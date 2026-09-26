@@ -43,11 +43,7 @@ from tools.agent_eval.run_batch_03 import (
     make_result,
     summarize,
 )
-from tools.agent_eval.run_batch_05 import (
-    _emit_compact,
-    _new_patient,
-    _write_reports,
-)
+from tools.agent_eval.run_batch_05 import _emit_compact, _new_patient
 
 ScenarioFn = Callable[[Session, Workspace], ScenarioResult]
 BATCH_NUMBER = 6
@@ -1382,6 +1378,76 @@ def _batch_summary(results: list[ScenarioResult]) -> dict[str, Any]:
         _GLOBAL_KEYS,
     )
     return summary
+
+
+def _write_reports(
+    payload: dict[str, Any],
+    json_path: Path,
+    md_path: Path,
+) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(
+        json.dumps(jsonable(payload), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    meta = payload["run_metadata"]
+    lines = [
+        "# Tia Agent Evaluation — Batch 06 Raw Baseline",
+        "",
+        f"- Runtime base SHA: {meta['batch6_base_sha']}",
+        f"- Evaluation tooling SHA: {meta['git_sha']}",
+        f"- Scenario version: {meta['scenario_version']}",
+        f"- Model: {meta['model']}",
+        f"- Reasoning: {meta['reasoning_effort']}",
+        f"- Scenarios executed: {len(payload['scenario_results'])}",
+        "",
+        "Raw deterministic findings are guards; final verdict requires manual DB/write/response review.",
+        "",
+    ]
+    for row in payload["scenario_results"]:
+        lines.extend(
+            [
+                f"## {row['id']}",
+                "",
+                f"Category: {row['category']}",
+                f"Purpose: {row['purpose']}",
+                f"Review status: {row['review']['status']}",
+                f"Expected: {row['review']['expected']}",
+                "",
+            ]
+        )
+        for turn in row["turns"]:
+            lines.append(f"Customer {turn['turn_number']}: {turn['user_message']}")
+            lines.append(f"Tia: {turn['agent_response']}")
+            lines.append(
+                "Usage: "
+                f"in={turn['token_usage']['input_tokens']} "
+                f"read={turn['token_usage']['cached_tokens']} "
+                f"write={turn['token_usage']['cache_write_tokens']} "
+                f"uncached={turn['token_usage']['uncached_input_tokens']} "
+                f"out={turn['token_usage']['output_tokens']} "
+                f"latency={turn['latency_ms']}ms"
+            )
+            lines.append("")
+        lines.append("DB verification:")
+        lines.append(json.dumps(row["db_verification"], ensure_ascii=False, indent=2))
+        if row["issues"]:
+            lines.append("Deterministic findings:")
+            for issue in row["issues"]:
+                lines.append(
+                    f"- {issue['severity']}: {issue['title']} — {issue['detail']}"
+                )
+        else:
+            lines.append("Deterministic findings: none; manual review still required.")
+        lines.append("")
+    lines.extend(
+        [
+            "## Batch summary",
+            "",
+            json.dumps(payload["batch_summary"], ensure_ascii=False, indent=2),
+        ]
+    )
+    md_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
