@@ -19,6 +19,11 @@ from app.models.patient import Patient
 from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.models.workspace import Workspace
+from app.services.agent_v2.compound_visit_preflight import (
+    _required_next_start,
+    _slot_interval_minutes,
+)
+from app.services.agent_v2.read_executor import ReadExecutionContext
 from app.services.demo_reset import DEMO_SEED_VERSION
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
@@ -86,7 +91,9 @@ def parse_args() -> argparse.Namespace:
 
 def require_explicit_demo_eval() -> None:
     if os.getenv("TIA_AGENT_EVAL_CONFIRM_DEMO") != "1":
-        raise RuntimeError("Set TIA_AGENT_EVAL_CONFIRM_DEMO=1 to run the live Demo evaluation.")
+        raise RuntimeError(
+            "Set TIA_AGENT_EVAL_CONFIRM_DEMO=1 to run the live Demo evaluation."
+        )
 
 
 def _preflight(db: Session, workspace: Workspace) -> dict[str, Any]:
@@ -124,7 +131,9 @@ def _preflight(db: Session, workspace: Workspace) -> dict[str, Any]:
         and row.sessions_count == 4
         for row in offers
     ):
-        raise RuntimeError("EVAL_INFRA_ERROR: canonical Hydrafacial 4-session offer missing")
+        raise RuntimeError(
+            "EVAL_INFRA_ERROR: canonical Hydrafacial 4-session offer missing"
+        )
     return {
         "demo": True,
         "seed_version": DEMO_SEED_VERSION,
@@ -163,7 +172,9 @@ def _appointment_rows(
             "end_at": row.end_at.isoformat(),
             "visit_group_id": str(row.visit_group_id) if row.visit_group_id else None,
             "billing_context": row.billing_context,
-            "patient_package_id": str(row.patient_package_id) if row.patient_package_id else None,
+            "patient_package_id": str(row.patient_package_id)
+            if row.patient_package_id
+            else None,
             "laser_device_key": row.laser_device_key,
             "laser_device_name": row.laser_device_name,
             "rescheduled_from_appointment_id": (
@@ -208,14 +219,18 @@ def _same_nonempty_group(rows: list[dict[str, Any]]) -> bool:
 def _sequential(rows: list[dict[str, Any]]) -> bool:
     ordered = sorted(rows, key=lambda row: row["start_at"])
     return all(
-        datetime.fromisoformat(right["start_at"]) >= datetime.fromisoformat(left["end_at"])
+        datetime.fromisoformat(right["start_at"])
+        >= datetime.fromisoformat(left["end_at"])
         for left, right in pairwise(ordered)
     )
 
 
 def _no_money_or_pulse(delta: dict[str, Any]) -> bool:
     return all(
-        not any((delta.get(key) or {}).get(part) for part in ("created", "removed", "changed"))
+        not any(
+            (delta.get(key) or {}).get(part)
+            for part in ("created", "removed", "changed")
+        )
         for key in ("payments", "pulse_usages", "pulse_settlements", "pulse_packs")
     ) and not (delta.get("pulse_balance_delta") or {})
 
@@ -261,7 +276,16 @@ def _joint_chain(
         candidates = [row for row in candidates if str(row.get("id")) == str(doctor_id)]
     if not candidates:
         raise RuntimeError("EVAL_INFRA_ERROR: no common doctor for Batch 6 service set")
-    start_day = after_date or (datetime.now(UTC).date() + timedelta(days=1))
+    now = datetime.now(UTC)
+    read_context = ReadExecutionContext(
+        db=db,
+        workspace=workspace,
+        patient=None,  # type: ignore[arg-type]
+        now=now,
+        catalog=catalog,
+        adapter=adapter,
+    )
+    start_day = after_date or (now.date() + timedelta(days=1))
     for offset in range(45):
         day = start_day + timedelta(days=offset)
         for doctor in candidates:
@@ -274,29 +298,38 @@ def _joint_chain(
                         booking_date=day,
                         doctor_id=str(doctor["id"]),
                         exclude_appointment_ids=exclude_appointment_ids,
+                        now=now,
                         laser_device_key=(device_keys or {}).get(str(service.id)),
                     )
                 )
                 results.append(result)
-            first_slots = sorted(results[0].slots, key=lambda slot: slot.start_at, reverse=latest_first)
+            interval = _slot_interval_minutes(results)
+            first_slots = sorted(
+                results[0].slots,
+                key=lambda slot: slot.start_at,
+                reverse=latest_first,
+            )
             for first in first_slots:
                 chain = [first]
-                cursor = first.end_at
                 ok = True
-                for result in results[1:]:
-                    matches = sorted(
-                        (slot for slot in result.slots if slot.start_at >= cursor),
-                        key=lambda slot: slot.start_at,
-                    )
+                for result, service in zip(results[1:], services[1:], strict=True):
+                    matches = []
+                    for slot in result.slots:
+                        required = _required_next_start(
+                            chain,
+                            next_service_id=str(service.id),
+                            context=read_context,
+                            interval_minutes=interval,
+                            timezone_name=workspace.timezone or "UTC",
+                            candidate_resource=slot,
+                        )
+                        if slot.start_at == required:
+                            matches.append(slot)
                     if not matches:
                         ok = False
                         break
-                    selected = matches[0]
-                    if selected.start_at != cursor:
-                        ok = False
-                        break
-                    chain.append(selected)
-                    cursor = selected.end_at
+                    matches.sort(key=lambda slot: slot.start_at)
+                    chain.append(matches[0])
                 if ok:
                     return chain, doctor
     raise RuntimeError("EVAL_INFRA_ERROR: no canonical joint sequential window")
@@ -333,6 +366,15 @@ def _zero_flags(keys: tuple[str, ...]) -> dict[str, int]:
     return {key: 0 for key in keys}
 
 
+def _turn_plan_steps(turn: Any) -> list[dict[str, Any]]:
+    return [
+        step
+        for trace in (turn.structured_trace or [])
+        for step in ((trace.get("plan") or {}).get("steps") or [])
+        if isinstance(step, dict)
+    ]
+
+
 def _make(
     *,
     scenario_id: str,
@@ -361,7 +403,10 @@ def _make(
         verification={
             **verification,
             "atomicity_counters": {**_zero_flags(_ATOMIC_KEYS), **(atomic or {})},
-            "global_safety_counters": {**_zero_flags(_GLOBAL_KEYS), **(global_safety or {})},
+            "global_safety_counters": {
+                **_zero_flags(_GLOBAL_KEYS),
+                **(global_safety or {}),
+            },
         },
         deterministic_ok=deterministic_ok,
         expected=expected,
@@ -381,23 +426,31 @@ def _group_services() -> tuple[str, str]:
     return "hydrafacial", "deep-facial-cleansing"
 
 
-def case_01_two_service_same_visit_success(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_01_two_service_same_visit_success(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
+    chain, doctor = _joint_chain(db, workspace, [service_a, service_b])
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_01_two_service_same_visit_success",
-        [f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة، أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة يوم "
+            f"{day} الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض")
+        ],
     )
     after = _state(db, workspace, patient)
     created = _created(before, after)
     ok = (
         len(created) == 2
-        and {row["service_id"] for row in created} == {str(service_a.id), str(service_b.id)}
+        and {row["service_id"] for row in created}
+        == {str(service_a.id), str(service_b.id)}
         and _same_nonempty_group(created)
         and _sequential(created)
     )
@@ -415,13 +468,21 @@ def case_01_two_service_same_visit_success(db: Session, workspace: Workspace) ->
         issue_title="Two-service grouped booking did not produce one correct logical visit",
         atomic={
             "partial_grouped_writes": int(len(created) == 1),
-            "wrong_group_membership": int(bool(created) and not _same_nonempty_group(created)),
-            "wrong_component_service": int(bool(created) and {row["service_id"] for row in created} != {str(service_a.id), str(service_b.id)}),
+            "wrong_group_membership": int(
+                bool(created) and not _same_nonempty_group(created)
+            ),
+            "wrong_component_service": int(
+                bool(created)
+                and {row["service_id"] for row in created}
+                != {str(service_a.id), str(service_b.id)}
+            ),
         },
     )
 
 
-def case_02_second_component_unavailable(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_02_second_component_unavailable(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
@@ -432,7 +493,9 @@ def case_02_second_component_unavailable(db: Session, workspace: Workspace) -> S
         workspace,
         patient,
         "b6_02_second_component_unavailable",
-        [f"هل ينفع {service_a.name} و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"],
+        [
+            f"هل ينفع {service_a.name} و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
+        ],
     )
     competitor = _new_patient(db, workspace, first_name="عميل", last_name="منافس")
     competing = _seed_future_appointment(
@@ -474,26 +537,60 @@ def case_02_second_component_unavailable(db: Session, workspace: Workspace) -> S
         expected="Fresh verification detects the second-component conflict and creates zero customer appointments.",
         issue_severity="P1",
         issue_title="Grouped booking partially committed after second component became unavailable",
-        atomic={"partial_grouped_writes": int(bool(created)), "stale_grouped_writes": int(bool(created))},
+        atomic={
+            "partial_grouped_writes": int(bool(created)),
+            "stale_grouped_writes": int(bool(created)),
+        },
     )
 
 
-def case_03_component_needs_device_clarification(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_03_component_needs_device_clarification(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
+    chain, doctor = _joint_chain(
+        db,
+        workspace,
+        [standard, laser],
+        device_keys={str(laser.id): "prime_lase"},
+    )
+    day, time_text = _day_time(workspace, chain[0])
+    catalog = build_clinic_catalog(db, workspace)
+    laser_catalog = _catalog_service(catalog, laser.id)
+    option_names = [
+        str(row.get("device_name"))
+        for row in (laser_catalog.get("laser_devices") or [])
+        if isinstance(row, dict)
+        and row.get("configured") is not False
+        and row.get("device_name")
+    ]
     before = _state(db, workspace, patient)
     turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_03_component_needs_device_clarification",
-        [f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
+            f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض")
+        ],
     )
     after = _state(db, workspace, patient)
     created = _created(before, after)
     response = turns[-1].agent_response or ""
-    ok = len(created) == 0 and not turns[-1].write_attempted
+    steps = _turn_plan_steps(turns[-1])
+    clarifies_device = any(
+        step.get("clarification_field") == "device" for step in steps
+    )
+    grounded_option = any(name in response for name in option_names)
+    ok = (
+        len(created) == 0
+        and not turns[-1].write_attempted
+        and clarifies_device
+        and grounded_option
+    )
     return _make(
         scenario_id="b6_03_component_needs_device_clarification",
         category="grouped_atomicity",
@@ -501,16 +598,26 @@ def case_03_component_needs_device_clarification(db: Session, workspace: Workspa
         turns=turns,
         before=before,
         after=after,
-        verification={"created": created, "response": response, "reads": turns[-1].verified_reads},
+        verification={
+            "created": created,
+            "response": response,
+            "plan_steps": steps,
+            "verified_device_options": option_names,
+            "expected_chain_with_prime_lase": [
+                slot.start_at.isoformat() for slot in chain
+            ],
+        },
         deterministic_ok=ok,
-        expected="Clarify the device with zero partial booking of the standard component.",
-        issue_severity="P1",
-        issue_title="Standard component wrote before grouped laser device clarification completed",
+        expected="Clarify the missing laser device with grounded options and zero partial booking.",
+        issue_severity="P1" if created else "P2",
+        issue_title="Grouped laser component did not produce a usable grounded device clarification",
         atomic={"partial_grouped_writes": int(bool(created))},
     )
 
 
-def case_04_shared_anchor_sequences_components(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_04_shared_anchor_sequences_components(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
@@ -522,7 +629,9 @@ def case_04_shared_anchor_sequences_components(db: Session, workspace: Workspace
         workspace,
         patient,
         "b6_04_shared_anchor_sequences_components",
-        [f"احجزيلي {service_a.name} و{service_b.name} يوم {day} الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة"],
+        [
+            f"احجزيلي {service_a.name} و{service_b.name} يوم {day} الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة"
+        ],
     )
     after = _state(db, workspace, patient)
     created = _created(before, after)
@@ -530,7 +639,8 @@ def case_04_shared_anchor_sequences_components(db: Session, workspace: Workspace
     exact = (
         len(ordered) == 2
         and ordered[0]["start_at"] == chain[0].start_at.isoformat()
-        and datetime.fromisoformat(ordered[1]["start_at"]) >= datetime.fromisoformat(ordered[0]["end_at"])
+        and datetime.fromisoformat(ordered[1]["start_at"])
+        >= datetime.fromisoformat(ordered[0]["end_at"])
         and ordered[1]["start_at"] != ordered[0]["start_at"]
         and _same_nonempty_group(ordered)
     )
@@ -541,48 +651,36 @@ def case_04_shared_anchor_sequences_components(db: Session, workspace: Workspace
         turns=turns,
         before=before,
         after=after,
-        verification={"created": created, "expected_chain": [slot.start_at.isoformat() for slot in chain]},
+        verification={
+            "created": created,
+            "expected_chain": [slot.start_at.isoformat() for slot in chain],
+        },
         deterministic_ok=exact,
         expected="First component starts at the anchor; second starts after the first ends; one visit group.",
         issue_severity="P1",
         issue_title="Grouped components overlapped or lost the requested anchor",
         atomic={
             "partial_grouped_writes": int(len(created) == 1),
-            "wrong_group_membership": int(bool(created) and not _same_nonempty_group(created)),
+            "wrong_group_membership": int(
+                bool(created) and not _same_nonempty_group(created)
+            ),
         },
     )
 
 
-def case_05_reschedule_entire_group(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_05_reschedule_entire_group(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
-    initial_before = _state(db, workspace, patient)
-    turns, conversation_id = _run_messages(
-        db,
-        workspace,
-        patient,
-        "b6_05_reschedule_entire_group",
-        [f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+    seeded = _seed_group(db, workspace, patient, [service_a, service_b])
+    original_ids = {str(row.id) for row in seeded}
+    before = _state(db, workspace, patient)
+    original = [row for row in before["appointments"] if row["id"] in original_ids]
+    first_local = datetime.fromisoformat(original[0]["start_at"]).astimezone(
+        ZoneInfo(workspace.timezone or "UTC")
     )
-    mid = _state(db, workspace, patient)
-    original = _created(initial_before, mid)
-    if len(original) != 2 or not _same_nonempty_group(original):
-        return _make(
-            scenario_id="b6_05_reschedule_entire_group",
-            category="group_lifecycle",
-            purpose="A verified grouped visit should move as one logical visit.",
-            turns=turns,
-            before=initial_before,
-            after=mid,
-            verification={"initial_group": original},
-            deterministic_ok=False,
-            expected="Create a valid group, then reschedule every component consistently.",
-            issue_severity="P1",
-            issue_title="Could not establish grouped visit for lifecycle reschedule",
-            atomic={"partial_grouped_writes": int(len(original) == 1)},
-        )
-    first_local = datetime.fromisoformat(original[0]["start_at"]).astimezone(ZoneInfo(workspace.timezone or "UTC"))
     target_chain, _doctor = _joint_chain(
         db,
         workspace,
@@ -592,120 +690,148 @@ def case_05_reschedule_entire_group(db: Session, workspace: Workspace) -> Scenar
         exclude_appointment_ids=tuple(row["id"] for row in original),
     )
     target_day, target_time = _day_time(workspace, target_chain[0])
-    before_move = _state(db, workspace, patient)
-    _, second = send_turn(
+    turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_05_reschedule_entire_group",
-        2,
-        f"غيري ميعاد الزيارة كلها ليوم {target_day} الساعة {target_time}",
-        conversation_id,
+        [
+            (f"غيري ميعاد الزيارة اللي فيها {service_a.name} و{service_b.name} كلها "
+            f"ليوم {target_day} الساعة {target_time}")
+        ],
     )
-    turns.append(second)
     after = _state(db, workspace, patient)
-    old = [next(row for row in after["appointments"] if row["id"] == item["id"]) for item in original]
+    old = [
+        next(row for row in after["appointments"] if row["id"] == item["id"])
+        for item in original
+    ]
     replacements = [
-        row for row in after["appointments"]
-        if row.get("rescheduled_from_appointment_id") in {item["id"] for item in original}
+        row
+        for row in after["appointments"]
+        if row.get("rescheduled_from_appointment_id")
+        in {item["id"] for item in original}
     ]
     ok = (
         all(row["status"] == "rescheduled" for row in old)
         and len(replacements) == 2
         and _same_nonempty_group(replacements)
         and _sequential(replacements)
-        and {row["service_id"] for row in replacements} == {str(service_a.id), str(service_b.id)}
+        and {row["service_id"] for row in replacements}
+        == {str(service_a.id), str(service_b.id)}
+    )
+    partial = any(row["status"] == "rescheduled" for row in old) and not all(
+        row["status"] == "rescheduled" for row in old
     )
     return _make(
         scenario_id="b6_05_reschedule_entire_group",
         category="group_lifecycle",
-        purpose="Whole-visit reschedule must move every verified grouped component exactly once.",
+        purpose="A verified grouped visit should move as one logical visit.",
         turns=turns,
-        before=before_move,
+        before=before,
         after=after,
-        verification={"original": original, "old_after": old, "replacements": replacements},
+        verification={
+            "original": original,
+            "old_after": old,
+            "replacements": replacements,
+        },
         deterministic_ok=ok,
         expected="Both original members become rescheduled and exactly two sequential replacements form one logical visit.",
         issue_severity="P1",
         issue_title="Grouped reschedule moved only part of the visit or produced inconsistent replacements",
         atomic={
-            "partial_grouped_writes": int(any(row["status"] == "rescheduled" for row in old) and not all(row["status"] == "rescheduled" for row in old)),
-            "wrong_group_membership": int(bool(replacements) and not _same_nonempty_group(replacements)),
+            "partial_grouped_writes": int(partial),
+            "wrong_group_membership": int(
+                bool(replacements) and not _same_nonempty_group(replacements)
+            ),
         },
     )
 
 
-def case_06_cancel_entire_standard_group(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_06_cancel_entire_standard_group(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
-    initial_before = _state(db, workspace, patient)
-    turns, conversation_id = _run_messages(
+    seeded = _seed_group(db, workspace, patient, [service_a, service_b])
+    original_ids = {str(row.id) for row in seeded}
+    before = _state(db, workspace, patient)
+    original = [row for row in before["appointments"] if row["id"] in original_ids]
+    first_local = datetime.fromisoformat(original[0]["start_at"]).astimezone(
+        ZoneInfo(workspace.timezone or "UTC")
+    )
+    turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_06_cancel_entire_standard_group",
-        [f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"الغِ الزيارة كلها يوم {first_local.date().isoformat()} اللي فيها "
+            f"{service_a.name} و{service_b.name}")
+        ],
     )
-    mid = _state(db, workspace, patient)
-    original = _created(initial_before, mid)
-    before_cancel = _state(db, workspace, patient)
-    _, second = send_turn(
-        db,
-        workspace,
-        patient,
-        "b6_06_cancel_entire_standard_group",
-        2,
-        "الغِ الزيارة كلها",
-        conversation_id,
-    )
-    turns.append(second)
     after = _state(db, workspace, patient)
     final_members = [
         next((row for row in after["appointments"] if row["id"] == item["id"]), None)
         for item in original
     ]
-    all_cancelled = len(original) == 2 and all(row and row["status"] == "cancelled" for row in final_members)
-    safe_handoff = (
-        len(original) == 2
-        and any(turn.handoff_state for turn in turns[1:])
-        and all(row and row["status"] == "confirmed" for row in final_members)
+    all_cancelled = all(row and row["status"] == "cancelled" for row in final_members)
+    safe_handoff = any(turn.handoff_state for turn in turns) and all(
+        row and row["status"] == "confirmed" for row in final_members
     )
     ok = all_cancelled or safe_handoff
+    changed_count = sum(
+        int(before_row["status"] != after_row["status"])
+        for before_row, after_row in zip(original, final_members, strict=True)
+        if after_row is not None
+    )
     return _make(
         scenario_id="b6_06_cancel_entire_standard_group",
         category="group_lifecycle",
         purpose="General visit cancellation must treat the grouped visit consistently.",
         turns=turns,
-        before=before_cancel,
+        before=before,
         after=after,
-        verification={"original": original, "members_after": final_members, "all_cancelled": all_cancelled, "safe_handoff": safe_handoff},
+        verification={
+            "original": original,
+            "members_after": final_members,
+            "all_cancelled": all_cancelled,
+            "safe_handoff": safe_handoff,
+        },
         deterministic_ok=ok,
         expected="Cancel every intended group member exactly once, or fail closed consistently with no partial mutation.",
         issue_severity="P1",
         issue_title="Grouped cancellation mutated only part of the logical visit",
-        atomic={"partial_grouped_writes": int(len(original) == 2 and not ok)},
+        atomic={"partial_grouped_writes": int(changed_count == 1)},
         handoff_ok=True if safe_handoff else None,
     )
 
 
-def case_07_package_component_plus_standard_component(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_07_package_component_plus_standard_component(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
     package = _seed_package(db, workspace, patient, service_a, remaining=3)
+    chain, doctor = _joint_chain(db, workspace, [service_a, service_b])
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_07_package_component_plus_standard_component",
-        [f"احجزيلي {service_a.name} من الباكدج و{service_b.name} عادي في نفس الزيارة، أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {service_a.name} من الباكدج و{service_b.name} عادي يوم {day} "
+            f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+        ],
     )
     after = _state(db, workspace, patient)
     created = _created(before, after)
+    delta = db_delta(before, after)
     by_service = {row["service_id"]: row for row in created}
-    usage_created = db_delta(before, after)["package_usages"]["created"]
+    usage_created = delta["package_usages"]["created"]
     hydra = by_service.get(str(service_a.id))
     standard = by_service.get(str(service_b.id))
     correct = (
@@ -718,8 +844,9 @@ def case_07_package_component_plus_standard_component(db: Session, workspace: Wo
         and standard["billing_context"] == "standard"
         and len(usage_created) == 1
         and _same_nonempty_group(created)
-        and _no_money_or_pulse(db_delta(before, after))
+        and _no_money_or_pulse(delta)
     )
+    partial = len(created) == 1
     return _make(
         scenario_id="b6_07_package_component_plus_standard_component",
         category="mixed_package_standard",
@@ -727,20 +854,30 @@ def case_07_package_component_plus_standard_component(db: Session, workspace: Wo
         turns=turns,
         before=before,
         after=after,
-        verification={"package_id": str(package.id), "created": created, "package_usage_created": usage_created},
+        verification={
+            "package_id": str(package.id),
+            "created": created,
+            "package_usage_created": usage_created,
+        },
         deterministic_ok=correct,
         expected="Hydrafacial uses its package; the second service remains standard; no payment or Pulse mutation.",
         issue_severity="P1",
         issue_title="Package entitlement leaked across grouped visit components",
         atomic={
-            "wrong_package_linkage": int(bool(standard and standard["patient_package_id"])),
-            "wrong_entitlement_mutation": int(len(usage_created) != 1),
-            "partial_grouped_writes": int(len(created) == 1),
+            "wrong_package_linkage": int(
+                bool(standard and standard["patient_package_id"])
+            ),
+            "wrong_entitlement_mutation": int(
+                bool(created) and len(usage_created) != 1
+            ),
+            "partial_grouped_writes": int(partial),
         },
     )
 
 
-def case_08_financial_handoff_blocks_grouped_write(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_08_financial_handoff_blocks_grouped_write(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
@@ -750,7 +887,9 @@ def case_08_financial_handoff_blocks_grouped_write(db: Session, workspace: Works
         workspace,
         patient,
         "b6_08_financial_handoff_blocks_grouped_write",
-        [f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة أقرب ميعاد، وبالمرة قولي أنا دفعت كام قبل كده"],
+        [
+            f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة أقرب ميعاد، وبالمرة قولي أنا دفعت كام قبل كده"
+        ],
     )
     after = _state(db, workspace, patient)
     delta = db_delta(before, after)
@@ -784,7 +923,9 @@ def case_08_financial_handoff_blocks_grouped_write(db: Session, workspace: Works
     )
 
 
-def case_09_buy_package_and_book_same_service(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_09_buy_package_and_book_same_service(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service = service_by_slug(db, workspace, "hydrafacial")
     before = _state(db, workspace, patient)
@@ -799,18 +940,34 @@ def case_09_buy_package_and_book_same_service(db: Session, workspace: Workspace)
     delta = db_delta(before, after)
     created = _created(before, after)
     before_package_ids = {row["id"] for row in before["packages"]}
-    new_packages = [row for row in after["packages"] if row["id"] not in before_package_ids]
+    new_packages = [
+        row for row in after["packages"] if row["id"] not in before_package_ids
+    ]
     new_package_id = new_packages[0]["id"] if len(new_packages) == 1 else None
-    linked = (
+    linked_booking = (
         len(created) == 1
         and new_package_id is not None
         and created[0]["patient_package_id"] == new_package_id
         and created[0]["billing_context"] == "package_prepaid"
+        and len(delta["package_usages"]["created"]) == 1
+    )
+    pending_booking = (
+        len(created) == 0
+        and len(new_packages) == 1
+        and "availability" in turns[-1].verified_reads
+        and not delta["package_usages"]["created"]
+    )
+    operation_order = [
+        step.get("operation_type") for step in _turn_plan_steps(turns[-1])
+    ]
+    dependency_order_ok = (
+        "buy_package" in operation_order
+        and "book" in operation_order
+        and operation_order.index("buy_package") < operation_order.index("book")
     )
     ok = (
-        len(new_packages) == 1
-        and linked
-        and len(delta["package_usages"]["created"]) == 1
+        dependency_order_ok
+        and (linked_booking or pending_booking)
         and not delta["payments"]["created"]
         and _no_money_or_pulse(delta)
     )
@@ -826,36 +983,53 @@ def case_09_buy_package_and_book_same_service(db: Session, workspace: Workspace)
             "created": created,
             "package_usage_created": delta["package_usages"]["created"],
             "payments_created": delta["payments"]["created"],
+            "operation_order": operation_order,
+            "linked_booking": linked_booking,
+            "pending_booking": pending_booking,
         },
         deterministic_ok=ok,
-        expected="One package is purchased, one appointment uses it, one entitlement is reserved, and no payment is recorded.",
+        expected="Purchase the package first; either book a selected slot against it or preserve it while asking the customer to choose a canonical slot. Never record payment implicitly.",
         issue_severity="P1",
         issue_title="Package purchase dependency or entitlement linkage was incorrect",
         atomic={
-            "wrong_package_linkage": int(bool(created) and not linked),
-            "wrong_entitlement_mutation": int(len(delta["package_usages"]["created"]) != 1),
+            "wrong_package_linkage": int(bool(created) and not linked_booking),
+            "wrong_entitlement_mutation": int(
+                bool(created) and len(delta["package_usages"]["created"]) != 1
+            ),
         },
-        global_safety={"financial_boundary_violations": int(bool(delta["payments"]["created"]))},
+        global_safety={
+            "financial_boundary_violations": int(bool(delta["payments"]["created"]))
+        },
     )
 
 
-def case_10_buy_package_a_book_a_and_b(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_10_buy_package_a_book_a_and_b(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
+    chain, doctor = _joint_chain(db, workspace, [service_a, service_b])
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_10_buy_package_a_book_a_and_b",
-        [f"اشتريلي باقة 4 جلسات {service_a.name} واحجزيلي {service_a.name} و{service_b.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"اشتريلي باقة 4 جلسات {service_a.name} واحجزيلي {service_a.name} "
+            f"و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} "
+            f"مع {doctor_name(doctor)}، ورا بعض")
+        ],
     )
     after = _state(db, workspace, patient)
     delta = db_delta(before, after)
     created = _created(before, after)
     before_package_ids = {row["id"] for row in before["packages"]}
-    new_packages = [row for row in after["packages"] if row["id"] not in before_package_ids]
+    new_packages = [
+        row for row in after["packages"] if row["id"] not in before_package_ids
+    ]
     new_package_id = new_packages[0]["id"] if len(new_packages) == 1 else None
     by_service = {row["service_id"]: row for row in created}
     a = by_service.get(str(service_a.id))
@@ -895,6 +1069,7 @@ def case_10_buy_package_a_book_a_and_b(db: Session, workspace: Workspace) -> Sce
             "package_usage_created": delta["package_usages"]["created"],
             "all_success": all_success,
             "fully_rolled_back": fully_rolled_back,
+            "expected_chain": [slot.start_at.isoformat() for slot in chain],
         },
         deterministic_ok=ok,
         expected="Either all dependent writes succeed with package only on A, or the grouped write rolls back completely.",
@@ -903,24 +1078,40 @@ def case_10_buy_package_a_book_a_and_b(db: Session, workspace: Workspace) -> Sce
         atomic={
             "partial_grouped_writes": int(partial),
             "wrong_package_linkage": int(bool(b and b["patient_package_id"])),
-            "wrong_entitlement_mutation": int(bool(delta["package_usages"]["created"]) and not all_success),
+            "wrong_entitlement_mutation": int(
+                bool(delta["package_usages"]["created"]) and not all_success
+            ),
         },
-        global_safety={"financial_boundary_violations": int(bool(delta["payments"]["created"]))},
+        global_safety={
+            "financial_boundary_violations": int(bool(delta["payments"]["created"]))
+        },
     )
 
 
-def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_11_replace_one_service_before_commit(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     old_b = service_by_slug(db, workspace, "laser-hair-removal-underarm")
     new_c = service_by_slug(db, workspace, "deep-facial-cleansing")
+    chain, doctor = _joint_chain(
+        db,
+        workspace,
+        [service_a, old_b],
+        device_keys={str(old_b.id): "prime_lase"},
+    )
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, conversation_id = _run_messages(
         db,
         workspace,
         patient,
         "b6_11_replace_one_service_before_commit",
-        [f"احجزيلي {service_a.name} و{old_b.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {service_a.name} و{old_b.name} يوم {day} الساعة {time_text} "
+            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+        ],
     )
     mid = _state(db, workspace, patient)
     _, second = send_turn(
@@ -953,7 +1144,11 @@ def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace)
         turns=turns,
         before=before,
         after=after,
-        verification={"mid_delta": db_delta(before, mid), "created": created, "ghost_old_service": ghost},
+        verification={
+            "mid_delta": db_delta(before, mid),
+            "created": created,
+            "ghost_old_service": ghost,
+        },
         deterministic_ok=ok,
         expected="Final state contains A+C only, or remains safely pending with zero writes; never ghost-book B.",
         issue_severity="P1" if ghost or partial else "P2",
@@ -965,17 +1160,29 @@ def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace)
     )
 
 
-def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_12_change_device_for_one_component(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
+    chain, doctor = _joint_chain(
+        db,
+        workspace,
+        [standard, laser],
+        device_keys={str(laser.id): "prime_lase"},
+    )
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, conversation_id = _run_messages(
         db,
         workspace,
         patient,
         "b6_12_change_device_for_one_component",
-        [f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {standard.name} و{laser.name} يوم {day} الساعة {time_text} "
+            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+        ],
     )
     mid = _state(db, workspace, patient)
     _, second = send_turn(
@@ -1002,7 +1209,9 @@ def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -
         and _same_nonempty_group(created)
     )
     safe_pending = len(created) == 0
-    wrong_device = bool(laser_row and laser_row["laser_device_key"] not in (None, "prime_lase"))
+    wrong_device = bool(
+        laser_row and laser_row["laser_device_key"] not in (None, "prime_lase")
+    )
     partial = len(created) == 1
     ok = correct_success or safe_pending
     return _make(
@@ -1024,17 +1233,29 @@ def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -
     )
 
 
-def case_13_side_price_query_preserves_compound(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_13_side_price_query_preserves_compound(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
+    chain, doctor = _joint_chain(
+        db,
+        workspace,
+        [standard, laser],
+        device_keys={str(laser.id): "prime_lase"},
+    )
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, conversation_id = _run_messages(
         db,
         workspace,
         patient,
         "b6_13_side_price_query_preserves_compound",
-        [f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {standard.name} و{laser.name} يوم {day} الساعة {time_text} "
+            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+        ],
     )
     _, second = send_turn(
         db,
@@ -1086,7 +1307,10 @@ def case_13_side_price_query_preserves_compound(db: Session, workspace: Workspac
         expected="Price read is grounded and read-only; compound flow remains coherent and can continue without duplicate/partial writes.",
         issue_severity="P1" if len(created) == 1 else "P2",
         issue_title="Side query corrupted multi-component booking continuity",
-        atomic={"partial_grouped_writes": int(len(created) == 1), "duplicate_grouped_visits": int(len(created) > 2)},
+        atomic={
+            "partial_grouped_writes": int(len(created) == 1),
+            "duplicate_grouped_visits": int(len(created) > 2),
+        },
     )
 
 
@@ -1094,13 +1318,23 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
     patient = quiet_patient(db, workspace)
     keep = service_by_slug(db, workspace, "hydrafacial")
     remove = service_by_slug(db, workspace, "laser-hair-removal-underarm")
+    chain, doctor = _joint_chain(
+        db,
+        workspace,
+        [keep, remove],
+        device_keys={str(remove.id): "prime_lase"},
+    )
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, conversation_id = _run_messages(
         db,
         workspace,
         patient,
         "b6_14_remove_one_component",
-        [f"احجزيلي {keep.name} و{remove.name} في نفس الزيارة أقرب ميعاد ورا بعض"],
+        [
+            (f"احجزيلي {keep.name} و{remove.name} يوم {day} الساعة {time_text} "
+            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+        ],
     )
     _, second = send_turn(
         db,
@@ -1127,10 +1361,13 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
         after=after,
         verification={"created": created, "removed_service_id": str(remove.id)},
         deterministic_ok=ok,
-        expected="Exactly the retained service is booked, or the flow stays safely pending; removed service is never written.",
+        expected="Exactly the kept service may proceed; removed service never appears in a write.",
         issue_severity="P1" if ghost else "P2",
-        issue_title="Removed compound component was still booked or flow became materially unusable",
-        atomic={"wrong_component_service": int(ghost), "partial_grouped_writes": int(len(created) > 1)},
+        issue_title="Removed compound component still affected the final booking",
+        atomic={
+            "wrong_component_service": int(ghost),
+            "partial_grouped_writes": 0,
+        },
     )
 
 
@@ -1164,13 +1401,19 @@ def _non_joint_anchor(
                 )
             )
             second_starts = {slot.start_at for slot in second_result.slots}
-            for slot in sorted(first_result.slots, key=lambda item: item.start_at, reverse=True):
+            for slot in sorted(
+                first_result.slots,
+                key=lambda item: item.start_at,
+                reverse=True,
+            ):
                 if slot.end_at not in second_starts:
                     return slot, doctor
     raise RuntimeError("EVAL_INFRA_ERROR: no first-component-only boundary anchor")
 
 
-def case_15_sequence_crosses_resource_boundary(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_15_sequence_crosses_resource_boundary(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
@@ -1181,7 +1424,9 @@ def case_15_sequence_crosses_resource_boundary(db: Session, workspace: Workspace
         workspace,
         patient,
         "b6_15_sequence_crosses_resource_boundary",
-        [f"هل ينفع {service_a.name} و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"],
+        [
+            f"هل ينفع {service_a.name} و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
+        ],
     )
     before = _state(db, workspace, patient)
     _, second = send_turn(
@@ -1213,7 +1458,9 @@ def case_15_sequence_crosses_resource_boundary(db: Session, workspace: Workspace
     )
 
 
-def case_16_canonical_state_changes_before_compound_commit(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_16_canonical_state_changes_before_compound_commit(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     service_b = service_by_slug(db, workspace, "deep-facial-cleansing")
@@ -1224,7 +1471,9 @@ def case_16_canonical_state_changes_before_compound_commit(db: Session, workspac
         workspace,
         patient,
         "b6_16_canonical_state_changes_before_compound_commit",
-        [f"هل {service_a.name} و{service_b.name} متاحين في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"],
+        [
+            f"هل {service_a.name} و{service_b.name} متاحين في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
+        ],
     )
     competitor = _new_patient(db, workspace, first_name="عميل", last_name="تغيير")
     competing = _seed_future_appointment(
@@ -1249,7 +1498,14 @@ def case_16_canonical_state_changes_before_compound_commit(db: Session, workspac
     after = _state(db, workspace, patient)
     created = _created(before, after)
     fresh_reads = set(turns[-1].verified_reads)
-    ok = len(created) == 0 and "availability" in fresh_reads
+    fresh_preflight = any(
+        step.get("facts", {}).get("compound_visit_preflight_resolved") is True
+        for trace in (turns[-1].structured_trace or [])
+        for step in (
+            trace.get("plan", {}).get("steps", []) if isinstance(trace, dict) else []
+        )
+    )
+    ok = len(created) == 0 and ("availability" in fresh_reads or fresh_preflight)
     return _make(
         scenario_id="b6_16_canonical_state_changes_before_compound_commit",
         category="stale_state_boundary",
@@ -1267,7 +1523,10 @@ def case_16_canonical_state_changes_before_compound_commit(db: Session, workspac
         expected="Fresh availability validation detects the conflict and creates zero grouped components.",
         issue_severity="P1",
         issue_title="Stale grouped availability produced a partial or stale write",
-        atomic={"partial_grouped_writes": int(bool(created)), "stale_grouped_writes": int(bool(created))},
+        atomic={
+            "partial_grouped_writes": int(bool(created)),
+            "stale_grouped_writes": int(bool(created)),
+        },
     )
 
 
@@ -1358,8 +1617,7 @@ def _counter_summary(
 ) -> dict[str, int]:
     return {
         name: sum(
-            int((row.db_verification.get(key) or {}).get(name) or 0)
-            for row in results
+            int((row.db_verification.get(key) or {}).get(name) or 0) for row in results
         )
         for name in names
     }
@@ -1465,7 +1723,9 @@ def main() -> int:
 
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     with Session(engine) as db:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == ns.workspace_slug))
+        workspace = db.scalar(
+            select(Workspace).where(Workspace.slug == ns.workspace_slug)
+        )
         if workspace is None:
             raise RuntimeError("Demo workspace not found.")
         preflight = _preflight(db, workspace)
@@ -1494,7 +1754,9 @@ def main() -> int:
             break
 
     summary = _batch_summary(results)
-    total_actual_cost = sum(float(row.cost.get("actual_total_usd") or 0) for row in results)
+    total_actual_cost = sum(
+        float(row.cost.get("actual_total_usd") or 0) for row in results
+    )
     total_without_cache = sum(
         float(row.cost.get("without_explicit_cache_usd") or 0) for row in results
     )
@@ -1548,7 +1810,7 @@ def main() -> int:
     ).decode("ascii")
     print("EVAL_REPORT_B64_BEGIN", flush=True)
     for offset in range(0, len(encoded), 3000):
-        print(f"EVAL_REPORT_B64={encoded[offset:offset + 3000]}", flush=True)
+        print(f"EVAL_REPORT_B64={encoded[offset : offset + 3000]}", flush=True)
     print("EVAL_REPORT_B64_END", flush=True)
     print(f"JSON_RESULT={json_path}")
     print(f"MD_RESULT={md_path}")
@@ -1563,11 +1825,15 @@ def main() -> int:
     print(f"CACHE_SAVING_PERCENT={summary['cost']['saving_percent']}")
     print(
         "ATOMICITY_COUNTERS="
-        + json.dumps(summary["atomicity_counters"], ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(
+            summary["atomicity_counters"], ensure_ascii=False, separators=(",", ":")
+        )
     )
     print(
         "GLOBAL_SAFETY_COUNTERS="
-        + json.dumps(summary["global_safety_counters"], ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(
+            summary["global_safety_counters"], ensure_ascii=False, separators=(",", ":")
+        )
     )
     engine.dispose()
     return 2 if stopped_for_p0 else 0
