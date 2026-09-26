@@ -494,7 +494,7 @@ def case_02_second_component_unavailable(
         patient,
         "b6_02_second_component_unavailable",
         [
-            f"هل ينفع {service_a.name} و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
+            f"هل {service_a.name} و{service_b.name} متاحين في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
         ],
     )
     competitor = _new_patient(db, workspace, first_name="عميل", last_name="منافس")
@@ -1088,17 +1088,18 @@ def case_10_buy_package_a_book_a_and_b(
     )
 
 
-def case_11_replace_one_service_before_commit(
-    db: Session, workspace: Workspace
-) -> ScenarioResult:
+def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     old_b = service_by_slug(db, workspace, "laser-hair-removal-underarm")
     new_c = service_by_slug(db, workspace, "deep-facial-cleansing")
-    chain, doctor = _joint_chain(
+    catalog = build_clinic_catalog(db, workspace)
+    doctor = _common_doctors(catalog, [service_a, old_b, new_c])[0]
+    chain, _ = _joint_chain(
         db,
         workspace,
         [service_a, old_b],
+        doctor_id=str(doctor["id"]),
         device_keys={str(old_b.id): "prime_lase"},
     )
     day, time_text = _day_time(workspace, chain[0])
@@ -1109,8 +1110,8 @@ def case_11_replace_one_service_before_commit(
         patient,
         "b6_11_replace_one_service_before_commit",
         [
-            (f"احجزيلي {service_a.name} و{old_b.name} يوم {day} الساعة {time_text} "
-            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+            (f"احجزيلي {service_a.name} و{old_b.name} في نفس الزيارة يوم {day} "
+            f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض")
         ],
     )
     mid = _state(db, workspace, patient)
@@ -1148,6 +1149,8 @@ def case_11_replace_one_service_before_commit(
             "mid_delta": db_delta(before, mid),
             "created": created,
             "ghost_old_service": ghost,
+            "anchor": chain[0].start_at.isoformat(),
+            "doctor_id": str(doctor["id"]),
         },
         deterministic_ok=ok,
         expected="Final state contains A+C only, or remains safely pending with zero writes; never ghost-book B.",
@@ -1160,17 +1163,19 @@ def case_11_replace_one_service_before_commit(
     )
 
 
-def case_12_change_device_for_one_component(
-    db: Session, workspace: Workspace
-) -> ScenarioResult:
+def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
-    chain, doctor = _joint_chain(
+    deep = service_by_slug(db, workspace, "deep-facial-cleansing")
+    catalog = build_clinic_catalog(db, workspace)
+    doctor = _common_doctors(catalog, [standard, laser, deep])[0]
+    chain, _ = _joint_chain(
         db,
         workspace,
         [standard, laser],
-        device_keys={str(laser.id): "prime_lase"},
+        doctor_id=str(doctor["id"]),
+        device_keys={str(laser.id): "candela_gentle"},
     )
     day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
@@ -1180,8 +1185,8 @@ def case_12_change_device_for_one_component(
         patient,
         "b6_12_change_device_for_one_component",
         [
-            (f"احجزيلي {standard.name} و{laser.name} يوم {day} الساعة {time_text} "
-            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+            (f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
+            f"مع {doctor_name(doctor)}، والليزر على Candela Gentle")
         ],
     )
     mid = _state(db, workspace, patient)
@@ -1191,7 +1196,7 @@ def case_12_change_device_for_one_component(
         patient,
         "b6_12_change_device_for_one_component",
         2,
-        "خلي الليزر على Prime Lase وكملي الحجز",
+        f"خلي الليزر على Prime Lase والساعة {time_text} وكملي الحجز",
         conversation_id,
     )
     turns.append(second)
@@ -1209,11 +1214,9 @@ def case_12_change_device_for_one_component(
         and _same_nonempty_group(created)
     )
     safe_pending = len(created) == 0
-    wrong_device = bool(
-        laser_row and laser_row["laser_device_key"] not in (None, "prime_lase")
-    )
+    wrong_device = bool(laser_row and laser_row["laser_device_key"] not in (None, "prime_lase"))
     partial = len(created) == 1
-    ok = correct_success or safe_pending
+    ok = (correct_success or safe_pending) and not wrong_device
     return _make(
         scenario_id="b6_12_change_device_for_one_component",
         category="compound_correction",
@@ -1221,8 +1224,13 @@ def case_12_change_device_for_one_component(
         turns=turns,
         before=before,
         after=after,
-        verification={"mid_delta": db_delta(before, mid), "created": created},
-        deterministic_ok=ok and not wrong_device,
+        verification={
+            "mid_created": _created(before, mid),
+            "created": created,
+            "anchor": chain[0].start_at.isoformat(),
+            "doctor_id": str(doctor["id"]),
+        },
+        deterministic_ok=ok,
         expected="Prime Lase is used only for the laser component; no stale device slot or partial group.",
         issue_severity="P1" if wrong_device or partial else "P2",
         issue_title="Component device correction reused stale context or partially committed the group",
@@ -1233,16 +1241,18 @@ def case_12_change_device_for_one_component(
     )
 
 
-def case_13_side_price_query_preserves_compound(
-    db: Session, workspace: Workspace
-) -> ScenarioResult:
+def case_13_side_price_query_preserves_compound(db: Session, workspace: Workspace) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
-    chain, doctor = _joint_chain(
+    deep = service_by_slug(db, workspace, "deep-facial-cleansing")
+    catalog = build_clinic_catalog(db, workspace)
+    doctor = _common_doctors(catalog, [standard, laser, deep])[0]
+    chain, _ = _joint_chain(
         db,
         workspace,
         [standard, laser],
+        doctor_id=str(doctor["id"]),
         device_keys={str(laser.id): "prime_lase"},
     )
     day, time_text = _day_time(workspace, chain[0])
@@ -1253,8 +1263,8 @@ def case_13_side_price_query_preserves_compound(
         patient,
         "b6_13_side_price_query_preserves_compound",
         [
-            (f"احجزيلي {standard.name} و{laser.name} يوم {day} الساعة {time_text} "
-            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+            (f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
+            f"مع {doctor_name(doctor)}، والليزر على Prime Lase")
         ],
     )
     _, second = send_turn(
@@ -1274,7 +1284,7 @@ def case_13_side_price_query_preserves_compound(
         patient,
         "b6_13_side_price_query_preserves_compound",
         3,
-        "تمام خليه Prime Lase وكملي الحجز",
+        f"تمام خليه Prime Lase والساعة {time_text} وكملي الحجز",
         conversation_id,
     )
     turns.append(third)
@@ -1302,6 +1312,7 @@ def case_13_side_price_query_preserves_compound(
             "mid_created": mid_created,
             "final_created": created,
             "price_turn_reads": turns[1].verified_reads,
+            "anchor": chain[0].start_at.isoformat(),
         },
         deterministic_ok=ok,
         expected="Price read is grounded and read-only; compound flow remains coherent and can continue without duplicate/partial writes.",
@@ -1318,10 +1329,14 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
     patient = quiet_patient(db, workspace)
     keep = service_by_slug(db, workspace, "hydrafacial")
     remove = service_by_slug(db, workspace, "laser-hair-removal-underarm")
-    chain, doctor = _joint_chain(
+    deep = service_by_slug(db, workspace, "deep-facial-cleansing")
+    catalog = build_clinic_catalog(db, workspace)
+    doctor = _common_doctors(catalog, [keep, remove, deep])[0]
+    chain, _ = _joint_chain(
         db,
         workspace,
         [keep, remove],
+        doctor_id=str(doctor["id"]),
         device_keys={str(remove.id): "prime_lase"},
     )
     day, time_text = _day_time(workspace, chain[0])
@@ -1332,8 +1347,8 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
         patient,
         "b6_14_remove_one_component",
         [
-            (f"احجزيلي {keep.name} و{remove.name} يوم {day} الساعة {time_text} "
-            f"مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+            (f"احجزيلي {keep.name} و{remove.name} في نفس الزيارة يوم {day} "
+            f"مع {doctor_name(doctor)}، والليزر على Prime Lase")
         ],
     )
     _, second = send_turn(
@@ -1342,7 +1357,7 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
         patient,
         "b6_14_remove_one_component",
         2,
-        f"سيبي {remove.name} وخلي {keep.name} بس وكملي",
+        f"سيبي {remove.name} وخلي {keep.name} بس الساعة {time_text} وكملي",
         conversation_id,
     )
     turns.append(second)
@@ -1359,15 +1374,16 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
         turns=turns,
         before=before,
         after=after,
-        verification={"created": created, "removed_service_id": str(remove.id)},
-        deterministic_ok=ok,
-        expected="Exactly the kept service may proceed; removed service never appears in a write.",
-        issue_severity="P1" if ghost else "P2",
-        issue_title="Removed compound component still affected the final booking",
-        atomic={
-            "wrong_component_service": int(ghost),
-            "partial_grouped_writes": 0,
+        verification={
+            "created": created,
+            "removed_service_id": str(remove.id),
+            "anchor": chain[0].start_at.isoformat(),
         },
+        deterministic_ok=ok,
+        expected="Exactly the retained service is booked, or the flow stays safely pending; removed service is never written.",
+        issue_severity="P1" if ghost else "P2",
+        issue_title="Removed compound component was still booked or flow became materially unusable",
+        atomic={"wrong_component_service": int(ghost), "partial_grouped_writes": int(len(created) > 1)},
     )
 
 
@@ -1380,9 +1396,17 @@ def _non_joint_anchor(
     branch_id = active_branch_id(catalog)
     adapter = get_clinic_adapter(db=db, workspace=workspace)
     doctors = _common_doctors(catalog, services)
-    today = datetime.now(UTC).date()
+    now = datetime.now(UTC)
+    context = ReadExecutionContext(
+        db=db,
+        workspace=workspace,
+        patient=None,  # type: ignore[arg-type]
+        now=now,
+        catalog=catalog,
+        adapter=adapter,
+    )
     for offset in range(1, 45):
-        day = today + timedelta(days=offset)
+        day = now.date() + timedelta(days=offset)
         for doctor in doctors:
             first_result = adapter.get_availability(
                 AvailabilityRequest(
@@ -1390,6 +1414,7 @@ def _non_joint_anchor(
                     service_id=str(services[0].id),
                     booking_date=day,
                     doctor_id=str(doctor["id"]),
+                    now=now,
                 )
             )
             second_result = adapter.get_availability(
@@ -1398,16 +1423,29 @@ def _non_joint_anchor(
                     service_id=str(services[1].id),
                     booking_date=day,
                     doctor_id=str(doctor["id"]),
+                    now=now,
                 )
             )
-            second_starts = {slot.start_at for slot in second_result.slots}
-            for slot in sorted(
+            interval = _slot_interval_minutes([first_result, second_result])
+            for first in sorted(
                 first_result.slots,
                 key=lambda item: item.start_at,
                 reverse=True,
             ):
-                if slot.end_at not in second_starts:
-                    return slot, doctor
+                has_valid_second = any(
+                    second.start_at
+                    == _required_next_start(
+                        [first],
+                        next_service_id=str(services[1].id),
+                        context=context,
+                        interval_minutes=interval,
+                        timezone_name=workspace.timezone or "UTC",
+                        candidate_resource=second,
+                    )
+                    for second in second_result.slots
+                )
+                if not has_valid_second:
+                    return first, doctor
     raise RuntimeError("EVAL_INFRA_ERROR: no first-component-only boundary anchor")
 
 
@@ -1425,7 +1463,7 @@ def case_15_sequence_crosses_resource_boundary(
         patient,
         "b6_15_sequence_crosses_resource_boundary",
         [
-            f"هل ينفع {service_a.name} و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
+            f"هل {service_a.name} و{service_b.name} متاحين في نفس الزيارة يوم {day} الساعة {time_text} مع {doctor_name(doctor)}؟"
         ],
     )
     before = _state(db, workspace, patient)
