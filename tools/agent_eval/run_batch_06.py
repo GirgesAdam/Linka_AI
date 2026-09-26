@@ -441,8 +441,10 @@ def case_01_two_service_same_visit_success(
         patient,
         "b6_01_two_service_same_visit_success",
         [
-            (f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة يوم "
-            f"{day} الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض")
+            (
+                f"احجزيلي {service_a.name} و{service_b.name} في نفس الزيارة يوم "
+                f"{day} الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض"
+            )
         ],
     )
     after = _state(db, workspace, patient)
@@ -573,8 +575,10 @@ def case_03_component_needs_device_clarification(
         patient,
         "b6_03_component_needs_device_clarification",
         [
-            (f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
-            f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض")
+            (
+                f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
+                f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض"
+            )
         ],
     )
     after = _state(db, workspace, patient)
@@ -696,8 +700,10 @@ def case_05_reschedule_entire_group(
         patient,
         "b6_05_reschedule_entire_group",
         [
-            (f"غيري ميعاد الزيارة اللي فيها {service_a.name} و{service_b.name} كلها "
-            f"ليوم {target_day} الساعة {target_time}")
+            (
+                f"غيري ميعاد الزيارة اللي فيها {service_a.name} و{service_b.name} كلها "
+                f"ليوم {target_day} الساعة {target_time}"
+            )
         ],
     )
     after = _state(db, workspace, patient)
@@ -766,8 +772,10 @@ def case_06_cancel_entire_standard_group(
         patient,
         "b6_06_cancel_entire_standard_group",
         [
-            (f"الغِ الزيارة كلها يوم {first_local.date().isoformat()} اللي فيها "
-            f"{service_a.name} و{service_b.name}")
+            (
+                f"الغِ الزيارة كلها يوم {first_local.date().isoformat()} اللي فيها "
+                f"{service_a.name} و{service_b.name}"
+            )
         ],
     )
     after = _state(db, workspace, patient)
@@ -823,8 +831,10 @@ def case_07_package_component_plus_standard_component(
         patient,
         "b6_07_package_component_plus_standard_component",
         [
-            (f"احجزيلي {service_a.name} من الباكدج و{service_b.name} عادي يوم {day} "
-            f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة")
+            (
+                f"احجزيلي {service_a.name} من الباكدج و{service_b.name} عادي يوم {day} "
+                f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض في نفس الزيارة"
+            )
         ],
     )
     after = _state(db, workspace, patient)
@@ -928,13 +938,18 @@ def case_09_buy_package_and_book_same_service(
 ) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service = service_by_slug(db, workspace, "hydrafacial")
+    chain, doctor = _joint_chain(db, workspace, [service])
+    day, time_text = _day_time(workspace, chain[0])
     before = _state(db, workspace, patient)
     turns, _ = _run_messages(
         db,
         workspace,
         patient,
         "b6_09_buy_package_and_book_same_service",
-        [f"اشتريلي باقة 4 جلسات {service.name} واحجزيلي أول جلسة أقرب ميعاد"],
+        [
+            (f"اشتريلي باقة 4 جلسات {service.name} واحجزيلي أول جلسة يوم {day} "
+            f"الساعة {time_text} مع {doctor_name(doctor)}")
+        ],
     )
     after = _state(db, workspace, patient)
     delta = db_delta(before, after)
@@ -951,11 +966,11 @@ def case_09_buy_package_and_book_same_service(
         and created[0]["billing_context"] == "package_prepaid"
         and len(delta["package_usages"]["created"]) == 1
     )
-    pending_booking = (
-        len(created) == 0
-        and len(new_packages) == 1
-        and "availability" in turns[-1].verified_reads
+    fully_rolled_back = (
+        not new_packages
+        and not created
         and not delta["package_usages"]["created"]
+        and not delta["payments"]["created"]
     )
     operation_order = [
         step.get("operation_type") for step in _turn_plan_steps(turns[-1])
@@ -965,12 +980,14 @@ def case_09_buy_package_and_book_same_service(
         and "book" in operation_order
         and operation_order.index("buy_package") < operation_order.index("book")
     )
-    ok = (
+    all_success = (
         dependency_order_ok
-        and (linked_booking or pending_booking)
+        and len(new_packages) == 1
+        and linked_booking
         and not delta["payments"]["created"]
         and _no_money_or_pulse(delta)
     )
+    ok = all_success or fully_rolled_back
     return _make(
         scenario_id="b6_09_buy_package_and_book_same_service",
         category="package_dependency",
@@ -985,16 +1002,18 @@ def case_09_buy_package_and_book_same_service(
             "payments_created": delta["payments"]["created"],
             "operation_order": operation_order,
             "linked_booking": linked_booking,
-            "pending_booking": pending_booking,
+            "all_success": all_success,
+            "fully_rolled_back": fully_rolled_back,
         },
         deterministic_ok=ok,
-        expected="Purchase the package first; either book a selected slot against it or preserve it while asking the customer to choose a canonical slot. Never record payment implicitly.",
+        expected="Package purchase and the exact dependent booking succeed atomically with one entitlement reservation, or the whole compound action rolls back. Never record payment implicitly.",
         issue_severity="P1",
-        issue_title="Package purchase dependency or entitlement linkage was incorrect",
+        issue_title="Package purchase dependency partially committed or entitlement linkage was incorrect",
         atomic={
+            "partial_grouped_writes": int(not ok),
             "wrong_package_linkage": int(bool(created) and not linked_booking),
             "wrong_entitlement_mutation": int(
-                bool(created) and len(delta["package_usages"]["created"]) != 1
+                bool(delta["package_usages"]["created"]) and not all_success
             ),
         },
         global_safety={
@@ -1018,9 +1037,11 @@ def case_10_buy_package_a_book_a_and_b(
         patient,
         "b6_10_buy_package_a_book_a_and_b",
         [
-            (f"اشتريلي باقة 4 جلسات {service_a.name} واحجزيلي {service_a.name} "
-            f"و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} "
-            f"مع {doctor_name(doctor)}، ورا بعض")
+            (
+                f"اشتريلي باقة 4 جلسات {service_a.name} واحجزيلي {service_a.name} "
+                f"و{service_b.name} في نفس الزيارة يوم {day} الساعة {time_text} "
+                f"مع {doctor_name(doctor)}، ورا بعض"
+            )
         ],
     )
     after = _state(db, workspace, patient)
@@ -1088,7 +1109,9 @@ def case_10_buy_package_a_book_a_and_b(
     )
 
 
-def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_11_replace_one_service_before_commit(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service_a = service_by_slug(db, workspace, "hydrafacial")
     old_b = service_by_slug(db, workspace, "laser-hair-removal-underarm")
@@ -1110,8 +1133,10 @@ def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace)
         patient,
         "b6_11_replace_one_service_before_commit",
         [
-            (f"احجزيلي {service_a.name} و{old_b.name} في نفس الزيارة يوم {day} "
-            f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض")
+            (
+                f"احجزيلي {service_a.name} و{old_b.name} في نفس الزيارة يوم {day} "
+                f"الساعة {time_text} مع {doctor_name(doctor)}، ورا بعض"
+            )
         ],
     )
     mid = _state(db, workspace, patient)
@@ -1163,7 +1188,9 @@ def case_11_replace_one_service_before_commit(db: Session, workspace: Workspace)
     )
 
 
-def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_12_change_device_for_one_component(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
@@ -1185,8 +1212,10 @@ def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -
         patient,
         "b6_12_change_device_for_one_component",
         [
-            (f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
-            f"مع {doctor_name(doctor)}، والليزر على Candela Gentle")
+            (
+                f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
+                f"مع {doctor_name(doctor)}، والليزر على Candela Gentle"
+            )
         ],
     )
     mid = _state(db, workspace, patient)
@@ -1214,7 +1243,9 @@ def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -
         and _same_nonempty_group(created)
     )
     safe_pending = len(created) == 0
-    wrong_device = bool(laser_row and laser_row["laser_device_key"] not in (None, "prime_lase"))
+    wrong_device = bool(
+        laser_row and laser_row["laser_device_key"] not in (None, "prime_lase")
+    )
     partial = len(created) == 1
     ok = (correct_success or safe_pending) and not wrong_device
     return _make(
@@ -1241,7 +1272,9 @@ def case_12_change_device_for_one_component(db: Session, workspace: Workspace) -
     )
 
 
-def case_13_side_price_query_preserves_compound(db: Session, workspace: Workspace) -> ScenarioResult:
+def case_13_side_price_query_preserves_compound(
+    db: Session, workspace: Workspace
+) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     standard = service_by_slug(db, workspace, "hydrafacial")
     laser = service_by_slug(db, workspace, "laser-hair-removal-underarm")
@@ -1263,8 +1296,10 @@ def case_13_side_price_query_preserves_compound(db: Session, workspace: Workspac
         patient,
         "b6_13_side_price_query_preserves_compound",
         [
-            (f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
-            f"مع {doctor_name(doctor)}، والليزر على Prime Lase")
+            (
+                f"احجزيلي {standard.name} و{laser.name} في نفس الزيارة يوم {day} "
+                f"مع {doctor_name(doctor)}، والليزر على Prime Lase"
+            )
         ],
     )
     _, second = send_turn(
@@ -1347,8 +1382,10 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
         patient,
         "b6_14_remove_one_component",
         [
-            (f"احجزيلي {keep.name} و{remove.name} في نفس الزيارة يوم {day} "
-            f"مع {doctor_name(doctor)}، والليزر على Prime Lase")
+            (
+                f"احجزيلي {keep.name} و{remove.name} في نفس الزيارة يوم {day} "
+                f"مع {doctor_name(doctor)}، والليزر على Prime Lase"
+            )
         ],
     )
     _, second = send_turn(
@@ -1383,7 +1420,10 @@ def case_14_remove_one_component(db: Session, workspace: Workspace) -> ScenarioR
         expected="Exactly the retained service is booked, or the flow stays safely pending; removed service is never written.",
         issue_severity="P1" if ghost else "P2",
         issue_title="Removed compound component was still booked or flow became materially unusable",
-        atomic={"wrong_component_service": int(ghost), "partial_grouped_writes": int(len(created) > 1)},
+        atomic={
+            "wrong_component_service": int(ghost),
+            "partial_grouped_writes": int(len(created) > 1),
+        },
     )
 
 
