@@ -98,30 +98,47 @@ def _recent_verified_read_context(
     return dict(value) if isinstance(value, dict) else None
 
 
+def _recent_verified_action_context_from_outbounds(
+    messages: list[Message],
+) -> dict[str, Any] | None:
+    """Recover booking context only across explicitly safe V2 read-only hops."""
+    for index, previous in enumerate(messages):
+        if previous.sender_type != "ai" or previous.direction != "outbound":
+            return None
+        metadata = dict(previous.metadata_json or {})
+        if metadata.get("runtime") != "v2":
+            return None
+        value = metadata.get("v2_action_context")
+        if isinstance(value, dict):
+            if index == 0:
+                return dict(value)
+            return dict(value) if value.get("operation_type") == "book" else None
+        if metadata.get("v2_action_context_passthrough") is not True:
+            return None
+    return None
+
+
 def _recent_verified_action_context(
     db: Session,
     *,
     conversation: Conversation,
     inbound: Message,
 ) -> dict[str, Any] | None:
-    """Return the immediately previous safe completed-action context, if any."""
-    previous = db.scalar(
-        select(Message)
-        .where(
-            Message.workspace_id == conversation.workspace_id,
-            Message.conversation_id == conversation.id,
-            Message.created_at < inbound.created_at,
-        )
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(1)
+    """Return recent safe completed-action context across bounded read-only detours."""
+    previous_outbounds = list(
+        db.scalars(
+            select(Message)
+            .where(
+                Message.workspace_id == conversation.workspace_id,
+                Message.conversation_id == conversation.id,
+                Message.direction == "outbound",
+                Message.created_at < inbound.created_at,
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(8)
+        ).all()
     )
-    if previous is None or previous.sender_type != "ai" or previous.direction != "outbound":
-        return None
-    metadata = dict(previous.metadata_json or {})
-    if metadata.get("runtime") != "v2":
-        return None
-    value = metadata.get("v2_action_context")
-    return dict(value) if isinstance(value, dict) else None
+    return _recent_verified_action_context_from_outbounds(previous_outbounds)
 
 
 def _recent_pending_choice_context(
@@ -259,6 +276,25 @@ def _verified_action_context_from_turn(
     return None
 
 
+def _safe_action_context_passthrough(turn: V2OrchestratedTurn) -> bool:
+    """Mark only operationally read-only informational turns as safe context hops."""
+    if turn.active_task is not None or turn.pending_write is not None:
+        return False
+    if not turn.plan.steps or not turn.understanding.operations:
+        return False
+    if any(
+        step.write_intent is not None
+        or step.state_action != "none"
+        or step.disposition not in {"read", "respond"}
+        for step in turn.plan.steps
+    ):
+        return False
+    return all(
+        operation.execution_intent == "informational"
+        for operation in turn.understanding.operations
+    )
+
+
 def _outbound_verified_action_context(
     turn: V2OrchestratedTurn,
     *,
@@ -271,22 +307,7 @@ def _outbound_verified_action_context(
     if (
         not isinstance(recent_action_context, dict)
         or recent_action_context.get("operation_type") != "book"
-    ):
-        return None
-    if turn.active_task is not None or turn.pending_write is not None:
-        return None
-    if not turn.plan.steps or not turn.understanding.operations:
-        return None
-    if any(
-        step.write_intent is not None
-        or step.state_action != "none"
-        or step.disposition not in {"read", "respond"}
-        for step in turn.plan.steps
-    ):
-        return None
-    if any(
-        operation.execution_intent != "informational"
-        for operation in turn.understanding.operations
+        or not _safe_action_context_passthrough(turn)
     ):
         return None
     return dict(recent_action_context)
@@ -446,6 +467,7 @@ def _run_v2_after_inbound(
             "handoff_ack": handoff_ack_allowed,
             "v2_read_context": verified_read_context,
             "v2_action_context": verified_action_context,
+            "v2_action_context_passthrough": _safe_action_context_passthrough(turn),
             "v2_pending_choice": (
                 turn.pending_choice.model_dump(mode="json")
                 if turn.pending_choice is not None

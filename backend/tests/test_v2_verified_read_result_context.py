@@ -7,6 +7,8 @@ from app.agents.v2.semantic_state_view import with_safe_read_context
 from app.services.agent_v2.live_chat import (
     _availability_option_count_for_step,
     _outbound_verified_action_context,
+    _recent_verified_action_context_from_outbounds,
+    _safe_action_context_passthrough,
     _verified_action_context_from_turn,
 )
 
@@ -210,6 +212,82 @@ def _recent_booking_context() -> dict[str, object]:
         "status": "confirmed",
         "package_usage": "unspecified",
     }
+
+
+def _outbound_message(
+    *,
+    context: dict[str, object] | None = None,
+    passthrough: bool = False,
+    runtime: str = "v2",
+    sender_type: str = "ai",
+):
+    return SimpleNamespace(
+        sender_type=sender_type,
+        direction="outbound",
+        metadata_json={
+            "runtime": runtime,
+            "v2_action_context": context,
+            "v2_action_context_passthrough": passthrough,
+        },
+    )
+
+
+def test_recent_booking_context_recovers_across_safe_passthrough_chain() -> None:
+    recent = _recent_booking_context()
+    messages = [
+        _outbound_message(passthrough=True),
+        _outbound_message(passthrough=True),
+        _outbound_message(context=recent),
+    ]
+
+    assert _recent_verified_action_context_from_outbounds(messages) == recent
+
+
+def test_recent_booking_context_does_not_cross_non_passthrough_barrier() -> None:
+    recent = _recent_booking_context()
+    messages = [
+        _outbound_message(passthrough=True),
+        _outbound_message(passthrough=False),
+        _outbound_message(context=recent),
+    ]
+
+    assert _recent_verified_action_context_from_outbounds(messages) is None
+
+
+def test_recent_booking_context_does_not_recover_old_non_booking_action() -> None:
+    messages = [
+        _outbound_message(passthrough=True),
+        _outbound_message(
+            context={
+                "operation_type": "cancel_appointment",
+                "appointment_id": "appointment-1",
+                "status": "cancelled",
+            }
+        ),
+    ]
+
+    assert _recent_verified_action_context_from_outbounds(messages) is None
+
+
+def test_safe_action_context_passthrough_requires_read_only_informational_turn() -> None:
+    assert _safe_action_context_passthrough(_informational_turn()) is True
+    assert (
+        _safe_action_context_passthrough(
+            _informational_turn(
+                operation_type="book",
+                write_intent=SimpleNamespace(kind="booking"),
+                state_action="start_booking",
+                execution_intent="execute",
+            )
+        )
+        is False
+    )
+    assert (
+        _safe_action_context_passthrough(
+            _informational_turn(active_task=SimpleNamespace(task_type="booking"))
+        )
+        is False
+    )
 
 
 def test_completed_booking_context_survives_informational_detours() -> None:
