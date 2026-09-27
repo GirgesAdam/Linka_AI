@@ -349,6 +349,34 @@ def _completed_action_context(
                 context[key] = dict(parameters[key])
         return context
 
+    if intent.kind == "reschedule":
+        appointment_id = action_result.get("appointment_id")
+        previous_appointment_id = action_result.get("previous_appointment_id")
+        status = action_result.get("status")
+        required = ("service_id", "doctor_id", "start_at")
+        if (
+            appointment_id in (None, "")
+            or previous_appointment_id in (None, "")
+            or status not in {"pending", "confirmed"}
+            or any(parameters.get(key) in (None, "") for key in required)
+        ):
+            return None
+        context = {
+            "operation_type": "reschedule",
+            "appointment_id": str(appointment_id),
+            "previous_appointment_id": str(previous_appointment_id),
+            "service_id": str(parameters["service_id"]),
+            "doctor_id": str(parameters["doctor_id"]),
+            "start_at": str(parameters["start_at"]),
+            "status": str(status),
+        }
+        if parameters.get("device_key") not in (None, ""):
+            context["device_key"] = str(parameters["device_key"])
+        for key in ("date", "time"):
+            if isinstance(parameters.get(key), dict):
+                context[key] = dict(parameters[key])
+        return context
+
     if intent.kind == "cancel_appointment":
         appointment_id = action_result.get("appointment_id")
         if appointment_id in (None, "") or action_result.get("status") != "cancelled":
@@ -415,6 +443,158 @@ def _same_recent_booking(
         and same("device_key")
         and str(step.facts.get("package_usage") or "unspecified")
         == str(recent_action.get("package_usage") or "unspecified")
+    )
+
+
+def _same_recent_reschedule(
+    step: PlanStep,
+    operation: TurnOperation,
+    recent_action: dict[str, object],
+    *,
+    timezone_name: str,
+) -> bool:
+    if (
+        step.operation_type != "reschedule"
+        or recent_action.get("operation_type") != "reschedule"
+        or recent_action.get("status") not in {"pending", "confirmed"}
+    ):
+        return False
+    if operation.selection is not None:
+        return False
+    appointment = operation.entities.appointment
+    if appointment is not None and (
+        appointment.ref is not None
+        or appointment.text not in (None, "")
+        or appointment.candidate_refs
+    ):
+        return False
+
+    expected_start = _exact_requested_start_at(step, timezone_name=timezone_name)
+    recent_start_raw = recent_action.get("start_at")
+    if expected_start is None or not isinstance(recent_start_raw, str):
+        return False
+    try:
+        recent_start = datetime.fromisoformat(recent_start_raw)
+    except ValueError:
+        return False
+    if recent_start.tzinfo is None or recent_start.utcoffset() is None:
+        return False
+    if expected_start.astimezone(recent_start.tzinfo) != recent_start:
+        return False
+
+    def compatible(key: str) -> bool:
+        current = step.facts.get(key)
+        recent = recent_action.get(key)
+        return current in (None, "") or str(current) == str(recent)
+
+    if not all(compatible(key) for key in ("service_id", "doctor_id", "device_key")):
+        return False
+
+    source = step.facts.get("source_appointment")
+    if isinstance(source, dict):
+        source_id = source.get("appointment_id")
+        if source_id not in (None, "") and str(source_id) != str(
+            recent_action.get("appointment_id")
+        ):
+            return False
+        for key in ("service_id", "doctor_id", "device_key"):
+            value = source.get(key)
+            if value not in (None, "") and str(value) != str(recent_action.get(key)):
+                return False
+    return True
+
+
+def _recent_reschedule_validation_request(
+    step: PlanStep,
+    operation: TurnOperation,
+    recent_action: dict[str, object] | None,
+    *,
+    timezone_name: str,
+) -> ReadRequest | None:
+    if not isinstance(recent_action, dict):
+        return None
+    if not _same_recent_reschedule(
+        step,
+        operation,
+        recent_action,
+        timezone_name=timezone_name,
+    ):
+        return None
+    appointment_id = recent_action.get("appointment_id")
+    if appointment_id in (None, ""):
+        return None
+    return ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": str(appointment_id)},
+    )
+
+
+def _canonical_recent_reschedule_is_current(
+    recent_action: dict[str, object] | None,
+    reads: ReadExecutionBundle,
+) -> bool:
+    if not isinstance(recent_action, dict):
+        return False
+    appointment_id = recent_action.get("appointment_id")
+    if appointment_id in (None, "") or reads.verification.appointment_match_count != 1:
+        return False
+    for result in reads.results:
+        if result.kind != "appointments" or not result.ok:
+            continue
+        rows = result.payload.get("appointments")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("appointment_id")) != str(appointment_id):
+                continue
+            if row.get("status") not in {"pending", "confirmed"}:
+                return False
+            for row_key, context_key in (
+                ("service_id", "service_id"),
+                ("doctor_id", "doctor_id"),
+                ("laser_device_key", "device_key"),
+            ):
+                expected = recent_action.get(context_key)
+                current = row.get(row_key)
+                if expected in (None, ""):
+                    if current not in (None, ""):
+                        return False
+                elif str(current) != str(expected):
+                    return False
+            current_start = row.get("start_at")
+            recent_start = recent_action.get("start_at")
+            if not isinstance(current_start, str) or not isinstance(recent_start, str):
+                return False
+            try:
+                current_dt = datetime.fromisoformat(current_start)
+                recent_dt = datetime.fromisoformat(recent_start)
+            except ValueError:
+                return False
+            if (
+                current_dt.tzinfo is None
+                or current_dt.utcoffset() is None
+                or recent_dt.tzinfo is None
+                or recent_dt.utcoffset() is None
+                or current_dt != recent_dt
+            ):
+                return False
+            return True
+    return False
+
+
+def _reschedule_acknowledgment_step(step: PlanStep) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "respond",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "social_ack",
+            "clarification_field": None,
+            "facts": _acknowledgment_facts("reschedule"),
+        }
     )
 
 
@@ -912,10 +1092,17 @@ def orchestrate_v2_turn(
             recent_action_context,
             timezone_name=timezone_name,
         )
+        recent_reschedule_validation = _recent_reschedule_validation_request(
+            effective_step,
+            operation,
+            recent_action_context,
+            timezone_name=timezone_name,
+        )
+        validation_request = recent_booking_validation or recent_reschedule_validation
         validation_reads = ReadExecutionBundle()
-        if recent_booking_validation is not None:
+        if validation_request is not None:
             validation_step = effective_step.model_copy(
-                update={"reads": [recent_booking_validation]}
+                update={"reads": [validation_request]}
             )
             validation_reads = execute_step_reads(validation_step, read_context)
 
@@ -928,6 +1115,15 @@ def orchestrate_v2_turn(
         ):
             reads = validation_reads
             advanced = _booking_acknowledgment_step(effective_step)
+        elif (
+            recent_reschedule_validation is not None
+            and _canonical_recent_reschedule_is_current(
+                recent_action_context,
+                validation_reads,
+            )
+        ):
+            reads = validation_reads
+            advanced = _reschedule_acknowledgment_step(effective_step)
         else:
             normal_reads = (
                 execute_step_reads(effective_step, read_context)
