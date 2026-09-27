@@ -721,7 +721,10 @@ def orchestrate_v2_turn(
         timezone_name=timezone_name,
         local_now=local_now,
     )
-    understanding, semantic_visit_groups = expand_multi_service_operations(understanding)
+    understanding, semantic_visit_groups = expand_multi_service_operations(
+        understanding,
+        semantic_context=semantic_context,
+    )
     initial_booking_task = (
         initial_task if isinstance(initial_task, BookingTaskState) else None
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 
 _EXPANDABLE_OPERATION_TYPES = frozenset({"availability", "book"})
@@ -19,8 +20,28 @@ def _service_set(operation: TurnOperation) -> list[str]:
     return list(dict.fromkeys(ref for ref in service.candidate_refs if ref))
 
 
+def _scope_component_device(
+    operation: TurnOperation,
+    *,
+    service_ref: str | None,
+    semantic_context: SemanticContext | None,
+) -> TurnOperation:
+    if semantic_context is None or service_ref is None or operation.entities.device is None:
+        return operation
+    target = semantic_context.reference_map.get(service_ref)
+    if target is None or target.kind != "service":
+        return operation
+    if target.metadata.get("requires_laser_device") is not False:
+        return operation
+    return operation.model_copy(
+        update={"entities": operation.entities.model_copy(update={"device": None})}
+    )
+
+
 def expand_multi_service_operations(
     turn: TiaTurnUnderstanding,
+    *,
+    semantic_context: SemanticContext | None = None,
 ) -> tuple[TiaTurnUnderstanding, dict[int, str]]:
     """Expand one semantic multi-service visit into addressable component operations.
 
@@ -43,7 +64,18 @@ def expand_multi_service_operations(
     visit_groups: dict[int, str] = {}
     for source_index, (operation, refs) in enumerate(zip(turn.operations, service_sets, strict=True)):
         if len(refs) <= 1:
-            expanded.append(operation)
+            service_ref = (
+                operation.entities.service.ref
+                if operation.entities.service is not None
+                else None
+            )
+            expanded.append(
+                _scope_component_device(
+                    operation,
+                    service_ref=service_ref,
+                    semantic_context=semantic_context,
+                )
+            )
             continue
         group_key = f"semantic-multi-service:{source_index}"
         assert operation.entities.service is not None
@@ -56,9 +88,14 @@ def expand_multi_service_operations(
                     "entities": operation.entities.model_copy(update={"service": service})
                 }
             )
+            component = _scope_component_device(
+                component,
+                service_ref=ref,
+                semantic_context=semantic_context,
+            )
             visit_groups[len(expanded)] = group_key
             expanded.append(component)
 
-    if not visit_groups:
+    if not visit_groups and expanded == turn.operations:
         return turn, {}
     return turn.model_copy(update={"operations": expanded}), visit_groups
