@@ -1,3 +1,4 @@
+from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
@@ -160,3 +161,116 @@ def test_two_package_purchases_and_expanded_bookings_share_atomic_write_group() 
     assert {compound_visit_group(step) for step in normalized.steps if step.operation_type == "book"} == {
         "semantic-multi-service:2"
     }
+
+
+def _component_device_context():
+    return build_semantic_context(
+        {
+            "services": [
+                {"id": "standard", "name": "Standard", "requires_laser_device": False},
+                {
+                    "id": "laser-a",
+                    "name": "Laser A",
+                    "requires_laser_device": True,
+                    "laser_devices": [{"device_key": "device-a", "device_name": "Device A"}],
+                },
+                {
+                    "id": "laser-b",
+                    "name": "Laser B",
+                    "requires_laser_device": True,
+                    "laser_devices": [{"device_key": "device-b", "device_name": "Device B"}],
+                },
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+
+
+def _service_set_with_device(*refs: str, device_ref: str | None) -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(candidate_refs=list(refs), candidate_mode="set"),
+                    device=(EntityReference(ref=device_ref) if device_ref else None),
+                    date=DateConstraint(mode="next_available"),
+                ),
+                execution_intent="execute",
+            )
+        ]
+    )
+
+
+def test_component_expansion_scopes_explicit_device_to_laser_service() -> None:
+    context = _component_device_context()
+    turn = _service_set_with_device("S1", "S2", device_ref="V1")
+
+    expanded, groups = expand_multi_service_operations(turn, semantic_context=context)
+
+    assert expanded.operations[0].entities.device is None
+    assert expanded.operations[1].entities.device is not None
+    assert expanded.operations[1].entities.device.ref == "V1"
+    assert groups == {0: "semantic-multi-service:0", 1: "semantic-multi-service:0"}
+
+
+def test_component_expansion_preserves_missing_device_on_laser_component() -> None:
+    context = _component_device_context()
+    turn = _service_set_with_device("S1", "S2", device_ref=None)
+
+    expanded, _ = expand_multi_service_operations(turn, semantic_context=context)
+
+    assert expanded.operations[0].entities.device is None
+    assert expanded.operations[1].entities.device is None
+
+
+def test_two_laser_components_do_not_silently_drop_incompatible_explicit_device() -> None:
+    context = _component_device_context()
+    turn = _service_set_with_device("S2", "S3", device_ref="V1")
+
+    expanded, _ = expand_multi_service_operations(turn, semantic_context=context)
+
+    assert [operation.entities.device.ref for operation in expanded.operations] == ["V1", "V1"]
+
+
+def test_single_standard_operation_clears_inherited_laser_device() -> None:
+    context = _component_device_context()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(ref="S1"),
+            device=EntityReference(ref="V1"),
+            date=DateConstraint(mode="next_available"),
+        ),
+        execution_intent="execute",
+    )
+    normalized, groups = expand_multi_service_operations(
+        TiaTurnUnderstanding(operations=[operation]),
+        semantic_context=context,
+    )
+
+    assert normalized.operations[0].entities.device is None
+    assert groups == {}
+
+
+def test_single_laser_operation_preserves_explicit_incompatible_device_for_compatibility_path() -> None:
+    context = _component_device_context()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(ref="S3"),
+            device=EntityReference(ref="V1"),
+            date=DateConstraint(mode="next_available"),
+        ),
+        execution_intent="execute",
+    )
+
+    normalized, groups = expand_multi_service_operations(
+        TiaTurnUnderstanding(operations=[operation]),
+        semantic_context=context,
+    )
+
+    assert normalized.operations[0].entities.device is not None
+    assert normalized.operations[0].entities.device.ref == "V1"
+    assert groups == {}

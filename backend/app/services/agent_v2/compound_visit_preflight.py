@@ -300,6 +300,31 @@ def _rewrite_step_for_slot(
     )
 
 
+def _missing_required_device(step: PlanStep) -> bool:
+    return (
+        bool(step.facts.get("service_requires_laser_device"))
+        and not _params(step).get("device_key")
+    )
+
+
+def _clarify_missing_group_device(step: PlanStep, *, is_missing: bool) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "clarify" if is_missing else "blocked",
+            "reads": step.reads if is_missing else [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "clarification",
+            "clarification_field": "device" if is_missing else None,
+            "facts": {
+                **_strip_sequence_facts(step.facts),
+                "compound_visit_preflight_resolved": True,
+                "compound_visit_missing_device": True,
+            },
+        }
+    )
+
+
 def _suppress_group_write(step: PlanStep, *, requested_anchor: datetime) -> PlanStep:
     return step.model_copy(
         update={
@@ -456,6 +481,16 @@ def _auto_resolve_grouped_visits(
     for _group_key, raw_group in groups.items():
         ordered = sorted(raw_group, key=lambda step: step.operation_index)
         if len(ordered) < 2:
+            continue
+        missing_device_indexes = {
+            step.operation_index for step in ordered if _missing_required_device(step)
+        }
+        if missing_device_indexes:
+            for step in ordered:
+                replacements[step.operation_index] = _clarify_missing_group_device(
+                    step,
+                    is_missing=step.operation_index in missing_device_indexes,
+                )
             continue
         common_doctors = _common_doctors(ordered, context)
         anchor = _requested_group_anchor(ordered, context=context, timezone_name=timezone_name)

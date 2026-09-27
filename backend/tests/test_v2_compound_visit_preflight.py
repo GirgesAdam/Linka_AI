@@ -416,3 +416,43 @@ def test_explicit_different_doctors_require_one_doctor_for_the_visit() -> None:
     assert [step.disposition for step in planned.steps] == ["clarify", "clarify"]
     assert [step.clarification_field for step in planned.steps] == ["doctor", "doctor"]
     assert all(step.facts["compound_visit_conflicting_doctors"] is True for step in planned.steps)
+
+
+def test_grouped_missing_laser_device_requests_device_clarification() -> None:
+    adapter = _joint_adapter()
+    base = _normalized(same_doctor=True)
+    standard = base.steps[0].model_copy(
+        update={
+            "facts": {
+                **base.steps[0].facts,
+                "service_requires_laser_device": False,
+            }
+        }
+    )
+    laser = base.steps[1].model_copy(
+        update={
+            "facts": {
+                **base.steps[1].facts,
+                "service_requires_laser_device": True,
+            }
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        base.model_copy(update={"steps": [standard, laser]}),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert planned.steps[0].disposition == "blocked"
+    assert planned.steps[0].response_goal == "clarification"
+    assert planned.steps[1].disposition == "clarify"
+    assert planned.steps[1].clarification_field == "device"
+    assert planned.steps[1].response_goal == "clarification"
+    assert planned.steps[1].reads
+    assert planned.steps[1].reads[0].kind == "availability"
+    assert planned.steps[1].reads[0].parameters.get("device_key") is None
+    assert planned.steps[1].facts["compound_visit_missing_device"] is True
+    assert "compound_visit_no_joint_window" not in planned.steps[1].facts
+    assert adapter.requests == []
