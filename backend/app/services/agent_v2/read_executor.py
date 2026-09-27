@@ -452,7 +452,19 @@ def _read_service_catalog(
     include_explanation: bool = False,
 ) -> ReadResult:
     service_id = request.parameters.get("service_id")
-    row = _catalog_row(_catalog(context), "services", service_id) if service_id else None
+    if service_id is None:
+        services = [
+            {"name": row.get("name")}
+            for row in _catalog_rows(_catalog(context), "services")
+            if row.get("name") not in (None, "")
+        ]
+        return ReadResult(
+            kind=request.kind,
+            ok=True,
+            payload={"services": services},
+        )
+
+    row = _catalog_row(_catalog(context), "services", service_id)
     if row is None:
         return ReadResult(
             kind=request.kind,

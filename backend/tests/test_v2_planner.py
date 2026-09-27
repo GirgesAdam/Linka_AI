@@ -474,6 +474,22 @@ def test_safe_pulse_offer_read_is_preserved_with_ordinary_human_support() -> Non
     assert plan.steps[1].disposition == "handoff"
 
 
+def test_open_ended_service_info_reads_catalog_without_forcing_service_choice() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[_operation("service_info")],
+        safety_signals=[],
+    )
+
+    plan = plan_turn(turn, _context())
+
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_service"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.reads[0].parameters == {}
+
+
 def test_multiple_safe_reads_keep_order_before_one_handoff() -> None:
     turn = TiaTurnUnderstanding(
         operations=[

@@ -257,9 +257,21 @@ def _deterministic_pure_price_reply(
 
     price = _service_price_text(service, arabic=arabic)
     if price:
+        customer_duration = str(service.get("customer_duration_text") or "").strip()
+        duration_minutes = service.get("duration_minutes")
         if arabic:
-            return f"جلسة {service_name} سعرها {price}.", "deterministic:verified-price"
-        return f"{service_name} is {price}.", "deterministic:verified-price"
+            reply = f"جلسة {service_name} سعرها {price}"
+            if customer_duration:
+                reply += f"، ومدتها {customer_duration}"
+            elif duration_minutes not in (None, ""):
+                reply += f"، ومدتها {duration_minutes} دقيقة"
+            return reply + ".", "deterministic:verified-price"
+        reply = f"{service_name} is {price}"
+        if customer_duration:
+            reply += f"; duration: {customer_duration}"
+        elif duration_minutes not in (None, ""):
+            reply += f" and takes {duration_minutes} minutes"
+        return reply + ".", "deterministic:verified-price"
 
     return (
         (
