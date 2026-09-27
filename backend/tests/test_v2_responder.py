@@ -295,6 +295,29 @@ def test_pure_price_reply_is_deterministic_and_skips_model(
     assert model == "deterministic:verified-price"
 
 
+def test_pure_price_reply_includes_verified_requested_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("verified price+duration must stay deterministic")),
+    )
+    outcome = _price_outcome()
+    outcome.facts["service_catalog"]["service"]["duration_minutes"] = 60
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="الإبط بكام وبيستغرق قد إيه؟")],
+        outcomes=[outcome],
+    )
+
+    assert text == "جلسة ليزر إبط سعرها 500 جنيه، ومدتها 60 دقيقة."
+    assert model == "deterministic:verified-price"
+
+
 def test_pure_doctor_list_is_complete_once_and_skips_model(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_if_built():
         raise AssertionError("pure doctor discovery should not build the responder model")

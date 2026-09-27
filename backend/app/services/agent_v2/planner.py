@@ -635,13 +635,16 @@ def _plan_operation(
         )
 
     if operation.type == "service_info":
-        if "service_id" not in params:
-            return _clarify(index=index, operation=operation, field="service")
+        service_params = (
+            {"service_id": params["service_id"]}
+            if "service_id" in params
+            else {}
+        )
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
             disposition="read",
-            reads=[ReadRequest(kind="service_catalog", parameters={"service_id": params["service_id"]})],
+            reads=[ReadRequest(kind="service_catalog", parameters=service_params)],
             response_goal="answer_service",
             facts=params,
         )
