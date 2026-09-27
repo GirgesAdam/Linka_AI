@@ -452,6 +452,17 @@ def finalize_step_after_state_transition(
     if step.state_action != "cancel_active":
         return step
     if transition.changed and transition.active_task is None:
+        if step.facts.get("canonical_target_non_actionable") is True:
+            return step.model_copy(
+                update={
+                    "response_goal": "clarification",
+                    "facts": {
+                        **step.facts,
+                        "active_task_cancelled": True,
+                        "active_task_invalidated": True,
+                    },
+                }
+            )
         return step.model_copy(
             update={
                 "response_goal": "active_task_cancelled",
