@@ -9,7 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.outcome import ResponseGoal
-from app.services.agent_v2.state import ActiveTaskState, OptionChoice, OptionSnapshot
+from app.services.agent_v2.state import (
+    ActiveTaskState,
+    OptionChoice,
+    OptionSnapshot,
+    RescheduleTaskState,
+)
 from app.services.agent_v2.state_rules import option_snapshot_is_current
 
 PlanDisposition = Literal[
@@ -387,12 +392,33 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
     if purpose == "reschedule_slot":
         authorized = (
             operation.execution_intent == "execute"
-            and state.task_type == "reschedule"
+            and isinstance(state, RescheduleTaskState)
             and state.write_authorization.authorized
             and state.write_authorization.operation == "reschedule"
         )
         if not authorized:
             return _clarify(index=index, operation=operation, field="selection")
+
+        target = getattr(state, "target", None)
+        target_appointment_id = str(getattr(target, "appointment_id", "") or "").strip()
+        selected_appointment_id = str(selected.payload.get("appointment_id") or "").strip()
+        if not target_appointment_id:
+            return _clarify(index=index, operation=operation, field="appointment")
+        if selected_appointment_id and selected_appointment_id != target_appointment_id:
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="blocked",
+                response_goal="clarification",
+                clarification_field="appointment",
+                facts={
+                    "reason": "reschedule_target_conflict",
+                    "selected_option_ref": selected.ref,
+                },
+            )
+
+        parameters = dict(selected.payload)
+        parameters["appointment_id"] = target_appointment_id
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
@@ -401,7 +427,7 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
             write_intent=WriteIntent(
                 kind="reschedule",
                 authorized=True,
-                parameters=dict(selected.payload),
+                parameters=parameters,
                 requires_verification=True,
             ),
             response_goal="reschedule_completed",

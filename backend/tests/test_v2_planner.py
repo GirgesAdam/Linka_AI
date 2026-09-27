@@ -23,6 +23,8 @@ from app.services.agent_v2.state import (
     CustomerConstraints,
     OptionChoice,
     OptionSnapshot,
+    RescheduleTarget,
+    RescheduleTaskState,
     WriteAuthorization,
 )
 
@@ -206,6 +208,113 @@ def test_verified_booking_snapshot_selection_requires_persisted_write_authorizat
     no_write = plan_turn(turn, _context(active_task=unauthorized_task)).steps[0]
     assert no_write.disposition == "respond"
     assert no_write.write_intent is None
+
+
+def _authorized_reschedule_task(
+    *,
+    appointment_id: str = "appointment-1",
+    slot_appointment_id: str | None = None,
+) -> RescheduleTaskState:
+    payload: dict[str, object] = {
+        "start_time_24h": "10:00",
+        "start_at": "2026-09-30T10:00:00+03:00",
+        "service_id": "service-underarm",
+        "doctor_id": "doctor-maryam",
+    }
+    if slot_appointment_id is not None:
+        payload["appointment_id"] = slot_appointment_id
+    snapshot = OptionSnapshot(
+        snapshot_id="reschedule-snapshot-1",
+        purpose="reschedule_slot",
+        task_version=4,
+        created_at=NOW - timedelta(minutes=1),
+        expires_at=NOW + timedelta(minutes=9),
+        options=[OptionChoice(ref="slot-1", label="10:00", payload=payload)],
+    )
+    return RescheduleTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(
+            operation="reschedule",
+            authorized=True,
+            source_turn_id="turn-reschedule",
+            granted_at=NOW - timedelta(minutes=2),
+        ),
+        target=RescheduleTarget(
+            appointment_id=appointment_id,
+            service_id="service-underarm",
+            doctor_id="doctor-maryam",
+            start_local="2026-09-28T10:00:00+03:00",
+        ),
+        replacement=CustomerConstraints(
+            service_id="service-underarm",
+            doctor_id="doctor-maryam",
+            date=DateConstraint(mode="exact", start_date="2026-09-30"),
+        ),
+        option_snapshot=snapshot,
+        version=4,
+    )
+
+
+def _select_reschedule_time() -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="select_active",
+                entities=TurnEntities(),
+                selection=Selection(kind="time", time="10:00"),
+                package_usage="unspecified",
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ],
+        safety_signals=[],
+    )
+
+
+def test_reschedule_slot_selection_preserves_persisted_target_appointment_id() -> None:
+    state = _authorized_reschedule_task()
+
+    step = plan_turn(_select_reschedule_time(), _context(active_task=state)).steps[0]
+
+    assert step.disposition == "write_ready"
+    assert step.write_intent is not None
+    assert step.write_intent.kind == "reschedule"
+    assert step.write_intent.parameters["appointment_id"] == "appointment-1"
+    assert step.write_intent.parameters["start_at"] == "2026-09-30T10:00:00+03:00"
+
+
+def test_reschedule_slot_payload_does_not_need_appointment_id() -> None:
+    state = _authorized_reschedule_task()
+    assert state.option_snapshot is not None
+    assert "appointment_id" not in state.option_snapshot.options[0].payload
+
+    step = plan_turn(_select_reschedule_time(), _context(active_task=state)).steps[0]
+
+    assert step.disposition == "write_ready"
+    assert step.write_intent is not None
+    assert step.write_intent.parameters["appointment_id"] == state.target.appointment_id
+
+
+def test_reschedule_slot_cannot_override_persisted_target_identity() -> None:
+    state = _authorized_reschedule_task(slot_appointment_id="appointment-2")
+
+    step = plan_turn(_select_reschedule_time(), _context(active_task=state)).steps[0]
+
+    assert step.disposition == "blocked"
+    assert step.write_intent is None
+    assert step.clarification_field == "appointment"
+    assert step.facts["reason"] == "reschedule_target_conflict"
+
+
+def test_reschedule_slot_without_valid_persisted_target_fails_closed() -> None:
+    state = _authorized_reschedule_task()
+    invalid = state.model_copy(update={"target": None})
+
+    step = plan_turn(_select_reschedule_time(), _context(active_task=invalid)).steps[0]
+
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "appointment"
+    assert step.write_intent is None
 
 
 def test_stale_snapshot_selection_never_writes() -> None:
