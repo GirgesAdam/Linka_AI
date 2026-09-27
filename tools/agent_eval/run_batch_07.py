@@ -57,7 +57,7 @@ from tools.agent_eval.run_batch_04 import _replacement_rows
 ScenarioFn = Callable[[Session, Workspace], ScenarioResult]
 BATCH_NUMBER = 7
 SCENARIO_VERSION = "batch7-v1"
-BATCH7_FIXTURE_VERSION = "batch7-demo-fixtures-v1"
+BATCH7_FIXTURE_VERSION = "batch7-demo-fixtures-v2"
 
 STALE_COUNTER_KEYS = (
     "stale_service_carryovers",
@@ -357,6 +357,26 @@ def _service_slot(
             return catalog, doctor, available, slot
     raise RuntimeError("EVAL_INFRA_ERROR: no suitable service slot")
 
+
+
+def _cancellation_safe_service_slot(
+    db: Session,
+    workspace: Workspace,
+    service: Service,
+):
+    catalog, doctor, _nearest_available, nearest_slot = _service_slot(
+        db,
+        workspace,
+        service,
+    )
+    available, slot = _future_slot(
+        db,
+        workspace,
+        service_id=str(service.id),
+        doctor_id=str(doctor["id"]),
+        after_date=nearest_slot.start_at.astimezone(UTC).date(),
+    )
+    return catalog, doctor, available, slot
 
 def _two_doctor_slots(
     db: Session,
@@ -1304,7 +1324,11 @@ def case_11_cancel_one_then_modify_other(db: Session, workspace: Workspace) -> S
     scenario_id = "b7_11_cancel_one_then_modify_other"
     patient = quiet_patient(db, workspace)
     service = service_by_slug(db, workspace, "hydrafacial")
-    _catalog, doctor, av_a, slot_a = _service_slot(db, workspace, service)
+    _catalog, doctor, av_a, slot_a = _cancellation_safe_service_slot(
+        db,
+        workspace,
+        service,
+    )
     av_b, slot_b = _future_slot(
         db,
         workspace,
@@ -1520,6 +1544,17 @@ def case_12_reception_edits_appointment_during_conversation(db: Session, workspa
     )
 
 
+
+def _active_reschedule_targets(
+    active_task: object,
+    appointment_id: str,
+) -> bool:
+    return bool(
+        isinstance(active_task, dict)
+        and active_task.get("task_type") == "reschedule"
+        and (active_task.get("target") or {}).get("appointment_id") == appointment_id
+    )
+
 def case_13_external_cancel_before_followup_action(db: Session, workspace: Workspace) -> ScenarioResult:
     scenario_id = "b7_13_external_cancel_before_followup_action"
     patient = quiet_patient(db, workspace)
@@ -1585,9 +1620,16 @@ def case_13_external_cancel_before_followup_action(db: Session, workspace: Works
     after = extended_state_snapshot(db, workspace, patient)
     source_after = _appointment_by_id(after, source.id)
     replacements = _replacement_rows(after, source.id)
-    active_after_cancel = evidence[-1].get("active_task_after") if evidence else None
+    cancel_followup_index = 3
+    active_after_cancel = (
+        evidence[cancel_followup_index].get("active_task_after")
+        if len(evidence) > cancel_followup_index
+        else None
+    )
     counters = _counter(
-        wrong_active_task_target=int(active_after_cancel is not None),
+        wrong_active_task_target=int(
+            _active_reschedule_targets(active_after_cancel, str(source.id))
+        ),
         duplicate_writes=max(0, len(replacements) - 1),
         stale_lifecycle_writes=int(bool(replacements)),
         wrong_appointment_writes=int(bool(replacements)),
