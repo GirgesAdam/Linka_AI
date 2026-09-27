@@ -409,6 +409,85 @@ def _availability_fact_payloads(outcomes: list[TurnOutcome]) -> list[dict[str, o
     return payloads
 
 
+def _device_price_clarification_pairs(
+    outcomes: list[TurnOutcome],
+) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for outcome in outcomes:
+        if outcome.status != "needs_input" or outcome.response_goal != "clarification":
+            continue
+        if outcome.facts.get("needed") != "device":
+            continue
+        availability = outcome.facts.get("availability")
+        if not isinstance(availability, dict):
+            continue
+        raw_options = availability.get("laser_device_options")
+        if not isinstance(raw_options, list):
+            continue
+        for raw in raw_options:
+            if not isinstance(raw, dict):
+                continue
+            device_name = str(raw.get("device_name") or "").strip()
+            price = str(raw.get("price") or "").strip()
+            if not device_name or not price:
+                continue
+            pair = (device_name, price)
+            if pair in seen:
+                continue
+            seen.add(pair)
+            pairs.append(pair)
+    return pairs
+
+
+def _device_price_pair_is_visible(
+    text: str,
+    *,
+    device_name: str,
+    price: str,
+) -> bool:
+    name_index = text.find(device_name)
+    if name_index < 0:
+        return False
+    amount = price.split()[0]
+    if not amount:
+        return False
+    nearby = text[name_index : name_index + len(device_name) + 80]
+    return amount.rstrip("0").rstrip(".") in nearby or amount in nearby
+
+
+def _deterministic_device_price_guard_reply(
+    text: str,
+    *,
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+) -> str | None:
+    pairs = _device_price_clarification_pairs(outcomes)
+    if len(pairs) < 2:
+        return None
+    if all(
+        _device_price_pair_is_visible(
+            text,
+            device_name=device_name,
+            price=price,
+        )
+        for device_name, price in pairs
+    ):
+        return None
+
+    arabic = _latest_customer_is_arabic(history)
+    rendered: list[str] = []
+    for device_name, price in pairs:
+        visible_price = _format_verified_price(price, arabic=arabic) or price
+        if arabic:
+            rendered.append(f"{device_name} بسعر {visible_price}")
+        else:
+            rendered.append(f"{device_name} at {visible_price}")
+    if arabic:
+        return "اختاري جهاز الليزر: " + "، ".join(rendered) + "."
+    return "Choose the laser device: " + "; ".join(rendered) + "."
+
+
 def _verified_availability_claim(outcomes: list[TurnOutcome]) -> AvailabilityClaim:
     """Derive availability truth only from deterministic outcomes, never from generated prose."""
     payloads = _availability_fact_payloads(outcomes)
@@ -670,6 +749,17 @@ def compose_v2_customer_reply(
             verified_claim=verified_claim,
         )
         return text, f"deterministic:availability-guard:{model_label(invocation.model_name)}"
+
+    guarded_device_prices = _deterministic_device_price_guard_reply(
+        text,
+        history=history,
+        outcomes=outcomes,
+    )
+    if guarded_device_prices is not None:
+        return (
+            guarded_device_prices,
+            f"deterministic:device-price-guard:{model_label(invocation.model_name)}",
+        )
 
     text = _ensure_verified_doctor_list(text, history=history, outcomes=outcomes)
     return text, model_label(invocation.model_name)
