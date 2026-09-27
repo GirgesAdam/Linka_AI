@@ -2,6 +2,7 @@ import pytest
 
 from tools.agent_eval.registry import scenarios_for_batch, select_scenarios
 from tools.agent_eval.run import main
+from tools.agent_eval.run_batch_07 import _replacement_chain
 
 EXPECTED = [
     "b7_01_booking_doctor_info_price_resume",
@@ -45,3 +46,19 @@ def test_batch7_single_scenario_selector() -> None:
 def test_batch7_unknown_selector_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown scenario selector"):
         select_scenarios("batch_07", selectors={"S99"})
+
+
+def test_replacement_chain_follows_transitive_reschedules() -> None:
+    snapshot = {
+        "appointments": [
+            {"id": "source", "rescheduled_from_appointment_id": None},
+            {"id": "replacement-1", "rescheduled_from_appointment_id": "source"},
+            {"id": "replacement-2", "rescheduled_from_appointment_id": "replacement-1"},
+            {"id": "unrelated", "rescheduled_from_appointment_id": None},
+        ]
+    }
+
+    assert [row["id"] for row in _replacement_chain(snapshot, "source")] == [
+        "replacement-1",
+        "replacement-2",
+    ]
