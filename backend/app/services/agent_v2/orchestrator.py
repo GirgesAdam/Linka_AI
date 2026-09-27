@@ -751,6 +751,69 @@ def _canonical_reschedule_target_is_non_actionable(
     return isinstance(rows, list) and not rows
 
 
+def _invalidated_reschedule_context(
+    active_task: ActiveTaskState | None,
+) -> dict[str, object] | None:
+    if not isinstance(active_task, RescheduleTaskState):
+        return None
+    return {
+        "operation_type": "reschedule_invalidated",
+        "target_appointment_id": active_task.target.appointment_id,
+        "replacement": active_task.replacement.model_dump(mode="json"),
+    }
+
+
+def _same_invalidated_reschedule_continuation(
+    step: PlanStep,
+    operation: TurnOperation,
+    recent_action: dict[str, object],
+) -> bool:
+    if (
+        recent_action.get("operation_type") != "reschedule_invalidated"
+        or not operation.continues_previous
+        or step.operation_type not in {"book", "reschedule"}
+    ):
+        return False
+    raw_replacement = recent_action.get("replacement")
+    if not isinstance(raw_replacement, dict):
+        return False
+
+    def compatible(current: object, previous: object) -> bool:
+        if current in (None, "", {}, []):
+            return True
+        if isinstance(current, dict):
+            if not isinstance(previous, dict):
+                return False
+            return all(
+                compatible(value, previous.get(key))
+                for key, value in current.items()
+            )
+        return previous not in (None, "", {}, []) and current == previous
+
+    return all(
+        compatible(step.facts.get(key), raw_replacement.get(key))
+        for key in ("service_id", "doctor_id", "device_key", "date", "time")
+    )
+
+
+def _invalidated_reschedule_continuation_step(step: PlanStep) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "respond",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "clarification",
+            "clarification_field": None,
+            "facts": {
+                "active_task_invalidated": True,
+                "canonical_target_non_actionable": True,
+                "stale_continuation_blocked": True,
+            },
+        }
+    )
+
+
 def _invalidated_reschedule_step(step: PlanStep) -> PlanStep:
     return step.model_copy(
         update={
@@ -802,6 +865,10 @@ def _normalize_recent_action_acknowledgments(
         # current lifecycle truth.
         if _bare_recent_cancellation(step, operation, recent_action):
             ack_facts = _acknowledgment_facts("cancel_appointment")
+        if _same_invalidated_reschedule_continuation(step, operation, recent_action):
+            normalized.append(_invalidated_reschedule_continuation_step(step))
+            changed = True
+            continue
         if ack_facts is None:
             normalized.append(step)
             continue
@@ -1186,6 +1253,9 @@ def orchestrate_v2_turn(
             target_validation_reads,
         ):
             reads = target_validation_reads
+            invalidated_context = _invalidated_reschedule_context(current_task)
+            if invalidated_context is not None:
+                completed_action_context = invalidated_context
             advanced = _invalidated_reschedule_step(effective_step)
         elif (
             recent_booking_validation is not None

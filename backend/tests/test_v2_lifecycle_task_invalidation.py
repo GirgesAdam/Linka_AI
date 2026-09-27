@@ -18,9 +18,11 @@ from app.services.agent_v2.active_task_progress import plan_active_task_progress
 from app.services.agent_v2.orchestrator import (
     _active_reschedule_target_validation_request,
     _canonical_reschedule_target_is_non_actionable,
+    _invalidated_reschedule_context,
     _invalidated_reschedule_step,
+    _normalize_recent_action_acknowledgments,
 )
-from app.services.agent_v2.planner import PlanStep, ReadRequest, VerificationFacts
+from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, VerificationFacts
 from app.services.agent_v2.read_executor import (
     ReadExecutionBundle,
     ReadExecutionContext,
@@ -325,4 +327,93 @@ def test_new_booking_after_invalidation_starts_without_old_reschedule_constraint
     assert booking.constraints.time == TimeConstraint(
         mode="exact",
         start_time="17:00",
+    )
+
+
+
+def test_invalidated_reschedule_context_blocks_same_stale_booking_continuation() -> None:
+    recent_action = _invalidated_reschedule_context(_state())
+    assert recent_action is not None
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="start_booking",
+        response_goal="present_availability",
+        facts={
+            "service_id": "svc-hydra",
+            "doctor_id": "doc-old",
+            "date": {"mode": "exact", "start_date": "2026-09-29"},
+            "time": {
+                "mode": "exact",
+                "start_time": "10:00",
+                "start_time_ambiguity": "none",
+                "end_time_ambiguity": "none",
+            },
+        },
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-09-29"),
+            time=TimeConstraint(mode="exact", start_time="10:00"),
+        ),
+        execution_intent="execute",
+        continues_previous=True,
+    )
+    understanding = SimpleNamespace(operations=[operation])
+    normalized = _normalize_recent_action_acknowledgments(
+        TurnPlan(steps=[step]),
+        understanding,
+        recent_action=recent_action,
+        timezone_name="Africa/Cairo",
+    )
+    result = normalized.steps[0]
+
+    assert result.disposition == "respond"
+    assert result.state_action == "none"
+    assert result.write_intent is None
+    assert result.facts["stale_continuation_blocked"] is True
+
+
+def test_invalidated_reschedule_context_allows_explicit_materially_new_booking() -> None:
+    recent_action = _invalidated_reschedule_context(_state())
+    assert recent_action is not None
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="start_booking",
+        response_goal="present_availability",
+        facts={
+            "service_id": "svc-new",
+            "date": {"mode": "exact", "start_date": "2026-10-03"},
+            "time": {
+                "mode": "exact",
+                "start_time": "17:00",
+                "start_time_ambiguity": "none",
+                "end_time_ambiguity": "none",
+            },
+        },
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-03"),
+            time=TimeConstraint(mode="exact", start_time="17:00"),
+        ),
+        execution_intent="execute",
+        continues_previous=True,
+    )
+    understanding = SimpleNamespace(operations=[operation])
+    plan = TurnPlan(steps=[step])
+
+    assert (
+        _normalize_recent_action_acknowledgments(
+            plan,
+            understanding,
+            recent_action=recent_action,
+            timezone_name="Africa/Cairo",
+        )
+        == plan
     )
