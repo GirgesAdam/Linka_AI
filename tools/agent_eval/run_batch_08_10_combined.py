@@ -325,7 +325,7 @@ def case_07_package_remaining_read(db: Session, workspace: Workspace) -> Scenari
         risk="wrong remaining-session count or package mutation",
         patient=patient,
         messages=["فاضلي كام جلسة في الباكدج بتاعتي؟"],
-        required_all=["2"],
+        required_any=["2", "جلستين", "جلستان"],
     )
 
 
