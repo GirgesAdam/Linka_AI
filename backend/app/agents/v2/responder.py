@@ -748,6 +748,16 @@ def compose_v2_customer_reply(
             outcomes=outcomes,
             verified_claim=verified_claim,
         )
+        guarded_device_prices = _deterministic_device_price_guard_reply(
+            text,
+            history=history,
+            outcomes=outcomes,
+        )
+        if guarded_device_prices is not None:
+            return (
+                guarded_device_prices,
+                f"deterministic:device-price-guard:{model_label(invocation.model_name)}",
+            )
         return text, f"deterministic:availability-guard:{model_label(invocation.model_name)}"
 
     guarded_device_prices = _deterministic_device_price_guard_reply(

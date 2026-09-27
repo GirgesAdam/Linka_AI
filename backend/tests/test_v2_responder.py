@@ -176,6 +176,37 @@ def test_device_price_guard_replaces_unbound_transliterated_reply(
     assert "برايم" not in text
 
 
+def test_device_price_guard_applies_after_availability_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
+    monkeypatch.setattr(
+        responder,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=responder.ResponderDraft(
+                reply="للأسف مفيش مواعيد متاحة.",
+                availability_claim="no_availability",
+            ),
+            model_name="test-model",
+        ),
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="اختار جهاز إيه؟")],
+        outcomes=[_device_price_clarification_outcome()],
+    )
+
+    assert source == "deterministic:device-price-guard:test-model"
+    assert "Candela Gentle" in text and "650 جنيه" in text
+    assert "Prime Lase" in text and "550 جنيه" in text
+    assert "مفيش مواعيد" not in text
+
+
 def test_device_price_guard_keeps_correct_canonical_pairs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
