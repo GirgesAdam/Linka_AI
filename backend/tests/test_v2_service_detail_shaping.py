@@ -103,6 +103,35 @@ def test_duration_is_exposed_only_when_semantically_requested() -> None:
     assert service == {"name": "ليزر إبط", "customer_duration_text": "حوالي 15 دقيقة"}
 
 
+def test_open_ended_service_catalog_preserves_only_verified_service_list() -> None:
+    operation = TurnOperation(
+        type="service_info",
+        entities=TurnEntities(),
+        selection=None,
+        package_usage="unspecified",
+        requested_service_details=[],
+    )
+    turn = TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+    step = PlanStep(
+        operation_index=0,
+        operation_type="service_info",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog")],
+        response_goal="answer_service",
+    )
+    reads = ReadExecutionBundle(
+        results=[ReadResult(kind="service_catalog", ok=True, payload={"services": [{"name": "Hydrafacial"}, {"name": "PRP للبشرة"}]})]
+    )
+
+    visible = customer_visible_outcome(
+        build_step_outcome(step, turn=turn, semantic_context=_context(), reads=reads)
+    )
+
+    assert visible["facts"]["service_catalog"] == {
+        "services": [{"name": "Hydrafacial"}, {"name": "PRP للبشرة"}]
+    }
+
+
 def test_generic_service_information_defaults_to_description_not_duration() -> None:
     operation = TurnOperation(
         type="service_info",

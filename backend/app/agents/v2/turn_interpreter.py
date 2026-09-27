@@ -210,9 +210,12 @@ SEMANTIC PRINCIPLES
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
   customer is actually asking Tia to carry out cancellation/refund/termination now, interpret it as
   human_support because the agent must not execute purchased-package cancellation.
-- clinic_info covers clinic-wide informational/explanatory questions, including policies, general
-  service guidance, and comparisons between clinic devices when the question is not about one
-  specific service. service_info is for information about one specific service.
+- clinic_info covers clinic-wide operational/informational questions such as location, policies,
+  and comparisons between clinic devices when the question is not about one specific service.
+  service_info covers one specific service and open-ended discovery/listing of the clinic's services;
+  for an open-ended service-list request, leave the service entity null instead of inventing one.
+- appointment_list covers current/upcoming appointments. Requests about prior, past, completed, or
+  cancelled appointment history belong to customer_history instead.
 - customer_history covers the customer's own prior visits/services/payment facts. A discrepancy or
   contested payment is additionally payment_dispute.
 - Medical suitability/symptom questions are medical safety signals; acute/emergency-seeming medical
