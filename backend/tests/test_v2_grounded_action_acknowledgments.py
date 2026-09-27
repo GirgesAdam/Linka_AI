@@ -73,7 +73,7 @@ def _booking_step(
     )
 
 
-def _booking_operation() -> TurnOperation:
+def _booking_operation(*, continues_previous: bool = True) -> TurnOperation:
     return TurnOperation(
         type="book",
         entities=TurnEntities(
@@ -84,6 +84,7 @@ def _booking_operation() -> TurnOperation:
             time=TimeConstraint(mode="exact", start_time="14:00"),
         ),
         execution_intent="execute",
+        continues_previous=continues_previous,
     )
 
 
@@ -213,6 +214,7 @@ def test_same_effective_booking_waits_for_canonical_revalidation() -> None:
     assert normalized == plan
     request = _recent_booking_validation_request(
         plan.steps[0],
+        _booking_operation(),
         _recent_booking(),
         timezone_name="Africa/Cairo",
     )
@@ -272,9 +274,21 @@ def test_materially_changed_canonical_booking_is_not_acknowledged_as_stale_match
     )
 
 
+def test_explicit_new_booking_does_not_use_recent_booking_acknowledgment() -> None:
+    request = _recent_booking_validation_request(
+        _booking_step(),
+        _booking_operation(continues_previous=False),
+        _recent_booking(),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert request is None
+
+
 def test_meaningful_customer_dimension_change_uses_normal_booking_flow() -> None:
     request = _recent_booking_validation_request(
         _booking_step(time="15:00"),
+        _booking_operation(),
         _recent_booking(),
         timezone_name="Africa/Cairo",
     )

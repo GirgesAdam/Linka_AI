@@ -410,12 +410,14 @@ def _exact_requested_start_at(step: PlanStep, *, timezone_name: str) -> datetime
 
 def _same_recent_booking(
     step: PlanStep,
+    operation: TurnOperation,
     recent_action: dict[str, object],
     *,
     timezone_name: str,
 ) -> bool:
     if (
         step.operation_type != "book"
+        or not operation.continues_previous
         or recent_action.get("operation_type") != "book"
         or recent_action.get("status") not in {"pending", "confirmed"}
     ):
@@ -641,6 +643,7 @@ def _acknowledgment_facts(action: str, *, same_booking: bool = False) -> dict[st
 
 def _recent_booking_validation_request(
     step: PlanStep,
+    operation: TurnOperation,
     recent_action: dict[str, object] | None,
     *,
     timezone_name: str,
@@ -648,7 +651,12 @@ def _recent_booking_validation_request(
     """Return the targeted canonical read required before a duplicate-booking ack."""
     if not isinstance(recent_action, dict):
         return None
-    if not _same_recent_booking(step, recent_action, timezone_name=timezone_name):
+    if not _same_recent_booking(
+        step,
+        operation,
+        recent_action,
+        timezone_name=timezone_name,
+    ):
         return None
     appointment_id = recent_action.get("appointment_id")
     if appointment_id in (None, ""):
@@ -1231,6 +1239,7 @@ def orchestrate_v2_turn(
 
         recent_booking_validation = _recent_booking_validation_request(
             effective_step,
+            operation,
             recent_action_context,
             timezone_name=timezone_name,
         )
