@@ -128,6 +128,53 @@ def customer_visible_outcome(outcome: TurnOutcome) -> dict[str, object]:
     }
 
 
+def _availability_device_price_facts(
+    slots: list[object],
+) -> tuple[list[dict[str, object]], list[str]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for raw_slot in slots:
+        if not isinstance(raw_slot, dict):
+            continue
+        device_key = str(raw_slot.get("laser_device_key") or "").strip()
+        device_name = str(raw_slot.get("laser_device_name") or "").strip()
+        if not device_key and not device_name:
+            continue
+        identity = f"key:{device_key}" if device_key else f"name:{device_name.casefold()}"
+        entry = grouped.setdefault(
+            identity,
+            {
+                "device_name": device_name,
+                "prices": set(),
+            },
+        )
+        if not entry.get("device_name") and device_name:
+            entry["device_name"] = device_name
+        price = _money(raw_slot.get("price_minor"), raw_slot.get("currency"))
+        if price is not None:
+            prices = entry["prices"]
+            assert isinstance(prices, set)
+            prices.add(price)
+
+    options: list[dict[str, object]] = []
+    conflicts: list[str] = []
+    for entry in grouped.values():
+        device_name = str(entry.get("device_name") or "").strip()
+        if not device_name:
+            continue
+        prices = entry["prices"]
+        assert isinstance(prices, set)
+        option: dict[str, object] = {"device_name": device_name}
+        if len(prices) == 1:
+            option["price"] = next(iter(prices))
+        elif len(prices) > 1:
+            conflicts.append(device_name)
+        options.append(option)
+
+    options.sort(key=lambda row: str(row["device_name"]))
+    conflicts.sort()
+    return options, conflicts
+
+
 def _availability_facts(result: ReadResult) -> dict[str, object]:
     payload = result.payload
     raw_slots = payload.get("slots")
@@ -148,6 +195,7 @@ def _availability_facts(result: ReadResult) -> dict[str, object]:
         }
         for window in windows
     ]
+    laser_device_options, device_price_conflicts = _availability_device_price_facts(slots)
     prices = {
         str(_money(slot.get("price_minor"), slot.get("currency")))
         for slot in slots
@@ -160,7 +208,13 @@ def _availability_facts(result: ReadResult) -> dict[str, object]:
         "available_option_count": len(slots),
         "search_truncated": bool(payload.get("search_truncated")),
     }
-    if len(prices) == 1:
+    if laser_device_options:
+        facts["laser_device_options"] = laser_device_options
+        if device_price_conflicts:
+            facts["device_price_conflicts"] = device_price_conflicts
+        if len(laser_device_options) == 1 and "price" in laser_device_options[0]:
+            facts["price"] = laser_device_options[0]["price"]
+    elif len(prices) == 1:
         facts["price"] = next(iter(prices))
     elif prices:
         facts["prices"] = sorted(prices)

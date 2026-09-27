@@ -88,6 +88,40 @@ def test_responder_payload_removes_internal_ids_and_formats_money_before_llm() -
     assert "ليزر إبط" in payload
 
 
+def test_responder_receives_explicit_device_price_pairs_for_availability() -> None:
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "availability": {
+                "service_name": "ليزر إزالة الشعر - إبط",
+                "available_option_count": 2,
+                "availability_windows": [
+                    {"laser_device_name": "Candela Gentle", "start_time_24h": "12:00"},
+                    {"laser_device_name": "Prime Lase", "start_time_24h": "12:00"},
+                ],
+                "laser_device_options": [
+                    {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+                    {"device_name": "Prime Lase", "price": "550.00 EGP"},
+                ],
+            }
+        },
+    )
+    messages = _build_responder_messages(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="اختار جهاز إيه؟")],
+        outcomes=[outcome],
+    )
+    payload = str(messages[-2].content)
+
+    assert '"device_name":"Candela Gentle","price":"650.00 EGP"' in payload
+    assert '"device_name":"Prime Lase","price":"550.00 EGP"' in payload
+    assert '"prices":' not in payload
+    assert "laser_device_key" not in payload
+
+
 def test_compound_outcomes_are_given_to_one_responder_call() -> None:
     outcomes = [
         _price_outcome(),
