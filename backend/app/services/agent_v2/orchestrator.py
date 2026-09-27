@@ -67,6 +67,7 @@ from app.services.agent_v2.state import (
     BookingTaskState,
     OptionChoice,
     OptionSnapshot,
+    RescheduleTaskState,
 )
 from app.services.agent_v2.state_executor import (
     apply_step_state,
@@ -714,6 +715,60 @@ def _canonical_recent_booking_is_current(
     return False
 
 
+def _active_reschedule_target_validation_request(
+    step: PlanStep,
+    active_task: ActiveTaskState | None,
+) -> ReadRequest | None:
+    if not isinstance(active_task, RescheduleTaskState):
+        return None
+    if step.operation_type != "reschedule":
+        return None
+    target_id = active_task.target.appointment_id
+    for request in step.reads:
+        if (
+            request.kind == "appointments"
+            and str(request.parameters.get("appointment_id") or "") == str(target_id)
+        ):
+            return request
+    return None
+
+
+def _canonical_reschedule_target_is_non_actionable(
+    request: ReadRequest | None,
+    reads: ReadExecutionBundle,
+) -> bool:
+    if request is None or request.kind != "appointments":
+        return False
+    target_id = request.parameters.get("appointment_id")
+    if target_id in (None, "") or reads.verification.appointment_match_count != 0:
+        return False
+    appointment_results = [
+        result for result in reads.results if result.kind == "appointments"
+    ]
+    if len(appointment_results) != 1 or not appointment_results[0].ok:
+        return False
+    rows = appointment_results[0].payload.get("appointments")
+    return isinstance(rows, list) and not rows
+
+
+def _invalidated_reschedule_step(step: PlanStep) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "respond",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "cancel_active",
+            "response_goal": "clarification",
+            "clarification_field": None,
+            "facts": {
+                **step.facts,
+                "active_task_invalidated": True,
+                "canonical_target_non_actionable": True,
+            },
+        }
+    )
+
+
 def _booking_acknowledgment_step(step: PlanStep) -> PlanStep:
     return step.model_copy(
         update={
@@ -792,6 +847,7 @@ def _persist_final_task(
     initial: PersistedActiveTask | None,
     final_task: ActiveTaskState | None,
     cancelled_existing_task: bool,
+    cancelled_existing_task_reason: str | None,
     completed_existing_task_result: dict[str, object] | None,
 ) -> PersistedActiveTask | None:
     initial_task = initial.active_task if initial is not None else None
@@ -818,6 +874,10 @@ def _persist_final_task(
                     patient_id=patient_id,
                     expected=initial,
                     run_id=run_id,
+                    reason=(
+                        cancelled_existing_task_reason
+                        or "customer_cancelled_active_task"
+                    ),
                 )
             else:
                 raise RuntimeError(
@@ -1015,6 +1075,7 @@ def orchestrate_v2_turn(
     pending_write: PendingV2Write | None = None
     outgoing_pending_choice: OptionSnapshot | None = None
     cancelled_existing_task = False
+    cancelled_existing_task_reason: str | None = None
     completed_existing_task_result: dict[str, object] | None = None
     completed_action_context: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
@@ -1087,6 +1148,20 @@ def orchestrate_v2_turn(
                     context=semantic_context,
                 )
 
+        target_validation = _active_reschedule_target_validation_request(
+            effective_step,
+            current_task,
+        )
+        target_validation_reads = ReadExecutionBundle()
+        if target_validation is not None:
+            target_validation_step = effective_step.model_copy(
+                update={"reads": [target_validation]}
+            )
+            target_validation_reads = execute_step_reads(
+                target_validation_step,
+                read_context,
+            )
+
         recent_booking_validation = _recent_booking_validation_request(
             effective_step,
             recent_action_context,
@@ -1106,7 +1181,13 @@ def orchestrate_v2_turn(
             )
             validation_reads = execute_step_reads(validation_step, read_context)
 
-        if (
+        if _canonical_reschedule_target_is_non_actionable(
+            target_validation,
+            target_validation_reads,
+        ):
+            reads = target_validation_reads
+            advanced = _invalidated_reschedule_step(effective_step)
+        elif (
             recent_booking_validation is not None
             and _canonical_recent_booking_is_current(
                 recent_action_context,
@@ -1174,6 +1255,10 @@ def orchestrate_v2_turn(
             and transition.active_task is None
         ):
             cancelled_existing_task = True
+            if advanced.facts.get("canonical_target_non_actionable") is True:
+                cancelled_existing_task_reason = (
+                    "canonical_reschedule_target_non_actionable"
+                )
         current_task = transition.active_task
 
         if advanced.disposition == "write_ready":
@@ -1337,6 +1422,7 @@ def orchestrate_v2_turn(
         initial=persisted,
         final_task=current_task,
         cancelled_existing_task=cancelled_existing_task,
+        cancelled_existing_task_reason=cancelled_existing_task_reason,
         completed_existing_task_result=completed_existing_task_result,
     )
 
