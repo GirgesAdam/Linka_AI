@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 from tools.agent_eval import run_batch_07 as batch7
 from tools.agent_eval.registry import scenarios_for_batch, select_scenarios
 from tools.agent_eval.run import main
