@@ -13,6 +13,7 @@ _BATCH_MODULES = {
     "batch_03": "tools.agent_eval.run_batch_03",
     "batch_04": "tools.agent_eval.run_batch_04",
     "batch_05": "tools.agent_eval.run_batch_05",
+    "combined_08_10": "tools.agent_eval.run_batch_08_10_combined",
 }
 
 _BATCH1 = (
@@ -100,6 +101,22 @@ _BATCH5_NAMES = (
     "case_15_two_rapid_customer_turns",
 )
 
+_COMBINED_08_10_NAMES = (
+    "case_01_service_catalog_discovery", "case_02_service_price_duration",
+    "case_03_doctors_for_service", "case_04_availability_read_only",
+    "case_05_device_price_comparison", "case_06_package_offers_read",
+    "case_07_package_remaining_read", "case_08_pulse_reads_combined",
+    "case_09_upcoming_appointments_read", "case_10_appointment_history_read",
+    "case_11_vague_service_clarification", "case_12_option_followup_second_doctor",
+    "case_13_service_correction_read", "case_14_date_correction_availability",
+    "case_15_device_correction_read", "case_16_fragmented_egyptian_arabic",
+    "case_17_mixed_arabic_english", "case_18_unsupported_then_recover",
+    "case_19_repeated_price_consistency", "case_20_detour_then_resume_doctors",
+    "case_21_pronoun_reference_duration", "case_22_negative_booking_correction",
+    "case_23_explicit_human_handoff", "case_24_financial_boundary_read",
+    "case_25_long_detour_resume_appointment",
+)
+
 
 @dataclass(frozen=True)
 class Scenario:
@@ -146,8 +163,10 @@ def _rows_for(batch: BatchName) -> list[tuple[str, str]]:
         names, prefix = _BATCH3_NAMES, "b3"
     elif batch == "batch_04":
         names, prefix = _BATCH4_NAMES, "b4"
-    else:
+    elif batch == "batch_05":
         names, prefix = _BATCH5_NAMES, "b5"
+    else:
+        names, prefix = _COMBINED_08_10_NAMES, "c0810"
     return [
         (name, f"{prefix}_{name.removeprefix('case_')}")
         for name in names
