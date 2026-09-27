@@ -16,9 +16,12 @@ from app.agents.v2.turn_contract import (
 from app.services.agent_v2.orchestrator import (
     _booking_acknowledgment_step,
     _canonical_recent_booking_is_current,
+    _canonical_recent_reschedule_is_current,
     _completed_action_context,
     _normalize_recent_action_acknowledgments,
     _recent_booking_validation_request,
+    _recent_reschedule_validation_request,
+    _reschedule_acknowledgment_step,
 )
 from app.services.agent_v2.planner import (
     PlanStep,
@@ -440,6 +443,215 @@ def test_unrelated_social_followup_is_not_forced_into_completed_action_acknowled
     )
 
     assert normalized == plan
+
+
+
+
+def _reschedule_step(
+    *,
+    service_id: str = "service-1",
+    doctor_id: str = "doctor-1",
+    device_key: str | None = None,
+    date: str = "2026-09-29",
+    time: str = "10:00",
+) -> PlanStep:
+    facts: dict[str, object] = {
+        "service_id": service_id,
+        "doctor_id": doctor_id,
+        "date": {"mode": "exact", "start_date": date, "end_date": None},
+        "time": {
+            "mode": "exact",
+            "start_time": time,
+            "end_time": None,
+            "start_time_ambiguity": "none",
+            "end_time_ambiguity": "none",
+        },
+        "source_appointment": {},
+    }
+    if device_key is not None:
+        facts["device_key"] = device_key
+    return PlanStep(
+        operation_index=0,
+        operation_type="reschedule",
+        disposition="read",
+        reads=[ReadRequest(kind="appointments"), ReadRequest(kind="availability")],
+        write_intent=WriteIntent(
+            kind="reschedule",
+            authorized=True,
+            parameters=dict(facts),
+        ),
+        state_action="start_reschedule",
+        response_goal="present_availability",
+        facts=facts,
+    )
+
+
+def _reschedule_operation(
+    *,
+    date: str = "2026-09-29",
+    time: str = "10:00",
+    appointment: EntityReference | None = None,
+) -> TurnOperation:
+    return TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            appointment=appointment,
+            date=DateConstraint(mode="exact", start_date=date),
+            time=TimeConstraint(mode="exact", start_time=time),
+        ),
+        execution_intent="execute",
+    )
+
+
+def _recent_reschedule(**updates: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "operation_type": "reschedule",
+        "appointment_id": "replacement-1",
+        "previous_appointment_id": "source-1",
+        "service_id": "service-1",
+        "doctor_id": "doctor-1",
+        "start_at": "2026-09-29T07:00:00+00:00",
+        "status": "confirmed",
+    }
+    base.update(updates)
+    return base
+
+
+def test_completed_reschedule_context_uses_replacement_identity() -> None:
+    step = _reschedule_step().model_copy(
+        update={
+            "disposition": "write_ready",
+            "write_intent": WriteIntent(
+                kind="reschedule",
+                authorized=True,
+                parameters={
+                    **_reschedule_step().facts,
+                    "appointment_id": "source-1",
+                    "branch_id": "branch-1",
+                    "start_at": "2026-09-29T07:00:00+00:00",
+                },
+            ),
+        }
+    )
+
+    context = _completed_action_context(
+        step,
+        {
+            "ok": True,
+            "appointment_id": "replacement-1",
+            "previous_appointment_id": "source-1",
+            "status": "confirmed",
+        },
+    )
+
+    assert context == {
+        "operation_type": "reschedule",
+        "appointment_id": "replacement-1",
+        "previous_appointment_id": "source-1",
+        "service_id": "service-1",
+        "doctor_id": "doctor-1",
+        "start_at": "2026-09-29T07:00:00+00:00",
+        "status": "confirmed",
+        "date": {"mode": "exact", "start_date": "2026-09-29", "end_date": None},
+        "time": {
+            "mode": "exact",
+            "start_time": "10:00",
+            "end_time": None,
+            "start_time_ambiguity": "none",
+            "end_time_ambiguity": "none",
+        },
+    }
+
+
+def test_completed_reschedule_bare_confirmation_waits_for_canonical_read() -> None:
+    step = _reschedule_step()
+    operation = _reschedule_operation()
+    request = _recent_reschedule_validation_request(
+        step,
+        operation,
+        _recent_reschedule(),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert request == ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": "replacement-1"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("date", "time"),
+    [("2026-09-30", "10:00"), ("2026-09-29", "12:00")],
+)
+def test_completed_reschedule_explicit_date_or_time_change_is_not_deduped(
+    date: str,
+    time: str,
+) -> None:
+    assert (
+        _recent_reschedule_validation_request(
+            _reschedule_step(date=date, time=time),
+            _reschedule_operation(date=date, time=time),
+            _recent_reschedule(),
+            timezone_name="Africa/Cairo",
+        )
+        is None
+    )
+
+
+def test_completed_reschedule_explicit_target_is_not_deduped() -> None:
+    assert (
+        _recent_reschedule_validation_request(
+            _reschedule_step(),
+            _reschedule_operation(appointment=EntityReference(ref="A2")),
+            _recent_reschedule(),
+            timezone_name="Africa/Cairo",
+        )
+        is None
+    )
+
+
+def test_completed_reschedule_canonical_replacement_must_still_match() -> None:
+    recent = _recent_reschedule()
+    assert _canonical_recent_reschedule_is_current(
+        recent,
+        _booking_validation_bundle(
+            appointment_id="replacement-1",
+            service_id="service-1",
+            doctor_id="doctor-1",
+            device_key=None,
+            start_at="2026-09-29T07:00:00+00:00",
+        ),
+    )
+    assert not _canonical_recent_reschedule_is_current(
+        recent,
+        _booking_validation_bundle(match_count=0),
+    )
+    assert not _canonical_recent_reschedule_is_current(
+        recent,
+        _booking_validation_bundle(
+            appointment_id="replacement-1",
+            service_id="service-1",
+            doctor_id="doctor-1",
+            device_key=None,
+            start_at="2026-09-29T08:00:00+00:00",
+        ),
+    )
+
+
+def test_completed_reschedule_acknowledgment_has_no_write() -> None:
+    step = _reschedule_acknowledgment_step(_reschedule_step())
+
+    assert step.disposition == "respond"
+    assert step.reads == []
+    assert step.write_intent is None
+    assert step.state_action == "none"
+    assert step.response_goal == "social_ack"
+    assert step.facts == {
+        "acknowledgment": {
+            "action": "reschedule",
+            "already_completed": True,
+        }
+    }
 
 
 def test_failed_or_unverified_write_never_creates_acknowledgment_context() -> None:
