@@ -4,9 +4,11 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from app.agents.clinic_grounding import build_clinic_catalog
 from app.integrations.clinic.base import AvailabilityRequest, AvailabilityResult, AvailabilitySlot
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.service import Service
+from app.services.agent_v2.branch_resolution import resolve_single_location_branch_id
 from app.services.agent_v2.compound_turn_policy import (
     compound_anchor_key,
     compound_sequence_index,
@@ -149,13 +151,25 @@ def _availability_for_day(
     forced_doctor_id: str | None = None,
 ) -> list[AvailabilityResult] | None:
     adapter = context.adapter or get_clinic_adapter(db=context.db, workspace=context.workspace)
-    branch_default = context.workspace.primary_branch_id
+    branch_default: str | None = None
+    branch_default_resolved = False
     results: list[AvailabilityResult] = []
     for step in steps:
         params = _params(step)
         service_id = params.get("service_id")
         doctor_id = forced_doctor_id or params.get("doctor_id")
-        branch_id = params.get("branch_id") or branch_default
+        branch_id = params.get("branch_id")
+        if branch_id is None:
+            if not branch_default_resolved:
+                catalog = context.catalog
+                if catalog is None and context.workspace.primary_branch_id is None:
+                    catalog = build_clinic_catalog(context.db, context.workspace)
+                branch_default = resolve_single_location_branch_id(
+                    primary_branch_id=context.workspace.primary_branch_id,
+                    catalog=catalog or {},
+                )
+                branch_default_resolved = True
+            branch_id = branch_default
         if service_id is None or doctor_id is None or branch_id is None:
             return None
         if bool(step.facts.get("service_requires_laser_device")) and not params.get("device_key"):

@@ -156,6 +156,18 @@ def active_task_semantic_view(
         constraints = _safe_constraints(active_task.get("constraints"), context)
         if constraints:
             safe["constraints"] = constraints
+        grouped = active_task.get("grouped")
+        if isinstance(grouped, dict):
+            raw_components = grouped.get("components")
+            if isinstance(raw_components, list):
+                components = [
+                    _safe_constraints(component, context)
+                    for component in raw_components
+                    if isinstance(component, dict)
+                ]
+                components = [component for component in components if component]
+                if len(components) >= 2:
+                    safe["grouped_components"] = components
     else:
         target = _safe_target(active_task.get("target"), context)
         replacement = _safe_constraints(active_task.get("replacement"), context)

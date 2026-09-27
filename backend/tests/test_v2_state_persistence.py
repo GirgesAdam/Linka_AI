@@ -10,6 +10,7 @@ from app.services.agent_v2 import state_persistence
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
+    GroupedBookingState,
     OptionChoice,
     OptionSnapshot,
     RescheduleTarget,
@@ -197,3 +198,30 @@ def test_legacy_pulse_usage_loads_and_normalizes_to_unspecified() -> None:
     assert restored.constraints.pulse_usage == "unspecified"
     assert restored.option_snapshot is not None
     assert restored.option_snapshot.options[0].payload["pulse_usage"] == "use_existing"
+
+
+def test_grouped_booking_state_round_trips_without_schema_version_bump() -> None:
+    task = _booking_task().model_copy(
+        update={
+            "grouped": GroupedBookingState(
+                components=[
+                    CustomerConstraints(service_id="service-1"),
+                    CustomerConstraints(service_id="service-2"),
+                ]
+            )
+        }
+    )
+    flow = _flow_for_task(task)
+
+    namespace = flow.entity_state["agent_core_v2"]
+    assert namespace["schema_version"] == 1
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored == task
+    assert restored is not None
+    assert restored.grouped is not None
+    assert [item.service_id for item in restored.grouped.components] == [
+        "service-1",
+        "service-2",
+    ]

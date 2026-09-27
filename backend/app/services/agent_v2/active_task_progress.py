@@ -184,6 +184,8 @@ def adapt_matching_active_task_step(
 ) -> PlanStep:
     """Merge structured continuations into verified active workflow state."""
     if isinstance(active_task, BookingTaskState):
+        if active_task.grouped is not None and operation.type in {"continue_active", "book"}:
+            return step.model_copy(update={"state_action": "none"})
         if operation.type == "continue_active":
             params = _booking_followup_parameters(
                 operation,

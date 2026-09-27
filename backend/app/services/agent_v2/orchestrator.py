@@ -37,6 +37,12 @@ from app.services.agent_v2.compound_turn_policy import (
     resolve_compound_followup_after_reads,
 )
 from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
+from app.services.agent_v2.grouped_booking_continuity import (
+    enforce_grouped_booking_write_guard,
+    explicitly_narrow_grouped_booking_task,
+    grouped_booking_task_from_plan,
+    restore_grouped_booking_understanding,
+)
 from app.services.agent_v2.grouped_write_transaction import (
     begin_group_savepoint,
     release_group_savepoint,
@@ -56,7 +62,12 @@ from app.services.agent_v2.read_executor import (
     ReadExecutionContext,
     execute_step_reads,
 )
-from app.services.agent_v2.state import ActiveTaskState, OptionChoice, OptionSnapshot
+from app.services.agent_v2.state import (
+    ActiveTaskState,
+    BookingTaskState,
+    OptionChoice,
+    OptionSnapshot,
+)
 from app.services.agent_v2.state_executor import (
     apply_step_state,
     finalize_step_after_state_transition,
@@ -711,11 +722,29 @@ def orchestrate_v2_turn(
         local_now=local_now,
     )
     understanding, semantic_visit_groups = expand_multi_service_operations(understanding)
+    initial_booking_task = (
+        initial_task if isinstance(initial_task, BookingTaskState) else None
+    )
+    narrowed_booking_task = explicitly_narrow_grouped_booking_task(
+        understanding,
+        active_task=initial_booking_task,
+        context=semantic_context,
+    )
+    understanding, restored_visit_groups = restore_grouped_booking_understanding(
+        understanding,
+        active_task=initial_booking_task,
+        context=semantic_context,
+    )
+    semantic_visit_groups = {
+        **semantic_visit_groups,
+        **restored_visit_groups,
+    }
+    planner_active_task: ActiveTaskState | None = narrowed_booking_task or initial_task
     plan = plan_turn(
         understanding,
         PlannerContext(
             semantic_context=semantic_context,
-            active_task=initial_task,
+            active_task=planner_active_task,
             now=local_now,
             pending_choice=pending_choice,
         ),
@@ -782,7 +811,22 @@ def orchestrate_v2_turn(
         timezone_name=timezone_name,
         visit_group_id=stable_visit_group_id,
     )
-    current_task = initial_task
+    grouped_booking_task = grouped_booking_task_from_plan(
+        plan,
+        understanding=understanding,
+        existing=initial_booking_task,
+        now=local_now,
+        turn_id=resolved_turn_id,
+    )
+    plan = enforce_grouped_booking_write_guard(
+        plan,
+        active_task=initial_booking_task,
+        candidate_task=grouped_booking_task,
+        explicit_narrowing=narrowed_booking_task is not None,
+    )
+    current_task: ActiveTaskState | None = (
+        grouped_booking_task or narrowed_booking_task or initial_task
+    )
     traces: list[V2RuntimeStepTrace] = []
     outcomes: list[TurnOutcome] = []
     pending_write: PendingV2Write | None = None
@@ -994,7 +1038,15 @@ def orchestrate_v2_turn(
                     verified_end = completed_compound_booking_end(reads)
                     if verified_end is not None:
                         compound_cursors[anchor_key] = verified_end
-                if current_task is not None and current_task.task_type == write_kind:
+                terminal_task_write = step_group_key is None or (
+                    bool(grouped_positions.get(step_group_key))
+                    and step_position == grouped_positions[step_group_key][-1]
+                )
+                if (
+                    terminal_task_write
+                    and current_task is not None
+                    and current_task.task_type == write_kind
+                ):
                     if (
                         persisted is not None
                         and persisted.active_task.task_type == current_task.task_type

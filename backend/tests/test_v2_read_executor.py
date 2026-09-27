@@ -13,7 +13,11 @@ from app.integrations.clinic.base import (
     AvailabilitySlot,
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
-from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
+from app.services.agent_v2.read_executor import (
+    ReadExecutionContext,
+    ReadExecutionError,
+    execute_step_reads,
+)
 from app.services.booking import BookingCompatibilityError, BookingRuleError
 
 NOW = datetime(2026, 9, 11, 15, 0, tzinfo=UTC)
@@ -252,6 +256,86 @@ def test_exact_availability_returns_one_verified_slot_without_writing() -> None:
     assert bundle.verification.exact_slot_match_count == 1
     assert bundle.verification.verified_parameters["doctor_id"] == "doctor-maryam"
     assert len(adapter.availability_requests) == 1
+    assert adapter.availability_requests[0].branch_id == str(BRANCH_ID)
+
+
+def test_normal_availability_uses_single_catalog_branch_without_primary() -> None:
+    adapter = FakeAdapter(availability=_availability([]))
+    workspace = _workspace()
+    workspace.primary_branch_id = None
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="availability",
+                parameters={
+                    "service_id": str(SERVICE_ID),
+                    "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+                },
+            )
+        ],
+        response_goal="present_availability",
+    )
+    context = ReadExecutionContext(
+        db=SimpleNamespace(),
+        workspace=workspace,
+        patient=_patient(),
+        now=NOW,
+        catalog=_catalog(),
+        adapter=adapter,
+    )
+
+    execute_step_reads(step, context)
+
+    assert adapter.availability_requests
+    assert all(request.branch_id == str(BRANCH_ID) for request in adapter.availability_requests)
+
+
+def test_normal_availability_does_not_guess_between_multiple_catalog_branches() -> None:
+    adapter = FakeAdapter(availability=_availability([]))
+    workspace = _workspace()
+    workspace.primary_branch_id = None
+    catalog = _catalog()
+    catalog["branches"] = [
+        *catalog["branches"],
+        {
+            "id": "77777777-7777-4777-8777-777777777777",
+            "name": "Second Branch",
+        },
+    ]
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="availability",
+                parameters={
+                    "service_id": str(SERVICE_ID),
+                    "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+                },
+            )
+        ],
+        response_goal="present_availability",
+    )
+    context = ReadExecutionContext(
+        db=SimpleNamespace(),
+        workspace=workspace,
+        patient=_patient(),
+        now=NOW,
+        catalog=catalog,
+        adapter=adapter,
+    )
+
+    with pytest.raises(
+        ReadExecutionError,
+        match="could not be resolved deterministically",
+    ):
+        execute_step_reads(step, context)
+
+    assert adapter.availability_requests == []
 
 
 def test_next_available_search_stops_on_first_day_with_matching_slots() -> None:

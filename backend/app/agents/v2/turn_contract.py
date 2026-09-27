@@ -50,6 +50,7 @@ EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
 FinancialOwnership = Literal["none", "reception"]
 ContinuationCondition = Literal["always", "if_previous_no_availability"]
+GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -266,6 +267,15 @@ class TurnOperation(StrictContractModel):
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.
     execution_intent: ExecutionIntent = "execute"
+    grouped_booking_action: GroupedBookingAction = Field(
+        default="preserve_group",
+        description=(
+            "For an active grouped booking only: keep preserve_group unless the customer explicitly "
+            "asks to drop the other pending service components and continue with only this operation's "
+            "service. Use remove_other_components only for that explicit narrowing; never infer it "
+            "merely because the customer mentions or edits one component."
+        ),
+    )
     # True only when this operation semantically continues the supplied verified
     # one-turn read context. Python, not the model, owns the actual merge.
     continues_previous: bool = Field(
