@@ -106,6 +106,25 @@ def _counter(**values: int) -> dict[str, int]:
     return row
 
 
+def _replacement_chain(snapshot: dict[str, object], source_id: str | UUID) -> list[dict[str, object]]:
+    appointments = [row for row in snapshot.get("appointments", []) if isinstance(row, dict)]
+    frontier = {str(source_id)}
+    seen: set[str] = set()
+    chain: list[dict[str, object]] = []
+    while frontier:
+        next_frontier: set[str] = set()
+        for row in appointments:
+            row_id = str(row.get("id") or "")
+            parent = str(row.get("rescheduled_from_appointment_id") or "")
+            if not row_id or row_id in seen or parent not in frontier:
+                continue
+            seen.add(row_id)
+            chain.append(row)
+            next_frontier.add(row_id)
+        frontier = next_frontier
+    return chain
+
+
 def _task_snapshot(
     db: Session,
     workspace: Workspace,
@@ -1139,6 +1158,9 @@ def case_09_booking_detour_then_reschedule(db: Session, workspace: Workspace) ->
     replacements = (
         _replacement_rows(after, source["id"]) if source is not None else []
     )
+    replacement_chain = (
+        _replacement_chain(after, source["id"]) if source is not None else []
+    )
     source_after = (
         _appointment_by_id(after, source["id"]) if source is not None else None
     )
@@ -1150,7 +1172,8 @@ def case_09_booking_detour_then_reschedule(db: Session, workspace: Workspace) ->
         and replacements[0]["start_at"] == target_slot.start_at.isoformat()
     )
     counters = _counter(
-        duplicate_writes=max(0, len(replacements) - 1),
+        duplicate_writes=max(0, len(replacement_chain) - 1),
+        stale_lifecycle_writes=max(0, len(replacement_chain) - 1),
         stale_date_time_carryovers=int(bool(replacements) and replacements[0]["start_at"] != target_slot.start_at.isoformat()),
         wrong_appointment_writes=int(source is None or (source_after is not None and source_after["status"] != "rescheduled")),
         side_read_business_writes=_side_read_writes(turns, (1, 2)),
@@ -1169,6 +1192,7 @@ def case_09_booking_detour_then_reschedule(db: Session, workspace: Workspace) ->
             "source": source,
             "source_after": source_after,
             "replacements": replacements,
+            "replacement_chain": replacement_chain,
             "target_start": target_slot.start_at.isoformat(),
         },
         deterministic_ok=correct,
@@ -1446,6 +1470,7 @@ def case_12_reception_edits_appointment_during_conversation(db: Session, workspa
     after = extended_state_snapshot(db, workspace, patient)
     source_after = _appointment_by_id(after, source.id)
     replacements = _replacement_rows(after, source.id)
+    replacement_chain = _replacement_chain(after, source.id)
     response3 = turn3.agent_response or ""
     canonical_seen = (
         doctor_name(doctor_b) in response3
@@ -1462,8 +1487,8 @@ def case_12_reception_edits_appointment_during_conversation(db: Session, workspa
         stale_doctor_carryovers=int(bool(replacements) and replacements[0]["doctor_id"] != str(doctor_b["id"])),
         stale_date_time_carryovers=int(bool(replacements) and replacements[0]["start_at"] != target_slot.start_at.isoformat()),
         wrong_active_task_target=int(source_after["id"] != str(source.id)),
-        duplicate_writes=max(0, len(replacements) - 1),
-        stale_lifecycle_writes=int(not correct and bool(replacements)),
+        duplicate_writes=max(0, len(replacement_chain) - 1),
+        stale_lifecycle_writes=max(int(not correct and bool(replacements)), max(0, len(replacement_chain) - 1)),
         wrong_appointment_writes=int(not correct and bool(replacements)),
     )
     return _result(
@@ -1486,6 +1511,7 @@ def case_12_reception_edits_appointment_during_conversation(db: Session, workspa
             "canonical_change_visible_in_followup": canonical_seen,
             "source_after": source_after,
             "replacements": replacements,
+            "replacement_chain": replacement_chain,
         },
         deterministic_ok=correct and canonical_seen,
         expected="The follow-up reflects the canonical reception edit; the subsequent reschedule targets that same current appointment and uses fresh doctor/time state.",
@@ -1559,7 +1585,9 @@ def case_13_external_cancel_before_followup_action(db: Session, workspace: Works
     after = extended_state_snapshot(db, workspace, patient)
     source_after = _appointment_by_id(after, source.id)
     replacements = _replacement_rows(after, source.id)
+    active_after_cancel = evidence[-1].get("active_task_after") if evidence else None
     counters = _counter(
+        wrong_active_task_target=int(active_after_cancel is not None),
         duplicate_writes=max(0, len(replacements) - 1),
         stale_lifecycle_writes=int(bool(replacements)),
         wrong_appointment_writes=int(bool(replacements)),
@@ -1580,11 +1608,16 @@ def case_13_external_cancel_before_followup_action(db: Session, workspace: Works
             "source_after": source_after,
             "replacements": replacements,
             "external_cancelled_before_turn": 4,
+            "active_task_after_cancel": active_after_cancel,
         },
         deterministic_ok=source_after["status"] == "cancelled" and not replacements,
         expected="Fresh canonical appointment state wins; the cancelled appointment is not rescheduled and no replacement is created.",
-        issue_severity="P1",
-        issue_title="Cancelled canonical appointment received a stale reschedule write",
+        issue_severity="P1" if replacements else "P2",
+        issue_title=(
+            "Cancelled canonical appointment received a stale reschedule write"
+            if replacements
+            else "Cancelled canonical appointment left a stale reschedule task active"
+        ),
     )
 
 
@@ -1765,7 +1798,9 @@ def case_16_completed_booking_long_detour_repeat_confirmation(db: Session, works
             slot=slot,
         )
     ]
+    restarted_task = evidence[-1].get("active_task_after") if evidence else None
     counters = _counter(
+        unexpected_task_restart=int(restarted_task is not None),
         duplicate_writes=max(0, len(active) - 1),
         stale_service_carryovers=int(bool(active) and any(row["service_id"] != str(service.id) for row in active)),
         stale_date_time_carryovers=int(bool(active) and any(row["start_at"] != slot.start_at.isoformat() for row in active)),
@@ -1783,14 +1818,19 @@ def case_16_completed_booking_long_detour_repeat_confirmation(db: Session, works
         verification={
             "conversation_id": str(conversation_id),
             "created": created,
+            "active_task_after_repeat": restarted_task,
             "active_created": active,
             "exact_matching_active": exact,
             "repeat_confirmation_turn": 5,
         },
         deterministic_ok=len(active) == 1 and len(exact) == 1,
         expected="Exactly one canonical booking remains; the later 'احجزيه زي ما اتفقنا' is acknowledged or safely handled without a duplicate write.",
-        issue_severity="P1",
-        issue_title="Repeated confirmation after a long detour duplicated or changed the completed booking",
+        issue_severity="P2",
+        issue_title=(
+            "Repeated confirmation after a long detour duplicated the completed booking"
+            if len(active) > 1
+            else "Repeated confirmation restarted a completed booking task"
+        ),
     )
 
 
