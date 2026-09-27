@@ -172,6 +172,260 @@ def test_availability_outcome_uses_windows_and_hides_canonical_ids() -> None:
     assert "candela_gentle" not in str(visible)
 
 
+def _availability_outcome_for_slots(slots: list[dict[str, object]]) -> TurnOutcome:
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر إبط", ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        response_goal="present_availability",
+        facts={"service_id": "service-1"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=True,
+                payload={
+                    "service_id": "service-1",
+                    "service_name": "ليزر إبط",
+                    "checked_dates": ["2026-09-17"],
+                    "slots": slots,
+                    "search_truncated": False,
+                },
+            )
+        ]
+    )
+    return build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+
+
+def _laser_slot(
+    *,
+    key: str,
+    name: str,
+    price_minor: int,
+    start: str,
+) -> dict[str, object]:
+    return {
+        "branch_id": "branch-1",
+        "doctor_id": "doctor-1",
+        "doctor_name": "مريم",
+        "service_id": "service-1",
+        "service_name": "ليزر إبط",
+        "start_local": f"2026-09-17T{start}:00+03:00",
+        "end_local": f"2026-09-17T{start}:00+03:00",
+        "price_minor": price_minor,
+        "currency": "EGP",
+        "laser_device_key": key,
+        "laser_device_name": name,
+    }
+
+
+def test_availability_preserves_exact_device_price_binding() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=65_000,
+                start="19:00",
+            ),
+            _laser_slot(
+                key="prime_lase",
+                name="Prime Lase",
+                price_minor=55_000,
+                start="19:30",
+            ),
+        ]
+    )
+    availability = outcome.facts["availability"]
+
+    assert availability["laser_device_options"] == [
+        {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+        {"device_name": "Prime Lase", "price": "550.00 EGP"},
+    ]
+    assert "prices" not in availability
+    assert "price" not in availability
+
+
+def test_device_price_binding_does_not_depend_on_slot_order() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="prime_lase",
+                name="Prime Lase",
+                price_minor=55_000,
+                start="19:30",
+            ),
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=65_000,
+                start="19:00",
+            ),
+        ]
+    )
+
+    assert outcome.facts["availability"]["laser_device_options"] == [
+        {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+        {"device_name": "Prime Lase", "price": "550.00 EGP"},
+    ]
+
+
+def test_repeated_slots_for_same_device_produce_one_price_option() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=65_000,
+                start="19:00",
+            ),
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=65_000,
+                start="19:30",
+            ),
+        ]
+    )
+    availability = outcome.facts["availability"]
+
+    assert availability["laser_device_options"] == [
+        {"device_name": "Candela Gentle", "price": "650.00 EGP"}
+    ]
+    assert availability["price"] == "650.00 EGP"
+
+
+def test_conflicting_prices_for_same_device_fail_closed() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=65_000,
+                start="19:00",
+            ),
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=70_000,
+                start="19:30",
+            ),
+        ]
+    )
+    availability = outcome.facts["availability"]
+
+    assert availability["laser_device_options"] == [{"device_name": "Candela Gentle"}]
+    assert availability["device_price_conflicts"] == ["Candela Gentle"]
+    assert "price" not in availability
+    assert "prices" not in availability
+
+
+def test_two_devices_with_same_price_remain_explicitly_bound() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=55_000,
+                start="19:00",
+            ),
+            _laser_slot(
+                key="prime_lase",
+                name="Prime Lase",
+                price_minor=55_000,
+                start="19:30",
+            ),
+        ]
+    )
+    availability = outcome.facts["availability"]
+
+    assert availability["laser_device_options"] == [
+        {"device_name": "Candela Gentle", "price": "550.00 EGP"},
+        {"device_name": "Prime Lase", "price": "550.00 EGP"},
+    ]
+    assert "price" not in availability
+    assert "prices" not in availability
+
+
+def test_non_laser_availability_keeps_single_price_behavior() -> None:
+    slot = _laser_slot(
+        key="",
+        name="",
+        price_minor=180_000,
+        start="19:00",
+    )
+    outcome = _availability_outcome_for_slots([slot])
+    availability = outcome.facts["availability"]
+
+    assert availability["price"] == "1800.00 EGP"
+    assert "laser_device_options" not in availability
+
+
+def test_single_laser_device_has_explicit_binding_and_legacy_single_price() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="prime_lase",
+                name="Prime Lase",
+                price_minor=55_000,
+                start="19:00",
+            )
+        ]
+    )
+    availability = outcome.facts["availability"]
+
+    assert availability["laser_device_options"] == [
+        {"device_name": "Prime Lase", "price": "550.00 EGP"}
+    ]
+    assert availability["price"] == "550.00 EGP"
+
+
+def test_visible_availability_device_prices_hide_internal_device_keys() -> None:
+    outcome = _availability_outcome_for_slots(
+        [
+            _laser_slot(
+                key="candela_gentle",
+                name="Candela Gentle",
+                price_minor=65_000,
+                start="19:00",
+            ),
+            _laser_slot(
+                key="prime_lase",
+                name="Prime Lase",
+                price_minor=55_000,
+                start="19:30",
+            ),
+        ]
+    )
+    visible = customer_visible_outcome(outcome)
+    payload = str(visible)
+
+    assert "candela_gentle" not in payload
+    assert "prime_lase" not in payload
+    assert "service-1" not in payload
+    assert "doctor-1" not in payload
+    assert "branch-1" not in payload
+    assert "Candela Gentle" in payload
+    assert "650.00 EGP" in payload
+    assert "Prime Lase" in payload
+    assert "550.00 EGP" in payload
+
+
 def test_empty_exact_availability_becomes_requested_time_unavailable() -> None:
     context = _semantic_context()
     operation = TurnOperation(

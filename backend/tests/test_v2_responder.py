@@ -88,6 +88,155 @@ def test_responder_payload_removes_internal_ids_and_formats_money_before_llm() -
     assert "ليزر إبط" in payload
 
 
+def test_responder_receives_explicit_device_price_pairs_for_availability() -> None:
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "availability": {
+                "service_name": "ليزر إزالة الشعر - إبط",
+                "available_option_count": 2,
+                "availability_windows": [
+                    {"laser_device_name": "Candela Gentle", "start_time_24h": "12:00"},
+                    {"laser_device_name": "Prime Lase", "start_time_24h": "12:00"},
+                ],
+                "laser_device_options": [
+                    {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+                    {"device_name": "Prime Lase", "price": "550.00 EGP"},
+                ],
+            }
+        },
+    )
+    messages = _build_responder_messages(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="اختار جهاز إيه؟")],
+        outcomes=[outcome],
+    )
+    payload = str(messages[-2].content)
+
+    assert '"device_name":"Candela Gentle","price":"650.00 EGP"' in payload
+    assert '"device_name":"Prime Lase","price":"550.00 EGP"' in payload
+    assert '"prices":' not in payload
+    assert "laser_device_key" not in payload
+
+
+def _device_price_clarification_outcome() -> TurnOutcome:
+    return TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "needed": "device",
+            "availability": {
+                "service_name": "ليزر إزالة الشعر - إبط",
+                "available_option_count": 2,
+                "availability_windows": [
+                    {"laser_device_name": "Candela Gentle", "start_time_24h": "13:00"},
+                    {"laser_device_name": "Prime Lase", "start_time_24h": "13:00"},
+                ],
+                "laser_device_options": [
+                    {"device_name": "Candela Gentle", "price": "650.00 EGP"},
+                    {"device_name": "Prime Lase", "price": "550.00 EGP"},
+                ],
+            },
+        },
+    )
+
+
+def test_device_price_guard_replaces_unbound_transliterated_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
+    monkeypatch.setattr(
+        responder,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=responder.ResponderDraft(
+                reply="اختاري كانديلا جنتل بـ650 جنيه أو برايم ليز بـ550 جنيه.",
+                availability_claim="options_available",
+            ),
+            model_name="test-model",
+        ),
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="اختار جهاز إيه؟")],
+        outcomes=[_device_price_clarification_outcome()],
+    )
+
+    assert source == "deterministic:device-price-guard:test-model"
+    assert "Candela Gentle" in text and "650 جنيه" in text
+    assert "Prime Lase" in text and "550 جنيه" in text
+    assert "كانديلا" not in text
+    assert "برايم" not in text
+
+
+def test_device_price_guard_applies_after_availability_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
+    monkeypatch.setattr(
+        responder,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=responder.ResponderDraft(
+                reply="للأسف مفيش مواعيد متاحة.",
+                availability_claim="no_availability",
+            ),
+            model_name="test-model",
+        ),
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="اختار جهاز إيه؟")],
+        outcomes=[_device_price_clarification_outcome()],
+    )
+
+    assert source == "deterministic:device-price-guard:test-model"
+    assert "Candela Gentle" in text and "650 جنيه" in text
+    assert "Prime Lase" in text and "550 جنيه" in text
+    assert "مفيش مواعيد" not in text
+
+
+def test_device_price_guard_keeps_correct_canonical_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    natural = "اختاري Candela Gentle بسعر 650 جنيه أو Prime Lase بسعر 550 جنيه."
+    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
+    monkeypatch.setattr(
+        responder,
+        "invoke_with_model_chain",
+        lambda **_kwargs: SimpleNamespace(
+            value=responder.ResponderDraft(
+                reply=natural,
+                availability_claim="options_available",
+            ),
+            model_name="test-model",
+        ),
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="اختار جهاز إيه؟")],
+        outcomes=[_device_price_clarification_outcome()],
+    )
+
+    assert text == natural
+    assert source == "test-model"
+
+
 def test_compound_outcomes_are_given_to_one_responder_call() -> None:
     outcomes = [
         _price_outcome(),
