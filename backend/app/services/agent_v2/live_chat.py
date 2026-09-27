@@ -259,6 +259,39 @@ def _verified_action_context_from_turn(
     return None
 
 
+def _outbound_verified_action_context(
+    turn: V2OrchestratedTurn,
+    *,
+    recent_action_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Carry one completed booking through read-only informational detours only."""
+    direct = _verified_action_context_from_turn(turn)
+    if direct is not None:
+        return direct
+    if (
+        not isinstance(recent_action_context, dict)
+        or recent_action_context.get("operation_type") != "book"
+    ):
+        return None
+    if turn.active_task is not None or turn.pending_write is not None:
+        return None
+    if not turn.plan.steps or not turn.understanding.operations:
+        return None
+    if any(
+        step.write_intent is not None
+        or step.state_action != "none"
+        or step.disposition not in {"read", "respond"}
+        for step in turn.plan.steps
+    ):
+        return None
+    if any(
+        operation.execution_intent != "informational"
+        for operation in turn.understanding.operations
+    ):
+        return None
+    return dict(recent_action_context)
+
+
 def _run_v2_after_inbound(
     *,
     db: Session,
@@ -387,7 +420,10 @@ def _run_v2_after_inbound(
         workspace=workspace,
         turn=turn,
     )
-    verified_action_context = _verified_action_context_from_turn(turn)
+    verified_action_context = _outbound_verified_action_context(
+        turn,
+        recent_action_context=recent_action_context,
+    )
     outbound_now = datetime.now(UTC)
     outbound = Message(
         workspace_id=workspace.id,

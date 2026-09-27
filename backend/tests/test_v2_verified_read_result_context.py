@@ -6,6 +6,7 @@ from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.semantic_state_view import with_safe_read_context
 from app.services.agent_v2.live_chat import (
     _availability_option_count_for_step,
+    _outbound_verified_action_context,
     _verified_action_context_from_turn,
 )
 
@@ -161,3 +162,119 @@ def test_direct_verified_cancellation_action_context_is_preserved_for_next_turn(
     )
 
     assert _verified_action_context_from_turn(turn) == context
+
+
+def _informational_turn(
+    *,
+    operation_type: str = "pricing",
+    active_task=None,
+    write_intent=None,
+    state_action: str = "none",
+    disposition: str = "read",
+    execution_intent: str = "informational",
+):
+    return SimpleNamespace(
+        verified_action_context=None,
+        traces=(),
+        active_task=active_task,
+        pending_write=None,
+        plan=SimpleNamespace(
+            steps=(
+                SimpleNamespace(
+                    operation_index=0,
+                    operation_type=operation_type,
+                    disposition=disposition,
+                    write_intent=write_intent,
+                    state_action=state_action,
+                ),
+            )
+        ),
+        understanding=SimpleNamespace(
+            operations=(
+                SimpleNamespace(
+                    type=operation_type,
+                    execution_intent=execution_intent,
+                ),
+            )
+        ),
+    )
+
+
+def _recent_booking_context() -> dict[str, object]:
+    return {
+        "operation_type": "book",
+        "appointment_id": "appointment-1",
+        "service_id": "service-1",
+        "doctor_id": "doctor-1",
+        "start_at": "2026-09-28T07:00:00+00:00",
+        "status": "confirmed",
+        "package_usage": "unspecified",
+    }
+
+
+def test_completed_booking_context_survives_informational_detours() -> None:
+    recent = _recent_booking_context()
+
+    after_price = _outbound_verified_action_context(
+        _informational_turn(operation_type="pricing"),
+        recent_action_context=recent,
+    )
+    assert after_price == recent
+
+    after_clinic_info = _outbound_verified_action_context(
+        _informational_turn(operation_type="clinic_info"),
+        recent_action_context=after_price,
+    )
+    assert after_clinic_info == recent
+
+    after_list = _outbound_verified_action_context(
+        _informational_turn(operation_type="appointment_list"),
+        recent_action_context=after_clinic_info,
+    )
+    assert after_list == recent
+
+
+def test_booking_context_is_not_retained_across_new_executable_action() -> None:
+    recent = _recent_booking_context()
+    turn = _informational_turn(
+        operation_type="book",
+        write_intent=SimpleNamespace(kind="booking"),
+        state_action="start_booking",
+        execution_intent="execute",
+    )
+
+    assert (
+        _outbound_verified_action_context(
+            turn,
+            recent_action_context=recent,
+        )
+        is None
+    )
+
+
+def test_booking_context_is_not_retained_when_active_task_exists() -> None:
+    recent = _recent_booking_context()
+
+    assert (
+        _outbound_verified_action_context(
+            _informational_turn(active_task=SimpleNamespace(task_type="booking")),
+            recent_action_context=recent,
+        )
+        is None
+    )
+
+
+def test_new_verified_action_context_replaces_retained_booking_context() -> None:
+    recent = _recent_booking_context()
+    direct = {
+        "operation_type": "cancel_appointment",
+        "appointment_id": "appointment-1",
+        "status": "cancelled",
+    }
+    turn = _informational_turn()
+    turn.verified_action_context = direct
+
+    assert _outbound_verified_action_context(
+        turn,
+        recent_action_context=recent,
+    ) == direct
