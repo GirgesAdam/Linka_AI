@@ -1,5 +1,10 @@
+from datetime import UTC, date, datetime
+from types import SimpleNamespace
+
 import pytest
 
+
+from tools.agent_eval import run_batch_07 as batch7
 from tools.agent_eval.registry import scenarios_for_batch, select_scenarios
 from tools.agent_eval.run import main
 from tools.agent_eval.run_batch_07 import _replacement_chain
@@ -46,6 +51,51 @@ def test_batch7_single_scenario_selector() -> None:
 def test_batch7_unknown_selector_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown scenario selector"):
         select_scenarios("batch_07", selectors={"S99"})
+
+
+def test_cancellation_safe_service_slot_skips_nearest_calendar_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nearest_slot = SimpleNamespace(start_at=datetime(2026, 9, 28, 7, tzinfo=UTC))
+    safe_slot = SimpleNamespace(start_at=datetime(2026, 9, 29, 7, tzinfo=UTC))
+    doctor = {"id": "doctor-1"}
+    service = SimpleNamespace(id="service-1")
+
+    monkeypatch.setattr(
+        batch7,
+        "_service_slot",
+        lambda *_args, **_kwargs: ("catalog", doctor, "nearest-availability", nearest_slot),
+    )
+
+    def fake_future_slot(*_args, **kwargs):
+        assert kwargs["service_id"] == "service-1"
+        assert kwargs["doctor_id"] == "doctor-1"
+        assert kwargs["after_date"] == date(2026, 9, 28)
+        return "safe-availability", safe_slot
+
+    monkeypatch.setattr(batch7, "_future_slot", fake_future_slot)
+
+    assert batch7._cancellation_safe_service_slot(object(), object(), service) == (
+        "catalog",
+        doctor,
+        "safe-availability",
+        safe_slot,
+    )
+
+
+def test_stale_reschedule_detector_ignores_new_booking_task() -> None:
+    assert not batch7._active_reschedule_targets(
+        {"task_type": "booking", "target": {"appointment_id": "apt-a"}},
+        "apt-a",
+    )
+    assert not batch7._active_reschedule_targets(
+        {"task_type": "reschedule", "target": {"appointment_id": "apt-b"}},
+        "apt-a",
+    )
+    assert batch7._active_reschedule_targets(
+        {"task_type": "reschedule", "target": {"appointment_id": "apt-a"}},
+        "apt-a",
+    )
 
 
 def test_replacement_chain_follows_transitive_reschedules() -> None:
