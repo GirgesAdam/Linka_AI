@@ -21,6 +21,7 @@ from app.integrations.clinic.base import (
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
+from app.services.agent_v2.branch_resolution import resolve_single_location_branch_id
 from app.services.agent_v2.planner import PlanStep, ReadKind, ReadRequest, VerificationFacts
 from app.services.booking import BookingCompatibilityError, BookingRuleError
 from app.services.clinic_knowledge_base import relevant_knowledge_context
@@ -181,15 +182,13 @@ def _explanatory_knowledge(context: ReadExecutionContext) -> str | None:
 
 
 def _single_location_branch_id(context: ReadExecutionContext) -> str:
-    if context.workspace.primary_branch_id is not None:
-        return str(context.workspace.primary_branch_id)
-    branch_ids = [
-        str(row["id"])
-        for row in _catalog_rows(_catalog(context), "branches")
-        if row.get("id")
-    ]
-    if len(branch_ids) == 1:
-        return branch_ids[0]
+    primary_branch_id = context.workspace.primary_branch_id
+    branch_id = resolve_single_location_branch_id(
+        primary_branch_id=primary_branch_id,
+        catalog={} if primary_branch_id is not None else _catalog(context),
+    )
+    if branch_id is not None:
+        return branch_id
     raise ReadExecutionError("Single-location clinic branch could not be resolved deterministically.")
 
 

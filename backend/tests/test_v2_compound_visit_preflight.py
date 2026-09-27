@@ -16,16 +16,23 @@ SERVICE_B = "22222222-2222-2222-2222-222222222222"
 DOCTOR_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 DOCTOR_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 BRANCH = "33333333-3333-3333-3333-333333333333"
+BRANCH_UUID = UUID(BRANCH)
+BRANCH_B = "66666666-6666-6666-6666-666666666666"
 WORKSPACE = UUID("44444444-4444-4444-4444-444444444444")
 PATIENT = UUID("55555555-5555-5555-5555-555555555555")
 DAY = date(2026, 9, 20)
 
 
-def _booking(index: int, service_id: str, doctor_id: str) -> PlanStep:
+def _booking(
+    index: int,
+    service_id: str,
+    doctor_id: str,
+    *,
+    branch_id: str | None = BRANCH,
+) -> PlanStep:
     params: dict[str, object] = {
         "service_id": service_id,
         "doctor_id": doctor_id,
-        "branch_id": BRANCH,
         "date": {"mode": "exact", "start_date": DAY.isoformat(), "end_date": None},
         "time": {
             "mode": "exact",
@@ -36,6 +43,8 @@ def _booking(index: int, service_id: str, doctor_id: str) -> PlanStep:
         },
         "package_usage": "unspecified",
     }
+    if branch_id is not None:
+        params["branch_id"] = branch_id
     return PlanStep(
         operation_index=index,
         operation_type="book",
@@ -86,8 +95,10 @@ def _result(service_id: str, slots: list[AvailabilitySlot]) -> AvailabilityResul
 class _Adapter:
     def __init__(self, results: dict[tuple[str, date], AvailabilityResult]) -> None:
         self.results = results
+        self.requests = []
 
     def get_availability(self, request):
+        self.requests.append(request)
         return self.results.get(
             (request.service_id, request.booking_date),
             _result(request.service_id, []),
@@ -113,23 +124,30 @@ def _context(
     adapter: _Adapter,
     *,
     buffers: dict[str, tuple[int, int]] | None = None,
+    primary_branch_id: UUID | None = BRANCH_UUID,
+    catalog: dict[str, object] | None = None,
 ) -> ReadExecutionContext:
     return ReadExecutionContext(
         db=_Db(buffers or {}),
-        workspace=SimpleNamespace(id=WORKSPACE, primary_branch_id=UUID(BRANCH)),
+        workspace=SimpleNamespace(id=WORKSPACE, primary_branch_id=primary_branch_id),
         patient=SimpleNamespace(id=PATIENT),
         now=datetime(2026, 9, 12, 12, 0, tzinfo=UTC),
+        catalog=catalog,
         adapter=adapter,
     )
 
 
-def _normalized(*, same_doctor: bool = False) -> TurnPlan:
+def _normalized(
+    *,
+    same_doctor: bool = False,
+    branch_id: str | None = BRANCH,
+) -> TurnPlan:
     second_doctor = DOCTOR_A if same_doctor else DOCTOR_B
     return normalize_compound_turn_plan(
         TurnPlan(
             steps=[
-                _booking(0, SERVICE_A, DOCTOR_A),
-                _booking(1, SERVICE_B, second_doctor),
+                _booking(0, SERVICE_A, DOCTOR_A, branch_id=branch_id),
+                _booking(1, SERVICE_B, second_doctor, branch_id=branch_id),
             ]
         ),
         catalog={
@@ -146,6 +164,132 @@ def _time(step: PlanStep) -> str:
     raw = source["time"]
     assert isinstance(raw, dict)
     return str(raw["start_time"])
+
+
+def _branch_catalog(*branch_ids: str) -> dict[str, object]:
+    return {"branches": [{"id": value, "name": value} for value in branch_ids]}
+
+
+def _joint_adapter() -> _Adapter:
+    return _Adapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [_slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00")],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [_slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00")],
+            ),
+        }
+    )
+
+
+def test_missing_primary_branch_uses_single_catalog_branch() -> None:
+    adapter = _joint_adapter()
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True, branch_id=None),
+        context=_context(
+            adapter,
+            primary_branch_id=None,
+            catalog=_branch_catalog(BRANCH),
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert [step.write_intent is not None for step in planned.steps] == [True, True]
+    assert [request.branch_id for request in adapter.requests] == [BRANCH, BRANCH]
+    assert all(
+        step.write_intent is not None
+        and step.write_intent.parameters["branch_id"] == BRANCH
+        for step in planned.steps
+    )
+
+
+def test_explicit_branch_wins_over_primary_branch() -> None:
+    adapter = _joint_adapter()
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True, branch_id=BRANCH),
+        context=_context(
+            adapter,
+            primary_branch_id=UUID(BRANCH_B),
+            catalog=_branch_catalog(BRANCH_B),
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert [step.write_intent is not None for step in planned.steps] == [True, True]
+    assert [request.branch_id for request in adapter.requests] == [BRANCH, BRANCH]
+
+
+def test_missing_step_branch_uses_workspace_primary_branch() -> None:
+    adapter = _joint_adapter()
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True, branch_id=None),
+        context=_context(adapter, primary_branch_id=UUID(BRANCH)),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert [step.write_intent is not None for step in planned.steps] == [True, True]
+    assert [request.branch_id for request in adapter.requests] == [BRANCH, BRANCH]
+
+
+def test_missing_primary_with_multiple_catalog_branches_fails_closed() -> None:
+    adapter = _joint_adapter()
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True, branch_id=None),
+        context=_context(
+            adapter,
+            primary_branch_id=None,
+            catalog=_branch_catalog(BRANCH, BRANCH_B),
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert adapter.requests == []
+    assert [step.write_intent for step in planned.steps] == [None, None]
+    assert all(step.facts["compound_visit_no_joint_window"] is True for step in planned.steps)
+
+
+def test_missing_primary_with_no_catalog_branches_fails_closed() -> None:
+    adapter = _joint_adapter()
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True, branch_id=None),
+        context=_context(
+            adapter,
+            primary_branch_id=None,
+            catalog=_branch_catalog(),
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert adapter.requests == []
+    assert [step.write_intent for step in planned.steps] == [None, None]
+
+
+def test_resolved_branch_does_not_turn_real_no_availability_into_success() -> None:
+    adapter = _Adapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [_slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00")],
+            ),
+            (SERVICE_B, DAY): _result(SERVICE_B, []),
+        }
+    )
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True, branch_id=None),
+        context=_context(
+            adapter,
+            primary_branch_id=None,
+            catalog=_branch_catalog(BRANCH),
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert [request.branch_id for request in adapter.requests[:2]] == [BRANCH, BRANCH]
+    assert [step.write_intent for step in planned.steps] == [None, None]
+    assert all(step.facts["compound_visit_no_joint_window"] is True for step in planned.steps)
 
 
 def test_exact_anchor_executes_only_when_full_joint_window_fits() -> None:
