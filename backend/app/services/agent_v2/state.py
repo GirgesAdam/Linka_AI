@@ -102,11 +102,27 @@ class OptionSnapshot(StrictStateModel):
         return self.task_version == task_version and now < self.expires_at
 
 
+class GroupedBookingState(StrictStateModel):
+    """Durable component set for one pending same-visit booking."""
+
+    components: list[CustomerConstraints] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_components(self) -> GroupedBookingState:
+        service_ids = [component.service_id for component in self.components]
+        if len(service_ids) < 2 or any(service_id is None for service_id in service_ids):
+            raise ValueError("grouped booking state requires at least two identified services.")
+        if len(set(service_ids)) != len(service_ids):
+            raise ValueError("grouped booking state requires distinct service components.")
+        return self
+
+
 class BookingTaskState(StrictStateModel):
     task_type: Literal["booking"] = "booking"
     status: TaskStatus = "collecting"
     write_authorization: WriteAuthorization
     constraints: CustomerConstraints = Field(default_factory=CustomerConstraints)
+    grouped: GroupedBookingState | None = None
     derived: DerivedBookingState = Field(default_factory=DerivedBookingState)
     option_snapshot: OptionSnapshot | None = None
     version: int = 1
