@@ -410,9 +410,24 @@ def _ensure_verified_doctor_list(
     return f"{text.rstrip()}\n{grounded_list}"
 
 
-def _availability_fact_payloads(outcomes: list[TurnOutcome]) -> list[dict[str, object]]:
+_AVAILABILITY_RESPONSE_GOALS = frozenset(
+    {
+        "present_availability",
+        "requested_time_unavailable",
+        "no_availability",
+    }
+)
+
+
+def _availability_fact_payloads(
+    outcomes: list[TurnOutcome],
+    *,
+    response_semantic_only: bool = False,
+) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
     for outcome in outcomes:
+        if response_semantic_only and outcome.response_goal not in _AVAILABILITY_RESPONSE_GOALS:
+            continue
         raw = outcome.facts.get("availability")
         candidates = raw if isinstance(raw, list) else [raw]
         for candidate in candidates:
@@ -501,17 +516,34 @@ def _deterministic_device_price_guard_reply(
 
 
 def _verified_availability_claim(outcomes: list[TurnOutcome]) -> AvailabilityClaim:
-    """Derive availability truth only from deterministic outcomes, never from generated prose."""
-    payloads = _availability_fact_payloads(outcomes)
+    """Derive the customer-facing availability claim from response semantics, not fact presence.
+
+    Availability facts can survive as verification evidence after a terminal booking/reschedule
+    write, or accompany a different read/clarification outcome. Those facts must not turn that
+    outcome into an availability presentation. Only explicit availability-facing response goals
+    participate in this guard.
+    """
+    availability_outcomes = [
+        outcome
+        for outcome in outcomes
+        if outcome.response_goal in _AVAILABILITY_RESPONSE_GOALS
+    ]
+    if not availability_outcomes:
+        return "not_applicable"
+
+    payloads = _availability_fact_payloads(
+        availability_outcomes,
+        response_semantic_only=True,
+    )
     if any(
         (isinstance(payload.get("available_option_count"), int) and payload["available_option_count"] > 0)
         or bool(payload.get("availability_windows"))
         for payload in payloads
-    ) or any(outcome.response_goal == "present_availability" for outcome in outcomes):
+    ) or any(outcome.response_goal == "present_availability" for outcome in availability_outcomes):
         return "options_available"
-    if any(outcome.response_goal == "requested_time_unavailable" for outcome in outcomes):
+    if any(outcome.response_goal == "requested_time_unavailable" for outcome in availability_outcomes):
         return "requested_time_unavailable"
-    if any(outcome.response_goal == "no_availability" for outcome in outcomes):
+    if any(outcome.response_goal == "no_availability" for outcome in availability_outcomes):
         return "no_availability"
     return "not_applicable"
 
@@ -524,7 +556,10 @@ def _deterministic_availability_guard_reply(
 ) -> str:
     """Safe fallback used only when the responder's semantic claim contradicts verified facts."""
     arabic = _latest_customer_is_arabic(history)
-    payloads = _availability_fact_payloads(outcomes)
+    payloads = _availability_fact_payloads(
+        outcomes,
+        response_semantic_only=True,
+    )
 
     if verified_claim == "options_available":
         windows: list[object] = []
@@ -594,10 +629,13 @@ RULES
   duration from availability timestamps.
 - Availability windows are verified ranges of bookable START times; the end is the latest verified
   start. Do not fill gaps or expand a summarized window into invented slots.
-- availability_claim must match the reply: options_available if verified options/windows exist;
-  requested_time_unavailable only when the requested exact time is unavailable and no alternative is
-  supplied; no_availability only for an explicit verified zero-option search; otherwise
-  not_applicable.
+- availability_claim must follow the current TURN_OUTCOME response semantics, not mere fact presence.
+  Use options_available for response_goal=present_availability (or verified alternatives attached to an
+  availability-facing outcome); requested_time_unavailable only for that explicit response goal when no
+  alternative is supplied; no_availability only for that explicit verified zero-option response goal;
+  otherwise use not_applicable. Availability facts inside booking_completed/reschedule_completed or other
+  non-availability outcomes are supporting verification evidence and do not make the reply an availability
+  claim.
 - A candidate missing from supplied availability is not proof of no future availability. For
   nearest/earliest comparisons, state only the verified result and explicit negative facts.
 - If the customer asks for a matching list, include every supplied item unless the outcome says it
