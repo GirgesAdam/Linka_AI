@@ -123,6 +123,10 @@ SEMANTIC PRINCIPLES
 - Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read and
   recent_verified_action when supplied because those scopes were verified by Python. Do not
   reconstruct stale constraints from assistant prose when a verified structured scope exists.
+- Ordinal references to an immediately preceding option list are positional: first/second/third (and
+  equivalents such as الأولى/التانية/الثالثة) refer to the corresponding displayed item in that
+  list, in order. Never reinterpret "the second" as "the other" or the last item. Ground the chosen
+  entity back to the verified recent read when that scope is available.
 - recent_verified_action describes only the immediately previous completed action when Python exposes
   one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
   added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
@@ -214,8 +218,10 @@ SEMANTIC PRINCIPLES
   and comparisons between clinic devices when the question is not about one specific service.
   service_info covers one specific service and open-ended discovery/listing of the clinic's services;
   for an open-ended service-list request, leave the service entity null instead of inventing one.
-- appointment_list covers current/upcoming appointments. Requests about prior, past, completed, or
-  cancelled appointment history belong to customer_history instead.
+- appointment_list covers current/upcoming appointments only. Requests about prior, past, completed,
+  old, previous, or cancelled appointment history belong to customer_history instead. For example,
+  a customer asking for "my old appointments and any that were cancelled" is customer_history, not
+  appointment_list, even when the word appointment is used.
 - customer_history covers the customer's own prior visits/services/payment facts. A discrepancy or
   contested payment is additionally payment_dispute.
 - Medical suitability/symptom questions are medical safety signals; acute/emergency-seeming medical
