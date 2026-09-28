@@ -218,7 +218,11 @@ SEMANTIC PRINCIPLES
   and comparisons between clinic devices when the question is not about one specific service.
   service_info covers one specific service and open-ended discovery/listing of the clinic's services;
   for an open-ended service-list request, leave the service entity null instead of inventing one.
-- appointment_list covers current/upcoming appointments only. Requests about prior, past, completed,
+- appointment_list covers current/upcoming appointments only. A possessive request for the customer's
+  own scheduled appointment/date/time (for example "my next appointment" or "معادي اللي جاي") is
+  appointment_list even after intervening service, doctor, package, or Pulse questions. Do not reinterpret
+  that request as availability merely because a recent turn named a service; availability means open/bookable
+  slots, while appointment_list means the customer's existing booking. Requests about prior, past, completed,
   old, previous, or cancelled appointment history belong to customer_history instead. For example,
   a customer asking for "my old appointments and any that were cancelled" is customer_history, not
   appointment_list, even when the word appointment is used.
