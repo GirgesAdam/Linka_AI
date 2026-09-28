@@ -1,0 +1,66 @@
+name: Availability Contract Composer Live Review
+
+on:
+  push:
+    branches:
+      - agent/availability-contract-composer
+    paths:
+      - backend/app/agents/v2/availability_composer.py
+      - backend/app/agents/v2/responder.py
+      - backend/app/services/agent_v2/response_contract.py
+      - backend/scripts/run_availability_contract_composer_live_review.py
+      - .github/workflows/availability-contract-composer-live-review.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  availability-composer-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://dummy:dummy@localhost:5432/dummy
+      MIGRATION_DATABASE_URL: postgresql+psycopg://dummy:dummy@localhost:5432/dummy
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_availability_review_dummy
+      SUPABASE_SECRET_KEY: sb_secret_availability_review_dummy
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-5.6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Verify OpenAI staging secret
+        shell: bash
+        run: test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+      - name: Run six availability composer scenarios
+        run: python scripts/run_availability_contract_composer_live_review.py
+      - name: Upload availability composer report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: availability-contract-composer-live-review
+          path: backend/artifacts/availability-contract-composer-live-review.json
+          if-no-files-found: error

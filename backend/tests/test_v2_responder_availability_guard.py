@@ -34,6 +34,22 @@ def _availability_outcome(*, count: int, windows: list[dict[str, object]]) -> Tu
 
 
 def _run_with_draft(monkeypatch, *, draft: ResponderDraft, outcomes: list[TurnOutcome]) -> tuple[str, str]:
+    # Phase 3A moves pure availability sets to the contract composer. Add one
+    # unsupported informational unit so these tests keep exercising the legacy
+    # mixed-response guard, which remains reachable by design.
+    if all(
+        outcome.response_goal
+        in {"present_availability", "requested_time_unavailable", "no_availability"}
+        for outcome in outcomes
+    ):
+        outcomes = [
+            *outcomes,
+            TurnOutcome(
+                status="answered",
+                response_goal="answer_service",
+                facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
+            ),
+        ]
     monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
     monkeypatch.setattr(responder, "model_label", lambda name: str(name))
     monkeypatch.setattr(
