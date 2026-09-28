@@ -138,6 +138,27 @@ def _contains_any(text: str, values: list[str]) -> bool:
     return any(str(value).casefold() in lowered for value in values if str(value).strip())
 
 
+def _final_trace_has_date(turns, expected_date: str | None) -> bool:
+    if expected_date is None:
+        return True
+    if not turns:
+        return False
+    for trace in reversed(turns[-1].structured_trace or []):
+        understanding = trace.get("understanding") if isinstance(trace, dict) else None
+        if not isinstance(understanding, dict):
+            continue
+        for operation in understanding.get("operations") or []:
+            if not isinstance(operation, dict):
+                continue
+            entities = operation.get("entities") or {}
+            date_value = entities.get("date") if isinstance(entities, dict) else None
+            if not isinstance(date_value, dict):
+                continue
+            if expected_date in {date_value.get("start_date"), date_value.get("end_date")}:
+                return True
+    return False
+
+
 def _read_case(
     *,
     db: Session,
@@ -153,6 +174,7 @@ def _read_case(
     require_verified_read: bool = True,
     allow_handoff: bool = False,
     required_final_read: str | None = None,
+    required_final_date: str | None = None,
     issue_severity: str = "P2",
 ) -> ScenarioResult:
     before = extended_state_snapshot(db, workspace, patient)
@@ -168,7 +190,8 @@ def _read_case(
         required_final_read is None
         or (bool(turns) and required_final_read in turns[-1].verified_reads)
     )
-    deterministic_ok = clean and reads_ok and all_ok and any_ok and final_read_ok
+    final_date_ok = _final_trace_has_date(turns, required_final_date)
+    deterministic_ok = clean and reads_ok and all_ok and any_ok and final_read_ok and final_date_ok
     result = make_result(
         scenario_id=scenario_id,
         category=lane,
@@ -186,6 +209,8 @@ def _read_case(
             "final_response": final,
             "required_final_read": required_final_read,
             "final_read_ok": final_read_ok,
+            "required_final_date": required_final_date,
+            "final_date_ok": final_date_ok,
         },
         deterministic_ok=deterministic_ok,
         expected=(
@@ -416,6 +441,7 @@ def case_10_appointment_history_read(db: Session, workspace: Workspace) -> Scena
         patient=patient,
         messages=["وريني آخر مواعيدي واللي اتلغى منها."],
         required_any=[service.name],
+        required_final_read="customer_history",
     )
 
 
@@ -436,7 +462,7 @@ def case_11_vague_service_clarification(db: Session, workspace: Workspace) -> Sc
 
 def case_12_option_followup_second_doctor(db: Session, workspace: Workspace) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
-    _, service, _, first, second = context_with_two_doctors(db, workspace)
+    _, service, _, _, second = context_with_two_doctors(db, workspace)
     return _read_case(
         db=db,
         workspace=workspace,
@@ -449,7 +475,7 @@ def case_12_option_followup_second_doctor(db: Session, workspace: Workspace) -> 
             f"مين الدكاترة اللي بيعملوا {service['name']}؟",
             "طب والدكتورة التانية مواعيدها إيه؟",
         ],
-        required_any=[doctor_name(first[0]), doctor_name(second[0])],
+        required_all=[doctor_name(second[0])],
     )
 
 
@@ -484,7 +510,7 @@ def case_14_date_correction_availability(db: Session, workspace: Workspace) -> S
         after_date=slot1.start_at.date(),
     )
     date1, _ = local_slot(available1, slot1)
-    date2, time2 = local_slot(available2, slot2)
+    date2, _ = local_slot(available2, slot2)
     return _read_case(
         db=db,
         workspace=workspace,
@@ -497,7 +523,7 @@ def case_14_date_correction_availability(db: Session, workspace: Workspace) -> S
             f"مواعيد Hydrafacial مع {doctor_name(doctor)} يوم {date1}؟",
             f"لا قصدي يوم {date2}.",
         ],
-        required_any=[time2, date2],
+        required_final_date=date2,
     )
 
 
