@@ -7,7 +7,27 @@ from pydantic import BaseModel, ConfigDict
 from app.services.agent_v2.outcome import OutcomeChoice, ResponseGoal, TurnOutcome
 
 FactRequirement = Literal["required", "optional"]
-FactSemanticType = Literal["entity_name", "date", "time", "money", "count", "status", "boolean", "text", "choice"]
+FactSemanticType = Literal[
+    "entity_name",
+    "date",
+    "time",
+    "money",
+    "count",
+    "status",
+    "boolean",
+    "text",
+    "choice",
+]
+TerminalAction = Literal[
+    "booking",
+    "reschedule",
+    "cancel_appointment",
+    "confirm_appointment",
+    "buy_package",
+    "buy_pulse_pack",
+    "follow_up",
+    "marketing_update",
+]
 
 
 class StrictResponseContractModel(BaseModel):
@@ -28,7 +48,7 @@ class ResponseChoice(StrictResponseContractModel):
 
 
 class ActionTruth(StrictResponseContractModel):
-    action: str
+    action: TerminalAction
     succeeded: bool
 
 
@@ -56,6 +76,8 @@ _REQUIRED_KEYS_BY_GOAL: dict[ResponseGoal, frozenset[str]] = {
     "requested_time_unavailable": frozenset({"requested_time_unavailable"}),
     "no_availability": frozenset({"no_availability"}),
     "active_task_cancelled": frozenset({"active_task_cancelled"}),
+    "follow_up_created": frozenset({"follow_up_at"}),
+    "marketing_updated": frozenset({"marketing_consent"}),
     "handoff": frozenset({"category"}),
 }
 _COMPLETE_SET_KEYS_BY_GOAL: dict[ResponseGoal, frozenset[str]] = {
@@ -68,10 +90,33 @@ _INTERNAL_EXACT_KEYS = frozenset({
     "purchase_transaction_id", "reference_transaction_id", "patient_package_id",
     "patient_pulse_pack_id", "package_offer_id", "pulse_pack_offer_id", "external_id",
 })
-_TERMINAL_CANONICAL_KEYS = (
-    "service_name", "doctor_name", "device_name", "laser_device_name", "start_local",
-    "date", "time", "status", "package_used", "package_name", "pulses_remaining",
-    "pulses_count", "follow_up_at", "marketing_consent", "consent",
+SUPPORTED_TERMINAL_RESPONSE_GOALS = _TERMINAL_GOALS
+
+TERMINAL_ACTION_BY_GOAL: dict[ResponseGoal, TerminalAction] = {
+    "booking_completed": "booking",
+    "reschedule_completed": "reschedule",
+    "cancellation_completed": "cancel_appointment",
+    "appointment_confirmed": "confirm_appointment",
+    "package_purchased": "buy_package",
+    "pulse_pack_purchased": "buy_pulse_pack",
+    "follow_up_created": "follow_up",
+    "marketing_updated": "marketing_update",
+}
+
+_TERMINAL_FACT_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("service_name", ("service_name",)),
+    ("doctor_name", ("doctor_name",)),
+    ("device_name", ("device_name", "laser_device_name")),
+    ("start_local", ("start_local",)),
+    ("date", ("date",)),
+    ("time", ("time",)),
+    ("status", ("status",)),
+    ("package_used", ("package_used",)),
+    ("package_name", ("package_name",)),
+    ("pulses_remaining", ("pulses_remaining",)),
+    ("pulses_count", ("pulses_count", "pulse_count")),
+    ("follow_up_at", ("follow_up_at", "follow_up_at_local", "due_at")),
+    ("marketing_consent", ("marketing_consent", "consent")),
 )
 
 
@@ -226,13 +271,21 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
 def _terminal_facts(goal: ResponseGoal, outcome: TurnOutcome) -> list[ResponseFact]:
     result: list[ResponseFact] = []
     seen: set[str] = set()
-    for source in (outcome.action_result, outcome.facts):
-        for key in _TERMINAL_CANONICAL_KEYS:
-            value = source.get(key)
-            if value in (None, "", [], {}) or key in seen:
+    for target_key, source_keys in _TERMINAL_FACT_SOURCES:
+        for source in (outcome.action_result, outcome.facts):
+            value = next(
+                (
+                    source[source_key]
+                    for source_key in source_keys
+                    if source.get(source_key) not in (None, "", [], {})
+                ),
+                None,
+            )
+            if value is None or target_key in seen:
                 continue
-            result.append(_make_fact(goal=goal, key=key, value=value))
-            seen.add(key)
+            result.append(_make_fact(goal=goal, key=target_key, value=value))
+            seen.add(target_key)
+            break
 
     availability = outcome.facts.get("availability")
     if isinstance(availability, dict):
@@ -286,9 +339,20 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     goal = outcome.response_goal
     action_truth: ActionTruth | None = None
     if goal in _TERMINAL_GOALS:
-        action = outcome.action_result.get("action")
-        succeeded = outcome.status == "completed" and outcome.action_result.get("ok") is True
-        action_truth = ActionTruth(action=str(action or goal.removesuffix("_completed")), succeeded=succeeded)
+        expected_action = TERMINAL_ACTION_BY_GOAL[goal]
+        source_action = outcome.action_result.get("action")
+        if source_action not in (None, expected_action):
+            raise ValueError(
+                f"Terminal action mismatch for {goal}: expected {expected_action}."
+            )
+        succeeded = (
+            outcome.status == "completed"
+            and outcome.action_result.get("ok") is True
+        )
+        action_truth = ActionTruth(
+            action=expected_action,
+            succeeded=succeeded,
+        )
         facts = _terminal_facts(goal, outcome)
     elif goal == "answer_price":
         facts = _service_price_facts(goal, outcome.facts)
@@ -314,4 +378,19 @@ def build_customer_response_contract(
     """Pure deterministic projection from business outcomes to the language boundary."""
     return CustomerResponseContract(
         units=tuple(_unit_from_outcome(outcome) for outcome in outcomes)
+    )
+
+
+def is_pure_supported_terminal_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is a completed terminal write supported by Phase 2."""
+    if not contract.units:
+        return False
+    return all(
+        unit.response_goal in SUPPORTED_TERMINAL_RESPONSE_GOALS
+        and unit.status == "completed"
+        and unit.action_truth is not None
+        and unit.action_truth.succeeded is True
+        for unit in contract.units
     )
