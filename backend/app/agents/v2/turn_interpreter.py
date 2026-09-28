@@ -241,6 +241,10 @@ SEMANTIC PRINCIPLES
   old, previous, or cancelled appointment history belong to customer_history instead. For example,
   a customer asking for "my old appointments and any that were cancelled" is customer_history, not
   appointment_list, even when the word appointment is used.
+- customer_profile covers the verified current customer's own profile. requested_patient_details controls
+  field-level disclosure: name for the stored name, phone for the stored display phone, preferred_language
+  for the stored language preference. Use multiple values only when multiple profile fields are requested;
+  leave it empty only for a broad request for the customer's profile/details.
 - customer_history covers the customer's own prior visits/services/payment facts. A discrepancy or
   contested payment is additionally payment_dispute.
 - Medical suitability/symptom questions are medical safety signals; acute/emergency-seeming medical

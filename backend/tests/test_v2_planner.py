@@ -14,6 +14,7 @@ from app.agents.v2.turn_contract import (
 )
 from app.services.agent_v2.planner import (
     PlannerContext,
+    ReadRequest,
     VerificationFacts,
     advance_step_after_verification,
     plan_turn,
@@ -411,6 +412,26 @@ def test_medical_safety_overrides_simultaneous_booking() -> None:
     assert plan.steps == []
     assert plan.handoff_category == "medical"
     assert plan.handoff_priority == "urgent"
+
+
+def test_customer_profile_preserves_requested_field_scope() -> None:
+    operation = TurnOperation(
+        type="customer_profile",
+        entities=TurnEntities(),
+        requested_patient_details=["phone"],
+        execution_intent="informational",
+    )
+    turn = TiaTurnUnderstanding(operations=[operation], safety_signals=[])
+
+    plan = plan_turn(turn, _context())
+
+    assert plan.steps[0].response_goal == "answer_customer_profile"
+    assert plan.steps[0].reads == [
+        ReadRequest(
+            kind="customer_profile",
+            parameters={"requested_patient_details": ["phone"]},
+        )
+    ]
 
 
 def test_payment_question_and_payment_dispute_are_separate_semantics() -> None:

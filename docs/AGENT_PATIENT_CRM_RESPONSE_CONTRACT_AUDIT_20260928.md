@@ -1,0 +1,216 @@
+# Patient / CRM Response Contract Audit — 2026-09-28
+
+## Starting baseline
+
+Starting main SHA:
+a3bd3fda895446369b66179fb05bf3c7e9e30873
+
+Closed prior phases:
+- Phase 3A Availability
+- Phase 3B Price / Device
+- Phase 3C Doctor / Provider
+- Phase 3D Package Information
+
+## Audit decision
+
+Migration justified: YES
+
+Chosen path:
+B — Focused Patient / CRM contract migration
+
+Reason:
+The runtime already owns current-patient selection and tenant/patient isolation deterministically, but pure customer-profile responses still pass exact identity/contact facts through the generic free-form responder with no patient-specific factual guard. In addition, customer-history outcomes currently carry unnecessary nested profile PII into the response layer.
+
+## Actual Patient / CRM Response Families
+
+### Family: current customer profile
+
+Operation:
+customer_profile
+
+Planner:
+- disposition=read
+- read=customer_profile
+- response_goal=answer_customer_profile
+
+Read source:
+_read_customer_profile()
+
+Identity scope:
+The read never searches by name or model-authored identity. It reads context.patient only.
+
+Verified backend facts currently emitted by the read:
+- first_name
+- last_name
+- phone
+- preferred_language
+- status
+
+Current responder behavior:
+Generic free-form responder.
+
+Existing deterministic protections:
+- context.patient is established before orchestration
+- internal IDs are recursively filtered
+- no patient lookup/search is delegated to the LLM
+
+Existing guards:
+No patient-specific post-hoc identity/contact guard exists.
+
+Material failure modes:
+- model can rewrite or swap first/last name
+- model can alter phone digits
+- internal CRM status can be surfaced as though it were ordinary customer profile data
+- no deterministic guarantee that only exact backend values are rendered
+
+Migration justified:
+YES
+
+Focused Phase 3E customer-safe profile ownership:
+- first_name
+- last_name
+- phone, when present
+- preferred_language
+
+Excluded from PatientTruth:
+- patient UUID
+- workspace ID
+- normalized phone
+- CRM status
+- source/source_detail
+- marketing flags
+- WhatsApp opt-in metadata
+- preferred branch internal binding
+- timestamps unless a later explicit customer-safe use case requires them
+
+### Family: customer history
+
+Operation:
+customer_history
+
+Planner:
+- disposition=read
+- read=customer_history
+- response_goal=answer_customer_history
+
+Read source:
+build_patient_history_context(
+    workspace_id=current workspace,
+    patient=context.patient,
+)
+
+Identity scope:
+All appointment/payment/service history queries constrain both workspace_id and patient.id.
+
+Internal DTO includes:
+- profile identity/contact/demographic fields
+- appointment counts
+- service history
+- recent appointment lifecycle facts
+- money totals
+- appointment prices/payment status/payment method/billing context
+
+Current responder behavior:
+Generic free-form responder.
+
+Privacy finding:
+The current generic visibility filter removes internal IDs but does not remove nested profile phone, gender, birth_date, source timestamps, or financial/history fields. A request about old appointments does not need the nested profile object, so that profile block is unnecessary PII exposure.
+
+Phase 3E boundary:
+customer_history is not migrated into PatientTruth because it deliberately mixes historical appointment and already-existing financial response semantics. Financial ownership and appointment lifecycle are outside Phase 3E.
+
+Minimal required hardening:
+Remove the nested history.profile object from answer_customer_history response facts before the responder. Keep the existing historical appointment/payment semantics otherwise unchanged.
+
+### Patient search / ambiguity
+
+V2 has no patient-search read kind and does not expose a candidate-patient list to the interpreter or responder.
+
+Same-name behavior:
+Not applicable to the customer agent runtime. Names are not used to select the patient.
+
+Unknown patient behavior:
+The live API path resolves Patient by (workspace_id, patient_id) and fails if not found.
+
+### WhatsApp / channel identity
+
+Existing identity:
+ChannelIdentity is resolved by workspace_id + channel_connection_id + external_user_id, then its patient is fetched with the same workspace.
+
+New identity:
+Phone is normalized server-side. Existing patient reuse is by workspace_id + phone_normalized. The model does not choose a patient.
+
+Conversation binding:
+Existing conversations reject a different patient_id.
+Existing inbound V2 processing rejects:
+- another workspace
+- another conversation
+- conversation.patient_id != patient.id
+- non-patient/non-inbound messages
+
+Display contact:
+customer_profile uses patient.phone, not phone_normalized, so the internal normalized value is not customer-visible.
+
+### Cross-patient / cross-tenant boundary
+
+Current-patient profile:
+No DB search; context.patient only.
+
+History:
+workspace_id + patient.id.
+
+Appointments/packages/pulse:
+existing domain reads already scope to the current patient and remain owned by their existing response/business domains.
+
+## Focused migration direction
+
+Pure answer_customer_profile:
+interpreter requested_patient_details
+→ planner-scoped customer_profile read
+→ verified profile fields only
+→ CustomerResponseContract
+→ backend-owned PatientTruth
+→ deterministic exact rendering
+
+Field-level disclosure:
+- name
+- phone
+- preferred_language
+
+A broad profile/details request uses all three safe fields.
+A narrow request reads and renders only the requested safe field(s).
+
+No Patient LLM composer is required.
+
+Mixed responses:
+Remain entirely on the existing legacy responder.
+
+History privacy shaping:
+answer_customer_history response facts drop the nested profile object before generic composition.
+
+No other customer-history financial or appointment ownership is transferred to Phase 3E.
+
+## Minimal runtime changes
+
+Interpreter:
+One typed requested_patient_details field is added for customer_profile field-level privacy minimization.
+
+Planner:
+Passes only that requested profile scope into the existing customer_profile read.
+
+Read executor:
+Returns only requested customer-safe profile fields and no longer emits internal CRM status.
+
+## Non-changes
+
+Patient selection: unchanged
+Channel identity resolution: unchanged
+Appointment lifecycle: unchanged
+Availability/Price/Doctor/Package contracts: unchanged
+Financial ownership: unchanged
+Patient writes/CRM mutation: unchanged
+Auth/permissions: unchanged
+
+No existing guard is deleted.
+No verifier model is added.
+additional_llm_calls = 0

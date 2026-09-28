@@ -1032,17 +1032,31 @@ def _read_appointments(
 
 def _read_customer_profile(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
     patient = context.patient
+    raw_details = request.parameters.get("requested_patient_details")
+    details = (
+        [str(item) for item in raw_details]
+        if isinstance(raw_details, list) and raw_details
+        else ["name", "phone", "preferred_language"]
+    )
+    allowed = {"name", "phone", "preferred_language"}
+    if len(set(details)) != len(details) or not set(details).issubset(allowed):
+        raise ReadExecutionError("Unsupported customer-profile detail requested.")
+
+    profile: dict[str, object] = {}
+    if "name" in details:
+        profile["first_name"] = patient.first_name
+        profile["last_name"] = patient.last_name
+    if "phone" in details:
+        profile["phone"] = patient.phone
+    if "preferred_language" in details:
+        profile["preferred_language"] = patient.preferred_language
+
     return ReadResult(
         kind=request.kind,
         ok=True,
         payload={
-            "patient": {
-                "first_name": patient.first_name,
-                "last_name": patient.last_name,
-                "phone": patient.phone,
-                "preferred_language": patient.preferred_language,
-                "status": patient.status,
-            }
+            "patient": profile,
+            "requested_details": details,
         },
     )
 

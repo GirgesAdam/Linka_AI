@@ -42,6 +42,7 @@ SafetySignal = Literal[
 ]
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 PackageDetail = Literal["owned", "offers"]
+PatientDetail = Literal["name", "phone", "preferred_language"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
 PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "financial_ledger"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
@@ -250,6 +251,14 @@ class TurnOperation(StrictContractModel):
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
+    requested_patient_details: list[PatientDetail] = Field(
+        default_factory=list,
+        description=(
+            "For customer_profile only, include exactly the customer-safe profile facts requested: "
+            "name, phone, preferred_language, or multiple values when the customer asks for multiple "
+            "profile fields. Leave empty only for a broad request for the customer's profile/details."
+        ),
+    )
     requested_package_details: list[PackageDetail] = Field(
         default_factory=list,
         description=(

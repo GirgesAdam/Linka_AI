@@ -123,6 +123,14 @@ class PackageTruth(StrictResponseContractModel):
     offers_complete_set: bool = False
 
 
+class PatientTruth(StrictResponseContractModel):
+    requested_details: tuple[str, ...]
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+    preferred_language: str | None = None
+
+
 class CustomerResponseUnit(StrictResponseContractModel):
     response_goal: ResponseGoal
     status: str
@@ -131,6 +139,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     commercial_truth: CommercialTruth | None = None
     doctor_truth: DoctorTruth | None = None
     package_truth: PackageTruth | None = None
+    patient_truth: PatientTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
 
@@ -712,6 +721,52 @@ def _package_truth(outcome: TurnOutcome) -> PackageTruth | None:
     )
 
 
+def _patient_truth(outcome: TurnOutcome) -> PatientTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "answer_customer_profile":
+        return None
+    wrapper = outcome.facts.get("customer_profile")
+    if not isinstance(wrapper, dict):
+        return None
+    raw_details = wrapper.get("requested_details")
+    if not isinstance(raw_details, list) or not raw_details:
+        return None
+    requested = tuple(str(item) for item in raw_details)
+    allowed = {"name", "phone", "preferred_language"}
+    if not set(requested).issubset(allowed) or len(set(requested)) != len(requested):
+        return None
+
+    raw = wrapper.get("patient")
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+
+    first_name = str(safe.get("first_name") or "").strip() or None
+    last_name = str(safe.get("last_name") or "").strip() or None
+    phone = str(safe.get("phone") or "").strip() or None
+    preferred_language = str(safe.get("preferred_language") or "").strip() or None
+
+    if "name" in requested and first_name is None:
+        return None
+    if "preferred_language" in requested and preferred_language is None:
+        return None
+    if "name" not in requested and (first_name is not None or last_name is not None):
+        return None
+    if "phone" not in requested and phone is not None:
+        return None
+    if "preferred_language" not in requested and preferred_language is not None:
+        return None
+
+    return PatientTruth(
+        requested_details=requested,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
+        preferred_language=preferred_language,
+    )
+
+
 def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     doctors = facts.get("doctors")
     if not isinstance(doctors, dict):
@@ -850,6 +905,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     commercial_truth = _commercial_truth(outcome)
     doctor_truth = _doctor_truth(outcome)
     package_truth = _package_truth(outcome)
+    patient_truth = _patient_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
         source_action = outcome.action_result.get("action")
@@ -886,6 +942,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         commercial_truth=commercial_truth,
         doctor_truth=doctor_truth,
         package_truth=package_truth,
+        patient_truth=patient_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
     )
@@ -1085,3 +1142,18 @@ def is_pure_supported_package_contract(
 
 
     return True
+
+
+def is_pure_supported_patient_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is a current-patient profile supported by Phase 3E."""
+    if not contract.units:
+        return False
+
+    return all(
+        unit.response_goal == "answer_customer_profile"
+        and unit.status == "answered"
+        and unit.patient_truth is not None
+        for unit in contract.units
+    )

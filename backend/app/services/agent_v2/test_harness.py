@@ -490,8 +490,29 @@ def execute_fixture_reads(step: PlanStep, env: V2FixtureEnvironment) -> ReadExec
                 },
             )
         elif request.kind == "customer_profile":
+            raw_details = params.get("requested_patient_details")
+            details = (
+                [str(item) for item in raw_details]
+                if isinstance(raw_details, list) and raw_details
+                else ["name", "phone", "preferred_language"]
+            )
+            profile: dict[str, object] = {}
+            if "name" in details:
+                profile["first_name"] = env.profile.get("first_name")
+                profile["last_name"] = env.profile.get("last_name")
+            if "phone" in details:
+                profile["phone"] = env.profile.get("phone")
+            if "preferred_language" in details:
+                profile["preferred_language"] = env.profile.get("preferred_language")
             results.append(
-                ReadResult(kind=request.kind, ok=True, payload={"patient": dict(env.profile)})
+                ReadResult(
+                    kind=request.kind,
+                    ok=True,
+                    payload={
+                        "patient": profile,
+                        "requested_details": details,
+                    },
+                )
             )
         elif request.kind == "customer_history":
             results.append(
