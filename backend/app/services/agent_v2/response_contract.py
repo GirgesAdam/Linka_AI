@@ -28,6 +28,11 @@ TerminalAction = Literal[
     "follow_up",
     "marketing_update",
 ]
+AvailabilityState = Literal[
+    "options_available",
+    "requested_time_unavailable",
+    "no_availability",
+]
 
 
 class StrictResponseContractModel(BaseModel):
@@ -52,10 +57,15 @@ class ActionTruth(StrictResponseContractModel):
     succeeded: bool
 
 
+class AvailabilityTruth(StrictResponseContractModel):
+    state: AvailabilityState
+
+
 class CustomerResponseUnit(StrictResponseContractModel):
     response_goal: ResponseGoal
     status: str
     action_truth: ActionTruth | None = None
+    availability_truth: AvailabilityTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
 
@@ -69,6 +79,16 @@ _TERMINAL_GOALS = frozenset({
     "appointment_confirmed", "package_purchased", "pulse_pack_purchased",
     "follow_up_created", "marketing_updated",
 })
+_AVAILABILITY_GOALS = frozenset({
+    "present_availability",
+    "requested_time_unavailable",
+    "no_availability",
+})
+_AVAILABILITY_STATE_BY_GOAL: dict[ResponseGoal, AvailabilityState] = {
+    "present_availability": "options_available",
+    "requested_time_unavailable": "requested_time_unavailable",
+    "no_availability": "no_availability",
+}
 _REQUIRED_KEYS_BY_GOAL: dict[ResponseGoal, frozenset[str]] = {
     "answer_price": frozenset({"service_name", "price", "device_price_options"}),
     "answer_doctor": frozenset({"doctors"}),
@@ -91,6 +111,8 @@ _INTERNAL_EXACT_KEYS = frozenset({
     "patient_pulse_pack_id", "package_offer_id", "pulse_pack_offer_id", "external_id",
 })
 SUPPORTED_TERMINAL_RESPONSE_GOALS = _TERMINAL_GOALS
+SUPPORTED_AVAILABILITY_RESPONSE_GOALS = _AVAILABILITY_GOALS
+AVAILABILITY_STATE_BY_GOAL = _AVAILABILITY_STATE_BY_GOAL
 
 TERMINAL_ACTION_BY_GOAL: dict[ResponseGoal, TerminalAction] = {
     "booking_completed": "booking",
@@ -237,32 +259,53 @@ def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Response
 
 def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     availability = facts.get("availability")
-    if not isinstance(availability, dict):
-        if goal == "requested_time_unavailable":
-            return [_make_fact(goal=goal, key="requested_time_unavailable", value=True, required=True)]
-        if goal == "no_availability":
-            return [_make_fact(goal=goal, key="no_availability", value=True, required=True)]
-        return []
-    safe = _safe_value(availability)
+    safe = _safe_value(availability) if isinstance(availability, dict) else {}
     if not isinstance(safe, dict):
-        return []
+        safe = {}
+
     result: list[ResponseFact] = []
     if goal == "present_availability":
         windows = safe.get("availability_windows")
         if isinstance(windows, list):
-            result.append(_make_fact(
-                goal=goal, key="availability_windows", value=windows, required=True, complete_set=True
-            ))
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="availability_windows",
+                    value=windows,
+                    required=True,
+                    complete_set=True,
+                )
+            )
         for key in (
-            "service_name", "price", "laser_device_options", "checked_dates",
-            "available_option_count", "search_truncated",
+            "service_name",
+            "checked_dates",
+            "available_option_count",
+            "search_truncated",
         ):
             if safe.get(key) not in (None, "", [], {}):
                 result.append(_make_fact(goal=goal, key=key, value=safe[key]))
         return result
-    marker = "requested_time_unavailable" if goal == "requested_time_unavailable" else "no_availability"
+
+    marker = (
+        "requested_time_unavailable"
+        if goal == "requested_time_unavailable"
+        else "no_availability"
+    )
     result.append(_make_fact(goal=goal, key=marker, value=True, required=True))
-    for key in ("service_name", "checked_dates"):
+
+    if goal == "requested_time_unavailable":
+        requested_time = facts.get("time")
+        if requested_time not in (None, "", [], {}):
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="requested_time",
+                    value=requested_time,
+                    required=True,
+                )
+            )
+
+    for key in ("service_name", "checked_dates", "search_truncated"):
         if safe.get(key) not in (None, "", [], {}):
             result.append(_make_fact(goal=goal, key=key, value=safe[key]))
     return result
@@ -338,6 +381,7 @@ def _generic_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Respons
 def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     goal = outcome.response_goal
     action_truth: ActionTruth | None = None
+    availability_truth: AvailabilityTruth | None = None
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
         source_action = outcome.action_result.get("action")
@@ -358,7 +402,10 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         facts = _service_price_facts(goal, outcome.facts)
     elif goal == "answer_doctor":
         facts = _doctor_facts(goal, outcome.facts)
-    elif goal in {"present_availability", "requested_time_unavailable", "no_availability"}:
+    elif goal in _AVAILABILITY_GOALS:
+        availability_truth = AvailabilityTruth(
+            state=_AVAILABILITY_STATE_BY_GOAL[goal]
+        )
         facts = _availability_facts(goal, outcome.facts)
     else:
         facts = _generic_facts(goal, outcome.facts)
@@ -367,6 +414,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         response_goal=goal,
         status=outcome.status,
         action_truth=action_truth,
+        availability_truth=availability_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
     )
@@ -394,3 +442,46 @@ def is_pure_supported_terminal_contract(
         and unit.action_truth.succeeded is True
         for unit in contract.units
     )
+
+
+def is_pure_supported_availability_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit has the verified shape required by the Phase 3A composer."""
+    if not contract.units:
+        return False
+
+    for unit in contract.units:
+        if (
+            unit.response_goal not in SUPPORTED_AVAILABILITY_RESPONSE_GOALS
+            or unit.availability_truth is None
+            or unit.availability_truth.state
+            != AVAILABILITY_STATE_BY_GOAL[unit.response_goal]
+        ):
+            return False
+
+        facts = {fact.key: fact for fact in unit.facts}
+        if unit.response_goal == "present_availability":
+            windows = facts.get("availability_windows")
+            if (
+                windows is None
+                or windows.complete_set is not True
+                or not isinstance(windows.value, list)
+                or not windows.value
+            ):
+                return False
+        elif unit.response_goal == "requested_time_unavailable":
+            marker = facts.get("requested_time_unavailable")
+            requested_time = facts.get("requested_time")
+            if (
+                marker is None
+                or marker.value is not True
+                or requested_time is None
+            ):
+                return False
+        elif unit.response_goal == "no_availability":
+            marker = facts.get("no_availability")
+            if marker is None or marker.value is not True:
+                return False
+
+    return True

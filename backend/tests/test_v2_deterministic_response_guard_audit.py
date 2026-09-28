@@ -48,6 +48,7 @@ def _run_with_draft(
     outcome: TurnOutcome,
     reply: str,
     claim: str,
+    force_mixed_availability: bool = False,
 ) -> tuple[str, str]:
     monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
     monkeypatch.setattr(responder, "model_label", lambda name: str(name))
@@ -59,12 +60,21 @@ def _run_with_draft(
             model_name="test-model",
         ),
     )
+    outcomes = [outcome]
+    if force_mixed_availability:
+        outcomes.append(
+            TurnOutcome(
+                status="answered",
+                response_goal="answer_service",
+                facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
+            )
+        )
     return compose_v2_customer_reply(
         clinic_name="Tia Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ايوة")],
-        outcomes=[outcome],
+        outcomes=outcomes,
     )
 
 
@@ -173,6 +183,7 @@ def test_true_availability_outcomes_still_activate_guard(
         outcome=outcome,
         reply="رد غير متوافق مع الحقيقة المؤكدة.",
         claim=bad_claim,
+        force_mixed_availability=True,
     )
 
     assert source.startswith("deterministic:availability-guard:")

@@ -16,12 +16,14 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.availability_composer import compose_availability_contract_reply
 from app.agents.v2.terminal_composer import compose_terminal_contract_reply
 from app.core.config import settings
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import customer_visible_outcome
 from app.services.agent_v2.response_contract import (
     build_customer_response_contract,
+    is_pure_supported_availability_contract,
     is_pure_supported_terminal_contract,
 )
 
@@ -734,6 +736,11 @@ def compose_v2_customer_reply(
     response_contract = build_customer_response_contract(outcomes)
     if is_pure_supported_terminal_contract(response_contract):
         return compose_terminal_contract_reply(
+            history=history,
+            contract=response_contract,
+        )
+    if is_pure_supported_availability_contract(response_contract):
+        return compose_availability_contract_reply(
             history=history,
             contract=response_contract,
         )
