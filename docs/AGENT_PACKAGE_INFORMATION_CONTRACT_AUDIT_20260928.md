@@ -479,3 +479,80 @@ additional_llm_calls = 0
 - additional_llm_calls
 
 All material counters must be zero before closure.
+
+
+## Deterministic validation evidence
+
+Focused package contract / responder / read boundary:
+- 80 passed
+
+Responder architecture + package contract:
+- 19 passed
+
+Full V2 regression sweep:
+- 638 passed
+
+Package business regressions covering offers, purchase semantics, refund lifecycle, package usage/payment separation, and patient packages:
+- 47 passed
+
+Agent-eval tooling:
+- Ruff PASS
+- compileall PASS
+- 39 passed
+
+Backend static checks:
+- Ruff PASS
+- compileall PASS
+- Alembic single head: 0086_all_service_packages
+
+## Bounded live validation
+
+One-off staging validation ran on:
+- workflow: Package Information Contract Live Review
+- run: 36477701283
+- branch commit: 41eed6eb02c0d4b472ebd471b21375e728430d83
+
+Scenarios:
+1. owned active package with exact remaining sessions/device/expiry
+2. expired owned package
+3. multiple owned packages
+4. device-specific available package offer
+5. owned packages plus available offers
+6. no owned packages
+7. mixed package-information + service-information legacy response
+
+Observed response sources:
+- deterministic:package-contract — 6
+- openai:gpt-5.6-luna mixed legacy responder — 1
+
+No scenario performed a database read, financial write, package mutation, repricing, or package-session deduction.
+
+Manual review:
+- NATURAL: 5
+- ACCEPTABLE: 2
+- ROBOTIC/MATERIAL: 0
+
+The expired-package response is ACCEPTABLE: it reports canonical expired status and the exact historical expiry date, though the phrasing is slightly formal.
+
+The mixed legacy response is ACCEPTABLE: it describes the clinic package as currently offered and the requested service description, without claiming patient ownership, package balance, or any package price.
+
+Material counters:
+- invented_packages = 0
+- wrong_package_identity = 0
+- wrong_package_service_bindings = 0
+- wrong_package_device_bindings = 0
+- wrong_session_counts = 0
+- wrong_remaining_session_counts = 0
+- owned_offer_confusion = 0
+- cross_patient_package_reads = 0
+- omitted_required_packages = 0
+- duplicate_packages = 0
+- incorrect_package_status = 0
+- financial_field_leaks = 0
+- financial_writes = 0
+- package_mutation_writes = 0
+- additional_llm_calls = 0
+
+Patient/tenant isolation is established separately by deterministic read coverage asserting the current workspace_id and patient_id are passed to list_patient_packages() and include_financials=False.
+
+The only live response-model call was the already-existing generic responder for the deliberately mixed unsupported response set. Pure PackageTruth rendering adds zero model calls. No validation/verifier model call exists.
