@@ -31,6 +31,11 @@ def test_combined_batch_has_required_safety_counters():
     assert required <= set(combined.STALE_COUNTER_KEYS)
 
 
+def test_combined_matchers_normalize_arabic_indic_digits():
+    assert combined._contains_all("مدتها ٦٠ دقيقة.", ["60"])
+    assert combined._contains_any("السعر ۱۸۰۰ جنيه.", ["1800"])
+
+
 def test_combined_batch_selector_accepts_id_and_canonical_id():
     by_id = registry.select_scenarios("combined_08_10", selectors={"S24"})
     assert [row.canonical_id for row in by_id] == ["c0810_24_financial_boundary_read"]

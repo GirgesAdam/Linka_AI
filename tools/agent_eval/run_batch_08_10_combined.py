@@ -128,14 +128,21 @@ def _responses(turns) -> list[str]:
     return [str(turn.agent_response or "") for turn in turns]
 
 
+_DIGIT_TRANSLATION = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+
+
+def _match_text(value: object) -> str:
+    return str(value).translate(_DIGIT_TRANSLATION).casefold()
+
+
 def _contains_all(text: str, values: list[str]) -> bool:
-    lowered = text.casefold()
-    return all(str(value).casefold() in lowered for value in values if str(value).strip())
+    normalized = _match_text(text)
+    return all(_match_text(value) in normalized for value in values if str(value).strip())
 
 
 def _contains_any(text: str, values: list[str]) -> bool:
-    lowered = text.casefold()
-    return any(str(value).casefold() in lowered for value in values if str(value).strip())
+    normalized = _match_text(text)
+    return any(_match_text(value) in normalized for value in values if str(value).strip())
 
 
 def _final_trace_has_date(turns, expected_date: str | None) -> bool:
