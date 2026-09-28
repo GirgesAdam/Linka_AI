@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -33,6 +34,15 @@ AvailabilityState = Literal[
     "requested_time_unavailable",
     "no_availability",
 ]
+CommercialPriceKind = Literal[
+    "service_base_price",
+    "service_device_price",
+    "service_device_price_options",
+    "package_price_options",
+    "device_price_clarification",
+    "price_unavailable",
+]
+CommercialPriceQualifier = Literal["base", "device", "package"]
 
 
 class StrictResponseContractModel(BaseModel):
@@ -61,11 +71,28 @@ class AvailabilityTruth(StrictResponseContractModel):
     state: AvailabilityState
 
 
+class CommercialPriceOption(StrictResponseContractModel):
+    qualifier: CommercialPriceQualifier
+    service_name: str
+    amount: str
+    currency: str
+    device_name: str | None = None
+    sessions_count: int | None = None
+
+
+class CommercialTruth(StrictResponseContractModel):
+    kind: CommercialPriceKind
+    service_name: str | None = None
+    options: tuple[CommercialPriceOption, ...] = ()
+    complete_set: bool = False
+
+
 class CustomerResponseUnit(StrictResponseContractModel):
     response_goal: ResponseGoal
     status: str
     action_truth: ActionTruth | None = None
     availability_truth: AvailabilityTruth | None = None
+    commercial_truth: CommercialTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
 
@@ -247,6 +274,246 @@ def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[R
     return result
 
 
+def _price_parts(
+    value: object,
+    *,
+    currency_hint: object = None,
+) -> tuple[str, str] | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parts = value.strip().split()
+    if not parts:
+        return None
+    try:
+        amount = Decimal(parts[0])
+    except InvalidOperation:
+        return None
+    currency = str(currency_hint or (parts[1] if len(parts) > 1 else "")).strip().upper()
+    if not currency:
+        return None
+    amount_text = format(amount, "f")
+    return amount_text, currency
+
+
+def _price_value(source: dict[str, object]) -> object:
+    price = source.get("price")
+    if price not in (None, ""):
+        return price
+    minor = source.get("price_minor")
+    currency = source.get("currency")
+    if minor is None or currency in (None, ""):
+        return None
+    try:
+        amount = Decimal(int(minor)) / Decimal(100)
+    except (TypeError, ValueError):
+        return None
+    return f"{format(amount, '.2f')} {str(currency).upper()}"
+
+
+def _commercial_option(
+    *,
+    qualifier: CommercialPriceQualifier,
+    service_name: object,
+    price: object,
+    currency_hint: object = None,
+    device_name: object = None,
+    sessions_count: object = None,
+) -> CommercialPriceOption | None:
+    clean_service = str(service_name or "").strip()
+    parts = _price_parts(price, currency_hint=currency_hint)
+    if not clean_service or parts is None:
+        return None
+    amount, currency = parts
+    clean_device = str(device_name or "").strip() or None
+    sessions: int | None = None
+    if sessions_count not in (None, ""):
+        try:
+            sessions = int(sessions_count)
+        except (TypeError, ValueError):
+            return None
+        if sessions <= 0:
+            return None
+    if qualifier == "device" and clean_device is None:
+        return None
+    if qualifier == "package" and sessions is None:
+        return None
+    return CommercialPriceOption(
+        qualifier=qualifier,
+        service_name=clean_service,
+        amount=amount,
+        currency=currency,
+        device_name=clean_device,
+        sessions_count=sessions,
+    )
+
+
+def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | None:
+    catalog = facts.get("service_catalog")
+    if not isinstance(catalog, dict):
+        return None
+    raw_service = catalog.get("service")
+    if not isinstance(raw_service, dict):
+        return None
+    service = _safe_value(raw_service)
+    if not isinstance(service, dict):
+        return None
+    service_name = str(service.get("name") or "").strip()
+    if not service_name:
+        return None
+
+    selected = service.get("selected_laser_device")
+    if isinstance(selected, dict):
+        option = _commercial_option(
+            qualifier="device",
+            service_name=service_name,
+            price=_price_value(selected),
+            device_name=selected.get("device_name"),
+        )
+        if option is not None:
+            return CommercialTruth(
+                kind="service_device_price",
+                service_name=service_name,
+                options=(option,),
+                complete_set=False,
+            )
+
+    raw_devices = service.get("laser_devices")
+    if isinstance(raw_devices, list) and raw_devices:
+        options = tuple(
+            option
+            for row in raw_devices
+            if isinstance(row, dict)
+            and (
+                option := _commercial_option(
+                    qualifier="device",
+                    service_name=service_name,
+                    price=_price_value(row),
+                    device_name=row.get("device_name"),
+                )
+            )
+            is not None
+        )
+        if options and len(options) == len(raw_devices):
+            return CommercialTruth(
+                kind=(
+                    "service_device_price"
+                    if len(options) == 1
+                    else "service_device_price_options"
+                ),
+                service_name=service_name,
+                options=options,
+                complete_set=len(options) > 1,
+            )
+
+    option = _commercial_option(
+        qualifier="base",
+        service_name=service_name,
+        price=_price_value(service),
+        currency_hint=service.get("currency"),
+    )
+    if option is not None:
+        return CommercialTruth(
+            kind="service_base_price",
+            service_name=service_name,
+            options=(option,),
+            complete_set=False,
+        )
+
+    return CommercialTruth(
+        kind="price_unavailable",
+        service_name=service_name,
+        options=(),
+        complete_set=False,
+    )
+
+
+def _package_commercial_truth(facts: dict[str, object]) -> CommercialTruth | None:
+    package_facts = facts.get("package_offers")
+    if not isinstance(package_facts, dict):
+        return None
+    raw_offers = package_facts.get("offers")
+    if not isinstance(raw_offers, list):
+        return None
+
+    options: list[CommercialPriceOption] = []
+    for raw in raw_offers:
+        if not isinstance(raw, dict):
+            return None
+        option = _commercial_option(
+            qualifier="package",
+            service_name=raw.get("service_name"),
+            price=_price_value(raw),
+            currency_hint=raw.get("currency"),
+            device_name=raw.get("device_name"),
+            sessions_count=raw.get("sessions_count"),
+        )
+        if option is None:
+            return None
+        options.append(option)
+
+    service_names = {option.service_name for option in options}
+    service_name = next(iter(service_names)) if len(service_names) == 1 else None
+    return CommercialTruth(
+        kind="package_price_options",
+        service_name=service_name,
+        options=tuple(options),
+        complete_set=len(options) > 1,
+    )
+
+
+def _device_clarification_commercial_truth(
+    outcome: TurnOutcome,
+) -> CommercialTruth | None:
+    if (
+        outcome.status != "needs_input"
+        or outcome.response_goal != "clarification"
+        or outcome.facts.get("needed") != "device"
+    ):
+        return None
+    availability = outcome.facts.get("availability")
+    if not isinstance(availability, dict):
+        return None
+    if availability.get("device_price_conflicts") not in (None, [], {}):
+        return None
+    raw_options = availability.get("laser_device_options")
+    if not isinstance(raw_options, list) or len(raw_options) < 2:
+        return None
+    service_name = str(availability.get("service_name") or "").strip()
+    if not service_name:
+        return None
+    options = tuple(
+        option
+        for raw in raw_options
+        if isinstance(raw, dict)
+        and (
+            option := _commercial_option(
+                qualifier="device",
+                service_name=service_name,
+                price=_price_value(raw),
+                device_name=raw.get("device_name"),
+            )
+        )
+        is not None
+    )
+    if len(options) != len(raw_options):
+        return None
+    return CommercialTruth(
+        kind="device_price_clarification",
+        service_name=service_name,
+        options=options,
+        complete_set=True,
+    )
+
+
+def _commercial_truth(outcome: TurnOutcome) -> CommercialTruth | None:
+    if outcome.status == "answered" and outcome.response_goal == "answer_price":
+        return (
+            _service_commercial_truth(outcome.facts)
+            or _package_commercial_truth(outcome.facts)
+        )
+    return _device_clarification_commercial_truth(outcome)
+
+
 def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     doctors = facts.get("doctors")
     if not isinstance(doctors, dict):
@@ -382,6 +649,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     goal = outcome.response_goal
     action_truth: ActionTruth | None = None
     availability_truth: AvailabilityTruth | None = None
+    commercial_truth = _commercial_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
         source_action = outcome.action_result.get("action")
@@ -415,6 +683,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         status=outcome.status,
         action_truth=action_truth,
         availability_truth=availability_truth,
+        commercial_truth=commercial_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
     )
@@ -483,5 +752,69 @@ def is_pure_supported_availability_contract(
             marker = facts.get("no_availability")
             if marker is None or marker.value is not True:
                 return False
+
+    return True
+
+
+def is_pure_supported_price_device_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit has a verified commercial shape supported by Phase 3B."""
+    if not contract.units:
+        return False
+
+    for unit in contract.units:
+        truth = unit.commercial_truth
+        if truth is None:
+            return False
+        if unit.response_goal == "answer_price":
+            if unit.status != "answered":
+                return False
+            fact_keys = {fact.key for fact in unit.facts}
+            if fact_keys & {
+                "description",
+                "duration_minutes",
+                "customer_duration_text",
+            }:
+                return False
+        elif unit.response_goal == "clarification":
+            if (
+                unit.status != "needs_input"
+                or truth.kind != "device_price_clarification"
+            ):
+                return False
+        else:
+            return False
+
+        signatures = [
+            (
+                option.qualifier,
+                option.service_name,
+                option.device_name,
+                option.sessions_count,
+                option.amount,
+                option.currency,
+            )
+            for option in truth.options
+        ]
+        if len(signatures) != len(set(signatures)):
+            return False
+
+        if truth.kind == "price_unavailable":
+            if truth.options:
+                return False
+            continue
+        if truth.kind == "package_price_options":
+            continue
+        if not truth.options:
+            return False
+        if truth.kind in {
+            "service_device_price_options",
+            "device_price_clarification",
+        }:
+            if len(truth.options) < 2 or truth.complete_set is not True:
+                return False
+        elif len(truth.options) != 1 or truth.complete_set:
+            return False
 
     return True
