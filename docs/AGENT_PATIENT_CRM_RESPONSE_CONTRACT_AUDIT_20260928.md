@@ -221,3 +221,89 @@ Auth/permissions: unchanged
 No existing guard is deleted.
 No verifier model is added.
 additional_llm_calls = 0
+
+
+## Deterministic validation evidence
+
+Focused Patient/CRM contract, planner, interpreter, read, outcome, responder:
+- Ruff PASS
+- 158 passed
+
+Identity/channel/history isolation regressions:
+- 64 passed
+
+Full V2 regression sweep before final history-minimization patch:
+- 651 passed
+
+Package/financial business regression set:
+- 47 passed
+
+Agent-eval tooling:
+- Ruff PASS
+- compileall PASS
+- 39 passed
+
+Static backend gates:
+- Ruff PASS
+- compileall PASS
+- Alembic single head: 0086_all_service_packages
+
+
+## Bounded live validation
+
+Final successful one-off staging review:
+- workflow: Patient CRM Contract Live Review
+- run: 36483022185
+- branch commit: 9803902da1c9caa042e5c60e5d37b7eb0ca7a39d
+
+Scenarios:
+1. broad current profile
+2. name-only after stale wrong assistant name
+3. phone-only with exact display formatting
+4. preferred-language-only
+5. requested phone absent
+6. customer history with injected nested profile PII and financial fields
+7. mixed phone-profile + service-information response
+
+Pure profile scenarios used:
+deterministic:patient-contract
+
+Customer-history and mixed unsupported response sets remained on the existing legacy responder.
+
+
+Live finding and correction:
+The first successful history read still allowed the generic responder to volunteer a 500 EGP payment amount for a non-financial last-visit question. This exposed an unnecessary financial response surface.
+
+The focused correction added a non-financial customer-history response whitelist. The final live reply became:
+"آخر زيارة كانت ليزر إبط مع د. مريم بتاريخ 29 أغسطس 2026."
+
+No payment amount, payment status/method, billing field, nested profile PII, or package-usage financial context remained.
+
+Manual review:
+- NATURAL: 6
+- ACCEPTABLE: 1
+- ROBOTIC/MATERIAL: 0
+
+The mixed phone + service reply is ACCEPTABLE: it preserves the exact verified phone and declines to invent unavailable service-list detail.
+
+
+Material counters after the final live review:
+- invented_patients = 0
+- wrong_patient_identity = 0
+- cross_patient_reads = 0
+- cross_patient_response_facts = 0
+- cross_tenant_reads = 0
+- wrong_phone_claims = 0
+- invented_contact_details = 0
+- internal_id_leaks = 0
+- internal_crm_field_leaks = 0
+- medical_field_leaks = 0
+- financial_field_leaks = 0
+- wrong_appointment_patient_binding = 0
+- omitted_required_patient_candidates = 0 (not applicable: V2 exposes no patient candidate search)
+- duplicate_patient_candidates = 0 (not applicable: V2 exposes no patient candidate search)
+- patient_mutation_writes = 0
+- financial_writes = 0
+- additional_llm_calls = 0
+
+The live fixture runtime performed zero database reads and zero writes. Production isolation is established separately by deterministic channel/live-chat/read regression coverage.
