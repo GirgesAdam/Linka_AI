@@ -102,6 +102,8 @@ def test_customer_package_read_excludes_receptionist_ledger_fields(
         return {key: raw[key] for key in include if key in raw}
 
     def list_packages(*_args: object, **kwargs: object) -> list[object]:
+        captured["workspace_id"] = kwargs.get("workspace_id")
+        captured["patient_id"] = kwargs.get("patient_id")
         captured["include_financials"] = kwargs.get("include_financials")
         return [SimpleNamespace(model_dump=model_dump)]
 
@@ -116,16 +118,20 @@ def test_customer_package_read_excludes_receptionist_ledger_fields(
         reads=[ReadRequest(kind="customer_packages")],
         response_goal="package_information",
     )
+    workspace_id = uuid4()
+    patient_id = uuid4()
     context = ReadExecutionContext(
         db=object(),
-        workspace=SimpleNamespace(id=uuid4()),
-        patient=SimpleNamespace(id=uuid4()),
+        workspace=SimpleNamespace(id=workspace_id),
+        patient=SimpleNamespace(id=patient_id),
         now=NOW,
     )
 
     bundle = execute_step_reads(step, context)
     package = bundle.results[0].payload["packages"][0]
 
+    assert captured["workspace_id"] == workspace_id
+    assert captured["patient_id"] == patient_id
     assert captured["include_financials"] is False
     assert package["sessions_remaining"] == 3
     assert package["sessions_consumed"] == 2
