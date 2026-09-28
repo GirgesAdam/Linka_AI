@@ -129,6 +129,10 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     )
 
     assert isinstance(messages[0], SystemMessage)
+    assert "Ordinal references to an immediately preceding option list are positional" in str(
+        messages[0].content
+    )
+    assert "old appointments and any that were cancelled" in str(messages[0].content)
     assert isinstance(messages[1], SystemMessage)
     assert isinstance(messages[2], HumanMessage)
     assert isinstance(messages[3], AIMessage)
