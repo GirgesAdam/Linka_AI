@@ -138,6 +138,36 @@ def test_profile_response_shaping_removes_internal_crm_status() -> None:
     }
 
 
+def test_profile_response_shaping_preserves_requested_missing_phone() -> None:
+    shaped = _patient_crm_response_facts(
+        {
+            "customer_profile": {
+                "requested_details": ["phone"],
+            }
+        },
+        response_goal="answer_customer_profile",
+    )
+
+    assert shaped == {
+        "customer_profile": {
+            "patient": {},
+            "requested_details": ["phone"],
+        }
+    }
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_customer_profile",
+        facts=shaped,
+    )
+    contract = build_customer_response_contract([outcome])
+    truth = contract.units[0].patient_truth
+
+    assert truth is not None
+    assert truth.requested_details == ("phone",)
+    assert truth.phone is None
+    assert is_pure_supported_patient_contract(contract) is True
+
+
 def test_history_response_shaping_removes_nested_profile_pii_only() -> None:
     history = {
         "profile": {
