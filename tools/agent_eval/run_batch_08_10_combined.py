@@ -739,7 +739,7 @@ def case_24_financial_boundary_read(db: Session, workspace: Workspace) -> Scenar
 def case_25_long_detour_resume_appointment(db: Session, workspace: Workspace) -> ScenarioResult:
     patient = quiet_patient(db, workspace)
     service = service_by_slug(db, workspace, "hydrafacial")
-    _, service_row, doctor, _, _, available = booking_context(
+    _, _, doctor, _, _, available = booking_context(
         db, workspace, service_slug="hydrafacial"
     )
     slot = available.slots[0]
@@ -767,7 +767,7 @@ def case_25_long_detour_resume_appointment(db: Session, workspace: Workspace) ->
             "مين الدكاترة اللي بيعملوا Hydrafacial؟",
             "طيب معادي اللي جاي إمتى بالظبط؟",
         ],
-        required_any=[str(service_row["name"]), date_text],
+        required_all=[date_text],
         allow_handoff=True,
     )
 
