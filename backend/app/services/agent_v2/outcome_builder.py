@@ -291,7 +291,7 @@ def _service_catalog_facts(
                     "device_name": selected.get("device_name"),
                     "price": selected["price"],
                 }
-            elif priced_devices:
+            elif selected_device_key is None and priced_devices:
                 shaped["laser_devices"] = [
                     {
                         "device_name": device.get("device_name"),

@@ -20,6 +20,7 @@ from app.services.agent_v2.outcome_builder import (
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
+from app.services.agent_v2.response_contract import build_customer_response_contract
 
 NOW = datetime(2026, 9, 11, 15, 0, tzinfo=UTC)
 
@@ -887,3 +888,72 @@ def test_compatibility_failure_reaches_responder_as_grounded_visible_fact() -> N
         "compatible_options": ["سارة"],
     }
     assert "doctor-2" not in str(visible)
+
+
+def test_selected_laser_device_without_verified_price_does_not_fall_back_to_other_devices() -> None:
+    operation = TurnOperation(
+        type="pricing",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر إبط", ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+        requested_service_details=["price"],
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-1"})],
+        response_goal="answer_price",
+        facts={"service_id": "service-1", "device_key": "candela_gentle"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-1",
+                        "name": "ليزر إبط",
+                        "price_minor": 55_000,
+                        "currency": "EGP",
+                        "requires_laser_device": True,
+                        "laser_devices": [
+                            {
+                                "device_key": "prime_lase",
+                                "device_name": "Prime Lase",
+                                "price_minor": 55_000,
+                                "currency": "EGP",
+                                "configured": True,
+                            },
+                            {
+                                "device_key": "candela_gentle",
+                                "device_name": "Candela Gentle",
+                                "price_minor": None,
+                                "currency": "EGP",
+                                "configured": False,
+                            },
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+    service = outcome.facts["service_catalog"]["service"]
+    contract = build_customer_response_contract([outcome])
+
+    assert service["requires_laser_device"] is True
+    assert "selected_laser_device" not in service
+    assert "laser_devices" not in service
+    assert contract.units[0].commercial_truth is not None
+    assert contract.units[0].commercial_truth.kind == "price_unavailable"

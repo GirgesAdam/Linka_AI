@@ -1173,13 +1173,15 @@ def _read_package_offers(
     request: ReadRequest,
     context: ReadExecutionContext,
 ) -> tuple[ReadResult, VerificationFacts]:
-    service_id, device_key, sessions, _package_id = _package_filters(request)
+    service_id, device_key, sessions, package_id = _package_filters(request)
     rows = list_package_offers(
         context.db,
         workspace_id=context.workspace.id,
         service_id=service_id,
         active_only=True,
     )
+    if package_id is not None:
+        rows = [row for row in rows if row.id == package_id]
     if device_key is not None:
         rows = [row for row in rows if row.device_key == device_key]
     if sessions is not None:

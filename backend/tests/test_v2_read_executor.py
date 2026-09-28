@@ -662,3 +662,54 @@ def test_unknown_device_is_not_reclassified_as_known_incompatibility() -> None:
             ),
             _context(adapter),
         )
+
+
+def test_package_offer_read_honors_explicit_package_id(monkeypatch) -> None:
+    other_offer_id = UUID("77777777-7777-4777-8777-777777777777")
+
+    class Offer:
+        def __init__(self, offer_id: UUID, price_minor: int) -> None:
+            self.id = offer_id
+            self.service_id = SERVICE_ID
+            self.device_key = "candela_gentle"
+            self.sessions_count = 6
+            self.price_minor = price_minor
+            self.currency = "EGP"
+
+        def model_dump(self, *, mode):
+            assert mode == "json"
+            return {
+                "id": str(self.id),
+                "service_id": str(self.service_id),
+                "device_key": self.device_key,
+                "sessions_count": self.sessions_count,
+                "price_minor": self.price_minor,
+                "currency": self.currency,
+            }
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.read_executor.list_package_offers",
+        lambda *args, **kwargs: [
+            Offer(OFFER_ID, 250000),
+            Offer(other_offer_id, 999999),
+        ],
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="pricing",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="package_offers",
+                parameters={"package_id": str(OFFER_ID)},
+            )
+        ],
+        response_goal="answer_price",
+    )
+
+    bundle = execute_step_reads(step, _context())
+
+    assert bundle.verification.package_offer_match_count == 1
+    assert bundle.verification.verified_parameters["package_offer_id"] == str(OFFER_ID)
+    assert len(bundle.results[0].payload["offers"]) == 1
+    assert bundle.results[0].payload["offers"][0]["id"] == str(OFFER_ID)

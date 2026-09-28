@@ -144,6 +144,24 @@ def _device_price_clarification_outcome() -> TurnOutcome:
     )
 
 
+def _mixed_device_price_guard_outcomes() -> list[TurnOutcome]:
+    return [
+        _device_price_clarification_outcome(),
+        TurnOutcome(
+            status="answered",
+            response_goal="answer_service",
+            facts={
+                "service_catalog": {
+                    "service": {
+                        "name": "ليزر إزالة الشعر - إبط",
+                        "description": "تفاصيل موثقة",
+                    }
+                }
+            },
+        ),
+    ]
+
+
 def test_device_price_guard_replaces_unbound_transliterated_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -166,7 +184,7 @@ def test_device_price_guard_replaces_unbound_transliterated_reply(
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
-        outcomes=[_device_price_clarification_outcome()],
+        outcomes=_mixed_device_price_guard_outcomes(),
     )
 
     assert source == "deterministic:device-price-guard:test-model"
@@ -198,7 +216,7 @@ def test_device_price_guard_applies_after_availability_fallback(
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
-        outcomes=[_device_price_clarification_outcome()],
+        outcomes=_mixed_device_price_guard_outcomes(),
     )
 
     assert source == "deterministic:device-price-guard:test-model"
@@ -230,7 +248,7 @@ def test_device_price_guard_keeps_correct_canonical_pairs(
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
-        outcomes=[_device_price_clarification_outcome()],
+        outcomes=_mixed_device_price_guard_outcomes(),
     )
 
     assert text == natural
@@ -292,7 +310,7 @@ def test_pure_price_reply_is_deterministic_and_skips_model(
     )
 
     assert text == "جلسة ليزر إبط سعرها 500 جنيه."
-    assert model == "deterministic:verified-price"
+    assert model == "deterministic:price-device-contract"
 
 
 def test_pure_price_reply_includes_verified_requested_duration(
@@ -435,7 +453,7 @@ def test_prp_verified_price_cannot_be_reinvented_by_responder(
         outcomes=[outcome],
     )
 
-    assert model == "deterministic:verified-price"
+    assert model == "deterministic:price-device-contract"
     assert "2000" in text
     assert "2500" not in text
 
@@ -469,7 +487,7 @@ def test_verified_normal_price_changes_without_code_constant(
         outcomes=[outcome],
     )
 
-    assert model == "deterministic:verified-price"
+    assert model == "deterministic:price-device-contract"
     assert "2100" in text
     assert "2000" not in text
 
@@ -507,7 +525,7 @@ def test_selected_candela_price_is_deterministic(
         outcomes=[outcome],
     )
 
-    assert model == "deterministic:verified-device-price"
+    assert model == "deterministic:price-device-contract"
     assert "Candela Gentle" in text
     assert "650" in text
     assert "550" not in text
@@ -546,7 +564,7 @@ def test_multiple_device_prices_are_presented_without_silent_selection(
         outcomes=[outcome],
     )
 
-    assert model == "deterministic:verified-device-prices"
+    assert model == "deterministic:price-device-contract"
     assert "Prime Lase" in text and "550" in text
     assert "Candela Gentle" in text and "650" in text
     assert "أي جهاز" in text
