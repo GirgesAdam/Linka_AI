@@ -390,3 +390,49 @@ Material counters:
 - additional_llm_calls
 
 All material correctness counters must finish at zero.
+
+
+## Bounded live validation evidence
+
+One-off staging review was executed on branch commit:
+58d3765948b0049223f44012c040ef2842f98cfa
+
+Scenarios:
+1. service base price
+2. explicit selected-device price
+3. general multi-device prices
+4. exact single package price
+5. multiple package/device price options
+6. device-price clarification
+7. forced invalid structured draft
+
+Observed customer outputs preserved every expected service/device/amount/currency binding.
+
+Response sources:
+- deterministic exact service/device contract: 3 cases
+- direct structured composer + backend resolution: 1 case
+- deterministic contract fallback after strict draft validation: 3 cases, including the intentionally forced invalid draft
+
+The two non-forced fallbacks were caused by PriceDeviceComposerValidationError. No validator was relaxed: exact option-set preservation takes precedence over direct-model success rate.
+
+Manual naturalness classification:
+- NATURAL: 6
+- ACCEPTABLE: 1
+- ROBOTIC/MATERIAL: 0
+
+The multiple-package list is classified ACCEPTABLE: it is slightly formal but commercially exact, grounded, complete, and actionable.
+
+Material counters:
+- hallucinated_prices = 0
+- wrong_device_price_bindings = 0
+- invented_devices = 0
+- invented_services = 0
+- wrong_currency = 0
+- omitted_required_price_options = 0
+- duplicate_price_options = 0
+- incorrect_base_price_claims = 0
+- financial_writes = 0
+- additional_llm_calls = 0
+
+The live harness was composition-only and used no database writes.
+No validation/verifier model call was introduced.
