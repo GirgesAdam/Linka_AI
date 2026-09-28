@@ -232,8 +232,8 @@ Focused Patient/CRM contract, planner, interpreter, read, outcome, responder:
 Identity/channel/history isolation regressions:
 - 64 passed
 
-Full V2 regression sweep before final history-minimization patch:
-- 651 passed
+Full V2 regression sweep on final history-minimized implementation:
+- 652 passed
 
 Package/financial business regression set:
 - 47 passed
