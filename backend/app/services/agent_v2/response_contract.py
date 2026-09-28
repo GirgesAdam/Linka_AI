@@ -43,6 +43,7 @@ CommercialPriceKind = Literal[
     "price_unavailable",
 ]
 CommercialPriceQualifier = Literal["base", "device", "package"]
+DoctorTruthKind = Literal["doctor_result_set", "doctor_choice"]
 
 
 class StrictResponseContractModel(BaseModel):
@@ -87,12 +88,24 @@ class CommercialTruth(StrictResponseContractModel):
     complete_set: bool = False
 
 
+class DoctorOption(StrictResponseContractModel):
+    name: str
+    specialization: str | None = None
+
+
+class DoctorTruth(StrictResponseContractModel):
+    kind: DoctorTruthKind
+    options: tuple[DoctorOption, ...] = ()
+    complete_set: bool = True
+
+
 class CustomerResponseUnit(StrictResponseContractModel):
     response_goal: ResponseGoal
     status: str
     action_truth: ActionTruth | None = None
     availability_truth: AvailabilityTruth | None = None
     commercial_truth: CommercialTruth | None = None
+    doctor_truth: DoctorTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
 
@@ -110,6 +123,10 @@ _AVAILABILITY_GOALS = frozenset({
     "present_availability",
     "requested_time_unavailable",
     "no_availability",
+})
+_DOCTOR_GOALS = frozenset({
+    "answer_doctor",
+    "ask_doctor_choice",
 })
 _AVAILABILITY_STATE_BY_GOAL: dict[ResponseGoal, AvailabilityState] = {
     "present_availability": "options_available",
@@ -139,6 +156,7 @@ _INTERNAL_EXACT_KEYS = frozenset({
 })
 SUPPORTED_TERMINAL_RESPONSE_GOALS = _TERMINAL_GOALS
 SUPPORTED_AVAILABILITY_RESPONSE_GOALS = _AVAILABILITY_GOALS
+SUPPORTED_DOCTOR_RESPONSE_GOALS = _DOCTOR_GOALS
 AVAILABILITY_STATE_BY_GOAL = _AVAILABILITY_STATE_BY_GOAL
 
 TERMINAL_ACTION_BY_GOAL: dict[ResponseGoal, TerminalAction] = {
@@ -514,6 +532,62 @@ def _commercial_truth(outcome: TurnOutcome) -> CommercialTruth | None:
     return _device_clarification_commercial_truth(outcome)
 
 
+def _doctor_option(raw: object) -> DoctorOption | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    name = str(safe.get("name") or safe.get("doctor_name") or "").strip()
+    if not name:
+        return None
+    specialization = str(safe.get("specialization") or "").strip() or None
+    return DoctorOption(
+        name=name,
+        specialization=specialization,
+    )
+
+
+def _doctor_truth(outcome: TurnOutcome) -> DoctorTruth | None:
+    if outcome.status == "answered" and outcome.response_goal == "answer_doctor":
+        wrapper = outcome.facts.get("doctors")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("doctors")
+        if not isinstance(rows, list):
+            return None
+        options: list[DoctorOption] = []
+        for raw in rows:
+            option = _doctor_option(raw)
+            if option is None:
+                return None
+            options.append(option)
+        return DoctorTruth(
+            kind="doctor_result_set",
+            options=tuple(options),
+            complete_set=True,
+        )
+
+    if (
+        outcome.status == "needs_input"
+        and outcome.response_goal == "ask_doctor_choice"
+        and outcome.choices
+    ):
+        options: list[DoctorOption] = []
+        for choice in outcome.choices:
+            name = str(choice.label or "").strip()
+            if not name:
+                return None
+            options.append(DoctorOption(name=name))
+        return DoctorTruth(
+            kind="doctor_choice",
+            options=tuple(options),
+            complete_set=True,
+        )
+
+    return None
+
+
 def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     doctors = facts.get("doctors")
     if not isinstance(doctors, dict):
@@ -650,6 +724,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     action_truth: ActionTruth | None = None
     availability_truth: AvailabilityTruth | None = None
     commercial_truth = _commercial_truth(outcome)
+    doctor_truth = _doctor_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
         source_action = outcome.action_result.get("action")
@@ -684,6 +759,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         action_truth=action_truth,
         availability_truth=availability_truth,
         commercial_truth=commercial_truth,
+        doctor_truth=doctor_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
     )
@@ -815,6 +891,45 @@ def is_pure_supported_price_device_contract(
             if len(truth.options) < 2 or truth.complete_set is not True:
                 return False
         elif len(truth.options) != 1 or truth.complete_set:
+            return False
+
+    return True
+
+
+def is_pure_supported_doctor_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit has a verified doctor shape supported by Phase 3C."""
+    if not contract.units:
+        return False
+
+    for unit in contract.units:
+        truth = unit.doctor_truth
+        if truth is None or truth.complete_set is not True:
+            return False
+
+        if unit.response_goal == "answer_doctor":
+            if unit.status != "answered" or truth.kind != "doctor_result_set":
+                return False
+            facts = {fact.key: fact for fact in unit.facts}
+            doctors = facts.get("doctors")
+            if (
+                doctors is None
+                or doctors.complete_set is not True
+                or not isinstance(doctors.value, list)
+                or len(doctors.value) != len(truth.options)
+            ):
+                return False
+        elif unit.response_goal == "ask_doctor_choice":
+            if unit.status != "needs_input" or truth.kind != "doctor_choice":
+                return False
+            if not truth.options or len(unit.choices) != len(truth.options):
+                return False
+            if [choice.label for choice in unit.choices] != [
+                option.name for option in truth.options
+            ]:
+                return False
+        else:
             return False
 
     return True

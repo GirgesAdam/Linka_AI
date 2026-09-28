@@ -17,6 +17,7 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.agents.v2.availability_composer import compose_availability_contract_reply
+from app.agents.v2.doctor_composer import compose_doctor_contract_reply
 from app.agents.v2.price_device_composer import compose_price_device_contract_reply
 from app.agents.v2.terminal_composer import compose_terminal_contract_reply
 from app.core.config import settings
@@ -25,6 +26,7 @@ from app.services.agent_v2.outcome_builder import customer_visible_outcome
 from app.services.agent_v2.response_contract import (
     build_customer_response_contract,
     is_pure_supported_availability_contract,
+    is_pure_supported_doctor_contract,
     is_pure_supported_price_device_contract,
     is_pure_supported_terminal_contract,
 )
@@ -410,12 +412,13 @@ def _ensure_verified_doctor_list(
 ) -> str:
     """Prevent the language layer from silently dropping verified doctors from a compound answer."""
     names = _verified_doctor_names(outcomes)
-    if len(names) < 2 or all(name in text for name in names):
+    missing = [name for name in names if name not in text]
+    if len(names) < 2 or not missing:
         return text
 
     arabic = _latest_customer_is_arabic(history)
-    prefix = "الدكاترة اللي بيقدموا الخدمة كلهم: " if arabic else "All doctors who provide the service: "
-    grounded_list = prefix + "، ".join(names) + "."
+    prefix = "وكمان من الدكاترة المطابقين: " if arabic else "Also among the matching doctors: "
+    grounded_list = prefix + "، ".join(missing) + "."
     return f"{text.rstrip()}\n{grounded_list}"
 
 
@@ -649,6 +652,10 @@ RULES
   nearest/earliest comparisons, state only the verified result and explicit negative facts.
 - If the customer asks for a matching list, include every supplied item unless the outcome says it
   was truncated.
+- Doctor identity, service compatibility, availability, and recommendation are separate facts. Use only
+  doctor names/specializations explicitly supplied by TURN_OUTCOMES. Never invent a doctor, qualification,
+  specialty, experience, ranking, or "best/better/recommended" claim unless that exact claim is verified.
+  Doctor existence or compatibility never proves appointment availability.
 - For needs_input, ask only the focused missing detail and present supplied choices naturally without
   refs/internal metadata. Never imply a future write already happened.
 - For a read-only payment-information outcome, booking_requires_payment=false means the customer can
@@ -748,6 +755,11 @@ def compose_v2_customer_reply(
         )
     if is_pure_supported_price_device_contract(response_contract):
         return compose_price_device_contract_reply(
+            history=history,
+            contract=response_contract,
+        )
+    if is_pure_supported_doctor_contract(response_contract):
+        return compose_doctor_contract_reply(
             history=history,
             contract=response_contract,
         )

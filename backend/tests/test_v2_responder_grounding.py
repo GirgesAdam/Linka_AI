@@ -28,7 +28,10 @@ def test_verified_doctor_list_appends_complete_grounded_list_when_model_omits_on
     )
 
     assert "د. نور علي" in text
-    assert "الدكاترة اللي بيقدموا الخدمة كلهم" in text
+    assert "وكمان من الدكاترة المطابقين" in text
+    assert text.count("د. سارة عادل") == 1
+    assert text.count("د. عمر خليل") == 1
+    assert text.count("د. نور علي") == 1
 
 
 def test_verified_doctor_list_leaves_complete_model_reply_unchanged() -> None:
