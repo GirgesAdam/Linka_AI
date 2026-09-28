@@ -40,6 +40,7 @@ SafetySignal = Literal[
     "privacy_issue",
 ]
 PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
+PackageDetail = Literal["owned", "offers"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
 PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "financial_ledger"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
@@ -246,6 +247,15 @@ class TurnOperation(StrictContractModel):
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
+    requested_package_details: list[PackageDetail] = Field(
+        default_factory=list,
+        description=(
+            "For package_info only, include exactly the session-package facts requested: owned for "
+            "the customer's existing packages/current remaining sessions, offers for packages currently "
+            "available to purchase, or both when both concerns are asked. Do not infer ownership from "
+            "an offer-discovery question."
+        ),
+    )
     requested_pulse_details: list[PulseDetail] = Field(
         default_factory=list,
         description=(

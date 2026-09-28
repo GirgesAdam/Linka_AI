@@ -166,9 +166,12 @@ SEMANTIC PRINCIPLES
 - For appointment_list, broad category wording such as asking for "my next laser appointment" must
   not force a service choice from the catalog. Unless one specific service is clearly named, leave
   the service entity null so Python can read the customer's actual appointments first.
-- package_info and refund_quote are reads. buy_package is a purchase request. package_usage describes
-  whether an appointment should consume an existing session package, avoid an existing package, or
-  leaves that question unspecified.
+- package_info and refund_quote are reads. buy_package is a purchase request. For package_info,
+  requested_package_details controls the exact read scope: owned means the customer's existing package
+  or remaining-session state; offers means session-package options currently available to purchase; use
+  both only when both concerns are explicitly requested. Set requested_package_details to exactly what
+  was requested. package_usage describes whether an appointment should consume an existing session
+  package, avoid an existing package, or leaves that question unspecified.
 - Pulse balance/payment selection is not part of appointment booking. Reception handles
   appointment billing, Pulse settlement, and cash-vs-Pulse choices. If a customer asks to book and
   mentions using/not using Pulses, keep the booking semantics and do not encode a billing preference.
