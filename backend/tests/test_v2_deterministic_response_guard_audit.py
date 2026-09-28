@@ -86,15 +86,24 @@ def test_terminal_scheduling_success_ignores_supporting_availability_facts(
         action_result={"ok": True},
     )
 
-    text, source = _run_with_draft(
-        monkeypatch,
-        outcome=outcome,
-        reply=natural,
-        claim="not_applicable",
+    monkeypatch.setattr(
+        responder,
+        "compose_terminal_contract_reply",
+        lambda **_kwargs: (
+            natural,
+            "contract-composer:test-model",
+        ),
+    )
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="ايوة")],
+        outcomes=[outcome],
     )
 
     assert text == natural
-    assert source == "test-model"
+    assert source == "contract-composer:test-model"
 
 
 def test_terminal_start_only_verification_evidence_never_triggers_availability_fallback(
@@ -108,16 +117,25 @@ def test_terminal_start_only_verification_evidence_never_triggers_availability_f
         action_result={"ok": True},
     )
 
-    text, source = _run_with_draft(
-        monkeypatch,
-        outcome=outcome,
-        reply=natural,
-        claim="not_applicable",
+    monkeypatch.setattr(
+        responder,
+        "compose_terminal_contract_reply",
+        lambda **_kwargs: (
+            natural,
+            "contract-composer:test-model",
+        ),
+    )
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="ايوة")],
+        outcomes=[outcome],
     )
 
     assert "تفاصيل الفترة مش متاحة" not in text
     assert text == natural
-    assert source == "test-model"
+    assert source == "contract-composer:test-model"
 
 
 @pytest.mark.parametrize(
