@@ -217,7 +217,7 @@ def _seed(
         second = _add_appointment(
             db, workspace, patient,
             service=services[1], doctor=doctor,
-            start_local=base + timedelta(minutes=45),
+            start_local=base + timedelta(minutes=90),
             visit_group_id=group,
         )
         return [first, second], {
