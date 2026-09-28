@@ -172,16 +172,26 @@ SEMANTIC PRINCIPLES
   both only when both concerns are explicitly requested. Set requested_package_details to exactly what
   was requested. package_usage describes whether an appointment should consume an existing session
   package, avoid an existing package, or leaves that question unspecified.
+- payment_info is a read-only general clinic payment-policy surface: how payment works, which payment
+  methods the clinic accepts (for example cash/card/instant transfer when actually configured), when
+  payment happens, and whether payment is required while making the booking. These are informational
+  questions, not financial transactions. Use payment_info with execution_intent=informational and
+  financial_ownership=none. During an active booking/reschedule, payment_info is a harmless side read:
+  do not cancel, replace, restart, or hand off the active task merely because payment is mentioned.
+  Specific methods must come from verified clinic information; never invent an accepted method.
 - Pulse balance/payment selection is not part of appointment booking. Reception handles
   appointment billing, Pulse settlement, and cash-vs-Pulse choices. If a customer asks to book and
   mentions using/not using Pulses, keep the booking semantics and do not encode a billing preference.
-- financial_ownership=reception is the general typed marker for customer/appointment money-ledger
-  meaning: amount already paid, balance still due, payment or transaction status, checkout, or
-  settlement. Apply it even inside an active booking/reschedule and even when a service/device is in
-  context. A question like "how much is left for me to pay?" is not service pricing. Service/package
-  offer-price questions use financial_ownership=none. For a mixed request, keep any separately asked
-  Agent-owned read as its own operation and mark only the ledger concern reception. The marker never
-  authorizes a financial read or write; Python converts it to Reception ownership deterministically.
+- financial_ownership=reception is the general typed marker for customer/appointment money-ledger or
+  financial-action meaning: amount already paid, balance still due, payment or transaction status,
+  checkout/settlement, recording or correcting a payment, changing an applied payment method, refund,
+  or other financial-record intervention. Apply it even inside an active booking/reschedule and even
+  when a service/device is in context. A question like "how much is left for me to pay?" is not service
+  pricing. General payment methods/timing/policy questions are payment_info and must remain
+  financial_ownership=none. Service/package offer-price questions also use financial_ownership=none.
+  For a mixed request, keep any separately asked Agent-owned read as its own operation and mark only
+  the ledger/action concern reception. The marker never authorizes a financial read or write; Python
+  converts it to Reception ownership deterministically.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
   Pulse-pack offers, or per-device overage price. Use balance for an aggregate remaining Pulse balance
   by device. Use owned_packs when the customer asks about a particular pack they own, including that
@@ -217,8 +227,10 @@ SEMANTIC PRINCIPLES
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
   customer is actually asking Tia to carry out cancellation/refund/termination now, interpret it as
   human_support because the agent must not execute purchased-package cancellation.
-- clinic_info covers clinic-wide operational/informational questions such as location, policies,
-  and comparisons between clinic devices when the question is not about one specific service.
+- clinic_info covers clinic-wide operational/informational questions such as location, non-payment
+  policies, and comparisons between clinic devices when the question is not about one specific service.
+  Use payment_info for general payment-method/timing/booking-payment questions so payment information
+  remains typed separately from receptionist-owned financial actions.
   service_info covers one specific service and open-ended discovery/listing of the clinic's services;
   for an open-ended service-list request, leave the service entity null instead of inventing one.
 - appointment_list covers current/upcoming appointments only. A possessive request for the customer's

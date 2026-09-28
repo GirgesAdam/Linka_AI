@@ -668,6 +668,20 @@ def _plan_operation(
             response_goal="answer_clinic_info",
         )
 
+    if operation.type == "payment_info":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="clinic_info")],
+            response_goal="answer_clinic_info",
+            facts={
+                "booking_requires_payment": False,
+                "payment_execution_owner": "reception",
+                "active_booking_in_progress": getattr(context.active_task, "task_type", None) == "booking",
+            },
+        )
+
     if operation.type == "availability":
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
