@@ -1,319 +1,355 @@
-from __future__ import annotations
+"""Temporary Phase 3G bounded staging review for upcoming appointment responses.
 
-"""Focused realistic V2 review for read continuity, entity sets, and execution intent.
-
-The suite uses the same staging clinic data as run_live_agent_ux_review but enters through the
-shared V2 live facade explicitly. Every conversation owns an outer SQL transaction that is rolled
-back. No WhatsApp/n8n delivery is invoked. The script reports transcripts plus deterministic
-DB-safety checks; reply quality is meant to be reviewed from the transcript rather than reduced to
-brittle phrase matching.
+All fixture mutations and chat persistence run inside one outer SQL transaction per
+scenario and are rolled back. Agent turns are informational only.
 """
 
-import argparse
+from __future__ import annotations
+
 import json
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, date, datetime, timedelta
+import sys
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from time import perf_counter
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-import scripts.run_live_agent_ux_review as base
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tools.agent_eval.harness import RuntimeProbe, assert_demo_only, runtime_summary
+
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.core.config import settings
-from app.integrations.clinic.base import AvailabilityRequest
-from app.integrations.clinic.registry import get_clinic_adapter
-from app.models.appointment import Appointment
+from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
+from app.models.message import Message
 from app.models.patient import Patient
-from app.models.service import Service
+from app.models.payment_transaction import PaymentTransaction
 from app.models.workspace import Workspace
 from app.services.agent_v2.live_chat import run_agent_chat as run_agent_chat_v2
-
-
-OLD_CASES = (
-    "general_availability_ranges",
-    "unavailable_exact_time",
-    "availability_after_six",
-    "availability_window",
-    "doctor_discovery",
-    "package_compare",
-    "mixed_language",
-    "service_change_mid_flow",
-    "book_from_window",
-)
-NEW_CASES = (
-    "time_constraint_replacement_new",
-    "nearest_read_only_new",
-    "doctor_pair_comparison_new",
-    "package_hypothetical_new",
-    "reschedule_hypothetical_new",
-    "read_then_explicit_book_new",
-)
-DEFAULT_CASES = OLD_CASES + NEW_CASES
+from scripts.run_live_agent_ux_review import _base_patient, _payload
 
 
 @dataclass
-class ReviewResult:
+class Result:
     name: str
-    turns: list[base.Turn] = field(default_factory=list)
-    db_checks: list[str] = field(default_factory=list)
+    response: str = ""
+    model: str = ""
+    reads: list[str] | None = None
+    llm_operations: list[str] | None = None
+    appointment_delta: int = 0
+    financial_delta: int = 0
+    responder_llm_calls: int = 0
+    classification: str = "MATERIAL"
     error: str | None = None
 
 
-def _args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--workspace-slug", default="tia")
-    parser.add_argument("--report", default="artifacts/v2-read-semantics-live-review.json")
-    parser.add_argument("--case", dest="cases", action="append", default=None)
-    return parser.parse_args()
-
-
-def _appointment_count(db: Session, workspace: Workspace, patient: Patient) -> int:
+def _count(db: Session, model, workspace_id: UUID) -> int:
     return int(
-        db.scalar(
-            select(func.count(Appointment.id)).where(
-                Appointment.workspace_id == workspace.id,
-                Appointment.patient_id == patient.id,
-            )
-        )
+        db.scalar(select(func.count(model.id)).where(model.workspace_id == workspace_id))
         or 0
     )
 
 
-def _send_v2(
+def _reset_upcoming(db: Session, workspace: Workspace, patient: Patient) -> None:
+    now = datetime.now(UTC)
+    rows = db.scalars(
+        select(Appointment).where(
+            Appointment.workspace_id == workspace.id,
+            Appointment.patient_id == patient.id,
+            Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            Appointment.start_at >= now - timedelta(hours=6),
+        )
+    ).all()
+    for row in rows:
+        row.status = "cancelled"
+    db.flush()
+def _catalog_context(
+    db: Session,
+    workspace: Workspace,
+    *,
+    two_services: bool = False,
+    prefer_device: bool = False,
+):
+    catalog = build_clinic_catalog(db, workspace)
+    services = {
+        str(row["id"]): row
+        for row in catalog.get("services", [])
+        if isinstance(row, dict) and row.get("id")
+    }
+    doctors = [
+        row
+        for row in catalog.get("doctors", [])
+        if isinstance(row, dict) and row.get("id")
+    ]
+    for doctor in doctors:
+        ids = [
+            str(value)
+            for value in doctor.get("service_ids", [])
+            if str(value) in services
+        ]
+        if prefer_device:
+            ids.sort(
+                key=lambda value: bool(services[value].get("laser_devices")),
+                reverse=True,
+            )
+        required = 2 if two_services else 1
+        if len(ids) >= required:
+            selected = [services[value] for value in ids[:required]]
+            return selected, doctor
+    raise RuntimeError("No compatible service/doctor fixture context")
+
+
+def _device(service: dict[str, object]) -> tuple[str | None, str | None, int]:
+    devices = [
+        row
+        for row in service.get("laser_devices", [])
+        if isinstance(row, dict) and row.get("device_key")
+    ]
+    if not devices:
+        return None, None, int(service.get("price_minor") or 0)
+    selected = devices[0]
+    return (
+        str(selected.get("device_key")),
+        str(selected.get("device_name") or selected.get("device_key")),
+        int(selected.get("price_minor") or service.get("price_minor") or 0),
+    )
+
+
+def _add_appointment(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    *,
+    service: dict[str, object],
+    doctor: dict[str, object],
+    start_local: datetime,
+    visit_group_id: UUID | None = None,
+) -> Appointment:
+    timezone = ZoneInfo(workspace.timezone)
+    start_at = start_local.replace(tzinfo=timezone).astimezone(UTC)
+    duration = int(service.get("duration_minutes") or 30)
+    end_at = start_at + timedelta(minutes=duration)
+    device_key, device_name, price_minor = _device(service)
+    row = Appointment(
+        workspace_id=workspace.id,
+        patient_id=patient.id,
+        branch_id=workspace.primary_branch_id,
+        doctor_id=UUID(str(doctor["id"])),
+        service_id=UUID(str(service["id"])),
+        status="confirmed",
+        source="staff",
+        start_at=start_at,
+        end_at=end_at,
+        busy_start_at=start_at,
+        busy_end_at=end_at,
+        duration_minutes=duration,
+        price_minor=price_minor,
+        currency=str(service.get("currency") or "EGP"),
+        payment_status="paid",
+        amount_paid_minor=price_minor,
+        payment_method="cash",
+        billing_context="standard",
+        laser_device_key=device_key,
+        laser_device_name=device_name,
+        visit_group_id=visit_group_id,
+        confirmed_at=datetime.now(UTC),
+    )
+    db.add(row)
+    db.flush()
+    return row
+def _seed(
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    name: str,
+) -> tuple[list[Appointment], dict[str, object]]:
+    _reset_upcoming(db, workspace, patient)
+    base = datetime.now(ZoneInfo(workspace.timezone)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    ) + timedelta(days=3)
+    if name == "empty":
+        return [], {}
+
+    if name == "grouped":
+        services, doctor = _catalog_context(db, workspace, two_services=True)
+        group = uuid4()
+        first = _add_appointment(
+            db, workspace, patient,
+            service=services[0], doctor=doctor, start_local=base,
+            visit_group_id=group,
+        )
+        second = _add_appointment(
+            db, workspace, patient,
+            service=services[1], doctor=doctor,
+            start_local=base + timedelta(minutes=45),
+            visit_group_id=group,
+        )
+        return [first, second], {
+            "service_names": [str(services[0]["name"]), str(services[1]["name"])],
+            "doctor_name": str(doctor.get("name") or ""),
+        }
+
+    services, doctor = _catalog_context(
+        db, workspace, prefer_device=(name == "doctor_device")
+    )
+    first = _add_appointment(
+        db, workspace, patient,
+        service=services[0], doctor=doctor, start_local=base,
+    )
+    rows = [first]
+    if name == "multiple":
+        rows.append(
+            _add_appointment(
+                db, workspace, patient,
+                service=services[0], doctor=doctor,
+                start_local=base + timedelta(days=2),
+            )
+        )
+    device_name = _device(services[0])[1]
+    return rows, {
+        "service_names": [str(services[0]["name"])],
+        "doctor_name": str(doctor.get("name") or ""),
+        "device_name": device_name,
+    }
+
+
+def _send(
     db: Session,
     workspace: Workspace,
     patient: Patient,
     message: str,
-    conversation_id: UUID | None,
+    conversation_id: UUID | None = None,
 ):
-    started = perf_counter()
-    response = run_agent_chat_v2(
-        db=db,
-        workspace=workspace,
-        payload=base._payload(patient.id, message, conversation_id),
-    )
-    return response, int((perf_counter() - started) * 1000)
-
-
-def _run_messages(
-    db: Session,
-    workspace: Workspace,
-    patient: Patient,
-    first: str,
-    second: str,
-) -> list[base.Turn]:
-    one, d1 = _send_v2(db, workspace, patient, first, None)
-    turns = [base.Turn(first, one.reply, one.model, d1)]
-    two, d2 = _send_v2(db, workspace, patient, second, one.conversation_id)
-    turns.append(base.Turn(second, two.reply, two.model, d2))
-    return turns
-
-
-def _old_case(
-    name: str,
-    db: Session,
-    workspace: Workspace,
-) -> tuple[Patient, str, str, list[str]]:
-    patient = base._base_patient(db, workspace)
-    checks: list[str] = []
-    if name == "package_compare":
-        selected = base._package_patient(db, workspace)
-        if selected is None:
-            raise RuntimeError("No usable package patient")
-        patient, package = selected
-        service = db.scalar(select(Service).where(Service.id == package.service_id))
-        service_name = service.name if service is not None else "الخدمة"
-        before = _appointment_count(db, workspace, patient)
-        first = f"بالنسبة لـ{service_name} أحجز جلسة واحدة ولا أستخدم الباكيدج اللي عندي؟"
-        second = "أنا بس بسأل، متحجزش حاجة"
-        checks.extend(
-            [
-                f"appointments_before={before}",
-                f"package_status_before={package.status}",
-            ]
+    with RuntimeProbe() as probe:
+        response = run_agent_chat_v2(
+            db=db,
+            workspace=workspace,
+            payload=_payload(patient.id, message, conversation_id),
         )
-        return patient, first, second, checks
-
-    first, second, _legacy_check = base._case_messages(name, db, workspace, patient)
-    checks.append(f"appointments_before={_appointment_count(db, workspace, patient)}")
-    return patient, first, second, checks
+    reads, write_attempted, _write_result = runtime_summary(probe)
+    llm_ops = [str(item.get("operation") or "") for item in probe.llm_calls]
+    return response, reads, write_attempted, llm_ops
 
 
-def _doctor_pair_context(db: Session, workspace: Workspace):
-    catalog, service, _doctor, branch_id, _day, _available = base._booking_context(db, workspace)
-    service_id = str(service["id"])
-    compatible = [
-        row
-        for row in catalog.get("doctors", [])
-        if isinstance(row, dict)
-        and row.get("id")
-        and service_id in {str(item) for item in (row.get("service_ids") or [])}
-    ]
-    adapter = get_clinic_adapter(db=db, workspace=workspace)
-    today = datetime.now(UTC).date()
-    usable: list[dict[str, object]] = []
-    for doctor in compatible:
-        doctor_id = str(doctor["id"])
-        found = False
-        for offset in range(1, 15):
-            result = adapter.get_availability(
-                AvailabilityRequest(
-                    branch_id=str(branch_id),
-                    service_id=service_id,
-                    booking_date=today + timedelta(days=offset),
-                    doctor_id=doctor_id,
-                )
-            )
-            if result.slots:
-                found = True
-                break
-        if found:
-            usable.append(doctor)
-        if len(usable) == 2:
-            return service, usable[0], usable[1]
-    raise RuntimeError("No service has two doctors with near-term availability")
-
-
-def _replacement_day_for_appointment(
-    db: Session,
-    workspace: Workspace,
-    appointment: Appointment,
-) -> date:
-    adapter = get_clinic_adapter(db=db, workspace=workspace)
-    timezone = ZoneInfo(workspace.timezone)
-    original_day = appointment.start_at.astimezone(timezone).date()
-    for offset in range(1, 15):
-        day = original_day + timedelta(days=offset)
-        result = adapter.get_availability(
-            AvailabilityRequest(
-                branch_id=str(appointment.branch_id),
-                service_id=str(appointment.service_id),
-                booking_date=day,
-                doctor_id=str(appointment.doctor_id) if appointment.doctor_id else None,
-                exclude_appointment_id=str(appointment.id),
-            )
-        )
-        if result.slots:
-            return day
-    raise RuntimeError("No replacement day available for hypothetical reschedule")
-
-
-def _new_case(
-    name: str,
-    db: Session,
-    workspace: Workspace,
-) -> tuple[Patient, str, str, list[str]]:
-    patient = base._base_patient(db, workspace)
-    before = _appointment_count(db, workspace, patient)
-    catalog, service, doctor, _branch_id, day, available = base._booking_context(db, workspace)
-    del catalog
-    service_name = str(service.get("name") or "الخدمة")
-    doctor_name = str(doctor.get("name") or "الدكتور")
-    date_text = day.isoformat()
-    local_tz = ZoneInfo(available.timezone)
-    local_slot = available.slots[0].start_at.astimezone(local_tz)
-    checks = [f"appointments_before={before}"]
-
-    if name == "time_constraint_replacement_new":
-        return (
-            patient,
-            f"وريني مواعيد {service_name} يوم {date_text} بعد الساعة 7 بالليل",
-            "طب غيرها: عايز اللي قبل الساعة 4 العصر بدل كده",
-            checks,
-        )
-    if name == "nearest_read_only_new":
-        return (
-            patient,
-            f"هل {service_name} مع {doctor_name} يوم {date_text} الساعة 14:07 متاح؟ أنا بس بسأل",
-            "لو مش متاح وريني أقرب وقت للساعة دي بس، من غير حجز",
-            checks,
-        )
-    if name == "doctor_pair_comparison_new":
-        service_row, doctor_a, doctor_b = _doctor_pair_context(db, workspace)
-        return (
-            patient,
-            f"بالنسبة لـ{service_row.get('name') or service_name}، مين متاح أقرب: {doctor_a.get('name')} ولا {doctor_b.get('name')}؟",
-            "قولي الأقرب فيهم بس، أنا مش بحجز دلوقتي",
-            checks,
-        )
-    if name == "package_hypothetical_new":
-        selected = base._package_patient(db, workspace)
-        if selected is None:
-            raise RuntimeError("No usable package patient")
-        patient, package = selected
-        service_row = db.scalar(select(Service).where(Service.id == package.service_id))
-        package_service_name = service_row.name if service_row is not None else "الخدمة"
-        before = _appointment_count(db, workspace, patient)
-        return (
-            patient,
-            f"لو محتاج جلسة {package_service_name}، أستخدم من الباكيدج ولا أدفع جلسة منفصلة؟ أنا بس بقارن",
-            "قولي المتبقي عندي والفرق لو متاح، ومتحجزش أي حاجة",
-            [f"appointments_before={before}", f"package_status_before={package.status}"],
-        )
-    if name == "reschedule_hypothetical_new":
-        rows = base._seed_upcoming(db, workspace, patient, 1)
-        row = rows[0]
-        service_row = db.scalar(select(Service).where(Service.id == row.service_id))
-        existing_service_name = service_row.name if service_row is not None else service_name
-        target_day = _replacement_day_for_appointment(db, workspace, row)
-        return (
-            patient,
-            f"لو حبيت أغير معاد {existing_service_name} بتاعي ليوم {target_day.isoformat()}، إيه المتاح؟ متغيرش حاجة دلوقتي",
-            "تمام أنا بس بشوف الاختيارات، سيب معادي زي ما هو",
-            [f"original_appointment_id={row.id}", f"original_status_before={row.status}"],
-        )
-    if name == "read_then_explicit_book_new":
-        return (
-            patient,
-            f"إيه المتاح لـ{service_name} مع {doctor_name} يوم {date_text}؟",
-            f"تمام، احجزلي الساعة {local_slot.strftime('%H:%M')}",
-            checks,
-        )
+def _message_for(name: str, service_name: str | None = None) -> str:
+    if name == "single":
+        return "ميعادي الجاي إمتى؟"
+    if name == "multiple":
+        return "عندي مواعيد إيه جاية؟"
+    if name == "grouped":
+        return "إيه الخدمات الموجودة في الميعاد الجاي ومين الدكتور؟"
+    if name == "doctor_device":
+        return "المعاد الجاي مع مين وعلى جهاز إيه؟"
+    if name == "empty":
+        return "عندي مواعيد جاية؟"
+    if name == "mixed":
+        return f"ميعادي الجاي إمتى وكمان قولي معلومات عن خدمة {service_name}؟"
     raise KeyError(name)
 
 
-def _execute(engine, slug: str, name: str) -> ReviewResult:
+def _check_response(
+    name: str,
+    response: str,
+    expected: dict[str, object],
+) -> bool:
+    if not response.strip():
+        return False
+    if name == "empty":
+        return "مواعيد جاية" in response or "مواعيد" in response
+    for service in expected.get("service_names", []):
+        if str(service) not in response:
+            return False
+    doctor = str(expected.get("doctor_name") or "")
+    if doctor and doctor not in response:
+        return False
+    if name == "doctor_device":
+        device = str(expected.get("device_name") or "")
+        if device and device not in response:
+            return False
+    return True
+
+
+def _execute(engine, name: str) -> Result:
     connection = engine.connect()
     outer = connection.begin()
-    db = Session(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint")
-    result = ReviewResult(name=name)
+    db = Session(
+        bind=connection,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    result = Result(name=name)
     try:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == slug))
+        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
         if workspace is None:
-            raise RuntimeError("Workspace not found")
-        if name in OLD_CASES:
-            patient, first, second, checks = _old_case(name, db, workspace)
-        elif name in NEW_CASES:
-            patient, first, second, checks = _new_case(name, db, workspace)
-        else:
-            raise KeyError(name)
-
-        before = _appointment_count(db, workspace, patient)
-        result.turns = _run_messages(db, workspace, patient, first, second)
-        after = _appointment_count(db, workspace, patient)
-        result.db_checks = [*checks, f"appointments_after={after}", f"appointment_delta={after - before}"]
-
-        if name == "reschedule_hypothetical_new":
-            original_id = UUID(result.db_checks[0].split("=", 1)[1])
-            original = db.get(Appointment, original_id)
-            result.db_checks.append(
-                f"original_status_after={original.status if original is not None else 'missing'}"
+            raise RuntimeError("Demo workspace not found")
+        assert_demo_only(workspace)
+        patient = _base_patient(db, workspace)
+        fixture_name = "single" if name in {"stale", "mixed"} else name
+        rows, expected = _seed(db, workspace, patient, fixture_name)
+        before_appts = _count(db, Appointment, workspace.id)
+        before_financial = _count(db, PaymentTransaction, workspace.id)
+        if name == "stale":
+            first, _reads, first_write, first_ops = _send(
+                db, workspace, patient, "أهلا"
             )
-        if name in {"package_compare", "package_hypothetical_new"}:
-            result.db_checks.append("expected_write_delta=0")
-        if name in {
-            "time_constraint_replacement_new",
-            "nearest_read_only_new",
-            "doctor_pair_comparison_new",
-            "reschedule_hypothetical_new",
-        }:
-            result.db_checks.append("expected_write_delta=0")
-        if name in {"book_from_window", "read_then_explicit_book_new"}:
-            result.db_checks.append("expected_write_delta=1")
+            if first_write:
+                raise RuntimeError("Unexpected agent write in stale-context setup")
+            outbound = db.get(Message, first.outbound_message_id)
+            if outbound is None:
+                raise RuntimeError("Could not find setup assistant message")
+            outbound.content = "ميعادك الأحد الساعة 5 مع دكتور قديم."
+            db.commit()
+            response, reads, write_attempted, llm_ops = _send(
+                db,
+                workspace,
+                patient,
+                "ميعادي الجاي إمتى؟",
+                first.conversation_id,
+            )
+            llm_ops = first_ops + llm_ops
+        else:
+            service_name = (
+                str(expected.get("service_names", [""])[0])
+                if expected.get("service_names")
+                else None
+            )
+            response, reads, write_attempted, llm_ops = _send(
+                db,
+                workspace,
+                patient,
+                _message_for(name, service_name),
+            )
+
+        after_appts = _count(db, Appointment, workspace.id)
+        after_financial = _count(db, PaymentTransaction, workspace.id)
+        result.response = response.reply
+        result.model = response.model
+        result.reads = reads
+        result.llm_operations = llm_ops
+        result.appointment_delta = after_appts - before_appts
+        result.financial_delta = after_financial - before_financial
+        result.responder_llm_calls = sum(
+            1
+            for operation in llm_ops
+            if "responder" in operation and "interpreter" not in operation
+        )
+        safe = (
+            not write_attempted
+            and result.appointment_delta == 0
+            and result.financial_delta == 0
+            and "appointments" in reads
+            and _check_response(name, response.reply, expected)
+        )
+        if name != "mixed":
+            safe = (
+                safe
+                and response.model == "deterministic:appointment-info-contract"
+                and result.responder_llm_calls == 0
+            )
+        result.classification = "ACCEPTABLE" if safe else "MATERIAL"
     except Exception as exc:  # noqa: BLE001
         result.error = f"{type(exc).__name__}: {exc}"
     finally:
@@ -325,40 +361,48 @@ def _execute(engine, slug: str, name: str) -> ReviewResult:
 
 
 def main() -> int:
-    args = _args()
     if not settings.agent_v2_live_enabled:
-        raise RuntimeError(
-            "Focused V2 live review requires AGENT_V2_LIVE_ENABLED=true; refusing to fall back to V1."
-        )
-    names = tuple(args.cases or DEFAULT_CASES)
+        raise RuntimeError("AGENT_V2_LIVE_ENABLED must be true")
+    names = (
+        "single",
+        "multiple",
+        "grouped",
+        "doctor_device",
+        "empty",
+        "stale",
+        "mixed",
+    )
     engine = create_engine(settings.database_url, pool_pre_ping=True)
-    results: list[ReviewResult] = []
+    results = []
     try:
-        for index, name in enumerate(names, start=1):
-            print(f"[{index:02d}/{len(names)}] {name}", flush=True)
-            result = _execute(engine, args.workspace_slug, name)
+        for name in names:
+            print(f"running {name}", flush=True)
+            result = _execute(engine, name)
             results.append(result)
-            # One compact line per conversation is intentional: Railway drops bursts above 500 logs/s.
-            print(json.dumps(asdict(result), ensure_ascii=False, separators=(",", ":")), flush=True)
+            print(json.dumps(asdict(result), ensure_ascii=False), flush=True)
     finally:
         engine.dispose()
-
     payload = {
-        "started_at": datetime.now(UTC).isoformat(),
-        "workspace_slug": args.workspace_slug,
-        "conversation_count": len(results),
-        "runtime": "v2",
+        "phase": "3G",
         "database_writes_persisted": False,
-        "whatsapp_or_n8n_used": False,
+        "agent_scenarios_are_read_only": True,
         "results": [asdict(item) for item in results],
     }
-    path = Path(args.report)
-    if not path.is_absolute():
-        path = Path.cwd() / path
+    path = Path("artifacts/v2-read-semantics-live-review.json")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Report: {path}", flush=True)
-    return 1 if any(item.error for item in results) else 0
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    failed = [
+        item.name
+        for item in results
+        if item.error is not None or item.classification == "MATERIAL"
+    ]
+    if failed:
+        print("FAILED=" + ",".join(failed), flush=True)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -435,6 +435,49 @@ def _package_information_response_facts(
     return shaped
 
 
+def _appointment_information_response_facts(
+    facts: dict[str, object],
+) -> dict[str, object]:
+    """Expose only read-only upcoming-visit facts needed for customer presentation."""
+    shaped = dict(facts)
+    wrapper = shaped.get("appointments")
+    if not isinstance(wrapper, dict):
+        return shaped
+
+    raw_visits = wrapper.get("visits")
+    visits: list[dict[str, object]] = []
+    if isinstance(raw_visits, list):
+        for raw_visit in raw_visits:
+            if not isinstance(raw_visit, dict):
+                continue
+            visit = {
+                key: raw_visit[key]
+                for key in ("status", "start_local", "end_local", "doctor_name")
+                if raw_visit.get(key) not in (None, "", [], {})
+            }
+            raw_services = raw_visit.get("services")
+            if isinstance(raw_services, list):
+                visit["services"] = [
+                    {
+                        key: raw_service[key]
+                        for key in ("service_name", "laser_device_name")
+                        if isinstance(raw_service, dict)
+                        and raw_service.get(key) not in (None, "", [], {})
+                    }
+                    for raw_service in raw_services
+                    if isinstance(raw_service, dict)
+                ]
+            visits.append(visit)
+
+    shaped["appointments"] = {
+        "visits": visits,
+        "visit_count": len(visits),
+        "presentation_unit": "visit",
+        "complete_set": True,
+    }
+    return shaped
+
+
 def _patient_crm_response_facts(
     facts: dict[str, object],
     *,
@@ -811,6 +854,8 @@ def build_step_outcome(
     base_facts = {**_visible_dict(step.facts), **read_facts}
     if step.response_goal == "package_information":
         base_facts = _package_information_response_facts(base_facts)
+    if step.operation_type == "appointment_list":
+        base_facts = _appointment_information_response_facts(base_facts)
     base_facts = _patient_crm_response_facts(
         base_facts,
         response_goal=step.response_goal,

@@ -2,6 +2,9 @@ name: V2 Read Semantics Review
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - agent/upcoming-appointment-info-contract
 
 permissions:
   contents: read

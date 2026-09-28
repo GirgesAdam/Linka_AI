@@ -379,12 +379,20 @@ def _visit_payload(rows: list[AppointmentRecord]) -> dict[str, object]:
     ordered = sorted(rows, key=lambda item: (item.start_at, item.appointment_id))
     statuses = {row.status for row in ordered}
     currencies = {row.currency for row in ordered}
+    start_at = min(row.start_at for row in ordered)
+    end_at = max(row.end_at for row in ordered)
+    try:
+        visit_timezone = ZoneInfo(ordered[0].timezone)
+    except Exception:
+        visit_timezone = ZoneInfo("UTC")
     return {
         "visit_group_id": _common([row.visit_group_id for row in ordered]),
         "appointment_ids": [row.appointment_id for row in ordered],
         "status": next(iter(statuses)) if len(statuses) == 1 else "mixed",
-        "start_at": min(row.start_at for row in ordered).isoformat(),
-        "end_at": max(row.end_at for row in ordered).isoformat(),
+        "start_at": start_at.isoformat(),
+        "end_at": end_at.isoformat(),
+        "start_local": start_at.astimezone(visit_timezone).isoformat(),
+        "end_local": end_at.astimezone(visit_timezone).isoformat(),
         "branch_id": _common([row.branch_id for row in ordered]),
         "branch_name": _common([row.branch_name for row in ordered]),
         "doctor_id": _common([row.doctor_id for row in ordered]),

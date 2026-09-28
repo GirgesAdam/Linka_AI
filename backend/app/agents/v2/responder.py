@@ -16,6 +16,7 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.appointment_info_composer import compose_appointment_info_contract_reply
 from app.agents.v2.availability_composer import compose_availability_contract_reply
 from app.agents.v2.doctor_composer import compose_doctor_contract_reply
 from app.agents.v2.package_composer import compose_package_contract_reply
@@ -27,6 +28,7 @@ from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import customer_visible_outcome
 from app.services.agent_v2.response_contract import (
     build_customer_response_contract,
+    is_pure_supported_appointment_contract,
     is_pure_supported_availability_contract,
     is_pure_supported_doctor_contract,
     is_pure_supported_package_contract,
@@ -762,6 +764,11 @@ def compose_v2_customer_reply(
         )
     if is_pure_supported_availability_contract(response_contract):
         return compose_availability_contract_reply(
+            history=history,
+            contract=response_contract,
+        )
+    if is_pure_supported_appointment_contract(response_contract):
+        return compose_appointment_info_contract_reply(
             history=history,
             contract=response_contract,
         )
