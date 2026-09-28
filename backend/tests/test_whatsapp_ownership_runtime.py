@@ -134,6 +134,8 @@ def test_outbox_claim_uses_conversation_then_dispatch_lock_and_ownership_guard()
     assert "ai_dispatch_is_sendable(" in block
     assert "cancel_dispatch_for_ownership(" in block
     assert "other_processing" in block
+    assert "allow_demo_reply_dispatch" in block
+    assert "Message.in_reply_to_message_id.is_not(None)" in block
 
 
 def test_staff_handoff_paths_quiesce_ai_and_safe_resume_waits_for_staff_outbox() -> None:

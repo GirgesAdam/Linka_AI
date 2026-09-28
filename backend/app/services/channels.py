@@ -47,7 +47,10 @@ from app.services.whatsapp_interactions import (
     process_whatsapp_booking_action,
     whatsapp_booking_dispatch_metadata,
 )
-from app.services.workspace_runtime_policy import workspace_runtime_policy
+from app.services.workspace_runtime_policy import (
+    demo_whatsapp_reply_test_enabled,
+    workspace_runtime_policy,
+)
 
 
 class ChannelError(ValueError):
@@ -1086,11 +1089,18 @@ def claim_dispatches(
     limit: int,
     allow_templates: bool = True,
     approved_template_names: frozenset[str] | set[str] | None = None,
+    allow_demo_reply_dispatch: bool = False,
 ) -> list[DispatchClaimItem]:
     workspace = db.get(Workspace, connection.workspace_id)
     if workspace is None:
         raise ChannelError("Channel connection references a missing workspace.")
-    if not workspace_runtime_policy(workspace).allow_external_dispatch:
+    demo_reply_test = allow_demo_reply_dispatch and demo_whatsapp_reply_test_enabled(
+        workspace, connection
+    )
+    if (
+        not workspace_runtime_policy(workspace).allow_external_dispatch
+        and not demo_reply_test
+    ):
         return []
     now = datetime.now(UTC)
     stale_before = now - DISPATCH_SEND_LEASE
@@ -1105,33 +1115,34 @@ def claim_dispatches(
     # Read candidate ids first, then lock in canonical conversation -> dispatch
     # order. This matches staff takeover/claim and avoids a dispatch->conversation
     # deadlock while still allowing multiple outbox workers to skip busy rows.
-    candidate_rows = list(
-        db.execute(
-            select(MessageDispatch.id, Message.conversation_id)
-            .join(Message, Message.id == MessageDispatch.message_id)
-            .where(
-                MessageDispatch.workspace_id == connection.workspace_id,
-                MessageDispatch.channel_connection_id == connection.id,
-                MessageDispatch.attempts < settings.channel_dispatch_max_attempts,
-                or_(
-                    and_(
-                        MessageDispatch.status == "queued",
-                        or_(
-                            MessageDispatch.next_attempt_at.is_(None),
-                            MessageDispatch.next_attempt_at <= now,
-                        ),
-                    ),
-                    and_(
-                        MessageDispatch.status == "processing",
-                        MessageDispatch.locked_at.is_not(None),
-                        MessageDispatch.locked_at <= stale_before,
+    candidate_query = (
+        select(MessageDispatch.id, Message.conversation_id)
+        .join(Message, Message.id == MessageDispatch.message_id)
+        .where(
+            MessageDispatch.workspace_id == connection.workspace_id,
+            MessageDispatch.channel_connection_id == connection.id,
+            MessageDispatch.attempts < settings.channel_dispatch_max_attempts,
+            or_(
+                and_(
+                    MessageDispatch.status == "queued",
+                    or_(
+                        MessageDispatch.next_attempt_at.is_(None),
+                        MessageDispatch.next_attempt_at <= now,
                     ),
                 ),
-            )
-            .order_by(MessageDispatch.created_at)
-            .limit(min(max(limit * 4, limit), 200))
+                and_(
+                    MessageDispatch.status == "processing",
+                    MessageDispatch.locked_at.is_not(None),
+                    MessageDispatch.locked_at <= stale_before,
+                ),
+            ),
         )
+        .order_by(MessageDispatch.created_at)
+        .limit(min(max(limit * 4, limit), 200))
     )
+    if demo_reply_test:
+        candidate_query = candidate_query.where(Message.in_reply_to_message_id.is_not(None))
+    candidate_rows = list(db.execute(candidate_query))
 
     claimed: list[DispatchClaimItem] = []
     for dispatch_id, conversation_id in candidate_rows:

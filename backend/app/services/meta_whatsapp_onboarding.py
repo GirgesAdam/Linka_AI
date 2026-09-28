@@ -27,7 +27,10 @@ from app.services.provider_credentials import (
     encrypt_provider_secret,
     provider_credential_encryption_ready,
 )
-from app.services.workspace_runtime_policy import workspace_runtime_policy
+from app.services.workspace_runtime_policy import (
+    demo_whatsapp_reply_test_enabled,
+    workspace_runtime_policy,
+)
 
 
 class MetaWhatsAppSetupError(RuntimeError):
@@ -570,7 +573,12 @@ def verify_direct_webhook_challenge(
     ):
         return False
     workspace = db.get(Workspace, connection.workspace_id)
-    if workspace is None or not workspace_runtime_policy(workspace).allow_external_configuration:
+    if workspace is None:
+        return False
+    if (
+        not workspace_runtime_policy(workspace).allow_external_configuration
+        and not demo_whatsapp_reply_test_enabled(workspace, connection)
+    ):
         return False
     expected = str((connection.config_json or {}).get("webhook_verify_token") or "").strip()
     supplied = (verify_token or "").strip()
