@@ -133,6 +133,8 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
         messages[0].content
     )
     assert "old appointments and any that were cancelled" in str(messages[0].content)
+    assert "own scheduled appointment/date/time" in str(messages[0].content)
+    assert "availability means open/bookable" in str(messages[0].content)
     assert isinstance(messages[1], SystemMessage)
     assert isinstance(messages[2], HumanMessage)
     assert isinstance(messages[3], AIMessage)
