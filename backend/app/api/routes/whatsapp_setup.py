@@ -32,7 +32,10 @@ from app.services.meta_whatsapp_onboarding import (
 )
 from app.services.meta_whatsapp_transport import ingest_meta_webhook, run_meta_transport_tick
 from app.services.provider_credentials import ProviderCredentialError, decrypt_provider_secret
-from app.services.workspace_runtime_policy import workspace_runtime_policy
+from app.services.workspace_runtime_policy import (
+    demo_whatsapp_reply_test_enabled,
+    workspace_runtime_policy,
+)
 
 router = APIRouter()
 
@@ -132,7 +135,10 @@ async def whatsapp_meta_webhook_receive(
     workspace = db.get(Workspace, connection.workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found.")
-    if not workspace_runtime_policy(workspace).allow_external_ingress:
+    policy = workspace_runtime_policy(workspace)
+    if not policy.allow_external_ingress and not demo_whatsapp_reply_test_enabled(
+        workspace, connection
+    ):
         return {"received": True, "ignored": True}
     media_result = ingest_meta_media_webhook(db, connection=connection, payload=payload)
     result = ingest_meta_webhook(db, payload)

@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -7,6 +8,7 @@ from pydantic import ValidationError
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import STANDARD_TEMPLATES_BY_RULE_KEY
+from app.models.channel_connection import ChannelConnection
 from app.models.workspace import Workspace
 from app.schemas.whatsapp_setup import (
     WhatsAppDirectConnect,
@@ -17,6 +19,7 @@ from app.services.meta_whatsapp_onboarding import (
     MetaWhatsAppConflictError,
     connect_direct_meta,
     direct_setup_available,
+    verify_direct_webhook_challenge,
 )
 from app.services.provider_credentials import decrypt_provider_secret, encrypt_provider_secret
 
@@ -68,6 +71,48 @@ def test_demo_workspace_cannot_start_external_meta_configuration() -> None:
             access_token="not-used",
             callback_base_url="https://example.test/api/v1/channels/whatsapp",
         )
+
+
+def test_demo_test_connection_can_verify_scoped_webhook() -> None:
+    workspace_id = uuid4()
+    connection_id = uuid4()
+    workspace = Workspace(
+        name="Demo",
+        slug=f"demo-webhook-{uuid4().hex[:8]}",
+        is_demo=True,
+    )
+    connection = SimpleNamespace(
+        id=connection_id,
+        workspace_id=workspace_id,
+        channel="whatsapp",
+        provider="meta_cloud",
+        config_json={
+            "demo_whatsapp_reply_test_enabled": True,
+            "webhook_verify_token": "verify-me",
+        },
+    )
+    commits = []
+
+    class DemoSession:
+        def get(self, model, object_id):
+            if model is ChannelConnection and object_id == connection_id:
+                return connection
+            if model is Workspace and object_id == workspace_id:
+                return workspace
+            return None
+
+        def commit(self):
+            commits.append(True)
+
+    assert verify_direct_webhook_challenge(
+        DemoSession(),  # type: ignore[arg-type]
+        connection_id=connection_id,
+        mode="subscribe",
+        verify_token="verify-me",
+    ) is True
+    assert connection.config_json.get("webhook_verified_at")
+    assert commits == [True]
+
 
 def test_direct_connect_schema_rejects_non_numeric_meta_ids() -> None:
     with pytest.raises(ValidationError):

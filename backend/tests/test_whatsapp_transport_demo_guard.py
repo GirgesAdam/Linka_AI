@@ -5,6 +5,7 @@ from app.api.routes import whatsapp_setup
 from app.core.config import settings
 from app.models.workspace import Workspace
 from app.services import meta_whatsapp_transport as transport
+from app.services.workspace_runtime_policy import demo_whatsapp_reply_test_enabled
 
 
 def test_transport_route_is_not_globally_disabled_by_legacy_demo_env(monkeypatch):
@@ -54,10 +55,11 @@ def test_native_worker_processes_demo_and_production_independently(monkeypatch):
     prod_workspace_id = uuid4()
     demo_connection = SimpleNamespace(
         id=uuid4(), workspace_id=demo_workspace_id, status="active",
-        config_json={}, created_at=None,
+        channel="whatsapp", provider="meta_cloud", config_json={}, created_at=None,
     )
     prod_connection = SimpleNamespace(
         id=uuid4(), workspace_id=prod_workspace_id, status="active",
+        channel="whatsapp", provider="meta_cloud",
         config_json={"transport_ready": True}, created_at=None,
     )
     db = FakeDB(
@@ -89,7 +91,12 @@ def test_native_worker_processes_demo_and_production_independently(monkeypatch):
     )
     monkeypatch.setattr(transport, "_decrypt_connection_token", lambda db, c: ("token", None))
     item = SimpleNamespace(dispatch_id=uuid4())
-    def claim(db, *, connection, limit, approved_template_names):
+    def claim(
+        db, *, connection, limit, allow_templates,
+        approved_template_names, allow_demo_reply_dispatch,
+    ):
+        assert allow_templates is True
+        assert allow_demo_reply_dispatch is False
         claimed.append(connection.id)
         return [item]
     monkeypatch.setattr(transport, "claim_dispatches", claim)
@@ -108,4 +115,142 @@ def test_native_worker_processes_demo_and_production_independently(monkeypatch):
     assert result == {
         "connections_checked": 2, "connections_ready": 1, "provider_refreshes": 1,
         "inbound_processed": 2, "inbound_failed": 0, "sent": 1, "send_failed": 0,
+    }
+
+
+def test_demo_reply_test_flag_is_explicit_and_connection_scoped():
+    workspace = SimpleNamespace(is_demo=True)
+    enabled = SimpleNamespace(
+        channel="whatsapp",
+        provider="meta_cloud",
+        config_json={"demo_whatsapp_reply_test_enabled": True},
+    )
+    disabled = SimpleNamespace(
+        channel="whatsapp",
+        provider="meta_cloud",
+        config_json={},
+    )
+    wrong_provider = SimpleNamespace(
+        channel="whatsapp",
+        provider="n8n_whatsapp_cloud",
+        config_json={"demo_whatsapp_reply_test_enabled": True},
+    )
+
+    assert demo_whatsapp_reply_test_enabled(workspace, enabled) is True
+    assert demo_whatsapp_reply_test_enabled(workspace, disabled) is False
+    assert demo_whatsapp_reply_test_enabled(workspace, wrong_provider) is False
+    assert (
+        demo_whatsapp_reply_test_enabled(SimpleNamespace(is_demo=False), enabled)
+        is False
+    )
+
+
+def test_native_worker_allows_flagged_demo_reactive_replies(monkeypatch):
+    workspace_id = uuid4()
+    connection = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        status="active",
+        channel="whatsapp",
+        provider="meta_cloud",
+        config_json={
+            "transport_ready": True,
+            "demo_whatsapp_reply_test_enabled": True,
+        },
+        created_at=None,
+    )
+    db = FakeDB(
+        [connection],
+        {workspace_id: SimpleNamespace(is_demo=True)},
+    )
+    processed = []
+    refreshed = []
+    claimed = []
+    sent = []
+
+    monkeypatch.setattr(
+        transport,
+        "_required_template_names",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        transport,
+        "_readiness_refresh_due",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        transport,
+        "refresh_meta_connection_readiness",
+        lambda *_args, **_kwargs: refreshed.append(True) or True,
+    )
+    monkeypatch.setattr(
+        transport,
+        "_process_pending_inbound",
+        lambda _db, c, *, limit: processed.append((c.id, limit)) or (1, 0),
+    )
+    monkeypatch.setattr(
+        transport,
+        "_cancel_expired_automation_dispatches",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        transport,
+        "_decrypt_connection_token",
+        lambda *_args, **_kwargs: ("token", None),
+    )
+    item = SimpleNamespace(dispatch_id=uuid4())
+
+    def claim(
+        _db,
+        *,
+        connection,
+        limit,
+        allow_templates,
+        approved_template_names,
+        allow_demo_reply_dispatch,
+    ):
+        claimed.append(
+            {
+                "connection": connection.id,
+                "limit": limit,
+                "allow_templates": allow_templates,
+                "allow_demo_reply_dispatch": allow_demo_reply_dispatch,
+            }
+        )
+        return [item]
+    monkeypatch.setattr(transport, "claim_dispatches", claim)
+    monkeypatch.setattr(
+        transport,
+        "_send_claimed_dispatch",
+        lambda _db, *, connection, token, item: sent.append(
+            (connection.id, token, item.dispatch_id)
+        )
+        or True,
+    )
+
+    result = transport.run_meta_transport_tick(
+        db,
+        limit_per_connection=2,
+        max_connections=5,
+    )
+
+    assert processed == [(connection.id, 2)]
+    assert refreshed == []
+    assert claimed == [
+        {
+            "connection": connection.id,
+            "limit": 2,
+            "allow_templates": False,
+            "allow_demo_reply_dispatch": True,
+        }
+    ]
+    assert sent == [(connection.id, "token", item.dispatch_id)]
+    assert result == {
+        "connections_checked": 1,
+        "connections_ready": 1,
+        "provider_refreshes": 0,
+        "inbound_processed": 1,
+        "inbound_failed": 0,
+        "sent": 1,
+        "send_failed": 0,
     }

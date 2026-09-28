@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.config import settings
+from app.models.channel_connection import ChannelConnection
 from app.models.workspace import Workspace
 
 
@@ -14,6 +15,21 @@ class WorkspaceRuntimePolicy:
     allow_external_ingress: bool
     allow_external_sync: bool
     agent_hourly_turn_limit: int | None
+
+
+DEMO_WHATSAPP_REPLY_TEST_FLAG = "demo_whatsapp_reply_test_enabled"
+
+
+def demo_whatsapp_reply_test_enabled(
+    workspace: Workspace,
+    connection: ChannelConnection,
+) -> bool:
+    """Allow reactive Meta test-number traffic without opening demo side effects broadly."""
+    if not workspace.is_demo:
+        return False
+    if connection.channel != "whatsapp" or connection.provider != "meta_cloud":
+        return False
+    return (connection.config_json or {}).get(DEMO_WHATSAPP_REPLY_TEST_FLAG) is True
 
 
 def workspace_runtime_policy(workspace: Workspace) -> WorkspaceRuntimePolicy:

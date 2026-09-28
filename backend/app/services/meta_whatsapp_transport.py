@@ -38,7 +38,10 @@ from app.services.provider_credentials import (
     ProviderCredentialError,
     decrypt_provider_access_token,
 )
-from app.services.workspace_runtime_policy import workspace_runtime_policy
+from app.services.workspace_runtime_policy import (
+    demo_whatsapp_reply_test_enabled,
+    workspace_runtime_policy,
+)
 
 
 class MetaWhatsAppTransportError(RuntimeError):
@@ -974,9 +977,11 @@ def run_meta_transport_tick(
         if workspace is None:
             continue
         policy = workspace_runtime_policy(workspace)
+        demo_reply_test = demo_whatsapp_reply_test_enabled(workspace, connection)
 
-        # Demo tenants share the production worker for inbound/agent behavior,
-        # but must never touch external provider readiness or outbound delivery.
+        # Demo tenants stay externally isolated by default. An explicitly flagged
+        # Meta test-number connection may send reactive replies only; provider
+        # refreshes and proactive/template delivery remain disabled for that mode.
         ready = False
         if policy.allow_external_dispatch:
             required_templates = _required_template_names(db, connection)
@@ -988,6 +993,8 @@ def run_meta_transport_tick(
                 provider_refreshes += 1
             else:
                 ready = bool((connection.config_json or {}).get("transport_ready"))
+        elif demo_reply_test:
+            ready = bool((connection.config_json or {}).get("transport_ready"))
 
         processed, failed = _process_pending_inbound(
             db, connection, limit=limit_per_connection
@@ -998,7 +1005,7 @@ def run_meta_transport_tick(
         # Expiration is local state maintenance and remains safe for demo tenants.
         _cancel_expired_automation_dispatches(db, connection=connection)
 
-        if not policy.allow_external_dispatch:
+        if not policy.allow_external_dispatch and not demo_reply_test:
             continue
         if not ready or connection.status != "active":
             continue
@@ -1018,7 +1025,9 @@ def run_meta_transport_tick(
             db,
             connection=connection,
             limit=limit_per_connection,
+            allow_templates=not demo_reply_test,
             approved_template_names=approved_template_names,
+            allow_demo_reply_dispatch=demo_reply_test,
         ):
             if _send_claimed_dispatch(db, connection=connection, token=token, item=item):
                 sent += 1
