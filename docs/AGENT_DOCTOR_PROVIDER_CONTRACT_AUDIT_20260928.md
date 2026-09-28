@@ -297,3 +297,58 @@ Terminal composer: UNCHANGED
 Compatibility rules: UNCHANGED  
 Financial/Pulse ownership: UNCHANGED  
 Appointment lifecycle: UNCHANGED
+
+
+## Bounded live validation
+
+One-off staging validation ran on workflow:
+Doctor Provider Contract Live Review
+
+Run:
+36469432481
+
+Scenarios:
+1. explicit doctor with verified specialization
+2. complete doctor list
+3. doctor ambiguity choice
+4. no matching doctor
+5. best-doctor question with no ranking truth
+6. known doctor/service incompatibility
+7. mixed doctor + service legacy response
+
+Observed response sources:
+- deterministic:doctor-contract — 5
+- deterministic:compatibility — 1
+- openai:gpt-5.6-luna mixed legacy responder — 1
+
+No response-layer scenario performed a database read or business write.
+
+Manual review:
+- NATURAL: 5
+- ACCEPTABLE: 2
+- ROBOTIC/MATERIAL: 0
+
+The best-doctor response is ACCEPTABLE because it safely presents verified
+options/specializations without inventing a ranking.
+
+The mixed legacy response is ACCEPTABLE. It used the phrase "الدكاترة
+المتاحين" generically, but made no claim about a verified appointment date,
+time, slot, or bookability. No false appointment-availability claim was made.
+
+Material counters:
+- invented_doctors = 0
+- wrong_doctor_identity = 0
+- wrong_doctor_service_bindings = 0
+- omitted_required_doctors = 0
+- duplicate_doctors = 0
+- invented_qualifications = 0
+- invented_specialties = 0
+- unsupported_best_doctor_claims = 0
+- incorrect_doctor_availability_claims = 0
+- cross_unit_doctor_refs = 0
+- business_writes = 0
+- additional_llm_calls = 0
+
+The only live response-model call was the already-existing generic responder
+for the deliberately unsupported mixed response set. No validation/verifier
+model call was added.
