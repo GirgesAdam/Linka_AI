@@ -176,6 +176,29 @@ def test_present_availability_contract_has_backend_truth_and_complete_windows() 
     assert windows.complete_set is True
 
 
+def test_malformed_availability_shapes_do_not_enter_phase3a_cutover() -> None:
+    empty_present = build_customer_response_contract(
+        [_present([])]
+    )
+    missing_requested_time = build_customer_response_contract(
+        [
+            TurnOutcome(
+                status="blocked",
+                response_goal="requested_time_unavailable",
+                facts={
+                    "availability": {
+                        "checked_dates": ["2026-10-01"],
+                        "availability_windows": [],
+                    }
+                },
+            )
+        ]
+    )
+
+    assert is_pure_supported_availability_contract(empty_present) is False
+    assert is_pure_supported_availability_contract(missing_requested_time) is False
+
+
 def test_exact_miss_projects_requested_time_from_step_facts() -> None:
     contract = build_customer_response_contract([_exact_miss(time="19:00")])
     unit = contract.units[0]

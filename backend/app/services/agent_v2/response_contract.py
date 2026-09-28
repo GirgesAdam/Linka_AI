@@ -447,13 +447,41 @@ def is_pure_supported_terminal_contract(
 def is_pure_supported_availability_contract(
     contract: CustomerResponseContract,
 ) -> bool:
-    """Whether every unit is an availability-only response supported by Phase 3A."""
+    """Whether every unit has the verified shape required by the Phase 3A composer."""
     if not contract.units:
         return False
-    return all(
-        unit.response_goal in SUPPORTED_AVAILABILITY_RESPONSE_GOALS
-        and unit.availability_truth is not None
-        and unit.availability_truth.state
-        == AVAILABILITY_STATE_BY_GOAL[unit.response_goal]
-        for unit in contract.units
-    )
+
+    for unit in contract.units:
+        if (
+            unit.response_goal not in SUPPORTED_AVAILABILITY_RESPONSE_GOALS
+            or unit.availability_truth is None
+            or unit.availability_truth.state
+            != AVAILABILITY_STATE_BY_GOAL[unit.response_goal]
+        ):
+            return False
+
+        facts = {fact.key: fact for fact in unit.facts}
+        if unit.response_goal == "present_availability":
+            windows = facts.get("availability_windows")
+            if (
+                windows is None
+                or windows.complete_set is not True
+                or not isinstance(windows.value, list)
+                or not windows.value
+            ):
+                return False
+        elif unit.response_goal == "requested_time_unavailable":
+            marker = facts.get("requested_time_unavailable")
+            requested_time = facts.get("requested_time")
+            if (
+                marker is None
+                or marker.value is not True
+                or requested_time is None
+            ):
+                return False
+        elif unit.response_goal == "no_availability":
+            marker = facts.get("no_availability")
+            if marker is None or marker.value is not True:
+                return False
+
+    return True
