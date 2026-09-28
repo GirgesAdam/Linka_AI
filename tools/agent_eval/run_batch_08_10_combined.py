@@ -152,6 +152,7 @@ def _read_case(
     required_any: list[str] | None = None,
     require_verified_read: bool = True,
     allow_handoff: bool = False,
+    required_final_read: str | None = None,
     issue_severity: str = "P2",
 ) -> ScenarioResult:
     before = extended_state_snapshot(db, workspace, patient)
@@ -163,7 +164,11 @@ def _read_case(
     final = _responses(turns)[-1] if turns else ""
     all_ok = _contains_all(final, required_all or [])
     any_ok = _contains_any(final, required_any or []) if required_any else True
-    deterministic_ok = clean and reads_ok and all_ok and any_ok
+    final_read_ok = (
+        required_final_read is None
+        or (bool(turns) and required_final_read in turns[-1].verified_reads)
+    )
+    deterministic_ok = clean and reads_ok and all_ok and any_ok and final_read_ok
     result = make_result(
         scenario_id=scenario_id,
         category=lane,
@@ -179,6 +184,8 @@ def _read_case(
             "required_all": required_all or [],
             "required_any": required_any or [],
             "final_response": final,
+            "required_final_read": required_final_read,
+            "final_read_ok": final_read_ok,
         },
         deterministic_ok=deterministic_ok,
         expected=(
@@ -751,7 +758,6 @@ def case_25_long_detour_resume_appointment(db: Session, workspace: Workspace) ->
         doctor_id=UUID(str(doctor["id"])),
         slot=slot,
     )
-    date_text, _ = local_slot(available, slot)
     return _read_case(
         db=db,
         workspace=workspace,
@@ -767,7 +773,7 @@ def case_25_long_detour_resume_appointment(db: Session, workspace: Workspace) ->
             "مين الدكاترة اللي بيعملوا Hydrafacial؟",
             "طيب معادي اللي جاي إمتى بالظبط؟",
         ],
-        required_all=[date_text],
+        required_final_read="appointments",
         allow_handoff=True,
     )
 
