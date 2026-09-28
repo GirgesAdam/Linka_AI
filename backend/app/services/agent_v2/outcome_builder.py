@@ -376,6 +376,65 @@ def _facts_from_reads(
     return facts
 
 
+def _package_information_response_facts(
+    facts: dict[str, object],
+) -> dict[str, object]:
+    """Keep read-only package info separate from Phase 3B commercial ownership."""
+    shaped = dict(facts)
+
+    owned = shaped.get("customer_packages")
+    if isinstance(owned, dict):
+        rows = owned.get("packages")
+        if isinstance(rows, list):
+            shaped["customer_packages"] = {
+                "packages": [
+                    {
+                        key: row[key]
+                        for key in (
+                            "name",
+                            "sessions_purchased",
+                            "sessions_reserved",
+                            "sessions_consumed",
+                            "sessions_remaining",
+                            "laser_device_name",
+                            "purchased_at",
+                            "expires_at",
+                            "status",
+                            "effective_status",
+                        )
+                        if isinstance(row, dict)
+                        and row.get(key) not in (None, "", [], {})
+                    }
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            }
+
+    offers = shaped.get("package_offers")
+    if isinstance(offers, dict):
+        rows = offers.get("offers")
+        if isinstance(rows, list):
+            shaped["package_offers"] = {
+                "offers": [
+                    {
+                        key: row[key]
+                        for key in (
+                            "service_name",
+                            "device_name",
+                            "sessions_count",
+                            "is_active",
+                        )
+                        if isinstance(row, dict)
+                        and row.get(key) not in (None, "", [], {})
+                    }
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            }
+
+    return shaped
+
+
 def _facts_for_completed_write(facts: dict[str, object], write_kind: str) -> dict[str, object]:
     """Hide scheduling end-times after booking/reschedule completion.
 
@@ -636,6 +695,8 @@ def build_step_outcome(
         selected_device_key=selected_device_key,
     )
     base_facts = {**_visible_dict(step.facts), **read_facts}
+    if step.response_goal == "package_information":
+        base_facts = _package_information_response_facts(base_facts)
     active_summary = _visible_dict(dict(active_task_summary or {}))
 
     if step.disposition == "handoff":

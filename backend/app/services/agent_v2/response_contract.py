@@ -99,6 +99,30 @@ class DoctorTruth(StrictResponseContractModel):
     complete_set: bool = True
 
 
+class OwnedPackageInfo(StrictResponseContractModel):
+    name: str
+    device_name: str | None = None
+    sessions_purchased: int
+    sessions_remaining: int
+    effective_status: str
+    expires_at: str | None = None
+
+
+class PackageOfferInfo(StrictResponseContractModel):
+    service_name: str
+    device_name: str | None = None
+    sessions_count: int
+
+
+class PackageTruth(StrictResponseContractModel):
+    owned_requested: bool = False
+    offers_requested: bool = False
+    owned_packages: tuple[OwnedPackageInfo, ...] = ()
+    package_offers: tuple[PackageOfferInfo, ...] = ()
+    owned_complete_set: bool = False
+    offers_complete_set: bool = False
+
+
 class CustomerResponseUnit(StrictResponseContractModel):
     response_goal: ResponseGoal
     status: str
@@ -106,6 +130,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     availability_truth: AvailabilityTruth | None = None
     commercial_truth: CommercialTruth | None = None
     doctor_truth: DoctorTruth | None = None
+    package_truth: PackageTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
 
@@ -588,6 +613,105 @@ def _doctor_truth(outcome: TurnOutcome) -> DoctorTruth | None:
     return None
 
 
+def _owned_package_info(raw: object) -> OwnedPackageInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    name = str(safe.get("name") or "").strip()
+    effective_status = str(safe.get("effective_status") or "").strip()
+    if not name or not effective_status:
+        return None
+    try:
+        sessions_purchased = int(safe.get("sessions_purchased"))
+        sessions_remaining = int(safe.get("sessions_remaining"))
+    except (TypeError, ValueError):
+        return None
+    if sessions_purchased < 0 or sessions_remaining < 0:
+        return None
+    device_name = str(safe.get("laser_device_name") or "").strip() or None
+    expires_at = str(safe.get("expires_at") or "").strip() or None
+    return OwnedPackageInfo(
+        name=name,
+        device_name=device_name,
+        sessions_purchased=sessions_purchased,
+        sessions_remaining=sessions_remaining,
+        effective_status=effective_status,
+        expires_at=expires_at,
+    )
+
+
+def _package_offer_info(raw: object) -> PackageOfferInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    service_name = str(safe.get("service_name") or "").strip()
+    if not service_name:
+        return None
+    try:
+        sessions_count = int(safe.get("sessions_count"))
+    except (TypeError, ValueError):
+        return None
+    if sessions_count <= 0:
+        return None
+    device_name = str(safe.get("device_name") or "").strip() or None
+    return PackageOfferInfo(
+        service_name=service_name,
+        device_name=device_name,
+        sessions_count=sessions_count,
+    )
+
+
+def _package_truth(outcome: TurnOutcome) -> PackageTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "package_information":
+        return None
+
+    owned_requested = "customer_packages" in outcome.facts
+    offers_requested = "package_offers" in outcome.facts
+    if not owned_requested and not offers_requested:
+        return None
+
+    owned: list[OwnedPackageInfo] = []
+    if owned_requested:
+        wrapper = outcome.facts.get("customer_packages")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("packages", [])
+        if not isinstance(rows, list):
+            return None
+        for raw in rows:
+            item = _owned_package_info(raw)
+            if item is None:
+                return None
+            owned.append(item)
+
+    offers: list[PackageOfferInfo] = []
+    if offers_requested:
+        wrapper = outcome.facts.get("package_offers")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("offers", [])
+        if not isinstance(rows, list):
+            return None
+        for raw in rows:
+            item = _package_offer_info(raw)
+            if item is None:
+                return None
+            offers.append(item)
+
+    return PackageTruth(
+        owned_requested=owned_requested,
+        offers_requested=offers_requested,
+        owned_packages=tuple(owned),
+        package_offers=tuple(offers),
+        owned_complete_set=owned_requested,
+        offers_complete_set=offers_requested,
+    )
+
+
 def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     doctors = facts.get("doctors")
     if not isinstance(doctors, dict):
@@ -725,6 +849,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     availability_truth: AvailabilityTruth | None = None
     commercial_truth = _commercial_truth(outcome)
     doctor_truth = _doctor_truth(outcome)
+    package_truth = _package_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
         source_action = outcome.action_result.get("action")
@@ -760,6 +885,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         availability_truth=availability_truth,
         commercial_truth=commercial_truth,
         doctor_truth=doctor_truth,
+        package_truth=package_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
     )
@@ -931,5 +1057,31 @@ def is_pure_supported_doctor_contract(
                 return False
         else:
             return False
+
+    return True
+
+
+def is_pure_supported_package_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is read-only package information supported by Phase 3D."""
+    if not contract.units:
+        return False
+
+    for unit in contract.units:
+        truth = unit.package_truth
+        if (
+            unit.response_goal != "package_information"
+            or unit.status != "answered"
+            or truth is None
+        ):
+            return False
+        if not truth.owned_requested and not truth.offers_requested:
+            return False
+        if truth.owned_requested is not truth.owned_complete_set:
+            return False
+        if truth.offers_requested is not truth.offers_complete_set:
+            return False
+
 
     return True
