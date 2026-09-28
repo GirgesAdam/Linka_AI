@@ -350,7 +350,7 @@ def test_pure_doctor_list_is_complete_once_and_skips_model(monkeypatch: pytest.M
         outcomes=[_doctor_outcome()],
     )
 
-    assert model == "deterministic:doctor-list"
+    assert model == "deterministic:doctor-contract"
     assert text.count("د. مريم") == 1
     assert text.count("د. سارة") == 1
     assert text.count("د. نور") == 1
