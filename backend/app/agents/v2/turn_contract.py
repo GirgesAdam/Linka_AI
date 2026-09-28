@@ -10,6 +10,7 @@ OperationType = Literal[
     "pricing",
     "doctor_info",
     "clinic_info",
+    "payment_info",
     "availability",
     "book",
     "appointment_list",
@@ -221,7 +222,9 @@ class TurnEntities(StrictContractModel):
 class TurnOperation(StrictContractModel):
     type: OperationType = Field(
         description=(
-            "Choose the customer's semantic action. Use book whenever the customer is asking Tia "
+            "Choose the customer's semantic action. Use payment_info for read-only general clinic "
+            "payment-method/timing/policy questions that do not ask to inspect or change a customer's "
+            "financial ledger. Use book whenever the customer is asking Tia "
             "to create/reserve a new appointment now, even when required booking details are still "
             "missing and Python will need to clarify them. Do not downgrade an incomplete booking "
             "request to availability. Use availability only when the customer is asking to inspect "
@@ -269,9 +272,10 @@ class TurnOperation(StrictContractModel):
         default="none",
         description=(
             "Set reception when this operation asks about money already paid, balance still due, "
-            "payment/transaction status, checkout, or settlement for the customer's own account or "
-            "appointment. This is a semantic ownership marker only and never authorizes a financial "
-            "read or write. Service/package offer prices remain none."
+            "payment/transaction status, checkout, settlement, or a financial-record mutation for the "
+            "customer's own account or appointment. General payment-method/timing/policy questions use "
+            "payment_info with financial_ownership=none. This is a semantic ownership marker only and "
+            "never authorizes a financial read or write. Service/package offer prices remain none."
         ),
     )
     # Required in provider schemas. The default preserves compatibility for direct
