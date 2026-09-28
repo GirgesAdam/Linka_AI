@@ -83,3 +83,11 @@ def test_v2_date_time_and_selection_shapes_fail_closed() -> None:
 
     with pytest.raises(ValidationError):
         Selection(kind="index", index=0, time=None, ref=None)
+
+
+def test_v2_provider_schema_exposes_typed_package_read_scope() -> None:
+    schema = TiaTurnUnderstanding.model_json_schema()
+    details = schema["$defs"]["TurnOperation"]["properties"]["requested_package_details"]
+    assert set(details["items"]["enum"]) == {"owned", "offers"}
+    provider = canonicalize_provider_json_schema(schema)
+    assert "requested_package_details" in str(provider)

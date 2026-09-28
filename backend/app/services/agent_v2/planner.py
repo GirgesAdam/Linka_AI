@@ -830,11 +830,17 @@ def _plan_operation(
         )
 
     if operation.type == "package_info":
+        details = set(operation.requested_package_details) or {"owned"}
+        reads: list[ReadRequest] = []
+        if "owned" in details:
+            reads.append(ReadRequest(kind="customer_packages", parameters=params))
+        if "offers" in details:
+            reads.append(ReadRequest(kind="package_offers", parameters=params))
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
             disposition="read",
-            reads=[ReadRequest(kind="customer_packages", parameters=params)],
+            reads=reads,
             response_goal="package_information",
             facts=params,
         )

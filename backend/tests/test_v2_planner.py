@@ -726,3 +726,57 @@ def test_session_package_booking_is_independent_from_pulse_billing() -> None:
     assert step.write_intent is not None
     assert step.write_intent.parameters["package_usage"] == "use_existing"
     assert "pulse_usage" not in step.write_intent.parameters
+
+
+def test_package_info_reads_requested_offer_scope_only() -> None:
+    operation = TurnOperation(
+        type="package_info",
+        entities=TurnEntities(),
+        selection=None,
+        package_usage="unspecified",
+        requested_package_details=["offers"],
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert [item.kind for item in step.reads] == ["package_offers"]
+
+
+def test_package_info_keeps_owned_scope_and_backward_compatible_default() -> None:
+    for requested_details in (["owned"], []):
+        operation = TurnOperation(
+            type="package_info",
+            entities=TurnEntities(),
+            selection=None,
+            package_usage="unspecified",
+            requested_package_details=requested_details,
+        )
+        step = plan_turn(
+            TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+            _context(),
+        ).steps[0]
+
+        assert step.disposition == "read"
+        assert step.write_intent is None
+        assert [item.kind for item in step.reads] == ["customer_packages"]
+
+
+def test_package_info_can_read_owned_and_offers_when_both_are_requested() -> None:
+    operation = TurnOperation(
+        type="package_info",
+        entities=TurnEntities(),
+        selection=None,
+        package_usage="unspecified",
+        requested_package_details=["owned", "offers"],
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(),
+    ).steps[0]
+
+    assert step.write_intent is None
+    assert [item.kind for item in step.reads] == ["customer_packages", "package_offers"]
