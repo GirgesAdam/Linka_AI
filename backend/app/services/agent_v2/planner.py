@@ -805,7 +805,16 @@ def _plan_operation(
             operation_index=index,
             operation_type=operation.type,
             disposition="read",
-            reads=[ReadRequest(kind="customer_profile")],
+            reads=[
+                ReadRequest(
+                    kind="customer_profile",
+                    parameters={
+                        "requested_patient_details": list(
+                            operation.requested_patient_details
+                        )
+                    },
+                )
+            ],
             response_goal="answer_customer_profile",
         )
 

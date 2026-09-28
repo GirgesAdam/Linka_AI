@@ -435,6 +435,120 @@ def _package_information_response_facts(
     return shaped
 
 
+def _patient_crm_response_facts(
+    facts: dict[str, object],
+    *,
+    response_goal: ResponseGoal | None,
+) -> dict[str, object]:
+    """Expose only response-safe patient fields without moving financial ownership."""
+    shaped = dict(facts)
+
+    if response_goal == "answer_customer_profile":
+        wrapper = shaped.get("customer_profile")
+        if isinstance(wrapper, dict):
+            patient = wrapper.get("patient")
+            safe_patient = patient if isinstance(patient, dict) else {}
+            requested = list(
+                wrapper.get("requested_details")
+                or ["name", "phone", "preferred_language"]
+            )
+            visible_keys: list[str] = []
+            if "name" in requested:
+                visible_keys.extend(("first_name", "last_name"))
+            if "phone" in requested:
+                visible_keys.append("phone")
+            if "preferred_language" in requested:
+                visible_keys.append("preferred_language")
+            shaped["customer_profile"] = {
+                "patient": {
+                    key: safe_patient[key]
+                    for key in visible_keys
+                    if safe_patient.get(key) not in (None, "", [], {})
+                },
+                "requested_details": requested,
+            }
+
+    if response_goal == "answer_customer_history":
+        wrapper = shaped.get("customer_history")
+        if isinstance(wrapper, dict):
+            history = wrapper.get("history")
+            if isinstance(history, dict):
+                visible_history: dict[str, object] = {
+                    key: history[key]
+                    for key in (
+                        "first_clinic_activity_at",
+                        "last_clinic_activity_at",
+                        "total_appointments",
+                        "completed_appointments",
+                        "cancelled_appointments",
+                        "no_show_appointments",
+                        "recent_visit_count",
+                        "presentation_unit",
+                    )
+                    if history.get(key) not in (None, "", [], {})
+                }
+                services = history.get("services")
+                if isinstance(services, list):
+                    visible_history["services"] = [
+                        {
+                            key: row[key]
+                            for key in (
+                                "service_name",
+                                "completed_visits",
+                                "first_completed_at",
+                                "last_completed_at",
+                            )
+                            if isinstance(row, dict)
+                            and row.get(key) not in (None, "", [], {})
+                        }
+                        for row in services
+                        if isinstance(row, dict)
+                    ]
+                recent_appointments = history.get("recent_appointments")
+                if isinstance(recent_appointments, list):
+                    visible_history["recent_appointments"] = [
+                        {
+                            key: row[key]
+                            for key in (
+                                "status",
+                                "start_at",
+                                "end_at",
+                                "service_name",
+                                "branch_name",
+                                "doctor_name",
+                            )
+                            if isinstance(row, dict)
+                            and row.get(key) not in (None, "", [], {})
+                        }
+                        for row in recent_appointments
+                        if isinstance(row, dict)
+                    ]
+                recent_visits = history.get("recent_visits")
+                if isinstance(recent_visits, list):
+                    visible_history["recent_visits"] = [
+                        {
+                            key: row[key]
+                            for key in (
+                                "status",
+                                "start_at",
+                                "end_at",
+                                "services",
+                                "service_name",
+                                "branch_name",
+                                "doctor_name",
+                                "date",
+                            )
+                            if isinstance(row, dict)
+                            and row.get(key) not in (None, "", [], {})
+                        }
+                        for row in recent_visits
+                        if isinstance(row, dict)
+                    ]
+                shaped["customer_history"] = {"history": visible_history}
+
+    return shaped
+
+
 def _facts_for_completed_write(facts: dict[str, object], write_kind: str) -> dict[str, object]:
     """Hide scheduling end-times after booking/reschedule completion.
 
@@ -697,6 +811,10 @@ def build_step_outcome(
     base_facts = {**_visible_dict(step.facts), **read_facts}
     if step.response_goal == "package_information":
         base_facts = _package_information_response_facts(base_facts)
+    base_facts = _patient_crm_response_facts(
+        base_facts,
+        response_goal=step.response_goal,
+    )
     active_summary = _visible_dict(dict(active_task_summary or {}))
 
     if step.disposition == "handoff":

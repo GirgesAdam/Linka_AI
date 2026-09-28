@@ -19,6 +19,7 @@ from app.agents.structured_output import StructuredOutputError, invoke_typed_str
 from app.agents.v2.availability_composer import compose_availability_contract_reply
 from app.agents.v2.doctor_composer import compose_doctor_contract_reply
 from app.agents.v2.package_composer import compose_package_contract_reply
+from app.agents.v2.patient_composer import compose_patient_contract_reply
 from app.agents.v2.price_device_composer import compose_price_device_contract_reply
 from app.agents.v2.terminal_composer import compose_terminal_contract_reply
 from app.core.config import settings
@@ -29,6 +30,7 @@ from app.services.agent_v2.response_contract import (
     is_pure_supported_availability_contract,
     is_pure_supported_doctor_contract,
     is_pure_supported_package_contract,
+    is_pure_supported_patient_contract,
     is_pure_supported_price_device_contract,
     is_pure_supported_terminal_contract,
 )
@@ -677,6 +679,10 @@ RULES
   after the requested answer is complete.
 - Use recent dialogue for continuity; no repeated greeting or stock opener/closer. Answer the direct
   question first. Combine multiple TURN_OUTCOMES into one coherent reply in customer-request order.
+- Customer-profile facts describe only the verified current patient record. Preserve supplied name spelling
+  and phone digits exactly; never infer another patient from dialogue, similar names, or prior assistant prose.
+  Customer-history facts are scoped to that same verified patient, but do not treat historical appointment or
+  payment fields as profile attributes and do not invent profile fields that are absent from the outcome.
 - Package offers and patient-owned packages are different facts. A package_offers result means only that
   the clinic currently offers that package; it never proves the patient owns it. Claim package ownership,
   remaining package uses, expiry, or effective status only from customer_packages facts. Package price/currency
@@ -771,6 +777,11 @@ def compose_v2_customer_reply(
         )
     if is_pure_supported_package_contract(response_contract):
         return compose_package_contract_reply(
+            history=history,
+            contract=response_contract,
+        )
+    if is_pure_supported_patient_contract(response_contract):
+        return compose_patient_contract_reply(
             history=history,
             contract=response_contract,
         )
