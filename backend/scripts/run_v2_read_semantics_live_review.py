@@ -24,6 +24,8 @@ from tools.agent_eval.harness import RuntimeProbe, assert_demo_only, runtime_sum
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.core.config import settings
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
+from app.models.branch import Branch
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.message import Message
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
@@ -91,6 +93,29 @@ def _catalog_context(
             if str(value) in services
         ]
         if prefer_device:
+            if ids and not any(services[value].get("laser_devices") for value in ids):
+                target = services[ids[0]]
+                device_price = ServiceDevicePrice(
+                    workspace_id=workspace.id,
+                    service_id=UUID(ids[0]),
+                    device_key="candela_gentle",
+                    device_name="Candela Gentle",
+                    price_minor=int(target.get("price_minor") or 0),
+                    duration_minutes=int(target.get("duration_minutes") or 30),
+                    currency=str(target.get("currency") or "EGP"),
+                    is_active=True,
+                )
+                db.add(device_price)
+                db.flush()
+                target["laser_devices"] = [
+                    {
+                        "device_key": "candela_gentle",
+                        "device_name": "Candela Gentle",
+                        "price_minor": int(target.get("price_minor") or 0),
+                        "currency": str(target.get("currency") or "EGP"),
+                        "configured": True,
+                    }
+                ]
             ids.sort(
                 key=lambda value: bool(services[value].get("laser_devices")),
                 reverse=True,
@@ -133,10 +158,18 @@ def _add_appointment(
     duration = int(service.get("duration_minutes") or 30)
     end_at = start_at + timedelta(minutes=duration)
     device_key, device_name, price_minor = _device(service)
+    branch_id = workspace.primary_branch_id or db.scalar(
+        select(Branch.id)
+        .where(Branch.workspace_id == workspace.id, Branch.is_active.is_(True))
+        .order_by(Branch.created_at.asc())
+        .limit(1)
+    )
+    if branch_id is None:
+        raise RuntimeError("Regression workspace has no active branch")
     row = Appointment(
         workspace_id=workspace.id,
         patient_id=patient.id,
-        branch_id=workspace.primary_branch_id,
+        branch_id=branch_id,
         doctor_id=UUID(str(doctor["id"])),
         service_id=UUID(str(service["id"])),
         status="confirmed",
@@ -294,7 +327,7 @@ def _execute(engine, name: str) -> Result:
         before_appts = _count(db, Appointment, workspace.id)
         before_financial = _count(db, PaymentTransaction, workspace.id)
         if name == "stale":
-            first, _reads, first_write, first_ops = _send(
+            first, _reads, first_write, _first_ops = _send(
                 db, workspace, patient, "أهلا"
             )
             if first_write:
@@ -311,7 +344,6 @@ def _execute(engine, name: str) -> Result:
                 "ميعادي الجاي إمتى؟",
                 first.conversation_id,
             )
-            llm_ops = first_ops + llm_ops
         else:
             service_name = (
                 str(expected.get("service_names", [""])[0])
