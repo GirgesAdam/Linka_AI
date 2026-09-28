@@ -324,6 +324,7 @@ def test_exact_miss_plus_separate_verified_alternative_unit_keeps_both_semantics
 
     assert text.index("مش متاح") < text.index("8 مساءً")
     assert "8 مساءً" in text
+    assert "أقدر أشوفلك وقت تاني" not in text
 
 
 @pytest.mark.parametrize(

@@ -11,7 +11,9 @@ from langchain_core.messages import HumanMessage
 from app.agents.v2 import availability_composer
 from app.agents.v2.availability_composer import (
     AvailabilityComposerDraft,
+    AvailabilityComposerValidationError,
     compose_availability_contract_reply,
+    deterministic_availability_fallback,
     resolve_availability_composer_draft,
 )
 from app.services.agent_v2.outcome import TurnOutcome
@@ -186,15 +188,29 @@ def _run(name: str, message: str, outcomes: list[TurnOutcome]) -> dict[str, Any]
     if not isinstance(raw_draft, dict):
         raise AssertionError(f"{name}: missing structured composer draft")
     draft = AvailabilityComposerDraft.model_validate(raw_draft)
-    resolved = resolve_availability_composer_draft(
-        contract,
-        draft,
-        arabic=True,
-    )
+    validation_error: str | None = None
+    try:
+        resolved = resolve_availability_composer_draft(
+            contract,
+            draft,
+            arabic=True,
+        )
+    except AvailabilityComposerValidationError as exc:
+        validation_error = str(exc)
+        resolved = deterministic_availability_fallback(
+            contract,
+            arabic=True,
+        )
+
     if final_text != resolved:
         raise AssertionError(f"{name}: final text differs from backend resolution")
-    if not source.startswith("availability-contract:"):
-        raise AssertionError(f"{name}: unexpected source {source}")
+    if validation_error is None:
+        if not source.startswith("availability-contract:"):
+            raise AssertionError(f"{name}: unexpected source {source}")
+    elif source != "deterministic:availability-contract-fallback":
+        raise AssertionError(
+            f"{name}: invalid draft did not use deterministic contract fallback"
+        )
 
     draft_payload = json.dumps(raw_draft, ensure_ascii=False)
     forbidden_values = [
@@ -231,7 +247,7 @@ def _run(name: str, message: str, outcomes: list[TurnOutcome]) -> dict[str, Any]
         for unit in contract.units
     )
     draft_window_count = sum(len(unit.window_refs) for unit in draft.units)
-    if draft_window_count != expected_window_count:
+    if validation_error is None and draft_window_count != expected_window_count:
         raise AssertionError(
             f"{name}: omitted availability refs "
             f"{draft_window_count}!={expected_window_count}"
@@ -244,6 +260,7 @@ def _run(name: str, message: str, outcomes: list[TurnOutcome]) -> dict[str, Any]
         "structured_availability_draft": raw_draft,
         "final_resolved_text": final_text,
         "response_source": source,
+        "structured_validation_error": validation_error,
         "fallback_model_used": captured.get("used_fallback_model"),
         "db_effect": "none (composition-only synthetic validation)",
         "input_tokens": "not exposed by invoke_with_model_chain",

@@ -530,7 +530,7 @@ def _render_requested_miss(
     scope = _date_scope_text(unit, arabic=arabic)
     context = _optional_context(unit, draft.optional_fact_keys, arabic=arabic)
     if arabic:
-        target = f"الساعة {requested_text}" if requested_text else "الوقت المطلوب"
+        target = f"ميعاد الساعة {requested_text}" if requested_text else "الوقت المطلوب"
         text = f"{target} مش متاح {scope}"
         if context:
             text += f" {context}"
@@ -606,7 +606,23 @@ def resolve_availability_composer_draft(
     for index, (unit, draft_unit) in enumerate(
         zip(contract.units, draft.units, strict=True)
     ):
-        rendered = _render_unit(unit, draft_unit, arabic=arabic)
+        effective_draft = draft_unit
+        truth = unit.availability_truth
+        later_options_exist = any(
+            later.availability_truth is not None
+            and later.availability_truth.state == "options_available"
+            for later in contract.units[index + 1 :]
+        )
+        if (
+            truth is not None
+            and truth.state == "requested_time_unavailable"
+            and later_options_exist
+            and draft_unit.closing_action == "offer_other_time"
+        ):
+            effective_draft = draft_unit.model_copy(
+                update={"closing_action": "none"}
+            )
+        rendered = _render_unit(unit, effective_draft, arabic=arabic)
         if index == 0:
             chunks.append(rendered)
             continue
