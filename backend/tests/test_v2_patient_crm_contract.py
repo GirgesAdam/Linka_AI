@@ -168,7 +168,7 @@ def test_profile_response_shaping_preserves_requested_missing_phone() -> None:
     assert is_pure_supported_patient_contract(contract) is True
 
 
-def test_history_response_shaping_removes_nested_profile_pii_only() -> None:
+def test_history_response_shaping_removes_profile_and_financial_fields() -> None:
     history = {
         "profile": {
             "first_name": "Mona",
@@ -179,7 +179,25 @@ def test_history_response_shaping_removes_nested_profile_pii_only() -> None:
         "total_appointments": 4,
         "completed_appointments": 3,
         "money": [{"currency": "EGP", "net_paid": "900.00 EGP"}],
-        "recent_visits": [{"status": "completed", "services": ["PRP"]}],
+        "recent_visits": [
+            {
+                "status": "completed",
+                "services": ["PRP"],
+                "price_minor": 100_000,
+                "net_paid_minor": 90_000,
+            }
+        ],
+        "recent_appointments": [
+            {
+                "status": "completed",
+                "service_name": "PRP",
+                "payment_status": "paid",
+                "payment_method": "cash",
+                "billing": "standard",
+                "price": "1000.00 EGP",
+                "net_paid": "900.00 EGP",
+            }
+        ],
     }
     shaped = _patient_crm_response_facts(
         {"customer_history": {"history": history}},
@@ -188,9 +206,14 @@ def test_history_response_shaping_removes_nested_profile_pii_only() -> None:
 
     visible = shaped["customer_history"]["history"]
     assert "profile" not in visible
+    assert "money" not in visible
     assert visible["total_appointments"] == 4
-    assert visible["money"] == [{"currency": "EGP", "net_paid": "900.00 EGP"}]
-    assert visible["recent_visits"][0]["services"] == ["PRP"]
+    assert visible["recent_visits"] == [
+        {"status": "completed", "services": ["PRP"]}
+    ]
+    assert visible["recent_appointments"] == [
+        {"status": "completed", "service_name": "PRP"}
+    ]
 
 
 def test_customer_profile_read_uses_only_context_patient() -> None:

@@ -104,7 +104,13 @@ CASES: list[dict[str, Any]] = [
         "env": _history_env(),
         "expected_details": None,
         "expected_reply": ["ليزر إبط"],
-        "forbidden_reply": ["PRIVATE_NAME", "01099999999", "1990-01-01"],
+        "forbidden_reply": [
+            "PRIVATE_NAME",
+            "01099999999",
+            "1990-01-01",
+            "500",
+            "جنيه",
+        ],
         "pure": False,
         "history_privacy": True,
     },
@@ -177,9 +183,22 @@ def _assert_history_privacy(result: object) -> None:
         traces[0].outcome.model_dump(mode="json"),
         ensure_ascii=False,
     )
-    for secret in ("PRIVATE_NAME", "01099999999", "female", "1990-01-01"):
+    for secret in (
+        "PRIVATE_NAME",
+        "01099999999",
+        "female",
+        "1990-01-01",
+        '"money"',
+        "net_paid",
+        "payment_status",
+        "payment_method",
+        "price_minor",
+        "net_paid_minor",
+    ):
         if secret in serialized:
-            raise AssertionError(f"History profile PII leaked into outcome: {secret}")
+            raise AssertionError(
+                f"History sensitive/financial field leaked into outcome: {secret}"
+            )
 
 
 def _run(case: dict[str, Any]) -> dict[str, object]:

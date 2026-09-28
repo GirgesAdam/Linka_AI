@@ -114,13 +114,20 @@ Current responder behavior:
 Generic free-form responder.
 
 Privacy finding:
-The current generic visibility filter removes internal IDs but does not remove nested profile phone, gender, birth_date, source timestamps, or financial/history fields. A request about old appointments does not need the nested profile object, so that profile block is unnecessary PII exposure.
+The current generic visibility filter removes internal IDs but does not remove nested profile phone, gender, birth_date, source timestamps, or financial/history fields. Live validation also showed that a non-financial question about the last visit could cause the generic responder to volunteer a payment amount.
 
 Phase 3E boundary:
-customer_history is not migrated into PatientTruth because it deliberately mixes historical appointment and already-existing financial response semantics. Financial ownership and appointment lifecycle are outside Phase 3E.
+customer_history is not migrated into PatientTruth. Appointment lifecycle remains owned by the existing appointment/history path, and money-ledger concerns remain receptionist-owned through financial_ownership=reception.
 
 Minimal required hardening:
-Remove the nested history.profile object from answer_customer_history response facts before the responder. Keep the existing historical appointment/payment semantics otherwise unchanged.
+Use an answer_customer_history response whitelist that removes:
+- nested profile PII
+- money totals
+- historical price/net-paid values
+- payment status/method/billing fields
+- package-usage financial context
+
+Keep customer-safe historical lifecycle facts such as service, doctor, branch, dates/times, status, and appointment/visit counts.
 
 ### Patient search / ambiguity
 
@@ -186,9 +193,9 @@ Mixed responses:
 Remain entirely on the existing legacy responder.
 
 History privacy shaping:
-answer_customer_history response facts drop the nested profile object before generic composition.
+answer_customer_history response facts use a non-financial customer-safe whitelist before generic composition. Nested profile PII and financial/payment/package-usage fields are removed.
 
-No other customer-history financial or appointment ownership is transferred to Phase 3E.
+No financial or appointment ownership is transferred to PatientTruth.
 
 ## Minimal runtime changes
 

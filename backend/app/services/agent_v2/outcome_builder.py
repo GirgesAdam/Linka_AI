@@ -473,8 +473,77 @@ def _patient_crm_response_facts(
         if isinstance(wrapper, dict):
             history = wrapper.get("history")
             if isinstance(history, dict):
-                visible_history = dict(history)
-                visible_history.pop("profile", None)
+                visible_history: dict[str, object] = {
+                    key: history[key]
+                    for key in (
+                        "first_clinic_activity_at",
+                        "last_clinic_activity_at",
+                        "total_appointments",
+                        "completed_appointments",
+                        "cancelled_appointments",
+                        "no_show_appointments",
+                        "recent_visit_count",
+                        "presentation_unit",
+                    )
+                    if history.get(key) not in (None, "", [], {})
+                }
+                services = history.get("services")
+                if isinstance(services, list):
+                    visible_history["services"] = [
+                        {
+                            key: row[key]
+                            for key in (
+                                "service_name",
+                                "completed_visits",
+                                "first_completed_at",
+                                "last_completed_at",
+                            )
+                            if isinstance(row, dict)
+                            and row.get(key) not in (None, "", [], {})
+                        }
+                        for row in services
+                        if isinstance(row, dict)
+                    ]
+                recent_appointments = history.get("recent_appointments")
+                if isinstance(recent_appointments, list):
+                    visible_history["recent_appointments"] = [
+                        {
+                            key: row[key]
+                            for key in (
+                                "status",
+                                "start_at",
+                                "end_at",
+                                "service_name",
+                                "branch_name",
+                                "doctor_name",
+                            )
+                            if isinstance(row, dict)
+                            and row.get(key) not in (None, "", [], {})
+                        }
+                        for row in recent_appointments
+                        if isinstance(row, dict)
+                    ]
+                recent_visits = history.get("recent_visits")
+                if isinstance(recent_visits, list):
+                    visible_history["recent_visits"] = [
+                        {
+                            key: row[key]
+                            for key in (
+                                "status",
+                                "start_at",
+                                "end_at",
+                                "services",
+                                "service_name",
+                                "branch_name",
+                                "doctor_name",
+                                "date",
+                            )
+                            if isinstance(row, dict)
+                            and row.get(key) not in (None, "", [], {})
+                        }
+                        for row in recent_visits
+                        if isinstance(row, dict)
+                    ]
                 shaped["customer_history"] = {"history": visible_history}
 
     return shaped
