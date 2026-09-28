@@ -282,9 +282,11 @@ def _execute(engine, name: str) -> Result:
     )
     result = Result(name=name)
     try:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
+        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia-regression"))
         if workspace is None:
-            raise RuntimeError("Demo workspace not found")
+            raise RuntimeError("Regression workspace not found")
+        workspace.is_demo = True
+        db.flush()
         assert_demo_only(workspace)
         patient = _base_patient(db, workspace)
         fixture_name = "single" if name in {"stale", "mixed"} else name
