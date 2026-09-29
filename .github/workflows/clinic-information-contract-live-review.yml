@@ -1,14 +1,16 @@
-name: V2 Clinic Information Review
+name: Phase 3I Clinic Information Live Review
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches:
+      - agent/clinic-information-contract-audit
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  clinic-info-review:
+  clinic-information-live-review:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: staging
@@ -37,9 +39,9 @@ jobs:
       DOCS_ENABLED: "false"
       DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
-      SUPABASE_URL: https://example.supabase.co
-      SUPABASE_PUBLISHABLE_KEY: sb_publishable_v2_clinic_review_unused
-      SUPABASE_SECRET_KEY: sb_secret_v2_clinic_review_unused
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_phase3i_unused
+      SUPABASE_SECRET_KEY: sb_secret_phase3i_unused
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       LLM_PROVIDER: openai
       OPENAI_MODEL: gpt-5.6-luna
@@ -113,9 +115,37 @@ jobs:
           engine.dispose()
           PY
           python scripts/seed_full_staging_demo.py
-      - name: Run focused V2 clinic information review
+          python - <<'PY'
+          from sqlalchemy import create_engine, select
+          from sqlalchemy.orm import Session
+          from app.core.config import settings
+          from app.models.branch import Branch
+          from app.models.workspace import Workspace
+          from app.services.clinic_knowledge_base import replace_knowledge_text
+
+          engine = create_engine(settings.database_url)
+          with Session(engine) as db:
+              workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia-regression'))
+              assert workspace is not None
+              branch = db.scalar(
+                  select(Branch).where(
+                      Branch.workspace_id == workspace.id,
+                      Branch.code == 'regression-main',
+                  )
+              )
+              assert branch is not None
+              workspace.primary_branch_id = branch.id
+              replace_knowledge_text(
+                  db,
+                  workspace_id=workspace.id,
+                  content='PHASE3I VERIFIED POLICY: customer-facing clinic information only.',
+              )
+              db.commit()
+          engine.dispose()
+          PY
+      - name: Run focused Phase 3I clinic information review
         run: python scripts/run_v2_clinic_info_live_review.py
-      - name: Upload focused V2 clinic information artifact
+      - name: Upload Phase 3I clinic information artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:

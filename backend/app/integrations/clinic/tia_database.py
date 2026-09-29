@@ -1009,7 +1009,14 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     "id": str(row.id),
                     "name": row.name,
                     "code": row.code,
+                    "phone": row.phone,
+                    "email": row.email,
+                    "address_line1": row.address_line1,
+                    "address_line2": row.address_line2,
                     "city": row.city,
+                    "state": row.state,
+                    "country_code": row.country_code,
+                    "timezone": row.timezone,
                     "address": "، ".join(
                         part.strip()
                         for part in (row.address_line1, row.address_line2, row.city)

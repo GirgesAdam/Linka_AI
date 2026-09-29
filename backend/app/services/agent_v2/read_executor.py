@@ -491,34 +491,62 @@ def _read_service_catalog(
 
 
 def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
-    branches = _catalog_rows(_catalog(context), "branches")
-    primary = str(context.workspace.primary_branch_id) if context.workspace.primary_branch_id else None
-    visible = []
-    for branch in branches:
-        if primary is not None and str(branch.get("id")) != primary:
-            continue
-        visible.append(
-            {
-                key: branch.get(key)
-                for key in (
-                    "name",
-                    "phone",
-                    "email",
-                    "address",
-                    "address_line1",
-                    "address_line2",
-                    "city",
-                    "state",
-                    "country_code",
-                    "timezone",
-                )
-                if branch.get(key) not in (None, "")
-            }
-        )
+    catalog = _catalog(context)
+    branches = _catalog_rows(catalog, "branches")
+    branch_id = resolve_single_location_branch_id(
+        primary_branch_id=context.workspace.primary_branch_id,
+        catalog=catalog,
+    )
+
+    visible: list[dict[str, object]] = []
+    branch = next(
+        (
+            row
+            for row in branches
+            if branch_id is not None and str(row.get("id")) == branch_id
+        ),
+        None,
+    )
+    if branch is not None:
+        location = {
+            key: branch.get(key)
+            for key in (
+                "name",
+                "phone",
+                "email",
+                "address",
+                "address_line1",
+                "address_line2",
+                "city",
+                "state",
+                "country_code",
+                "timezone",
+            )
+            if branch.get(key) not in (None, "")
+        }
+        raw_hours = branch.get("working_hours")
+        if isinstance(raw_hours, list):
+            working_hours = [
+                {
+                    "weekday": row["weekday"],
+                    "start": str(row["start"])[:5],
+                    "end": str(row["end"])[:5],
+                }
+                for row in raw_hours
+                if isinstance(row, dict)
+                and isinstance(row.get("weekday"), int)
+                and 0 <= int(row["weekday"]) <= 6
+                and len(str(row.get("start") or "")) >= 5
+                and len(str(row.get("end") or "")) >= 5
+            ]
+            if working_hours:
+                location["working_hours"] = working_hours
+        visible.append(location)
+
     payload: dict[str, object] = {
         "clinic_name": context.workspace.name,
         "timezone": context.workspace.timezone,
-        "locations": visible[:1],
+        "locations": visible,
     }
     knowledge = _explanatory_knowledge(context)
     if knowledge:

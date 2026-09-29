@@ -14,6 +14,26 @@ class ClinicComposerValidationError(RuntimeError):
     pass
 
 
+_WEEKDAYS_EN = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+_WEEKDAYS_AR = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+
+
 def _message_text(message: BaseMessage, *, limit: int = 1000) -> str:
     if not isinstance(message.content, str) or not message.content.strip():
         return ""
@@ -29,135 +49,135 @@ def _latest_customer_is_arabic(history: list[BaseMessage]) -> bool:
     return False
 
 
-def _address_text(location: ClinicLocationInfo) -> str | None:
+def _address_text(location: ClinicLocationInfo, *, arabic: bool) -> str | None:
     if location.address:
         return location.address
-    parts = [
-        value
-        for value in (
-            location.address_line1,
-            location.address_line2,
-            location.city,
-            location.state,
-            location.country_code,
-        )
-        if value
-    ]
-    return ", ".join(parts) if parts else None
-
-
-def _render_location(
-    truth: ClinicTruth,
-    *,
-    arabic: bool,
-    include_address: bool,
-    include_contact: bool,
-) -> str:
-    if not truth.complete_location_set:
-        raise ClinicComposerValidationError("Clinic location scope is not verified complete.")
-    if not truth.locations:
-        if include_address and include_contact:
-            return (
-                "لا توجد بيانات عنوان أو تواصل محفوظة للموقع الحالي."
-                if arabic
-                else "No address or contact details are stored for the current clinic location."
-            )
-        if include_address:
-            return (
-                "لا يوجد عنوان محفوظ للموقع الحالي."
-                if arabic
-                else "No address is stored for the current clinic location."
-            )
-        return (
-            "لا توجد بيانات تواصل محفوظة للموقع الحالي."
-            if arabic
-            else "No contact details are stored for the current clinic location."
-        )
-
-    location = truth.locations[0]
     parts: list[str] = []
-    if location.name:
-        parts.append(
-            f"الموقع: {location.name}."
-            if arabic
-            else f"Location: {location.name}."
-        )
-    if include_address:
-        address = _address_text(location)
-        parts.append(
-            f"العنوان: {address}."
-            if arabic and address
-            else f"Address: {address}."
-            if address
-            else "لا يوجد عنوان محفوظ للموقع الحالي."
-            if arabic
-            else "No address is stored for the current clinic location."
-        )
-    if include_contact:
-        if location.phone:
-            parts.append(
-                f"الهاتف: {location.phone}."
-                if arabic
-                else f"Phone: {location.phone}."
-            )
-        if location.email:
-            parts.append(
-                f"البريد الإلكتروني: {location.email}."
-                if arabic
-                else f"Email: {location.email}."
-            )
-        if not location.phone and not location.email:
-            parts.append(
-                "لا توجد بيانات تواصل محفوظة للموقع الحالي."
-                if arabic
-                else "No contact details are stored for the current clinic location."
-            )
-    return " ".join(parts)
+    for value in (
+        location.address_line1,
+        location.address_line2,
+        location.city,
+        location.state,
+        location.country_code,
+    ):
+        if value and value not in parts:
+            parts.append(value)
+    if not parts:
+        return None
+    return ("، " if arabic else ", ").join(parts)
 
 
-def _render_truth(truth: ClinicTruth, *, arabic: bool) -> str:
+def _working_hours_text(truth: ClinicTruth, *, arabic: bool) -> str | None:
+    location = truth.location
+    if location is None or not location.working_hours:
+        return None
+    grouped: dict[int, list[str]] = {}
+    for row in location.working_hours:
+        grouped.setdefault(row.weekday, []).append(f"{row.start}–{row.end}")
+    names = _WEEKDAYS_AR if arabic else _WEEKDAYS_EN
+    separator = "؛ " if arabic else "; "
+    rendered = separator.join(
+        f"{names[weekday]}: {', '.join(periods)}"
+        for weekday, periods in sorted(grouped.items())
+    )
+    timezone = location.timezone or truth.timezone
+    if timezone:
+        rendered = f"{rendered} ({timezone})"
+    return rendered
+
+
+def _detail_reply(truth: ClinicTruth, *, arabic: bool) -> str:
     parts: list[str] = []
-    requested = truth.requested_details
+    location = truth.location
 
-    if "name" in requested:
-        if truth.clinic_name:
+    for detail in truth.requested_details:
+        if detail == "name":
             parts.append(
                 f"اسم العيادة: {truth.clinic_name}."
                 if arabic
-                else f"Clinic: {truth.clinic_name}."
+                else f"Clinic name: {truth.clinic_name}."
             )
-        else:
+        elif detail == "address":
+            address = _address_text(location, arabic=arabic) if location else None
+            location_name = location.name if location else None
+            if address:
+                if arabic:
+                    prefix = f"{location_name}: " if location_name else ""
+                    parts.append(f"العنوان المسجل: {prefix}{address}.")
+                else:
+                    prefix = f"{location_name}: " if location_name else ""
+                    parts.append(f"Registered address: {prefix}{address}.")
+            else:
+                parts.append(
+                    "مفيش عنوان عميل مسجل في بيانات العيادة الحالية."
+                    if arabic
+                    else "No customer-facing address is stored in the current clinic data."
+                )
+        elif detail == "contact":
+            contact_parts: list[str] = []
+            if location and location.phone:
+                contact_parts.append(
+                    f"رقم التواصل: {location.phone}."
+                    if arabic
+                    else f"Contact phone: {location.phone}."
+                )
+            if location and location.email:
+                contact_parts.append(
+                    f"البريد الإلكتروني: {location.email}."
+                    if arabic
+                    else f"Email: {location.email}."
+                )
+            if contact_parts:
+                parts.extend(contact_parts)
+            else:
+                parts.append(
+                    "مفيش بيانات تواصل عميل مسجلة في بيانات العيادة الحالية."
+                    if arabic
+                    else "No customer-facing contact details are stored in the current clinic data."
+                )
+        elif detail == "working_hours":
+            hours = _working_hours_text(truth, arabic=arabic)
             parts.append(
-                "اسم العيادة غير محفوظ في البيانات الحالية."
+                (
+                    f"ساعات العمل الأسبوعية المسجلة: {hours}."
+                    if hours
+                    else "مفيش ساعات عمل أسبوعية مسجلة في بيانات العيادة الحالية."
+                )
                 if arabic
-                else "The clinic name is not stored in the current data."
+                else (
+                    f"Registered weekly working hours: {hours}."
+                    if hours
+                    else "No weekly working hours are stored in the current clinic data."
+                )
             )
-
-    include_location = "location" in requested
-    include_contact = "contact" in requested
-    if include_location or include_contact:
-        parts.append(
-            _render_location(
-                truth,
-                arabic=arabic,
-                include_address=include_location,
-                include_contact=include_contact,
-            )
-        )
-
-    if "knowledge" in requested:
-        parts.append(
-            truth.knowledge
-            if truth.knowledge
-            else (
-                "لا توجد معلومات إضافية محفوظة للعيادة حاليًا."
-                if arabic
-                else "No additional clinic information is currently stored."
-            )
-        )
+        elif detail == "general_info":
+            if truth.knowledge:
+                parts.append(truth.knowledge)
+            else:
+                parts.append(
+                    "مفيش معلومات عامة إضافية محفوظة للعيادة حاليًا."
+                    if arabic
+                    else "No additional clinic-authored general information is stored right now."
+                )
+        elif detail == "open_now":
+            hours = _working_hours_text(truth, arabic=arabic)
+            if arabic:
+                if hours:
+                    parts.append(f"ساعات العمل الأسبوعية المسجلة: {hours}.")
+                parts.append(
+                    "البيانات الحالية ما فيهاش حالة فتح/إغلاق لحظية أو استثناءات اليوم، "
+                    "فما أقدرش أؤكد إن العيادة مفتوحة دلوقتي."
+                )
+            else:
+                if hours:
+                    parts.append(f"Registered weekly working hours: {hours}.")
+                parts.append(
+                    "The current data does not include a verified live open/closed state or today's "
+                    "exceptions, so I cannot confirm that the clinic is open right now."
+                )
 
     if not parts:
-        raise ClinicComposerValidationError("Clinic truth has no renderable requested facts.")
+        raise ClinicComposerValidationError("Clinic truth has no supported requested details.")
     return " ".join(parts).strip()
 
 
@@ -175,7 +195,7 @@ def deterministic_clinic_contract_reply(
         truth = unit.clinic_truth
         if truth is None:
             raise ClinicComposerValidationError("Clinic truth is missing.")
-        chunks.append(_render_truth(truth, arabic=arabic))
+        chunks.append(_detail_reply(truth, arabic=arabic))
     return "\n".join(chunks).strip()
 
 
