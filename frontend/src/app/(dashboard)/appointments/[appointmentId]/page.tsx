@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
@@ -256,7 +257,7 @@ export default async function AppointmentOperationsPage({
         </div>
       )}
       {feedback.visit_saved && !feedback.visit_error && (
-        <div className="mb-4 rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm font-bold text-teal-800">
+        <div className="mb-4 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-sm font-bold text-[var(--accent-strong)]">
           {feedback.visit_saved === "package"
             ? "تمت إضافة الباكيدج للحساب واحتساب الجلسة الحالية منها."
             : feedback.visit_saved === "extra_package"
@@ -281,13 +282,13 @@ export default async function AppointmentOperationsPage({
                 <CardTitle>تفاصيل الموعد</CardTitle>
                 <div className="mt-1 text-xs text-[var(--muted)]">أهم بيانات الموعد والإجراء المناسب لحالته الحالية.</div>
               </div>
-              <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>
+              <StatusBadge domain="appointment" status={appointment.status} />
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-[var(--surface-2)] p-4">
                   <div className="flex items-center gap-2 text-xs text-[var(--muted)]"><UserRound size={14} /> العميل</div>
-                  <Link href={`/patients/${detail.patient.id}`} className="mt-1 block font-black text-teal-800 hover:underline">{detail.patient.name}</Link>
+                  <Link href={`/patients/${detail.patient.id}`} className="mt-1 block font-black text-[var(--accent-strong)] hover:underline">{detail.patient.name}</Link>
                   <div className="mt-1 text-xs text-[var(--muted)]" dir="ltr">{detail.patient.phone || "—"}</div>
                 </div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-4">
@@ -299,13 +300,13 @@ export default async function AppointmentOperationsPage({
                   <div className="flex items-center gap-2 text-xs text-[var(--muted)]"><Stethoscope size={14} /> الخدمة والطبيب</div>
                   <div className="mt-1 font-black">{detail.service.name}</div>
                   <div className="mt-1 text-xs text-[var(--muted)]">{detail.doctor.name} · {formatMoney(payments.service_price_minor ?? appointment.price_minor, appointment.currency)}</div>
-                  {laserAppointment.laser_device_name && <div className="mt-1 text-xs font-bold text-teal-700">الجهاز: {laserAppointment.laser_device_name}</div>}
+                  {laserAppointment.laser_device_name && <div className="mt-1 text-xs font-bold text-[var(--accent-strong)]">الجهاز: {laserAppointment.laser_device_name}</div>}
                 </div>
               </div>
 
               {laserAppointment.laser_device_key && (
                 <div className="mt-4 space-y-3">
-                  <form action={updateLaserPulses} className="rounded-xl border border-teal-100 bg-teal-50/50 p-3">
+                  <form action={updateLaserPulses} className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3">
                     <input type="hidden" name="appointment_id" value={appointment.id} />
                     <input type="hidden" name="patient_id" value={appointment.patient_id} />
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
@@ -460,13 +461,13 @@ export default async function AppointmentOperationsPage({
             </CardHeader>
             <CardContent className="space-y-4">
               {(visiblePulseBalances.length > 0 || primaryPackage) && (
-                <div className="rounded-xl border border-teal-200 bg-teal-50/50 p-4">
-                  <div className="text-sm font-black text-teal-950">رصيد العميل وقت الحساب</div>
+                <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+                  <div className="text-sm font-black text-slate-900">رصيد العميل وقت الحساب</div>
                   <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {visiblePulseBalances.map((balance) => (
                       <div key={balance.device_key} className="rounded-lg bg-white p-3">
                         <div className="text-xs text-[var(--muted)]">{balance.device_name}</div>
-                        <b className="mt-1 block text-teal-950">
+                        <b className="mt-1 block text-slate-900">
                           {balance.pulses_remaining.toLocaleString("ar-EG")} Pulse متبقية
                         </b>
                         {balance.active_pack_count > 0 && (
@@ -479,7 +480,7 @@ export default async function AppointmentOperationsPage({
                     {primaryPackage && (
                       <div className="rounded-lg bg-white p-3">
                         <div className="text-xs text-[var(--muted)]">{primaryPackage.name}</div>
-                        <b className="mt-1 block text-teal-950">
+                        <b className="mt-1 block text-slate-900">
                           {primaryPackage.sessions_remaining.toLocaleString("ar-EG")} جلسة متبقية
                         </b>
                         <div className="mt-1 text-[11px] text-[var(--muted)]">
@@ -508,7 +509,7 @@ export default async function AppointmentOperationsPage({
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">Pulses إضافية</div><b className="mt-1 block">{formatMoney(payments.pulse_overage_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">المنتجات</div><b className="mt-1 block">{formatMoney(payments.products_total_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">قبل الخصم</div><b className="mt-1 block">{formatMoney(payments.subtotal_minor ?? payments.price_minor, payments.currency)}</b></div>
-                <div className="rounded-xl bg-teal-50 p-3"><div className="text-xs text-teal-700">الخصم</div><b className="mt-1 block text-teal-900">{formatMoney(payments.discount_minor ?? 0, payments.currency)}</b></div>
+                <div className="rounded-xl bg-[var(--accent-soft)] p-3"><div className="text-xs text-[var(--accent-strong)]">الخصم</div><b className="mt-1 block text-[var(--accent-strong)]">{formatMoney(payments.discount_minor ?? 0, payments.currency)}</b></div>
                 <div className="rounded-xl bg-[var(--surface-2)] p-3"><div className="text-xs text-[var(--muted)]">الإجمالي بعد الخصم</div><b className="mt-1 block">{formatMoney(payments.price_minor, payments.currency)}</b></div>
               </div>
 
@@ -555,8 +556,8 @@ export default async function AppointmentOperationsPage({
                             </div>
 
                             {!line.patient_package_id && line.billing_context === "standard" && canEditVisitCharges && linePackageOffers.length > 0 && (
-                              <details className="mt-3 rounded-lg border border-teal-200 bg-white p-3">
-                                <summary className="cursor-pointer text-xs font-black text-teal-800">تحويل الخدمة دي لباكيدج</summary>
+                              <details className="mt-3 rounded-lg border border-[var(--accent-border)] bg-white p-3">
+                                <summary className="cursor-pointer text-xs font-black text-[var(--accent-strong)]">تحويل الخدمة دي لباكيدج</summary>
                                 <form action={purchasePackageForAdditionalService} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
                                   <input type="hidden" name="appointment_id" value={appointment.id} />
                                   <input type="hidden" name="patient_id" value={appointment.patient_id} />
@@ -599,8 +600,8 @@ export default async function AppointmentOperationsPage({
               </details>
 
               {!prepaidBacked && compatiblePackageOffers.length > 0 && canEditVisitCharges && (
-                <details className="rounded-xl border border-teal-200 bg-teal-50/40 p-3">
-                  <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-teal-950"><PackagePlus size={16} /> تحويل الجلسة الحالية إلى باكيدج</summary>
+                <details className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3">
+                  <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900"><PackagePlus size={16} /> تحويل الجلسة الحالية إلى باكيدج</summary>
                   <form action={purchasePackageFromAppointment} className="mt-4 grid gap-3">
                     <input type="hidden" name="appointment_id" value={appointment.id} />
                     <input type="hidden" name="patient_id" value={appointment.patient_id} />
@@ -615,7 +616,7 @@ export default async function AppointmentOperationsPage({
                         ))}
                       </select>
                     </label>
-                    <div className="rounded-xl border border-teal-200 bg-white p-3 text-xs leading-5 text-teal-950">
+                    <div className="rounded-xl border border-[var(--accent-border)] bg-white p-3 text-xs leading-5 text-slate-900">
                       عند التأكيد هيتضاف سعر الباكيدج إلى إجمالي الزيارة، والجلسة الحالية هتتحسب تلقائيًا كأول جلسة منها بدل سعر الجلسة الفردية. الدفع نفسه بيتسجل من قسم المدفوعات تحت.
                     </div>
                     <div><Button><PackagePlus size={15} /> إضافة الباكيدج للحساب واحتساب الجلسة</Button></div>
@@ -656,12 +657,12 @@ export default async function AppointmentOperationsPage({
               </details>
 
               {payments.billing_context === "package_prepaid" && (
-                <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-sm text-[var(--accent-strong)]">
                   الجلسة الأساسية محسوبة من الباكيدج، وسعر الباكيدج المشتراة من الزيارة ظاهر ضمن الإجمالي المستحق أعلاه.
                 </div>
               )}
               {payments.billing_context === "pulse_prepaid" && (
-                <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+                <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-sm text-[var(--accent-strong)]">
                   سعر الجلسة الأساسية غير محسوب مرة ثانية لأنها من رصيد الـPulses. أي باقة Pulses جديدة أو Pulses إضافية تظهر كبند مستقل في الحساب.
                 </div>
               )}
@@ -744,7 +745,7 @@ export default async function AppointmentOperationsPage({
               <details className="rounded-xl border border-[var(--border)] p-3">
                 <summary className="flex cursor-pointer items-center gap-2 text-sm font-bold text-slate-800"><History size={15} /> سجل تغييرات الحالة</summary>
                 <div className="mt-3 space-y-3">
-                  {detail.history.map((item) => <div key={item.id} className="border-r-2 border-teal-200 pr-3"><div className="flex flex-wrap items-center gap-2"><Badge tone={toneForStatus(item.to_status)}>{appointmentLabels[item.to_status] || "تم تحديث الحالة"}</Badge>{item.from_status && <span className="text-xs text-[var(--muted)]">بعد {appointmentLabels[item.from_status] || "الحالة السابقة"}</span>}</div><div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(item.created_at)}</div>{item.reason && <div className="mt-1 text-sm">{item.reason}</div>}</div>)}
+                  {detail.history.map((item) => <div key={item.id} className="border-r-2 border-[var(--accent-border)] pr-3"><div className="flex flex-wrap items-center gap-2"><Badge tone={toneForStatus(item.to_status)}>{appointmentLabels[item.to_status] || "تم تحديث الحالة"}</Badge>{item.from_status && <span className="text-xs text-[var(--muted)]">بعد {appointmentLabels[item.from_status] || "الحالة السابقة"}</span>}</div><div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(item.created_at)}</div>{item.reason && <div className="mt-1 text-sm">{item.reason}</div>}</div>)}
                 </div>
               </details>
             </CardContent>

@@ -128,11 +128,11 @@ export function AppointmentPaymentForm({
       <input type="hidden" name="pulse_pack_offer_id" value={billingChoice === "pulse_pack" ? selectedOfferId : ""} />
 
       {pulseCheckout && (
-        <div className="rounded-xl border border-teal-200 bg-teal-50/50 p-4">
-          <div className="flex items-center gap-2 text-sm font-black text-teal-950">
+        <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+          <div className="flex items-center gap-2 text-sm font-black text-slate-900">
             <Zap size={16} /> طريقة حساب جلسة الليزر
           </div>
-          <div className="mt-2 grid gap-2 text-xs text-teal-950 sm:grid-cols-3">
+          <div className="mt-2 grid gap-2 text-xs text-slate-900 sm:grid-cols-3">
             <div className="rounded-lg bg-white p-2">
               <span className="text-[var(--muted)]">الاستهلاك</span>
               <b className="mt-1 block">{pulseCheckout.pulsesUsed.toLocaleString("ar-EG")} Pulse</b>
@@ -244,7 +244,7 @@ export function AppointmentPaymentForm({
             </div>
           )}
 
-          <div className="mt-3 text-[11px] leading-5 text-teal-900">
+          <div className="mt-3 text-[11px] leading-5 text-[var(--accent-strong)]">
             عند اختيار الحساب بالـPulses، سعر الخدمة الأساسية يُلغى من الحساب. المنتجات والخدمات الإضافية تظل محسوبة بشكل طبيعي.
           </div>
         </div>

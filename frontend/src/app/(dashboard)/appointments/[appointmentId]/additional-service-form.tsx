@@ -180,7 +180,7 @@ export function AdditionalServiceForm({
       )}
 
       {usePulse && service?.requires_laser_device && selectedDevice && (
-        <div className="space-y-3 rounded-xl border border-teal-200 bg-teal-50/50 p-3">
+        <div className="space-y-3 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3">
           <label className="block text-xs font-bold">
             عدد الـPulses المستخدمة فعليًا
             <input
@@ -217,14 +217,14 @@ export function AdditionalServiceForm({
           )}
 
           {numericPulses > 0 && deficit === 0 && (
-            <div className="rounded-lg bg-white p-3 text-xs font-semibold text-teal-950">
+            <div className="rounded-lg bg-white p-3 text-xs font-semibold text-slate-900">
               الرصيد يكفي. سيتم خصم الاستهلاك من Pulses العميل، ولن يضاف سعر الخدمة الإضافية للحساب.
             </div>
           )}
 
           {deficit > 0 && (
             <div className="space-y-2">
-              <div className="text-xs font-black text-teal-950">تغطية العجز</div>
+              <div className="text-xs font-black text-slate-900">تغطية العجز</div>
               <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-3 text-sm">
                 <input
                   type="radio"
