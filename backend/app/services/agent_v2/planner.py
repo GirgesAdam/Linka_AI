@@ -635,11 +635,18 @@ def _plan_operation(
         )
 
     if operation.type == "service_info":
-        service_params = (
-            {"service_id": params["service_id"]}
-            if "service_id" in params
-            else {}
-        )
+        if "service_id" in params:
+            service_params: dict[str, object] = {"service_id": params["service_id"]}
+        elif "service_ids" in params:
+            service_params = {"service_ids": params["service_ids"]}
+        else:
+            requested_service = operation.entities.service
+            if (
+                requested_service is not None
+                and str(requested_service.text or "").strip()
+            ):
+                return _clarify(index=index, operation=operation, field="service")
+            service_params = {}
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,

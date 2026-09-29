@@ -461,10 +461,20 @@ def _read_service_catalog(
 ) -> ReadResult:
     service_id = request.parameters.get("service_id")
     if service_id is None:
+        raw_service_ids = request.parameters.get("service_ids")
+        requested_service_ids = (
+            {str(item) for item in raw_service_ids}
+            if isinstance(raw_service_ids, list)
+            else set()
+        )
         services = [
             {"name": row.get("name")}
             for row in _catalog_rows(_catalog(context), "services")
             if row.get("name") not in (None, "")
+            and (
+                not requested_service_ids
+                or str(row.get("id") or row.get("service_id") or "") in requested_service_ids
+            )
         ]
         return ReadResult(
             kind=request.kind,

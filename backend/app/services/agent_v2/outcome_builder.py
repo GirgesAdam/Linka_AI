@@ -263,6 +263,15 @@ def _service_catalog_facts(
 ) -> dict[str, object]:
     raw_service = result.payload.get("service")
     if not isinstance(raw_service, dict):
+        raw_services = result.payload.get("services")
+        if isinstance(raw_services, list):
+            return {
+                "services": [
+                    {"name": row["name"]}
+                    for row in raw_services
+                    if isinstance(row, dict) and row.get("name") not in (None, "")
+                ]
+            }
         visible = _visible_value(result.payload)
         return visible if isinstance(visible, dict) else {}
 
@@ -320,6 +329,77 @@ def _service_catalog_facts(
         if "devices" in requested_details and visible_service.get("laser_devices") not in (None, [], {}):
             shaped["laser_devices"] = visible_service["laser_devices"]
     return {"service": shaped}
+
+
+def _service_information_response_facts(
+    facts: dict[str, object],
+    *,
+    requested_details: set[str],
+) -> dict[str, object]:
+    """Expose only customer-safe service facts for read-only service information."""
+    catalog = facts.get("service_catalog")
+    if not isinstance(catalog, dict):
+        return {}
+
+    raw_service = catalog.get("service")
+    if isinstance(raw_service, dict):
+        name = str(raw_service.get("name") or "").strip()
+        if not name:
+            return {}
+        service: dict[str, object] = {"name": name}
+        if "description" in requested_details:
+            description = raw_service.get("description")
+            if description not in (None, ""):
+                service["clinic_explanation"] = description
+        if "duration" in requested_details:
+            customer_duration = raw_service.get("customer_duration_text")
+            if customer_duration not in (None, ""):
+                service["customer_duration_text"] = customer_duration
+            elif raw_service.get("duration_minutes") not in (None, ""):
+                service["booking_duration_minutes"] = raw_service["duration_minutes"]
+        if "devices" in requested_details:
+            devices: list[dict[str, str]] = []
+            seen: set[str] = set()
+            raw_devices = raw_service.get("laser_devices")
+            if isinstance(raw_devices, list):
+                for raw_device in raw_devices:
+                    if not isinstance(raw_device, dict) or raw_device.get("configured") is not True:
+                        continue
+                    device_name = str(raw_device.get("device_name") or "").strip()
+                    if not device_name or device_name in seen:
+                        continue
+                    seen.add(device_name)
+                    devices.append({"name": device_name})
+            service["devices"] = devices
+        return {
+            "service_catalog": {
+                "service": service,
+                "requested_details": sorted(requested_details),
+                "complete_set": False,
+            }
+        }
+
+    raw_services = catalog.get("services")
+    if isinstance(raw_services, list):
+        services: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for raw in raw_services:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            services.append({"name": name})
+        return {
+            "service_catalog": {
+                "services": services,
+                "requested_details": [],
+                "complete_set": True,
+            }
+        }
+
+    return {}
 
 
 def _read_facts(
@@ -852,6 +932,11 @@ def build_step_outcome(
         selected_device_key=selected_device_key,
     )
     base_facts = {**_visible_dict(step.facts), **read_facts}
+    if step.operation_type == "service_info":
+        base_facts = _service_information_response_facts(
+            base_facts,
+            requested_details=requested_details,
+        )
     if step.response_goal == "package_information":
         base_facts = _package_information_response_facts(base_facts)
     if step.operation_type == "appointment_list":

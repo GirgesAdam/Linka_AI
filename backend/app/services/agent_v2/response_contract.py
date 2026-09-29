@@ -44,6 +44,7 @@ CommercialPriceKind = Literal[
 ]
 CommercialPriceQualifier = Literal["base", "device", "package"]
 DoctorTruthKind = Literal["doctor_result_set", "doctor_choice"]
+ServiceTruthKind = Literal["service_detail", "service_catalog"]
 
 
 class StrictResponseContractModel(BaseModel):
@@ -123,6 +124,21 @@ class PackageTruth(StrictResponseContractModel):
     offers_complete_set: bool = False
 
 
+class ServiceInformationItem(StrictResponseContractModel):
+    name: str
+    clinic_explanation: str | None = None
+    booking_duration_minutes: int | None = None
+    customer_duration_text: str | None = None
+    devices: tuple[str, ...] = ()
+
+
+class ServiceTruth(StrictResponseContractModel):
+    kind: ServiceTruthKind
+    requested_details: tuple[str, ...] = ()
+    services: tuple[ServiceInformationItem, ...] = ()
+    complete_set: bool = False
+
+
 class PatientTruth(StrictResponseContractModel):
     requested_details: tuple[str, ...]
     first_name: str | None = None
@@ -157,6 +173,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     commercial_truth: CommercialTruth | None = None
     doctor_truth: DoctorTruth | None = None
     package_truth: PackageTruth | None = None
+    service_truth: ServiceTruth | None = None
     patient_truth: PatientTruth | None = None
     appointment_truth: AppointmentInfoTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
@@ -740,6 +757,96 @@ def _package_truth(outcome: TurnOutcome) -> PackageTruth | None:
     )
 
 
+def _service_information_item(raw: object) -> ServiceInformationItem | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    name = str(safe.get("name") or "").strip()
+    if not name:
+        return None
+
+    raw_duration = safe.get("booking_duration_minutes")
+    booking_duration_minutes: int | None = None
+    if raw_duration not in (None, ""):
+        try:
+            booking_duration_minutes = int(raw_duration)
+        except (TypeError, ValueError):
+            return None
+        if booking_duration_minutes <= 0:
+            return None
+
+    raw_devices = safe.get("devices", [])
+    if not isinstance(raw_devices, list):
+        return None
+    devices: list[str] = []
+    for raw_device in raw_devices:
+        if not isinstance(raw_device, dict):
+            return None
+        device_name = str(raw_device.get("name") or "").strip()
+        if not device_name:
+            return None
+        devices.append(device_name)
+    if len(devices) != len(set(devices)):
+        return None
+
+    return ServiceInformationItem(
+        name=name,
+        clinic_explanation=str(safe.get("clinic_explanation") or "").strip() or None,
+        booking_duration_minutes=booking_duration_minutes,
+        customer_duration_text=(
+            str(safe.get("customer_duration_text") or "").strip() or None
+        ),
+        devices=tuple(devices),
+    )
+
+
+def _service_truth(outcome: TurnOutcome) -> ServiceTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "answer_service":
+        return None
+    wrapper = outcome.facts.get("service_catalog")
+    if not isinstance(wrapper, dict):
+        return None
+    raw_requested = wrapper.get("requested_details", [])
+    if not isinstance(raw_requested, list):
+        return None
+    requested = tuple(str(item) for item in raw_requested)
+    allowed = {"description", "duration", "devices"}
+    if not set(requested).issubset(allowed) or len(requested) != len(set(requested)):
+        return None
+
+    raw_service = wrapper.get("service")
+    if isinstance(raw_service, dict):
+        item = _service_information_item(raw_service)
+        if item is None or wrapper.get("complete_set") is not False:
+            return None
+        return ServiceTruth(
+            kind="service_detail",
+            requested_details=requested,
+            services=(item,),
+            complete_set=False,
+        )
+
+    raw_services = wrapper.get("services")
+    if not isinstance(raw_services, list) or requested:
+        return None
+    services: list[ServiceInformationItem] = []
+    for raw in raw_services:
+        item = _service_information_item(raw)
+        if item is None:
+            return None
+        services.append(item)
+    names = [item.name for item in services]
+    if len(names) != len(set(names)) or wrapper.get("complete_set") is not True:
+        return None
+    return ServiceTruth(
+        kind="service_catalog",
+        services=tuple(services),
+        complete_set=True,
+    )
+
+
 def _appointment_truth(outcome: TurnOutcome) -> AppointmentInfoTruth | None:
     if outcome.status != "answered" or outcome.response_goal != "answer_customer_history":
         return None
@@ -978,6 +1085,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     commercial_truth = _commercial_truth(outcome)
     doctor_truth = _doctor_truth(outcome)
     package_truth = _package_truth(outcome)
+    service_truth = _service_truth(outcome)
     patient_truth = _patient_truth(outcome)
     appointment_truth = _appointment_truth(outcome)
     if goal in _TERMINAL_GOALS:
@@ -1016,6 +1124,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         commercial_truth=commercial_truth,
         doctor_truth=doctor_truth,
         package_truth=package_truth,
+        service_truth=service_truth,
         patient_truth=patient_truth,
         appointment_truth=appointment_truth,
         facts=tuple(facts),
@@ -1216,6 +1325,33 @@ def is_pure_supported_package_contract(
             return False
 
 
+    return True
+
+
+def is_pure_supported_service_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is read-only service information supported by Phase 3H."""
+    if not contract.units:
+        return False
+
+    for unit in contract.units:
+        truth = unit.service_truth
+        if (
+            unit.response_goal != "answer_service"
+            or unit.status != "answered"
+            or truth is None
+            or any(fact.key != "service_catalog" for fact in unit.facts)
+        ):
+            return False
+        if truth.kind == "service_catalog":
+            if truth.complete_set is not True or truth.requested_details:
+                return False
+        elif truth.kind == "service_detail":
+            if truth.complete_set or len(truth.services) != 1:
+                return False
+        else:
+            return False
     return True
 
 
