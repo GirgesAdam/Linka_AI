@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { formatDateTime } from "@/lib/format";
 import { appointmentLabels } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
@@ -153,16 +154,6 @@ function appointmentTime(value: string, timezone: string) {
   }).format(new Date(value));
 }
 
-function scheduleStatus(status: Appointment["status"]) {
-  if (status === "completed") {
-    return { label: "مكتمل", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" };
-  }
-  if (status === "pending") {
-    return { label: "غير مؤكد", className: "bg-amber-50 text-amber-800 ring-amber-200" };
-  }
-  return { label: "مؤكد", className: "bg-teal-50 text-teal-800 ring-teal-200" };
-}
-
 type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick" | "other";
 
 const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
@@ -294,6 +285,50 @@ function buildSchedulePeriods(
   return periods;
 }
 
+function MobileAgenda({ appointments, timezone, patientNames, serviceById, visibleColumns }: {
+  appointments: Appointment[];
+  timezone: string;
+  patientNames: Map<string, string>;
+  serviceById: Map<string, Service>;
+  visibleColumns: ScheduleColumnId[];
+}) {
+  const visible = appointments
+    .filter((appointment) => visibleColumns.includes(appointmentColumn(appointment, serviceById)))
+    .slice()
+    .sort((a, b) => a.start_at.localeCompare(b.start_at));
+
+  if (!visible.length) {
+    return <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm font-semibold text-slate-500">{"\u0644\u0627 \u062a\u0648\u062c\u062f \u0645\u0648\u0627\u0639\u064a\u062f \u0641\u064a \u0647\u0630\u0627 \u0627\u0644\u064a\u0648\u0645 \u0636\u0645\u0646 \u0627\u0644\u0645\u0648\u0627\u0631\u062f \u0627\u0644\u0645\u062e\u062a\u0627\u0631\u0629."}</div>;
+  }
+
+  return (
+    <div className="space-y-2 lg:hidden" aria-label="mobile appointment agenda">
+      {visible.map((appointment) => {
+        const service = serviceById.get(appointment.service_id);
+        const resource = scheduleColumns.find((item) => item.id === appointmentColumn(appointment, serviceById));
+        return (
+          <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 rounded-2xl border border-slate-200 bg-white p-3 transition active:bg-slate-50">
+            <div className="border-l border-slate-100 pl-3 text-left" dir="ltr">
+              <div className="text-sm font-black text-slate-950">{appointmentTime(appointment.start_at, timezone)}</div>
+              <div className="mt-1 text-[11px] font-semibold text-slate-400">{appointmentTime(appointment.end_at, timezone)}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "\u0639\u0645\u064a\u0644"}</div>
+                  <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "\u062e\u062f\u0645\u0629"}</div>
+                </div>
+                <StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" />
+              </div>
+              <div className="mt-2 text-[11px] font-bold text-[var(--accent-strong)]">{resource?.label || "\u0645\u0648\u0639\u062f"}</div>
+            </div>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
 function DailySchedule({
   appointments,
   hours,
@@ -331,7 +366,9 @@ function DailySchedule({
   const columns = scheduleColumns.filter((column) => visibleColumns.includes(column.id));
 
   return (
-    <div className="space-y-4">
+    <>
+      <MobileAgenda appointments={appointments} timezone={timezone} patientNames={patientNames} serviceById={serviceById} visibleColumns={visibleColumns} />
+      <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
         .sort((a, b) => a.start_time.localeCompare(b.start_time))
@@ -409,7 +446,6 @@ function DailySchedule({
                                 ) : (
                                   <div className="space-y-2">
                                     {period.appointments.map((appointment) => {
-                                      const status = scheduleStatus(appointment.status);
                                       const service = serviceById.get(appointment.service_id);
                                       return (
                                         <Link
@@ -422,7 +458,7 @@ function DailySchedule({
                                               <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div>
                                               <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div>
                                             </div>
-                                            <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ring-1 ${status.className}`}>{status.label}</span>
+                                            <StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" />
                                           </div>
                                           <div className="mt-2 text-xs font-bold text-teal-700">
                                             {appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}
@@ -462,7 +498,8 @@ function DailySchedule({
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

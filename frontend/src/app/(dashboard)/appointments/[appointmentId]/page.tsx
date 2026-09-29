@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { appointmentLabels, labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
@@ -281,7 +282,7 @@ export default async function AppointmentOperationsPage({
                 <CardTitle>تفاصيل الموعد</CardTitle>
                 <div className="mt-1 text-xs text-[var(--muted)]">أهم بيانات الموعد والإجراء المناسب لحالته الحالية.</div>
               </div>
-              <Badge tone={toneForStatus(appointment.status)}>{appointmentLabels[appointment.status] || "غير محدد"}</Badge>
+              <StatusBadge domain="appointment" status={appointment.status} />
             </CardHeader>
             <CardContent>
               <div className="grid gap-3 sm:grid-cols-3">
