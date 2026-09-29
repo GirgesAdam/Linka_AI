@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 
 def _root() -> Path:
@@ -48,4 +48,3 @@ def test_appointment_workspace_preserves_visit_commerce_and_lifecycle_capabiliti
     )
     for capability in required:
         assert capability in page
-
