@@ -5,10 +5,11 @@ import { EmptyState } from "@/components/empty-state";
 import { LiveRouteRefresh } from "@/components/live-route-refresh";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
 import { formatDateTime } from "@/lib/format";
-import { labelForChannel, labelForPriority, labelForStatus, toneForStatus } from "@/lib/status";
+import { labelForChannel } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type { InboxConversationListItem } from "@/lib/types";
 
@@ -51,6 +52,22 @@ function pageHref(filters: InboxFilters, page: number) {
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
   return query ? `/inbox?${query}` : "/inbox";
+}
+
+function attentionLabel(conversation: InboxConversationListItem) {
+  if (conversation.last_message?.direction === "outbound" && conversation.last_message.delivery_status === "failed") {
+    return { label: "فشل إرسال", className: "text-red-700" };
+  }
+  if (conversation.active_handoff && !conversation.active_handoff.assigned_user_id) {
+    return { label: "تحتاج استلام", className: "text-amber-700" };
+  }
+  if (conversation.active_handoff) {
+    return { label: "تدخل بشري", className: "text-amber-700" };
+  }
+  if (conversation.unread_count > 0) {
+    return { label: "رسائل جديدة", className: "text-[var(--accent-strong)]" };
+  }
+  return null;
 }
 
 function senderLabel(senderType?: string) {
@@ -235,6 +252,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                 const patientName = `${conversation.patient.first_name} ${conversation.patient.last_name || ""}`.trim();
                 const preview = conversation.last_message?.content?.trim() || (conversation.last_message ? "رسالة غير نصية" : "لا توجد رسائل بعد");
                 const assignee = conversation.assigned_user?.full_name || conversation.assigned_user?.email;
+                const attention = attentionLabel(conversation);
                 return (
                   <Link
                     href={`/inbox/${conversation.id}`}
@@ -242,10 +260,13 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                     className="grid gap-3 p-4 transition hover:bg-slate-50 sm:p-5 md:grid-cols-[minmax(190px,.8fr)_minmax(260px,1.5fr)_auto] md:items-center"
                   >
                     <div className="min-w-0">
+                      {attention && (
+                        <div className={`mb-1 text-[11px] font-black ${attention.className}`}>{attention.label}</div>
+                      )}
                       <div className="flex items-center gap-2">
                         <div className="truncate font-bold text-slate-900">{patientName}</div>
                         {conversation.unread_count > 0 && (
-                          <span className="grid min-w-6 place-items-center rounded-full bg-teal-700 px-1.5 py-0.5 text-[10px] font-black text-white">
+                          <span className="grid min-w-6 place-items-center rounded-full bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-black text-white">
                             {conversation.unread_count}
                           </span>
                         )}
@@ -263,11 +284,9 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                             {conversation.owner_type === "human" ? "مع الفريق" : "تديرها Linka"}
                           </span>
                         </Badge>
-                        <Badge tone={toneForStatus(conversation.status)}>{labelForStatus(conversation.status)}</Badge>
+                        <StatusBadge domain="conversation" status={conversation.status} showIcon={false} />
                         {conversation.active_handoff && (
-                          <Badge tone={toneForStatus(conversation.active_handoff.priority)}>
-                            متابعة {labelForPriority(conversation.active_handoff.priority)}
-                          </Badge>
+                          <StatusBadge domain="priority" status={conversation.active_handoff.priority} />
                         )}
                         {assignee && <Badge>{assignee}</Badge>}
                       </div>
