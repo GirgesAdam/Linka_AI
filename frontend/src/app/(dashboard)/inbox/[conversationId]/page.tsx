@@ -4,6 +4,7 @@ import { ConversationReadMarker } from "@/components/conversation-read-marker";
 import { LiveRouteRefresh } from "@/components/live-route-refresh";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,13 +40,6 @@ function senderLabel(senderType: string) {
   if (senderType === "staff") return "الفريق";
   if (senderType === "ai") return "Linka";
   return "العيادة";
-}
-
-function deliveryLabel(status: string) {
-  if (status === "failed") return "فشل الإرسال";
-  if (status === "queued") return "بانتظار الإرسال";
-  if (status === "processing") return "جارٍ الإرسال";
-  return labelForStatus(status);
 }
 
 function contextString(value: unknown) {
@@ -118,7 +112,7 @@ export default async function ConversationPage({
                 <Badge tone={conversation.owner_type === "human" ? "yellow" : "green"}>
                   {conversation.owner_type === "human" ? "الفريق يتولى الرد" : "Linka تتولى الرد"}
                 </Badge>
-                <Badge tone={toneForStatus(conversation.status)}>{labelForStatus(conversation.status)}</Badge>
+                <StatusBadge domain="conversation" status={conversation.status} />
               </div>
             </div>
           </CardHeader>
@@ -134,7 +128,7 @@ export default async function ConversationPage({
                   <div key={message.id} className={`flex ${incoming ? "justify-start" : "justify-end"}`}>
                     <div
                       className={`max-w-[88%] rounded-2xl px-4 py-3 sm:max-w-[76%] ${
-                        incoming ? "bg-[var(--surface-2)]" : "bg-[#e4f4f1]"
+                        incoming ? "bg-[var(--surface-2)]" : "bg-[var(--accent-soft)]"
                       } ${deliveryFailed ? "ring-1 ring-red-200" : ""}`}
                     >
                       <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold text-[var(--muted)]">
@@ -153,9 +147,7 @@ export default async function ConversationPage({
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted)]">
                         <span>{formatDateTime(message.created_at)}</span>
                         {message.direction === "outbound" && (
-                          <Badge tone={toneForStatus(message.delivery_status)}>
-                            {deliveryLabel(message.delivery_status)}
-                          </Badge>
+                          <StatusBadge domain="message" status={message.delivery_status} showIcon={false} />
                         )}
                       </div>
                     </div>
@@ -173,7 +165,7 @@ export default async function ConversationPage({
                   هذه المحادثة مغلقة. يمكن متابعة العميل من ملفه عند الحاجة.
                 </div>
               ) : conversation.owner_type === "ai" ? (
-                <div className="flex flex-col gap-3 rounded-xl bg-teal-50 p-4 text-sm text-teal-900 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-3 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 text-sm text-slate-800 sm:flex-row sm:items-center sm:justify-between">
                   <span>Linka تتولى المحادثة حاليًا. استلم المحادثة إذا احتاج الفريق إلى الرد مباشرة.</span>
                   <form action={takeOverConversation}>
                     <input type="hidden" name="conversation_id" value={conversation.id} />
@@ -259,8 +251,8 @@ export default async function ConversationPage({
               {handoff && (
                 <div className="space-y-3 border-t border-[var(--border)] pt-4">
                   <div className="flex flex-wrap gap-2">
-                    <Badge tone={toneForStatus(handoff.priority)}>أولوية {labelForPriority(handoff.priority)}</Badge>
-                    <Badge tone={toneForStatus(handoff.status)}>{labelForStatus(handoff.status)}</Badge>
+                    <StatusBadge domain="priority" status={handoff.priority} />
+                    <StatusBadge domain="handoff" status={handoff.status} />
                   </div>
                   <div>
                     <div className="text-xs font-bold text-[var(--muted)]">سبب المتابعة</div>
