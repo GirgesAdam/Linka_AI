@@ -2,6 +2,8 @@ name: V2 Read Semantics Review
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -54,12 +56,12 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
           test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
-      - name: Run focused V2 read semantics review
-        run: python scripts/run_v2_read_semantics_live_review.py
-      - name: Upload focused V2 read semantics artifact
+      - name: Run focused V2 service information review
+        run: python scripts/run_v2_service_info_live_review.py
+      - name: Upload focused V2 service information artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v2-read-semantics-review
-          path: backend/artifacts/v2-read-semantics-live-review.json
+          name: v2-service-info-live-review
+          path: backend/artifacts/v2-service-info-live-review.json
           if-no-files-found: error
