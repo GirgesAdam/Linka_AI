@@ -233,7 +233,7 @@ export default async function RescheduleAppointmentPage({
             </div>
           ) : (
             <div className="mt-5 space-y-4">
-              <div className="rounded-xl border border-teal-100 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-900">
+              <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-xs font-bold text-[var(--accent-strong)]">
                 العمود المميز هو مكان الموعد الحالي. اختيار الميعاد الجديد متاح داخله فقط، بينما باقي الأعمدة تعرض جدول اليوم للمقارنة.
               </div>
               {hours.map((interval, intervalIndex) => (
@@ -260,11 +260,11 @@ export default async function RescheduleAppointmentPage({
                         return (
                           <div
                             key={column.id}
-                            className={`w-[260px] border-l border-slate-200 first:border-l-0 lg:w-auto ${isTarget ? "bg-teal-50/30" : ""}`}
+                            className={`w-[260px] border-l border-slate-200 first:border-l-0 lg:w-auto ${isTarget ? "bg-[var(--accent-soft)]" : ""}`}
                           >
-                            <div className={`border-b px-3 py-3 text-center text-sm font-black ${isTarget ? "border-teal-200 bg-teal-50 text-teal-950" : "border-slate-200 bg-white text-slate-900"}`}>
+                            <div className={`border-b px-3 py-3 text-center text-sm font-black ${isTarget ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-slate-900" : "border-slate-200 bg-white text-slate-900"}`}>
                               {column.label}
-                              {isTarget && <span className="mr-2 rounded-full bg-teal-700 px-2 py-0.5 text-[10px] text-white">الموعد الحالي</span>}
+                              {isTarget && <span className="mr-2 rounded-full bg-[var(--accent-strong)] px-2 py-0.5 text-[10px] text-white">الموعد الحالي</span>}
                             </div>
                             <div className="divide-y divide-slate-100">
                               {periods.map((period, periodIndex) => {

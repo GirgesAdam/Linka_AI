@@ -111,14 +111,14 @@ export function QuickAppointmentDialog({
                       <div className="text-sm font-black text-slate-950">الحجوزات السابقة لـ {patient.first_name} {patient.last_name || ""}</div>
                       <div className="mt-1 text-xs text-[var(--muted)]">آخر {Math.min(history.length, 20).toLocaleString("ar-EG")} موعد مسجل لهذا الرقم.</div>
                     </div>
-                    <Link href={`/patients/${patient.id}`} className="text-xs font-bold text-teal-700 hover:underline">فتح ملف العميل</Link>
+                    <Link href={`/patients/${patient.id}`} className="text-xs font-bold text-[var(--accent-strong)] hover:underline">فتح ملف العميل</Link>
                   </div>
                   {history.length ? (
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
                       {history.slice(0, 4).map((appointment) => (
-                        <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs transition hover:ring-1 hover:ring-teal-300">
+                        <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs transition hover:ring-1 hover:ring-[var(--accent-ring)]">
                           <div className="font-black text-slate-900">{serviceNames.get(appointment.service_id) || "خدمة"}</div>
-                          <div className="mt-1 text-teal-700">{formatDateTime(appointment.start_at)}</div>
+                          <div className="mt-1 text-[var(--accent-strong)]">{formatDateTime(appointment.start_at)}</div>
                           <div className="mt-1 font-bold text-slate-700">{appointmentLabels[appointment.status] || appointment.status}</div>
                         </Link>
                       ))}

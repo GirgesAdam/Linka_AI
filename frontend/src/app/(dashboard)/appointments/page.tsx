@@ -205,6 +205,13 @@ function scheduleHref(current: SearchParams, date: string, branchId: string) {
   return `/appointments?${query.toString()}`;
 }
 
+function resourceFilterHref(current: SearchParams, date: string, branchId: string, column?: ScheduleColumnId) {
+  const query = new URLSearchParams({ date, branch_id: branchId });
+  if (current.patient_id) query.set("patient_id", current.patient_id);
+  if (column) query.append("column", column);
+  return `/appointments?${query.toString()}`;
+}
+
 function quickBookingHref(
   current: SearchParams,
   date: string,
@@ -285,24 +292,34 @@ function buildSchedulePeriods(
   return periods;
 }
 
-function MobileAgenda({ appointments, timezone, patientNames, serviceById, visibleColumns }: {
+function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking }: {
   appointments: Appointment[];
+  hours: KnowledgeHour[];
   timezone: string;
   patientNames: Map<string, string>;
   serviceById: Map<string, Service>;
   visibleColumns: ScheduleColumnId[];
+  selectedDate: string;
+  branchId: string;
+  currentParams: SearchParams;
+  allowQuickBooking: boolean;
 }) {
   const visible = appointments
     .filter((appointment) => visibleColumns.includes(appointmentColumn(appointment, serviceById)))
     .slice()
     .sort((a, b) => a.start_at.localeCompare(b.start_at));
 
-  if (!visible.length) {
-    return <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm font-semibold text-slate-500">{"\u0644\u0627 \u062a\u0648\u062c\u062f \u0645\u0648\u0627\u0639\u064a\u062f \u0641\u064a \u0647\u0630\u0627 \u0627\u0644\u064a\u0648\u0645 \u0636\u0645\u0646 \u0627\u0644\u0645\u0648\u0627\u0631\u062f \u0627\u0644\u0645\u062e\u062a\u0627\u0631\u0629."}</div>;
-  }
+  const freePeriods = visibleColumns.flatMap((column) =>
+    hours.flatMap((interval) => buildSchedulePeriods(appointmentsForColumn(appointments, column, serviceById), interval, timezone).filter((period) => period.appointments.length === 0).map((period) => ({ column, ...period }))),
+  ).sort((a, b) => a.start - b.start);
 
   return (
-    <div className="space-y-2 lg:hidden" aria-label="mobile appointment agenda">
+    <div className="space-y-4 lg:hidden" aria-label="mobile appointment agenda">
+      {allowQuickBooking && freePeriods.length > 0 && <section aria-label="available appointment times">
+        <div className="mb-2 flex items-center justify-between gap-2"><div className="text-xs font-black text-slate-700">????? ?????</div><div className="text-[11px] font-semibold text-slate-400">???? ????? ??????</div></div>
+        <div className="grid gap-2 sm:grid-cols-2">{freePeriods.slice(0, 8).map((period) => { const resource = scheduleColumns.find((item) => item.id === period.column); return <Link key={`${period.column}-${period.start}-${period.end}`} href={quickBookingHref(currentParams, selectedDate, branchId, period.column, period.start, period.end)} className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm transition hover:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"><span className="font-black text-[var(--accent-strong)]">{minuteLabel(period.start)} ? {minuteLabel(period.end)}</span><span className="text-xs font-bold text-slate-600">{resource?.label}</span></Link>; })}</div>
+      </section>}
+      {!visible.length && <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-semibold text-slate-500">?? ???? ?????? ?????? ??? ??????? ????????. ??????? ??????? ????? ??????? ????? ??????.</div>}
       {visible.map((appointment) => {
         const service = serviceById.get(appointment.service_id);
         const resource = scheduleColumns.find((item) => item.id === appointmentColumn(appointment, serviceById));
@@ -367,7 +384,7 @@ function DailySchedule({
 
   return (
     <>
-      <MobileAgenda appointments={appointments} timezone={timezone} patientNames={patientNames} serviceById={serviceById} visibleColumns={visibleColumns} />
+      <MobileAgenda appointments={appointments} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} />
       <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
@@ -404,7 +421,7 @@ function DailySchedule({
                             {allowQuickBooking && column.id === "quick" && (
                               <Link
                                 href={quickBookingHref(currentParams, selectedDate, branchId, "quick", start, end)}
-                                className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-black text-teal-800 transition hover:bg-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-300"
+                                className="inline-flex items-center gap-1 rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-black text-[var(--accent-strong)] transition hover:bg-[var(--accent-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
                               >
                                 <Plus size={13} />
                                 حجز سريع
@@ -435,9 +452,9 @@ function DailySchedule({
                                           period.end,
                                         )}
                                         aria-label={`إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`}
-                                        className="absolute inset-0 grid place-items-center rounded-xl text-teal-700 outline-none transition hover:bg-teal-50/80 focus:bg-teal-50 focus:ring-2 focus:ring-teal-300"
+                                        className="absolute inset-0 grid place-items-center rounded-xl text-[var(--accent-strong)] outline-none transition hover:bg-[var(--accent-soft)] focus:bg-[var(--accent-soft)] focus:ring-2 focus:ring-[var(--accent-ring)]"
                                       >
-                                        <span className="grid size-8 place-items-center rounded-full border border-teal-200 bg-white shadow-sm opacity-60 transition group-hover:scale-105 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+                                        <span className="grid size-8 place-items-center rounded-full border border-[var(--accent-border)] bg-white shadow-sm opacity-60 transition group-hover:scale-105 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
                                           <Plus size={17} />
                                         </span>
                                       </Link>
@@ -451,7 +468,7 @@ function DailySchedule({
                                         <Link
                                           key={appointment.id}
                                           href={`/appointments/${appointment.id}`}
-                                          className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition hover:border-teal-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-teal-300"
+                                          className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition hover:border-[var(--accent)] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
                                         >
                                           <div className="flex items-start justify-between gap-2">
                                             <div className="min-w-0">
@@ -460,7 +477,7 @@ function DailySchedule({
                                             </div>
                                             <StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" />
                                           </div>
-                                          <div className="mt-2 text-xs font-bold text-teal-700">
+                                          <div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">
                                             {appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}
                                           </div>
                                         </Link>
@@ -610,7 +627,7 @@ export default async function AppointmentsPage({
         }
         action={
           selectedPatient ? (
-            <Link href={`/patients/${selectedPatient.id}`} className="inline-flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-800">
+            <Link href={`/patients/${selectedPatient.id}`} className="inline-flex items-center gap-1 text-sm font-bold text-[var(--accent-strong)] hover:text-[var(--accent-strong)]">
               الرجوع إلى ملف العميل <ChevronLeft size={15} />
             </Link>
           ) : undefined
@@ -642,14 +659,14 @@ export default async function AppointmentsPage({
                         <div className="text-sm font-black text-slate-950">الحجوزات السابقة لـ {manualPatient.first_name} {manualPatient.last_name || ""}</div>
                         <div className="mt-1 text-xs text-[var(--muted)]">آخر {Math.min(manualHistory.length, 20).toLocaleString("ar-EG")} موعد مسجل لهذا الرقم.</div>
                       </div>
-                      <Link href={`/patients/${manualPatient.id}`} className="text-xs font-bold text-teal-700 hover:underline">فتح ملف العميل</Link>
+                      <Link href={`/patients/${manualPatient.id}`} className="text-xs font-bold text-[var(--accent-strong)] hover:underline">فتح ملف العميل</Link>
                     </div>
                     {manualHistory.length ? (
                       <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                         {manualHistory.slice(0, 6).map((appointment) => (
-                          <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs transition hover:ring-1 hover:ring-teal-300">
+                          <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs transition hover:ring-1 hover:ring-[var(--accent-ring)]">
                             <div className="font-black text-slate-900">{serviceNames.get(appointment.service_id) || "خدمة"}</div>
-                            <div className="mt-1 text-teal-700">{formatDateTime(appointment.start_at)}</div>
+                            <div className="mt-1 text-[var(--accent-strong)]">{formatDateTime(appointment.start_at)}</div>
                             <div className="mt-1 font-bold text-slate-700">{appointmentLabels[appointment.status] || appointment.status}</div>
                           </Link>
                         ))}
@@ -713,7 +730,7 @@ export default async function AppointmentsPage({
                 <Link href={scheduleHref(currentParams, addDays(selectedDate, -1), selectedBranch.id)} className="inline-flex h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50">
                   <ChevronRight size={15} /> السابق
                 </Link>
-                <Link href={scheduleHref(currentParams, today, selectedBranch.id)} className="inline-flex h-10 items-center rounded-xl border border-slate-200 px-3 text-xs font-black text-teal-700 hover:bg-teal-50">
+                <Link href={scheduleHref(currentParams, today, selectedBranch.id)} className="inline-flex h-10 items-center rounded-xl border border-slate-200 px-3 text-xs font-black text-[var(--accent-strong)] hover:bg-[var(--accent-soft)]">
                   اليوم
                 </Link>
                 <Link href={scheduleHref(currentParams, addDays(selectedDate, 1), selectedBranch.id)} className="inline-flex h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50">
@@ -721,6 +738,14 @@ export default async function AppointmentsPage({
                 </Link>
               </div>
             )}
+
+          {selectedBranch && <div className="border-t border-slate-100 pt-3 md:hidden" aria-label="mobile resource filter">
+            <div className="mb-2 text-xs font-black text-slate-600">?????? / ?????</div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              <Link href={resourceFilterHref(currentParams, selectedDate, selectedBranch.id)} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold ${visibleColumns.length === scheduleColumns.length ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "border-slate-200 bg-white text-slate-600"}`}>????</Link>
+              {scheduleColumns.map((column) => <Link key={column.id} href={resourceFilterHref(currentParams, selectedDate, selectedBranch.id, column.id)} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold ${visibleColumns.length === 1 && visibleColumns[0] === column.id ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "border-slate-200 bg-white text-slate-600"}`}>{column.label}</Link>)}
+            </div>
+          </div>}
 
           <form method="get" className="hidden flex-wrap items-center gap-2 border-t border-slate-100 pt-3 md:flex">
             <input type="hidden" name="date" value={selectedDate} />

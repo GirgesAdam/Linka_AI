@@ -65,7 +65,7 @@ The appointment itself is the operational workspace: identity/time/service first
 
 ## Mobile direction
 
-Do not render the desktop resource board horizontally. Render a chronological operational agenda with one row per appointment: `time → patient → service → status`, plus the resource/device/category as compact context. Existing resource filters still control the agenda. Tapping a row opens the same full appointment workspace.
+Do not render the desktop resource board horizontally. Render a chronological operational agenda with one row per appointment: `time → patient → service → status`, plus the resource/device/category as compact context. A compact mobile resource switch filters the agenda. Available gaps are shown as mobile-native quick-booking rows, so free clinic capacity remains visible without recreating the desktop grid. Tapping a booked row opens the same full appointment workspace.
 
 ## Progressive disclosure decisions
 
@@ -83,4 +83,4 @@ No new backend behavior is required for this milestone. The UI consumes existing
 
 ## Implementation notes
 
-The schedule now has two responsive representations over the same appointment data and filters: desktop resource board at `md+`, and a true chronological mobile agenda below `md`. This avoids horizontal calendar scrolling without creating a second business workflow.
+The schedule now has two responsive representations over the same appointment data and filters: desktop resource board at `lg+`, and a true chronological agenda on tablet/mobile below `lg`. Tablet intentionally uses the agenda because six simultaneous resource columns would otherwise require a horizontally-scrolling board. Mobile/tablet retain resource filtering and visible free-period quick booking. This avoids horizontal calendar scrolling without creating a second business workflow.

@@ -172,7 +172,7 @@ export function AppointmentServiceEditor({
           </div>
         )}
         {state.ok && !state.error && (
-          <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-xs font-bold text-teal-800">
+          <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-xs font-bold text-[var(--accent-strong)]">
             تم حفظ تعديل الموعد بنجاح.
           </div>
         )}
