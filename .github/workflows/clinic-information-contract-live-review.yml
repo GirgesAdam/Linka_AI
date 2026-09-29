@@ -120,8 +120,8 @@ jobs:
           from sqlalchemy.orm import Session
           from app.core.config import settings
           from app.models.branch import Branch
-          from app.models.clinic_knowledge_entry import ClinicKnowledgeEntry
           from app.models.workspace import Workspace
+          from app.services.clinic_knowledge_base import replace_knowledge_text
 
           engine = create_engine(settings.database_url)
           with Session(engine) as db:
@@ -135,16 +135,11 @@ jobs:
               )
               assert branch is not None
               workspace.primary_branch_id = branch.id
-              db.add(ClinicKnowledgeEntry(
+              replace_knowledge_text(
+                  db,
                   workspace_id=workspace.id,
-                  scope_type='clinic',
-                  service_id=None,
-                  device_key=None,
-                  title='Phase 3I verified clinic information',
                   content='PHASE3I VERIFIED POLICY: customer-facing clinic information only.',
-                  sort_order=0,
-                  is_active=True,
-              ))
+              )
               db.commit()
           engine.dispose()
           PY
