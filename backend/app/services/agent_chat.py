@@ -597,7 +597,6 @@ def _clinic_public_info_payload(
         "ok": True,
         "address": "، ".join(address_parts) or None,
         "phone": location.phone,
-        "email": location.email,
         "working_hours": working_hours,
     }
 

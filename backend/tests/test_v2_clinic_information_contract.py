@@ -105,13 +105,13 @@ def test_exact_clinic_address_and_contact_are_backend_owned() -> None:
     assert truth.location.name == "Main"
     assert truth.location.address == "10 Verified Street, Cairo"
     assert truth.location.phone == "01012345678"
-    assert truth.location.email == "hello@example.test"
+    assert "email" not in truth.location.model_dump()
 
     text = deterministic_clinic_contract_reply(contract, arabic=False)
     assert "Tia Verified Clinic" in text
     assert "10 Verified Street, Cairo" in text
     assert "01012345678" in text
-    assert "hello@example.test" in text
+    assert "hello@example.test" not in text
 
 
 def test_working_hours_are_exact_and_do_not_create_availability_claim() -> None:
@@ -188,7 +188,6 @@ def test_clinic_outcome_shaping_removes_internal_config_and_unrequested_fields()
             {
                 "name": "Main",
                 "phone": "01012345678",
-                "email": "hello@example.test",
             }
         ],
     }
@@ -200,6 +199,7 @@ def test_clinic_outcome_shaping_removes_internal_config_and_unrequested_fields()
         "working_hours",
         "address_line1",
         "knowledge",
+        "hello@example.test",
     ):
         assert forbidden not in dumped
 
@@ -261,14 +261,34 @@ def test_pure_clinic_path_bypasses_generic_responder(
     assert "01012345678" in text
 
 
+def test_explicit_clinic_email_question_returns_phone_only_truth() -> None:
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="إيميل العيادة إيه؟")],
+        outcomes=[_build_outcome("contact")],
+    )
+
+    assert source == "deterministic:clinic-information-contract"
+    assert "01012345678" in text
+    assert "hello@example.test" not in text
+    assert "email" not in text.casefold()
+
+
 def test_stale_assistant_contact_cannot_override_verified_truth() -> None:
     text, source = compose_v2_customer_reply(
         clinic_name="Tia",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
-            AIMessage(content="رقم العيادة 01199999999 والعنوان Old Street."),
-            HumanMessage(content="طب الرقم والعنوان المسجلين إيه؟"),
+            AIMessage(
+                content=(
+                    "رقم العيادة 01199999999 والعنوان Old Street "
+                    "والإيميل old-clinic@example.test."
+                )
+            ),
+            HumanMessage(content="طب الرقم والعنوان ووسيلة التواصل المسجلين إيه؟"),
         ],
         outcomes=[_build_outcome("address", "contact")],
     )
@@ -278,6 +298,7 @@ def test_stale_assistant_contact_cannot_override_verified_truth() -> None:
     assert "10 Verified Street, Cairo" in text
     assert "01199999999" not in text
     assert "Old Street" not in text
+    assert "old-clinic@example.test" not in text
 
 
 def test_payment_info_is_not_claimed_by_clinic_truth() -> None:
@@ -415,12 +436,20 @@ def test_clinic_read_does_not_pick_first_branch_when_single_location_is_ambiguou
     assert "Address B" not in str(result.payload)
 
 
+def test_legacy_clinic_public_info_payload_is_phone_only() -> None:
+    from app.services.agent_chat import _clinic_public_info_payload
+
+    source = getsource(_clinic_public_info_payload)
+
+    assert '"phone": location.phone' in source
+    assert '"email": location.email' not in source
+
+
 def test_native_catalog_projects_customer_contact_without_internal_config() -> None:
     source = getsource(TiaDatabaseClinicAdapter.build_catalog)
 
     for expected in (
         '"phone": row.phone',
-        '"email": row.email',
         '"address_line1": row.address_line1',
         '"address_line2": row.address_line2',
         '"state": row.state',
@@ -430,6 +459,7 @@ def test_native_catalog_projects_customer_contact_without_internal_config() -> N
     ):
         assert expected in source
     for forbidden in (
+        '"email": row.email',
         "access_token",
         "api_key",
         "webhook_secret",

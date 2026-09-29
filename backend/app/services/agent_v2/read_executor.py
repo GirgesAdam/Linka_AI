@@ -513,7 +513,6 @@ def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> Re
             for key in (
                 "name",
                 "phone",
-                "email",
                 "address",
                 "address_line1",
                 "address_line2",

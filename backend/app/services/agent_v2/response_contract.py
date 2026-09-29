@@ -156,7 +156,6 @@ class ClinicWorkingHour(StrictResponseContractModel):
 class ClinicLocationInfo(StrictResponseContractModel):
     name: str | None = None
     phone: str | None = None
-    email: str | None = None
     address: str | None = None
     address_line1: str | None = None
     address_line2: str | None = None
@@ -979,9 +978,7 @@ def _clinic_truth(outcome: TurnOutcome) -> ClinicTruth | None:
             safe.get(key) not in (None, "") for key in address_fields
         ):
             return None
-        if "contact" not in requested and any(
-            safe.get(key) not in (None, "") for key in ("phone", "email")
-        ):
+        if "contact" not in requested and safe.get("phone") not in (None, ""):
             return None
         if (
             "working_hours" not in requested
@@ -1035,7 +1032,6 @@ def _clinic_truth(outcome: TurnOutcome) -> ClinicTruth | None:
         location = ClinicLocationInfo(
             name=str(safe.get("name") or "").strip() or None,
             phone=str(safe.get("phone") or "").strip() or None,
-            email=str(safe.get("email") or "").strip() or None,
             address=str(safe.get("address") or "").strip() or None,
             address_line1=str(safe.get("address_line1") or "").strip() or None,
             address_line2=str(safe.get("address_line2") or "").strip() or None,

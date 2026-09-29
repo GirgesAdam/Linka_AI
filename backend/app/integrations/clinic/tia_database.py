@@ -1010,7 +1010,6 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     "name": row.name,
                     "code": row.code,
                     "phone": row.phone,
-                    "email": row.email,
                     "address_line1": row.address_line1,
                     "address_line2": row.address_line2,
                     "city": row.city,
