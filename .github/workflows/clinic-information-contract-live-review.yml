@@ -125,7 +125,7 @@ jobs:
 
           engine = create_engine(settings.database_url)
           with Session(engine) as db:
-              workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+              workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia-regression'))
               assert workspace is not None
               branch = db.scalar(
                   select(Branch).where(

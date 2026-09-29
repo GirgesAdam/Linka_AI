@@ -15,6 +15,7 @@ from app.models.appointment import Appointment
 from app.models.payment_transaction import PaymentTransaction
 from app.models.workspace import Workspace
 from app.services.agent_v2.live_chat import run_agent_chat as run_agent_chat_v2
+from scripts.staging_scenarios import REGRESSION_WORKSPACE_SLUG
 
 
 @dataclass
@@ -104,9 +105,13 @@ def _run_one(engine, name: str, message_builder) -> Result:
         join_transaction_mode="create_savepoint",
     )
     try:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
+        workspace = db.scalar(
+            select(Workspace).where(Workspace.slug == REGRESSION_WORKSPACE_SLUG)
+        )
         if workspace is None:
-            raise RuntimeError("Workspace tia not found")
+            raise RuntimeError(
+                f"Workspace {REGRESSION_WORKSPACE_SLUG} not found"
+            )
         patient = base._base_patient(db, workspace)
         catalog = build_clinic_catalog(db, workspace)
         service_name = _service_name(catalog)
