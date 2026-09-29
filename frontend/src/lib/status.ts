@@ -127,6 +127,7 @@ const domainStatus: Record<Exclude<StatusDomain, "appointment" | "generic">, Rec
   patient: {
     active: status("نشط", "success", "check"),
     inactive: status("غير نشط", "neutral", "pause"),
+    blocked: status("محظور", "danger", "x"),
   },
   task: {
     open: status("مفتوحة", "warning", "clock"),

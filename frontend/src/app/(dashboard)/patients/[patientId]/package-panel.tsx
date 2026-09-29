@@ -113,7 +113,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
 
                 {item.effective_status === "active" && item.balance_due_minor > 0 && (
                   <details className="mt-3 rounded-lg border border-[var(--border)] p-2">
-                    <summary className="cursor-pointer text-xs font-bold text-teal-700">تسجيل دفعة للباكيدج</summary>
+                    <summary className="cursor-pointer text-xs font-bold text-[var(--interactive)]">تسجيل دفعة للباكيدج</summary>
                     <form action={recordPatientPackagePayment} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                       <input type="hidden" name="patient_id" value={patientId} />
                       <input type="hidden" name="package_id" value={item.id} />
