@@ -1,0 +1,124 @@
+name: V2 Clinic Information Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  clinic-info-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_v2_clinic_review_unused
+      SUPABASE_SECRET_KEY: sb_secret_v2_clinic_review_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-5.6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      AGENT_V2_LIVE_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify live-model secret
+        shell: bash
+        run: test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+      - name: Bootstrap isolated PostgreSQL
+        env:
+          PGPASSWORD: ci_password
+        shell: bash
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+          python -m alembic upgrade head
+          python - <<'PY'
+          from uuid import uuid4
+          from sqlalchemy import create_engine
+          from sqlalchemy.orm import Session
+          from app.core.config import settings
+          from app.models.user import User
+          from app.models.workspace import Workspace
+          from app.models.workspace_member import WorkspaceMember
+
+          engine = create_engine(settings.database_url)
+          with Session(engine) as db:
+              user = User(email='phase3i-admin@example.test', auth_user_id=uuid4())
+              workspace = Workspace(
+                  name='Tia', slug='tia', timezone='Africa/Cairo',
+                  is_active=True, is_demo=True,
+              )
+              db.add_all([user, workspace])
+              db.flush()
+              db.add(WorkspaceMember(
+                  workspace_id=workspace.id,
+                  user_id=user.id,
+                  role='admin',
+                  is_active=True,
+              ))
+              db.commit()
+          engine.dispose()
+          PY
+          python scripts/seed_full_staging_demo.py
+      - name: Run focused V2 clinic information review
+        run: python scripts/run_v2_clinic_info_live_review.py
+      - name: Upload focused V2 clinic information artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-clinic-info-live-review
+          path: backend/artifacts/v2-clinic-info-live-review.json
+          if-no-files-found: error
