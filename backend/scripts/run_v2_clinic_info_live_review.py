@@ -47,7 +47,16 @@ def _run_one(engine, name: str, message: str) -> Result:
             .order_by(Branch.created_at.asc())
         )
         if branch is None:
-            raise RuntimeError("Active branch not found")
+            branch = Branch(
+                workspace_id=workspace.id,
+                name="Main Regression Branch",
+                code="main-regression",
+                country_code="EG",
+                timezone="Africa/Cairo",
+                is_active=True,
+            )
+            db.add(branch)
+            db.flush()
         workspace.name = "Tia Clinic Regression"
         workspace.primary_branch_id = branch.id
         branch.name = "Main Regression Branch"
