@@ -342,7 +342,7 @@ def test_pure_profile_bypasses_generic_responder(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="إيه البيانات المسجلة عندكم ليا؟")],
@@ -411,7 +411,7 @@ def test_mixed_patient_and_unsupported_family_stays_legacy(
     )
 
     text, _source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="قولّي بياناتي والخدمة")],

@@ -28,7 +28,7 @@ from app.services.workspace_runtime_policy import workspace_runtime_policy
 
 logger = logging.getLogger("tia.automation_scheduler")
 
-RUNTIME_WORKER_NAME = "Tia Railway Automation Scheduler"
+RUNTIME_WORKER_NAME = "Linka Railway Automation Scheduler"
 DEFAULT_INTERVAL_SECONDS = 60
 DEFAULT_JOB_LIMIT = 20
 DEFAULT_PLANNING_HORIZON_DAYS = 14
@@ -248,7 +248,7 @@ async def run_forever() -> None:
         minimum=15,
         maximum=3600,
     )
-    logger.info("Starting native Tia automation scheduler interval=%ss", interval_seconds)
+    logger.info("Starting native Linka automation scheduler interval=%ss", interval_seconds)
 
     while True:
         started = time.monotonic()

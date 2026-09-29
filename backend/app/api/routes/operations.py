@@ -47,7 +47,7 @@ def activity_log(
     result: list[ActivityEventRead] = []
     for event, user in rows:
         if event.actor_type == "ai":
-            actor_label = "Tia AI"
+            actor_label = "Linka"
         elif event.actor_type == "system":
             actor_label = "System"
         else:

@@ -364,7 +364,7 @@ def test_exact_service_price_stays_zero_llm_calls(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="الهيدرافيشل بكام؟")],
@@ -387,7 +387,7 @@ def test_multi_device_service_price_stays_zero_llm_calls_and_not_swapped(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="سعر الليزر كام حسب الجهاز؟")],
@@ -428,7 +428,7 @@ def test_package_price_model_selects_refs_only_backend_resolves_values(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="باكدج الست جلسات بكام؟")],
@@ -471,7 +471,7 @@ def test_device_clarification_new_path_bypasses_legacy_guard(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
@@ -503,7 +503,7 @@ def test_invalid_model_refs_use_same_contract_deterministic_fallback(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="الباكدج بكام؟")],
@@ -533,7 +533,7 @@ def test_provider_failure_uses_same_contract_deterministic_fallback(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
@@ -585,7 +585,7 @@ def test_mixed_unsupported_response_stays_entirely_legacy(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="السعر والتفاصيل؟")],
@@ -624,7 +624,7 @@ def test_structured_output_failure_uses_same_contract_deterministic_fallback(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],

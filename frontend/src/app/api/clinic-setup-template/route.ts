@@ -7,7 +7,7 @@ export async function GET() {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="Tia_Clinic_Setup_Template_v1.xlsx"',
+      "Content-Disposition": 'attachment; filename="Linka_Clinic_Setup_Template_v1.xlsx"',
     },
   });
 }

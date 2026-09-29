@@ -1,4 +1,4 @@
-# Tia AI v0.17.2 — Automation runtime vs test artifacts
+# Linka v0.17.2 — Automation runtime vs test artifacts
 
 Automation health now distinguishes real runtime automation from explicit
 staging/regression fixtures.
@@ -35,7 +35,7 @@ This keeps Production strict without making regression residue a false blocker.
 
 ## WhatsApp transport staging
 
-The current WhatsApp architecture keeps scheduling/provider state in Tia and
+The current WhatsApp architecture keeps scheduling/provider state in Linka and
 uses per-clinic Meta credentials encrypted at rest. Native Meta transport
 staging must run from an isolated service/branch and test recipient; it must not
 reuse or migrate a clinic production number merely to validate delivery.

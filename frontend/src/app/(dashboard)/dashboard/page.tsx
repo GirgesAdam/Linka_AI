@@ -41,7 +41,7 @@ export default async function DashboardPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 font-black text-slate-950">
                   <Settings2 size={18} className="text-teal-700" />
-                  كمّل تجهيز العيادة قبل تشغيل Tia بالكامل
+                  كمّل تجهيز العيادة قبل تشغيل Linka بالكامل
                 </div>
                 <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
                   البيانات الأساسية مكتملة بنسبة {setup.readiness.progress_percent}%. كمّل الناقص عشان الحجوزات والردود التلقائية تعتمد على بيانات صحيحة.

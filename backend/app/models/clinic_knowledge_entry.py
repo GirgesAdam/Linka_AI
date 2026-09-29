@@ -18,7 +18,7 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class ClinicKnowledgeEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Curated explanatory knowledge used by Tia after entity grounding.
+    """Curated explanatory knowledge used by Linka after entity grounding.
 
     Operational facts such as prices, duration, availability and booking rules
     remain owned by their canonical tables and must never be sourced from here.

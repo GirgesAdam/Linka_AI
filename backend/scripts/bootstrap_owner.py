@@ -3,7 +3,7 @@ import sys
 
 def main() -> int:
     print(
-        "This script has been retired because Tia AI now uses admin/member roles only. "
+        "This script has been retired because Linka now uses admin/member roles only. "
         "Use: python scripts/bootstrap_admin.py ...",
         file=sys.stderr,
     )

@@ -1,6 +1,6 @@
 # Agent Core V2
 
-This package is an isolated, non-production implementation of Tia's next conversational core.
+This package is an isolated, non-production implementation of Linka's next conversational core.
 
 Current phases on this branch:
 

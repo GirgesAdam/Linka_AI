@@ -24,7 +24,7 @@ export async function knowledgeAssistantAction(
     }
 
     const message = String(formData.get("message") || "").trim();
-    if (!message) throw new Error("اكتب التعديل اللي عايز Tia تساعدك فيه.");
+    if (!message) throw new Error("اكتب التعديل اللي عايز Linka تساعدك فيه.");
     const proposal = await tiaRequest<KnowledgeEditProposal>("/clinic/knowledge/ai/propose", {
       method: "POST",
       body: JSON.stringify({ message }),

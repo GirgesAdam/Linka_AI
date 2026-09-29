@@ -32,7 +32,7 @@ NOW = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
 
 def _raw_clinic_payload() -> dict[str, object]:
     return {
-        "clinic_name": "Tia Verified Clinic",
+        "clinic_name": "Linka Verified Clinic",
         "timezone": "Africa/Cairo",
         "locations": [
             {
@@ -100,7 +100,7 @@ def test_exact_clinic_address_and_contact_are_backend_owned() -> None:
     truth = contract.units[0].clinic_truth
 
     assert truth is not None
-    assert truth.clinic_name == "Tia Verified Clinic"
+    assert truth.clinic_name == "Linka Verified Clinic"
     assert truth.location is not None
     assert truth.location.name == "Main"
     assert truth.location.address == "10 Verified Street, Cairo"
@@ -108,7 +108,7 @@ def test_exact_clinic_address_and_contact_are_backend_owned() -> None:
     assert "email" not in truth.location.model_dump()
 
     text = deterministic_clinic_contract_reply(contract, arabic=False)
-    assert "Tia Verified Clinic" in text
+    assert "Linka Verified Clinic" in text
     assert "10 Verified Street, Cairo" in text
     assert "01012345678" in text
     assert "hello@example.test" not in text
@@ -183,7 +183,7 @@ def test_clinic_outcome_shaping_removes_internal_config_and_unrequested_fields()
     dumped = str(outcome.model_dump(mode="json"))
 
     assert outcome.facts["clinic_info"] == {
-        "clinic_name": "Tia Verified Clinic",
+        "clinic_name": "Linka Verified Clinic",
         "locations": [
             {
                 "name": "Main",
@@ -212,7 +212,7 @@ def test_mixed_legacy_path_receives_only_safe_clinic_facts() -> None:
         facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
     )
     messages = _build_responder_messages(
-        clinic_name="Tia",
+        clinic_name="Linka",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="رقم العيادة وقولي عندكم Hydrafacial؟")],
@@ -250,7 +250,7 @@ def test_pure_clinic_path_bypasses_generic_responder(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia",
+        clinic_name="Linka",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="رقم العيادة إيه؟")],
@@ -263,7 +263,7 @@ def test_pure_clinic_path_bypasses_generic_responder(
 
 def test_explicit_clinic_email_question_returns_phone_only_truth() -> None:
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia",
+        clinic_name="Linka",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="إيميل العيادة إيه؟")],
@@ -278,7 +278,7 @@ def test_explicit_clinic_email_question_returns_phone_only_truth() -> None:
 
 def test_stale_assistant_contact_cannot_override_verified_truth() -> None:
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia",
+        clinic_name="Linka",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
@@ -324,7 +324,7 @@ def test_duplicate_or_invalid_working_hours_fail_closed_from_pure_contract() -> 
         facts={
             "clinic_requested_details": ["working_hours"],
             "clinic_info": {
-                "clinic_name": "Tia",
+                "clinic_name": "Linka",
                 "timezone": "Africa/Cairo",
                 "locations": [
                     {

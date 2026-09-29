@@ -1,1 +1,1 @@
-"""Tia AI LangGraph agents."""
+"""Linka LangGraph agents."""

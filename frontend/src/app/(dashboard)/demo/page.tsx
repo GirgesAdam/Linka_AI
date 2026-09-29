@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { isDemoMode } from "@/lib/demo-mode";
 
 const tour = [
-  { href: "/agent-demo", title: "جرّب Tia كأنك عميل", description: "اختبر نفس Agent ونفس booking tools المستخدمة في البرودكشن، لكن على بيانات Demo معزولة.", icon: BotMessageSquare, cta: "ابدأ المحادثة" },
+  { href: "/agent-demo", title: "جرّب Linka كأنك عميل", description: "اختبر نفس Agent ونفس booking tools المستخدمة في البرودكشن، لكن على بيانات Demo معزولة.", icon: BotMessageSquare, cta: "ابدأ المحادثة" },
   { href: "/appointments", title: "راجع المواعيد", description: "شوف أثر الحجز أو التعديل أو الإلغاء مباشرة بعد المحادثة.", icon: CalendarDays, cta: "افتح المواعيد" },
   { href: "/patients", title: "استكشف العملاء", description: "راجع ملف العميل وتاريخه بعد تنفيذ المحادثة.", icon: ContactRound, cta: "افتح العملاء" },
   { href: "/analytics", title: "شوف أداء العيادة", description: "راجع التقارير والتحليلات على بيانات الـDemo.", icon: BarChart3, cta: "افتح التقارير" },
@@ -19,8 +19,8 @@ export default async function DemoHomePage() {
     <div className="space-y-7">
       <section className="overflow-hidden rounded-[28px] border border-teal-200 bg-gradient-to-l from-teal-950 via-teal-900 to-slate-950 p-6 text-white shadow-sm md:p-8">
         <div className="max-w-3xl">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold text-teal-50"><Sparkles size={14} /> Tia Interactive Demo</div>
-          <h1 className="text-3xl font-black tracking-tight md:text-4xl">جرّب نفس Tia المستخدمة في البرودكشن</h1>
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold text-teal-50"><Sparkles size={14} /> Linka Interactive Demo</div>
+          <h1 className="text-3xl font-black tracking-tight md:text-4xl">جرّب نفس Linka المستخدمة في البرودكشن</h1>
           <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-200 md:text-base">الاختلاف الوحيد هو إنك داخل workspace تجريبية معزولة. الـAgent والـbooking logic والـAPI نفسهم، علشان نتيجة الـDemo تمثل سلوك البرودكشن فعلًا.</p>
         </div>
       </section>

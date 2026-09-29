@@ -34,7 +34,7 @@ def _cached_openai_model(
 ) -> BaseChatModel:
     """Reuse stateless OpenAI Responses API clients across customer turns.
 
-    Tia keeps conversation/workflow state in its own database and messages, so the
+    Linka keeps conversation/workflow state in its own database and messages, so the
     provider response is not stored server-side by OpenAI. The v0 LangChain output
     shape keeps the existing LangGraph/tool-message contract stable while the
     transport uses the Responses API.

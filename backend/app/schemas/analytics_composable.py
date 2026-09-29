@@ -37,7 +37,7 @@ class AnalyticsAudiencePlan(BaseModel):
     """Composable, deterministic patient-list query.
 
     The semantic planner may combine these bounded dimensions, but execution is
-    always performed by backend SQLAlchemy queries against canonical Tia data.
+    always performed by backend SQLAlchemy queries against canonical Linka data.
     """
 
     model_config = ConfigDict(extra="forbid")

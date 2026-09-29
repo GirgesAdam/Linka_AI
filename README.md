@@ -1,6 +1,6 @@
 <div align="center">
 
-# Tia AI
+# Linka
 
 ### AI-native operating platform for aesthetic clinics
 
@@ -15,7 +15,7 @@ Patient conversations, booking, clinic operations, CRM, payments, packages, inve
 
 **FastAPI · Next.js · PostgreSQL · Supabase · SQLAlchemy · Alembic · OpenAI · n8n**
 
-### [Open the live Tia application](https://app.tiaai.online)
+### [Open the live Linka application](https://app.tiaai.online)
 
 </div>
 
@@ -38,9 +38,9 @@ The demo account can explore the operational product, including dashboard data, 
 
 ---
 
-## What Tia is
+## What Linka is
 
-Tia is an AI-powered operating layer for aesthetic and cosmetic clinics. It connects the patient conversation to the same operational state used by reception, booking, finance, inventory, CRM and analytics.
+Linka is an AI-powered operating layer for aesthetic and cosmetic clinics. It connects the patient conversation to the same operational state used by reception, booking, finance, inventory, CRM and analytics.
 
 The central engineering boundary is:
 
@@ -48,7 +48,7 @@ The central engineering boundary is:
 
 The LLM understands meaning and returns structured decisions. Deterministic backend services remain authoritative for availability, writes, payments, package accounting, identity resolution, inventory conversion and analytics.
 
-Tia does **not** use keyword/regex routing as a substitute for semantic understanding, and the LLM is never treated as the source of transactional truth.
+Linka does **not** use keyword/regex routing as a substitute for semantic understanding, and the LLM is never treated as the source of transactional truth.
 
 ---
 
@@ -103,7 +103,7 @@ Structured Excel-assisted setup is preview-first: values are parsed and validate
 
 ## Patients, CRM and timeline
 
-Tia maintains a canonical patient record shared across appointments, conversations, CRM, payments, packages and imports.
+Linka maintains a canonical patient record shared across appointments, conversations, CRM, payments, packages and imports.
 
 Historical identity resolution is conservative: strong external identifiers and normalized phone numbers can establish identity; **patients are never merged by name alone**.
 
@@ -129,7 +129,7 @@ A package cancellation refund is deterministic: consumed sessions are repriced a
 
 ## Products and injectable inventory
 
-Tia includes clinic product and treatment inventory workflows.
+Linka includes clinic product and treatment inventory workflows.
 
 **Clinic products** can be attached to appointments with an explicit quantity and manual unit price.
 
@@ -143,9 +143,9 @@ Conversation state is persisted with messages, channel identities, delivery stat
 
 ## Automation and external integrations
 
-Durable rules/jobs power operational follow-up. `n8n` remains part of the external orchestration layer, while clinic-domain validity stays inside Tia.
+Durable rules/jobs power operational follow-up. `n8n` remains part of the external orchestration layer, while clinic-domain validity stays inside Linka.
 
-The integration layer is designed for real clinics whose existing database/file structures differ from Tia's canonical model. Source-specific interpretation and mapping are kept separate from canonical persistence.
+The integration layer is designed for real clinics whose existing database/file structures differ from Linka's canonical model. Source-specific interpretation and mapping are kept separate from canonical persistence.
 
 ## Historical data migration
 
@@ -337,6 +337,6 @@ See [`SECURITY.md`](SECURITY.md) and [`docs/RECRUITER_DEMO.md`](docs/RECRUITER_D
 
 # License
 
-Tia AI is proprietary software. Unless explicitly authorized, the source code and associated materials may not be redistributed, modified, sublicensed or used commercially by third parties.
+Linka is proprietary software. Unless explicitly authorized, the source code and associated materials may not be redistributed, modified, sublicensed or used commercially by third parties.
 
 **All rights reserved.**

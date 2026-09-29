@@ -253,7 +253,7 @@ def test_registry_can_resolve_active_external_prototype() -> None:
 
         @staticmethod
         def scalar(_statement):
-            # Simulates clinic_integration_entity_links resolving the Tia patient.
+            # Simulates clinic_integration_entity_links resolving the Linka patient.
             return "CLIENT-009"
 
     adapter = get_clinic_adapter(db=_Db(), workspace=workspace)

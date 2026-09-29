@@ -48,7 +48,7 @@ def _runtime_args() -> dict[str, object]:
         "history": [],
         "local_now": _NOW,
         "timezone_name": "Africa/Cairo",
-        "clinic_name": "Tia Test Clinic",
+        "clinic_name": "Linka Test Clinic",
         "catalog": {"fixture": True},
         "turn_id": "turn-1",
     }
@@ -594,7 +594,7 @@ def _run_conditional_availability(
                 ReadResult(
                     kind="clinic_info",
                     ok=True,
-                    payload={"clinic": {"name": "Tia Test Clinic"}},
+                    payload={"clinic": {"name": "Linka Test Clinic"}},
                 )
             ]
         )
@@ -633,7 +633,7 @@ def _run_conditional_availability(
         return TurnOutcome(
             status="answered",
             response_goal="answer_clinic_info",
-            facts={"clinic_name": "Tia Test Clinic"},
+            facts={"clinic_name": "Linka Test Clinic"},
         )
 
     monkeypatch.setattr(runtime, "build_step_outcome", build_outcome)

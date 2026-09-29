@@ -28,7 +28,7 @@ def _semantic_context():
         {
             "services": [{"id": "svc-hydrafacial", "name": "?????????"}],
             "doctors": [{"id": "doc-1", "name": "?. ????", "service_ids": ["svc-hydrafacial"]}],
-            "branches": [{"id": "branch-1", "name": "Tia Clinic"}],
+            "branches": [{"id": "branch-1", "name": "Linka Clinic"}],
         }
     )
 

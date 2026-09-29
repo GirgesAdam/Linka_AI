@@ -31,7 +31,7 @@ class AnalyticsBIError(ValueError):
 def analytics_entity_catalog(db: Session, *, workspace_id: UUID) -> dict[str, list[dict[str, str]]]:
     """Small canonical entity catalog for the semantic planner.
 
-    Analytics is always executed against Tia's canonical tables, even when the
+    Analytics is always executed against Linka's canonical tables, even when the
     workspace sync source is an external connector. The planner receives names
     and canonical IDs only; it never receives patient rows or financial facts.
     """
@@ -284,7 +284,7 @@ def _summary(
         )
     answer = f"الفترة فيها {total} حجز، منهم {completed} مكتمل، و{new_patients} عميل جديد."
     definitions = [
-        "العميل الجديد يُحسب من source_created_at عند توفره، وإلا created_at في Tia.",
+        "العميل الجديد يُحسب من source_created_at عند توفره، وإلا created_at في Linka.",
         "صافي المدفوع = payment transactions ناقص refund transactions داخل الفترة.",
     ]
     return answer, definitions, rows
@@ -894,7 +894,7 @@ def _new_patients_trend(
     ]
     return (
         f"تم تجميع العملاء الجدد على مستوى {'اليوم' if bucket == 'day' else 'الشهر'} باستخدام تاريخهم الأصلي عند توفره.",
-        ["تاريخ العميل = source_created_at عند توفره، وإلا created_at في Tia."],
+        ["تاريخ العميل = source_created_at عند توفره، وإلا created_at في Linka."],
         rows,
     )
 
@@ -1014,7 +1014,7 @@ def _patient_history_lookup(
         answer,
         [
             "المريض يُحل بالـphone exact أولًا، أو exact unique full name فقط؛ الاسم الغامض لا يتم تخمينه.",
-            "التاريخ والدفعات هنا من Tia canonical data، بما فيها البيانات القديمة المتزامنة.",
+            "التاريخ والدفعات هنا من Linka canonical data، بما فيها البيانات القديمة المتزامنة.",
         ],
         rows,
     )

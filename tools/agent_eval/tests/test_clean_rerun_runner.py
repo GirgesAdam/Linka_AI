@@ -30,7 +30,7 @@ def test_bookable_context_resolves_canonical_db_id_into_agent_catalog(monkeypatc
         is_active=True,
     )
     catalog = {
-        "branches": [{"id": str(branch_id), "name": "Tia Clinic"}],
+        "branches": [{"id": str(branch_id), "name": "Linka Clinic"}],
         "services": [{"id": str(service_id), "name": "PRP للبشرة", "requires_laser_device": False}],
         "doctors": [{
             "id": str(doctor_id),

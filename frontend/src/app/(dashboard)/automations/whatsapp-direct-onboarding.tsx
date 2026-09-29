@@ -124,7 +124,7 @@ function TemplateStatusList({ templates }: { templates: WhatsAppSetupState["temp
     <details className="rounded-2xl border border-slate-200 bg-white p-4">
       <summary className="cursor-pointer text-sm font-black text-slate-900">حالة قوالب الرسائل</summary>
       <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-        Tia تنشئ القوالب المطلوبة وتستخدم القوالب المعتمدة فقط. لا تحتاج لإدارة أسماء تقنية من هنا.
+        Linka تنشئ القوالب المطلوبة وتستخدم القوالب المعتمدة فقط. لا تحتاج لإدارة أسماء تقنية من هنا.
       </p>
       <div className="mt-3 space-y-2">
         {templates.map((template) => (
@@ -178,12 +178,12 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
                   <KeyRound size={18} /> 1. أدخل بيانات الربط من Meta
                 </div>
                 <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                  جهّز الرقم في WhatsApp Cloud API أولًا، ثم انسخ القيم التالية. Tia تتحقق منها قبل الحفظ، والبيانات السرية لا تظهر مرة أخرى بعد نجاح الربط.
+                  جهّز الرقم في WhatsApp Cloud API أولًا، ثم انسخ القيم التالية. Linka تتحقق منها قبل الحفظ، والبيانات السرية لا تظهر مرة أخرى بعد نجاح الربط.
                 </p>
                 <details className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
                   <summary className="cursor-pointer font-bold">لو الرقم مستخدم حاليًا في WhatsApp Business App</summary>
                   <p className="mt-2">
-                    الربط اليدوي الحالي لا يستخدم Coexistence. لو ستستخدم نفس الرقم على Cloud API، أكمل نقل وتجهيز الرقم داخل Meta أولًا وجهّز فريق الاستقبال لاستخدام Inbox داخل Tia للرد اليدوي.
+                    الربط اليدوي الحالي لا يستخدم Coexistence. لو ستستخدم نفس الرقم على Cloud API، أكمل نقل وتجهيز الرقم داخل Meta أولًا وجهّز فريق الاستقبال لاستخدام Inbox داخل Linka للرد اليدوي.
                   </p>
                 </details>
               </div>
@@ -282,7 +282,7 @@ export function WhatsAppDirectOnboarding({ state }: { state: WhatsAppSetupState 
                 <ShieldCheck size={18} /> 3. فحص الجاهزية
               </div>
               <p className="mt-2 text-sm leading-6 text-amber-900">
-                {state.system_message || state.admin_message || "استقبال الرسائل اتأكد. Tia تفحص الرقم والقوالب ومسار الإرسال قبل السماح بالتشغيل."}
+                {state.system_message || state.admin_message || "استقبال الرسائل اتأكد. Linka تفحص الرقم والقوالب ومسار الإرسال قبل السماح بالتشغيل."}
               </p>
             </div>
           )}

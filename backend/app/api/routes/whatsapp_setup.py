@@ -154,7 +154,7 @@ def _require_transport_worker(
     if not expected or not expected.strip():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Tia WhatsApp transport worker is not configured.",
+            detail="Linka WhatsApp transport worker is not configured.",
         )
     supplied = (x_tia_transport_token or "").strip()
     if not supplied or not hmac.compare_digest(supplied, expected.strip()):

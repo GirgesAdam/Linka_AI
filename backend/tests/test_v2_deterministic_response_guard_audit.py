@@ -70,7 +70,7 @@ def _run_with_draft(
             )
         )
     return compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ايوة")],
@@ -105,7 +105,7 @@ def test_terminal_scheduling_success_ignores_supporting_availability_facts(
         ),
     )
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ايوة")],
@@ -136,7 +136,7 @@ def test_terminal_start_only_verification_evidence_never_triggers_availability_f
         ),
     )
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ايوة")],

@@ -1,1 +1,1 @@
-"""External-system integration boundaries for Tia."""
+"""External-system integration boundaries for Linka."""

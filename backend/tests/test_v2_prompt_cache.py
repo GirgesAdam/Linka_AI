@@ -123,7 +123,7 @@ def test_cached_prefix_contains_current_pulse_ownership_boundary() -> None:
 
 def test_responder_contract_separates_offers_from_owned_pulse_state() -> None:
     text = _system_prompt(
-        clinic_name="Tia Test",
+        clinic_name="Linka Test",
         timezone_name="Africa/Cairo",
         local_now=NOW,
     )

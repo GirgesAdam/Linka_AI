@@ -56,7 +56,7 @@ const quickAccessKeys = ["revenue_overview", "appointment_overview", "revenue_by
 const REPORT_GUIDES: Record<string, { benefit: string; calculation: string }> = {
   revenue_overview: {
     benefit: "يعطيك صورة مالية سريعة عن حجم التحصيل والمرتجعات وصافي الدخل في الفترة، لتعرف هل الأداء المالي يتحسن أم لا.",
-    calculation: "يجمع المدفوعات المسجلة خلال الفترة، ويطرح منها المرتجعات المسجلة. كل رقم يأتي من سجل المدفوعات الفعلي في Tia.",
+    calculation: "يجمع المدفوعات المسجلة خلال الفترة، ويطرح منها المرتجعات المسجلة. كل رقم يأتي من سجل المدفوعات الفعلي في Linka.",
   },
   revenue_trend: {
     benefit: "يوضح اتجاه الدخل عبر الوقت، ويساعدك تكتشف الأيام أو الشهور الأقوى والأضعف وتربطها بقرارات التشغيل والتسويق.",
@@ -72,7 +72,7 @@ const REPORT_GUIDES: Record<string, { benefit: string; calculation: string }> = 
   },
   new_patients_trend: {
     benefit: "يوضح هل قاعدة العملاء الجدد تنمو أم تتراجع، ويساعدك تقيس تأثير الحملات والمواسم على اكتساب العملاء.",
-    calculation: "يعد العملاء حسب تاريخ انضمامهم الأصلي عند توفره، وإلا يستخدم تاريخ إنشاء ملفهم في Tia، ثم يجمعهم حسب الفترة الزمنية.",
+    calculation: "يعد العملاء حسب تاريخ انضمامهم الأصلي عند توفره، وإلا يستخدم تاريخ إنشاء ملفهم في Linka، ثم يجمعهم حسب الفترة الزمنية.",
   },
   repeat_patient_rate: {
     benefit: "يقيس قدرة العيادة على إعادة العميل مرة أخرى بدل الاعتماد الدائم على عملاء جدد.",
@@ -143,7 +143,7 @@ const REPORT_GUIDES: Record<string, { benefit: string; calculation: string }> = 
 function guideFor(item: Pick<AnalyticsCatalogDefinition, "key" | "description">) {
   return REPORT_GUIDES[item.key] || {
     benefit: `استخدم هذا التقرير لفهم ${item.description.replace(/\.$/, "")} واتخاذ قرار تشغيلي مبني على نفس الأرقام كل مرة.`,
-    calculation: `يُحسب من البيانات المسجلة داخل Tia وفق تعريف التقرير: ${item.description}`,
+    calculation: `يُحسب من البيانات المسجلة داخل Linka وفق تعريف التقرير: ${item.description}`,
   };
 }
 
@@ -366,7 +366,7 @@ function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
 
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded-2xl border border-teal-100 bg-teal-50/50 p-4"><div className="flex items-center gap-2 text-sm font-black text-teal-950"><Info size={16} /> تستفيد منه إزاي؟</div><p className="mt-2 text-xs leading-6 text-teal-950/80">{guide?.benefit || "استخدم اتجاه الرسم والمقارنات لتحديد التغيرات المهمة واتخاذ قرار تشغيلي بناءً على البيانات المسجلة."}</p></div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-black text-slate-900">بيتحسب إزاي؟</div><p className="mt-2 text-xs leading-6 text-slate-700">{guide?.calculation || "الحساب يتم من البيانات المسجلة في Tia وبنفس التعريف كل مرة."}</p>{result.definitions.length > 0 && <ul className="mt-2 list-disc space-y-1 pr-5 text-[11px] leading-5 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-black text-slate-900">بيتحسب إزاي؟</div><p className="mt-2 text-xs leading-6 text-slate-700">{guide?.calculation || "الحساب يتم من البيانات المسجلة في Linka وبنفس التعريف كل مرة."}</p>{result.definitions.length > 0 && <ul className="mt-2 list-disc space-y-1 pr-5 text-[11px] leading-5 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>
       </div>
     </div>
   );

@@ -204,7 +204,7 @@ def plan_onboarding_turn(
 ) -> OnboardingTurnDecision:
     system = SystemMessage(
         content=(
-            "You are Tia's AI-assisted clinic onboarding planner. "
+            "You are Linka's AI-assisted clinic onboarding planner. "
             "You plan configuration; you never execute writes and never expose "
             "internal database IDs. Return only the required structured output.\n\n"
             "Understand Arabic or English semantically. Do not use keyword "

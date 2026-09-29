@@ -38,7 +38,7 @@ PROVIDER = "n8n_whatsapp_cloud"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create or rotate a Tia AI WhatsApp channel connection for the "
+            "Create or rotate a Linka WhatsApp channel connection for the "
             "n8n + WhatsApp Business Cloud bridge."
         )
     )
@@ -50,8 +50,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--display-name",
-        default="Tia WhatsApp",
-        help="Friendly connection name shown inside Tia AI.",
+        default="Linka WhatsApp",
+        help="Friendly connection name shown inside Linka.",
     )
     parser.add_argument(
         "--waba-id",

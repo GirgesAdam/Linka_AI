@@ -2702,7 +2702,7 @@ def write_reports(
         encoding="utf-8",
     )
     lines = [
-        "# Tia Agent Evaluation — Batch 03 Raw Baseline",
+        "# Linka Agent Evaluation — Batch 03 Raw Baseline",
         "",
         (f"- Batch runtime base SHA: {payload['run_metadata']['batch3_base_sha']}"),
         f"- Harness SHA: {payload['run_metadata']['git_sha']}",
@@ -2731,7 +2731,7 @@ def write_reports(
         )
         for turn in row["turns"]:
             lines.append(f"Customer {turn['turn_number']}: {turn['user_message']}")
-            lines.append(f"Tia: {turn['agent_response']}")
+            lines.append(f"Linka: {turn['agent_response']}")
             lines.append(
                 "Usage: "
                 f"in={turn['token_usage']['input_tokens']} "

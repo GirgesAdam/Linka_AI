@@ -798,7 +798,7 @@ def test_pure_terminal_responder_routes_to_contract_composer(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="تم الحجز؟")],
@@ -861,7 +861,7 @@ def test_mixed_terminal_and_nonterminal_stays_on_legacy_responder(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="تم الحجز ومعلومة العيادة؟")],
@@ -912,7 +912,7 @@ def test_active_task_cancelled_stays_on_legacy_responder(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="خلاص بلاش نكمل")],

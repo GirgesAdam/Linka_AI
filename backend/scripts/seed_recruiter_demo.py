@@ -21,7 +21,7 @@ from app.models.workspace import Workspace
 from scripts import seed_realistic_aesthetic_clinic as realistic
 
 DEMO_WORKSPACE_SLUG = "tia-demo"
-DEMO_WORKSPACE_NAME = "Tia Demo Aesthetic Clinic"
+DEMO_WORKSPACE_NAME = "Linka Demo Aesthetic Clinic"
 DEMO_PATIENTS = (
     {
         "key": "recruiter-new-booking",
@@ -49,7 +49,7 @@ DEMO_PATIENTS = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Seed the isolated Tia recruiter/admin demo workspace."
+        description="Seed the isolated Linka recruiter/admin demo workspace."
     )
     parser.add_argument("--workspace-slug", default=DEMO_WORKSPACE_SLUG)
     parser.add_argument("--workspace-name", default=DEMO_WORKSPACE_NAME)
@@ -207,7 +207,7 @@ def main() -> int:
             db.rollback()
             raise
 
-        print("Tia recruiter demo workspace is ready")
+        print("Linka recruiter demo workspace is ready")
         print(json.dumps({
             "workspace_id": str(workspace.id),
             "workspace_slug": workspace.slug,

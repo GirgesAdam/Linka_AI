@@ -6,7 +6,7 @@ from app.agents.prompts.customer_service import build_customer_service_system_pr
 
 def _prompt() -> str:
     return build_customer_service_system_prompt(
-        clinic_name="Tia",
+        clinic_name="Linka",
         timezone_name="Africa/Cairo",
         local_now=datetime(2026, 8, 12, 18, 0, tzinfo=ZoneInfo("Africa/Cairo")),
     )

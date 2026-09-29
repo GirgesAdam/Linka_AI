@@ -28,7 +28,7 @@ def test_connection_config_rejects_secrets() -> None:
         ChannelConnectionCreate(
             channel="whatsapp",
             provider="n8n",
-            display_name="Tia WhatsApp",
+            display_name="Linka WhatsApp",
             config={"access_token": "should-not-be-stored-here"},
         )
 
@@ -38,7 +38,7 @@ def test_connection_config_rejects_nested_secrets() -> None:
         ChannelConnectionCreate(
             channel="whatsapp",
             provider="n8n",
-            display_name="Tia WhatsApp",
+            display_name="Linka WhatsApp",
             config={"provider": {"api_key": "nope"}},
         )
 
@@ -47,7 +47,7 @@ def test_connection_config_allows_non_secret_provider_metadata() -> None:
     payload = ChannelConnectionCreate(
         channel="whatsapp",
         provider="n8n",
-        display_name="Tia WhatsApp",
+        display_name="Linka WhatsApp",
         external_account_id="201000000000",
         config={"phone_number_id": "123456", "region": "EG"},
     )

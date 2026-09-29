@@ -1,4 +1,4 @@
-"""Canonical clinic-system integration boundary used by the Tia runtime."""
+"""Canonical clinic-system integration boundary used by the Linka runtime."""
 
 from app.integrations.clinic.base import (
     AppointmentMutationResult,

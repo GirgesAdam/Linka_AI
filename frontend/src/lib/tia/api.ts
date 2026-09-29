@@ -45,7 +45,7 @@ function userFacingApiError(status: number) {
   if (status === 404) return "تعذر العثور على البيانات المطلوبة. قد تكون تغيّرت أو حُذفت.";
   if (status === 409) return "تعذر تنفيذ الإجراء بسبب تعارض في البيانات الحالية. حدّث الصفحة وحاول مرة أخرى.";
   if (status === 429) return "تم إرسال طلبات كثيرة خلال وقت قصير. حاول مرة أخرى بعد قليل.";
-  if (status >= 500) return "جزء من خدمة Tia غير متاح مؤقتًا. حاول مرة أخرى بعد قليل.";
+  if (status >= 500) return "جزء من خدمة Linka غير متاح مؤقتًا. حاول مرة أخرى بعد قليل.";
   return "تعذر إكمال العملية. حاول مرة أخرى.";
 }
 
@@ -71,20 +71,20 @@ export async function tiaRawRequest(path: string, init: RequestInit = {}, option
     });
   } catch (error) {
     const technicalMessage = error instanceof Error ? error.message : String(error);
-    console.error("[Tia API] network request failed", {
+    console.error("[Linka API] network request failed", {
       path,
       method: init.method || "GET",
       detail: technicalMessage,
     });
     throw new TiaApiError(
       503,
-      "تعذر الاتصال بخدمة Tia مؤقتًا. حاول مرة أخرى؛ لو كانت العملية طويلة قد تكون اكتملت بالفعل.",
+      "تعذر الاتصال بخدمة Linka مؤقتًا. حاول مرة أخرى؛ لو كانت العملية طويلة قد تكون اكتملت بالفعل.",
       technicalMessage,
     );
   }
   if (!response.ok) {
     const technicalMessage = await parseTechnicalError(response);
-    console.error("[Tia API] request failed", {
+    console.error("[Linka API] request failed", {
       path,
       method: init.method || "GET",
       status: response.status,

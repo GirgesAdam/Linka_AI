@@ -1403,7 +1403,7 @@ def _prefetch_read_tools(
         prefetched.add(action.tool_name)
         results[action.tool_name] = _compact_context_value(action.output_json)
         logger.info(
-            "Tia turn run_id=%s stage=prefetch-reuse tool=%s",
+            "Linka turn run_id=%s stage=prefetch-reuse tool=%s",
             tool_context.run_id,
             action.tool_name,
         )
@@ -1421,7 +1421,7 @@ def _prefetch_read_tools(
         if result is not None:
             results[tool_name] = _compact_context_value(result)
         logger.info(
-            "Tia turn run_id=%s stage=prefetch tool=%s duration_ms=%s ok=%s",
+            "Linka turn run_id=%s stage=prefetch tool=%s duration_ms=%s ok=%s",
             tool_context.run_id,
             tool_name,
             int((perf_counter() - stage_started) * 1000),
@@ -1513,7 +1513,7 @@ def _prefetch_read_tools(
                 first_date = max(first_date, boundary + timedelta(days=1))
             except ValueError:
                 logger.warning(
-                    "Tia turn run_id=%s ignored invalid availability search boundary=%s",
+                    "Linka turn run_id=%s ignored invalid availability search boundary=%s",
                     tool_context.run_id,
                     availability_search_after_date,
                 )
@@ -2303,7 +2303,7 @@ def _apply_prerequisite_option_selection(
             }
         )
         logger.info(
-            "Tia turn run_id=%s stage=requirement-selection field=%s id=%s value=%s",
+            "Linka turn run_id=%s stage=requirement-selection field=%s id=%s value=%s",
             run_id,
             entity_key,
             selected_id_text,
@@ -2775,7 +2775,7 @@ def _run_after_inbound(
         clinic_catalog=clinic_catalog,
     )
     logger.info(
-        "Tia turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
+        "Linka turn run_id=%s stage=clinic-catalog services=%s branches=%s doctors=%s duration_ms=%s",
         run_id,
         len(clinic_catalog.get("services", [])),
         len(clinic_catalog.get("branches", [])),
@@ -2839,7 +2839,7 @@ def _run_after_inbound(
         inherited_capabilities = []
     semantic_stage = "unified-turn-interpreter"
     logger.info(
-        "Tia turn run_id=%s stage=%s duration_ms=%s capabilities=%s risks=%s",
+        "Linka turn run_id=%s stage=%s duration_ms=%s capabilities=%s risks=%s",
         run_id,
         semantic_stage,
         int((perf_counter() - semantic_started) * 1000),
@@ -2847,7 +2847,7 @@ def _run_after_inbound(
         semantic_decision.risk_flags,
     )
     logger.info(
-        "Tia turn run_id=%s stage=semantic-entities source=%s entity_hints=%s missing=%s",
+        "Linka turn run_id=%s stage=semantic-entities source=%s entity_hints=%s missing=%s",
         run_id,
         semantic_stage,
         semantic_decision.entity_hints.model_dump(mode="json"),
@@ -2961,7 +2961,7 @@ def _run_after_inbound(
         )
         if flow_turn.clear_entity_fields:
             logger.info(
-                "Tia turn run_id=%s stage=flow-entity-clear fields=%s",
+                "Linka turn run_id=%s stage=flow-entity-clear fields=%s",
                 run_id,
                 sorted(flow_turn.clear_entity_fields),
             )
@@ -3055,13 +3055,13 @@ def _run_after_inbound(
                 )
                 model_name = composed_model
                 logger.info(
-                    "Tia turn run_id=%s stage=grounded-response-composer action_result=true model=%s",
+                    "Linka turn run_id=%s stage=grounded-response-composer action_result=true model=%s",
                     run_id,
                     model_name,
                 )
             except (LLMProviderError, RuntimeError) as exc:
                 logger.warning(
-                    "Tia turn run_id=%s stage=grounded-response-composer-fallback action_result=true error=%s",
+                    "Linka turn run_id=%s stage=grounded-response-composer-fallback action_result=true error=%s",
                     run_id,
                     type(exc).__name__,
                 )
@@ -3145,7 +3145,7 @@ def _run_after_inbound(
                 "selection_status": "unresolved",
             }
         logger.info(
-            "Tia turn run_id=%s stage=prefetch-summary tools=%s duration_ms=%s",
+            "Linka turn run_id=%s stage=prefetch-summary tools=%s duration_ms=%s",
             run_id,
             sorted(prefetched_tool_names),
             int((perf_counter() - prefetch_started) * 1000),
@@ -3318,14 +3318,14 @@ def _run_after_inbound(
                     verified_data=prefetched_results,
                 )
                 logger.info(
-                    "Tia turn run_id=%s stage=grounded-response-composer duration_ms=%s model=%s",
+                    "Linka turn run_id=%s stage=grounded-response-composer duration_ms=%s model=%s",
                     run_id,
                     int((perf_counter() - composer_started) * 1000),
                     prefetch_direct[1],
                 )
             except (LLMProviderError, RuntimeError) as exc:
                 logger.warning(
-                    "Tia turn run_id=%s stage=grounded-response-composer-fallback error=%s",
+                    "Linka turn run_id=%s stage=grounded-response-composer-fallback error=%s",
                     run_id,
                     type(exc).__name__,
                 )
@@ -3338,7 +3338,7 @@ def _run_after_inbound(
         if prefetch_direct is not None:
             reply, model_name = prefetch_direct
             logger.info(
-                "Tia turn run_id=%s stage=prefetch-direct-response model=%s",
+                "Linka turn run_id=%s stage=prefetch-direct-response model=%s",
                 run_id,
                 model_name,
             )
@@ -3360,7 +3360,7 @@ def _run_after_inbound(
                         run_id=run_id,
                     )
             logger.info(
-                "Tia turn run_id=%s stage=flow-sync duration_ms=%s source=%s",
+                "Linka turn run_id=%s stage=flow-sync duration_ms=%s source=%s",
                 run_id,
                 int((perf_counter() - flow_sync_started) * 1000),
                 "verified-prefetch" if grounded_mode else "agent-actions",
@@ -3426,7 +3426,7 @@ def _run_after_inbound(
                 allowed_tool_names=agent_allowed_tools,
             )
             logger.info(
-                "Tia turn run_id=%s stage=customer-agent duration_ms=%s model=%s",
+                "Linka turn run_id=%s stage=customer-agent duration_ms=%s model=%s",
                 run_id,
                 int((perf_counter() - agent_started) * 1000),
                 model_name,
@@ -3511,12 +3511,12 @@ def _run_after_inbound(
     # only needs outbound.id and the already-loaded conversation.status, so two
     # post-commit refresh SELECTs added latency without changing response semantics.
     logger.info(
-        "Tia turn run_id=%s stage=outbound-persist duration_ms=%s",
+        "Linka turn run_id=%s stage=outbound-persist duration_ms=%s",
         run_id,
         int((perf_counter() - persistence_started) * 1000),
     )
     logger.info(
-        "Tia turn run_id=%s completed total_duration_ms=%s source=%s model=%s",
+        "Linka turn run_id=%s completed total_duration_ms=%s source=%s model=%s",
         run_id,
         int((perf_counter() - turn_started) * 1000),
         source,
@@ -3620,7 +3620,7 @@ def run_agent_for_existing_inbound(
     db.refresh(inbound)
     if existing_run_id is not None:
         logger.info(
-            "Tia inbound retry inbound_message_id=%s run_id=%s attempt=%s",
+            "Linka inbound retry inbound_message_id=%s run_id=%s attempt=%s",
             inbound.id,
             run_id,
             metadata["agent_processing_attempts"],
@@ -3633,7 +3633,7 @@ def run_agent_for_existing_inbound(
     )
     if existing_response is not None:
         logger.info(
-            "Tia inbound recovery inbound_message_id=%s run_id=%s outbound_message_id=%s",
+            "Linka inbound recovery inbound_message_id=%s run_id=%s outbound_message_id=%s",
             inbound.id,
             run_id,
             existing_response.outbound_message_id,

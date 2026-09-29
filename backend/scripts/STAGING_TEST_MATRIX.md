@@ -1,4 +1,4 @@
-# Tia AI Full Staging Test Matrix — v0.13.0
+# Linka Full Staging Test Matrix — v0.13.0
 
 This suite is designed for **staging only**. The seed script refuses to run when
 `ENVIRONMENT=production`.

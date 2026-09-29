@@ -21,7 +21,7 @@ STAFF_FOLLOWUP_TEMPLATE_BODY = (
     "أهلًا {{1}} 👋 بنتابع معاك بخصوص طلبك السابق مع {{2}}. "
     "لو حابب/حابة نكمل المتابعة، رد علينا هنا وإحنا موجودين."
 )
-STAFF_FOLLOWUP_TEMPLATE_EXAMPLE = ("مريم", "Tia Clinic")
+STAFF_FOLLOWUP_TEMPLATE_EXAMPLE = ("مريم", "Linka Clinic")
 
 
 class StaffWhatsAppFollowupError(RuntimeError):

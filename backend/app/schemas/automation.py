@@ -93,7 +93,7 @@ class AutomationWorkerRead(BaseModel):
 
 class AutomationWorkerCreated(AutomationWorkerRead):
     worker_token: str
-    token_note: str = "Store this token securely. Only its SHA-256 hash is stored by Tia."
+    token_note: str = "Store this token securely. Only its SHA-256 hash is stored by Linka."
 
 
 class AutomationWorkerTokenRotated(BaseModel):

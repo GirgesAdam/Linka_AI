@@ -832,7 +832,7 @@ def _execute_period(
 
 def _definitions(plan: AnalyticsBusinessPlan) -> list[str]:
     definitions = [
-        "الخطة يختارها الـAI من metrics/dimensions مسموحة فقط، والتنفيذ يتم بqueries ثابتة على canonical Tia data بدون SQL مولّد.",
+        "الخطة يختارها الـAI من metrics/dimensions مسموحة فقط، والتنفيذ يتم بqueries ثابتة على canonical Linka data بدون SQL مولّد.",
         "كل filters على service/branch/doctor تستخدم canonical IDs داخل workspace الحالية فقط.",
     ]
     if any(metric in MONEY_METRICS for metric in plan.metrics):
@@ -853,7 +853,7 @@ def _definitions(plan: AnalyticsBusinessPlan) -> list[str]:
     if "same_service_repeat_rate" in plan.metrics:
         definitions.append("Same-service retention = المرضى الذين لديهم 2+ completed visits لنفس الخدمة ÷ المرضى الذين لديهم completed visit واحدة على الأقل لها.")
     if "new_patients" in plan.metrics:
-        definitions.append("العميل الجديد يُنسب إلى source_created_at عند توفره، وإلا created_at داخل Tia.")
+        definitions.append("العميل الجديد يُنسب إلى source_created_at عند توفره، وإلا created_at داخل Linka.")
     if plan.comparison == "previous_period":
         definitions.append("المقارنة تستخدم الفترة السابقة المساوية تمامًا في الطول؛ تغير الـrates يظهر كنقاط مئوية.")
     return definitions

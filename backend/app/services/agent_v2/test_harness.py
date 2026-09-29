@@ -114,7 +114,7 @@ DEFAULT_CATALOG: dict[str, object] = {
 }
 
 DEFAULT_CLINIC_INFO = {
-    "name": "Tia Test Clinic",
+    "name": "Linka Test Clinic",
     "phone": "01000000000",
     "working_hours": "يوميًا من 10 صباحًا إلى 10 مساءً",
 }
@@ -549,7 +549,7 @@ def run_v2_fixture_turn(
     history: list[BaseMessage],
     local_now: datetime,
     timezone_name: str = "Africa/Cairo",
-    clinic_name: str = "Tia Test Clinic",
+    clinic_name: str = "Linka Test Clinic",
     env: V2FixtureEnvironment | None = None,
     active_task: ActiveTaskState | None = None,
     simulate_writes: bool = True,

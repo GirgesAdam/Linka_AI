@@ -1,1 +1,1 @@
-"""Read-only runtime diagnostics for Tia operations."""
+"""Read-only runtime diagnostics for Linka operations."""

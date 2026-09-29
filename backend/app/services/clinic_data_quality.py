@@ -1071,7 +1071,7 @@ def resolve_data_issue(
             "materialized_dependent_package_usages": repaired_usages,
         }
     else:
-        raise ClinicDataQualityError("نوع الإصلاح ده لسه محتاج مراجعة يدوية من Tia.")
+        raise ClinicDataQualityError("نوع الإصلاح ده لسه محتاج مراجعة يدوية من Linka.")
 
     issue.status = "resolved"
     issue.resolution = resolution

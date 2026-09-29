@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-# Doctor titles are presentation, not identity. Tia stores staff names without them
+# Doctor titles are presentation, not identity. Linka stores staff names without them
 # and adds the appropriate title in the UI/copy layer when needed.
 _DOCTOR_TITLE_RE = re.compile(
     r"^(?:(?:(?:أ|ا)\s*\.\s*د\s*\.?|د\.|dr\.|prof\.)\s*|(?:د|دكتور|دكتورة|dr|doctor|prof|professor)\s+)+",

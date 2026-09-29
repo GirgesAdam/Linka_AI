@@ -1,4 +1,4 @@
-# Tia AI routing architecture
+# Linka routing architecture
 
 As of v0.14.0, the v0.13.4 single semantic route has been superseded by:
 

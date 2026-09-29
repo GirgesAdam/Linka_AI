@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Focused package regression suite for Tia's single-service package model.
+"""Focused package regression suite for Linka's single-service package model.
 
 Business invariant under test:
 - Every package belongs to exactly one service_id.
@@ -742,7 +742,7 @@ def _case_second_active_package_rejected(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run five focused package checks for Tia single-service, single-active-package rules."
+        description="Run five focused package checks for Linka single-service, single-active-package rules."
     )
     parser.add_argument("--workspace-slug", default="tia-demo")
     parser.add_argument("--workspace-id", type=UUID, default=None)

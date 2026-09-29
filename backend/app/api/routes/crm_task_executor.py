@@ -108,7 +108,7 @@ def update_task_executor(
     if task.task_type != "follow_up" and payload.executor == "tia":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Only follow-up tasks can be executed by Tia.",
+            detail="Only follow-up tasks can be executed by Linka.",
         )
 
     previous_mode = task.execution_mode
@@ -124,7 +124,7 @@ def update_task_executor(
         if task.status != "pending":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="A follow-up can only be handed back to Tia before execution starts.",
+                detail="A follow-up can only be handed back to Linka before execution starts.",
             )
         task.execution_mode = "ai"
         task.assigned_user_id = None

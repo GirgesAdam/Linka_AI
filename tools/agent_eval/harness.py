@@ -1024,7 +1024,7 @@ def write_reports(
         encoding="utf-8",
     )
     lines = [
-        "# Tia Agent Evaluation — Batch 01",
+        "# Linka Agent Evaluation — Batch 01",
         "",
         f"- Git SHA: `{payload['run_metadata']['git_sha']}`",
         f"- Workspace: `{payload['run_metadata']['workspace']}`",
@@ -1047,7 +1047,7 @@ def write_reports(
             lines.append(
                 f"**Customer {turn['turn_number']}:** {turn['user_message']}"
             )
-            lines.append(f"**Tia:** {turn['agent_response']}")
+            lines.append(f"**Linka:** {turn['agent_response']}")
             lines.append(
                 "Tokens: "
                 f"{turn['token_usage']['total_tokens']} | "

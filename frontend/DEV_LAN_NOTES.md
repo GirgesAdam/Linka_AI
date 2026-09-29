@@ -1,4 +1,4 @@
-# Tia frontend LAN development
+# Linka frontend LAN development
 
 Next.js protects dev-only resources such as HMR by origin.
 
@@ -9,5 +9,5 @@ Restart `npm run dev` after changing Next configuration.
 
 The hydration warning containing `sapling-installed="true"` is caused by the
 Sapling browser extension modifying `<body>` before React hydration. Disable
-Sapling for the local Tia site while testing rather than hiding the warning in
+Sapling for the local Linka site while testing rather than hiding the warning in
 application code.

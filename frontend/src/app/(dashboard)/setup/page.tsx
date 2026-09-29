@@ -27,7 +27,7 @@ export default async function SetupPage() {
     <>
       <PageHeader
         title="إعدادات العيادة"
-        description="بيانات العيادة، مواعيد العمل، معلومات Tia، والبيانات القديمة في مكان واحد."
+        description="بيانات العيادة، مواعيد العمل، معلومات Linka، والبيانات القديمة في مكان واحد."
       />
 
       <Card className="mb-5 border-teal-200 bg-teal-50/50">
@@ -49,7 +49,7 @@ export default async function SetupPage() {
               <div>
                 <b className="text-slate-950">اربط واتساب بالعيادة</b>
                 <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-                  Tia هتمشي معاك خطوة بخطوة في إعداد Meta، وتتحقق من كل البيانات قبل الحفظ، وبعدها تجهز الـWebhook والقوالب للـAutomation.
+                  Linka هتمشي معاك خطوة بخطوة في إعداد Meta، وتتحقق من كل البيانات قبل الحفظ، وبعدها تجهز الـWebhook والقوالب للـAutomation.
                 </p>
               </div>
             </div>

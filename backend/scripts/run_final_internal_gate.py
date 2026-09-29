@@ -113,7 +113,7 @@ def ensure_ephemeral_auth_user(email: str, password: str) -> str:
                 "password": password,
                 "email_confirm": True,
                 "user_metadata": {
-                    "name": "Tia Final Gate Member",
+                    "name": "Linka Final Gate Member",
                     "tia_test_marker": marker,
                 },
             },
@@ -125,7 +125,7 @@ def ensure_ephemeral_auth_user(email: str, password: str) -> str:
             "password": password,
             "email_confirm": True,
             "user_metadata": {
-                "name": "Tia Final Gate Member",
+                "name": "Linka Final Gate Member",
                 "tia_test_marker": marker,
             },
         }
@@ -178,7 +178,7 @@ def main() -> int:
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     report = Report(Path.cwd() / f"tia_final_internal_gate_{stamp}.txt")
-    report.section("TIA AI v0.15.4 FINAL INTERNAL GATE")
+    report.section("Linka v0.15.4 FINAL INTERNAL GATE")
 
     if settings.is_production:
         report.result("Production safety gate", "FAIL", "Refusing production.")

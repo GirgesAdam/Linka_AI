@@ -256,7 +256,7 @@ def _ensure_link(
         if by_external.canonical_id != str(canonical_id):
             raise ClinicSyncRecordError(
                 "identity_conflict",
-                f"External {entity_type} id is already linked to another Tia entity.",
+                f"External {entity_type} id is already linked to another Linka entity.",
                 retryable=False,
             )
         by_external.metadata_json = metadata
@@ -271,7 +271,7 @@ def _ensure_link(
     if by_canonical is not None and by_canonical.external_id != external_id:
         raise ClinicSyncRecordError(
             "identity_conflict",
-            f"Tia {entity_type} is already linked to another external entity.",
+            f"Linka {entity_type} is already linked to another external entity.",
             retryable=False,
         )
 
@@ -447,7 +447,7 @@ def _sync_patient(
         if patient is None or patient.workspace_id != workspace.id:
             raise ClinicSyncRecordError(
                 "broken_entity_link",
-                "External patient link points to a missing Tia patient.",
+                "External patient link points to a missing Linka patient.",
                 retryable=False,
             )
         previous_metadata = dict(link.metadata_json or {})
@@ -479,7 +479,7 @@ def _sync_patient(
         if conflicts:
             raise ClinicSyncRecordError(
                 "source_authority_conflict",
-                "Tia and the external clinic system changed the same authoritative patient data.",
+                "Linka and the external clinic system changed the same authoritative patient data.",
                 retryable=False,
             )
 
@@ -504,7 +504,7 @@ def _sync_patient(
         if identity_candidate is not None and identity_candidate.id != patient.id:
             raise ClinicSyncRecordError(
                 "patient_identity_conflict",
-                "Linked external patient now resolves to another Tia patient identity.",
+                "Linked external patient now resolves to another Linka patient identity.",
                 retryable=False,
             )
         outcome: SyncOutcome = "updated"
@@ -1028,7 +1028,7 @@ def _sync_appointment(
     if appointment is None or appointment.workspace_id != workspace.id:
         raise ClinicSyncRecordError(
             "broken_entity_link",
-            "External appointment link points to a missing Tia appointment.",
+            "External appointment link points to a missing Linka appointment.",
             retryable=False,
         )
     metadata = dict(link.metadata_json or {})
@@ -1046,7 +1046,7 @@ def _sync_appointment(
     if current_model_fingerprint != previous_applied and current_model_fingerprint != desired_model_fingerprint:
         raise ClinicSyncRecordError(
             "source_authority_conflict",
-            "Tia and the external clinic system changed the same authoritative appointment data.",
+            "Linka and the external clinic system changed the same authoritative appointment data.",
             retryable=False,
         )
     if source_updated_at and previous_updated_at:
@@ -1326,7 +1326,7 @@ def _sync_payment(
         if transaction is None or transaction.workspace_id != workspace.id:
             raise ClinicSyncRecordError(
                 "broken_entity_link",
-                "External payment link points to a missing Tia transaction.",
+                "External payment link points to a missing Linka transaction.",
                 retryable=False,
             )
         metadata = dict(existing_link.metadata_json or {})
@@ -1383,7 +1383,7 @@ def _sync_payment(
         if appointment.patient_id != patient.id:
             raise ClinicSyncRecordError(
                 "payment_patient_mismatch",
-                "External payment allocation belongs to another Tia patient.",
+                "External payment allocation belongs to another Linka patient.",
                 retryable=False,
             )
         resolved_allocations.append((appointment.id, amount_minor))

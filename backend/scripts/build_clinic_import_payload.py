@@ -23,7 +23,7 @@ def _document(path: Path) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build a Tia clinic tabular-import JSON payload from CSV/XLSX files."
+        description="Build a Linka clinic tabular-import JSON payload from CSV/XLSX files."
     )
     parser.add_argument("--mapping", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)

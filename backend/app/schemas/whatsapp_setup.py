@@ -114,7 +114,7 @@ class WhatsAppSetupState(BaseModel):
                 self.admin_message = None
                 if self.webhook_verified and self.transport_ready:
                     self.system_message = (
-                        "Tia أنشأت القوالب تلقائيًا وبتتابع اعتماد قالب واحد على الأقل لكل Automation."
+                        "Linka أنشأت القوالب تلقائيًا وبتتابع اعتماد قالب واحد على الأقل لكل Automation."
                     )
         return self
 

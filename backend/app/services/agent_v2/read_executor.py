@@ -160,7 +160,7 @@ def _availability_compatibility_failure(
 
 
 def _explanatory_knowledge(context: ReadExecutionContext) -> str | None:
-    """Read only the clinic-wide saved "معلومات Tia" customer knowledge text."""
+    """Read only the clinic-wide saved "معلومات Linka" customer knowledge text."""
     payload = relevant_knowledge_context(
         context.db,
         workspace_id=context.workspace.id,

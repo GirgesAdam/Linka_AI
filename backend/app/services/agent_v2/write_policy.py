@@ -42,7 +42,7 @@ def paid_appointment_cancellation_requires_human(
         matches.extend(row for row in rows if isinstance(row, dict))
 
     # The planner only writes after exactly one appointment is verified. If that one appointment has
-    # money/package state attached, Tia must stop before mutation and hand the request to clinic staff.
+    # money/package state attached, Linka must stop before mutation and hand the request to clinic staff.
     return len(matches) == 1 and _appointment_has_financial_effect(matches[0])
 
 

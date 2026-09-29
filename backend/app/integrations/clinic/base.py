@@ -9,7 +9,7 @@ from typing import Any
 
 
 class ClinicCapability(StrEnum):
-    """Canonical abilities a clinic source can expose to Tia."""
+    """Canonical abilities a clinic source can expose to Linka."""
 
     CATALOG_READ = "catalog.read"
     AVAILABILITY_READ = "availability.read"
@@ -236,7 +236,7 @@ class AppointmentMutationResult:
 
 
 class ClinicAdapter(ABC):
-    """Canonical boundary between Tia's agent and a clinic's source system."""
+    """Canonical boundary between Linka's agent and a clinic's source system."""
 
     @property
     def cache_namespace(self) -> str:

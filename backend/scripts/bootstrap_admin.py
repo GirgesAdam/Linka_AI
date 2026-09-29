@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Attach an existing Supabase Auth user as an admin "
-            "of a Tia AI workspace."
+            "of a Linka workspace."
         )
     )
     parser.add_argument(

@@ -684,7 +684,7 @@ def test_setup_excel_import_applies_valid_rows_and_keeps_invalid_rows_editable()
     )
 
     workbook = load_workbook(io.BytesIO(build_clinic_setup_template()))
-    workbook["clinic_profile"]["B2"] = "Tia Test Clinic"
+    workbook["clinic_profile"]["B2"] = "Linka Test Clinic"
     services = workbook["services"]
     services.append(["PRP Face", "Skin", 45, 2000])
     services.append(["Broken Service", "Skin", None, 1200])

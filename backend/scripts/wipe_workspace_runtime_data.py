@@ -133,7 +133,7 @@ def _count(db, table, wid) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Wipe runtime/test data for one Tia workspace while preserving clinic setup/configuration.")
+    parser = argparse.ArgumentParser(description="Wipe runtime/test data for one Linka workspace while preserving clinic setup/configuration.")
     parser.add_argument("--workspace-id")
     parser.add_argument("--workspace-slug")
     parser.add_argument("--apply", action="store_true")

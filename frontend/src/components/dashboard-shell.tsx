@@ -30,7 +30,7 @@ export function DashboardShell({
             <Bot size={19} />
           </span>
           <div className="min-w-0">
-            <div className="text-[17px] font-black tracking-[-0.02em] text-slate-950">Tia</div>
+            <div className="text-[17px] font-black tracking-[-0.02em] text-slate-950">Linka</div>
             <div className="mt-0.5 truncate text-[11px] font-semibold text-slate-500">{workspace.workspace_name}</div>
           </div>
         </div>
@@ -55,7 +55,7 @@ export function DashboardShell({
                 <Bot size={17} />
               </span>
               <div className="min-w-0">
-                <div className="font-black tracking-tight">Tia</div>
+                <div className="font-black tracking-tight">Linka</div>
                 <div className="truncate text-[10px] font-semibold text-slate-500">{workspace.workspace_name}</div>
               </div>
             </div>

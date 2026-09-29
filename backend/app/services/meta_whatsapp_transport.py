@@ -264,7 +264,7 @@ def provision_standard_whatsapp_templates(
     *,
     current_statuses: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Create every Tia standard template that is missing from this clinic WABA."""
+    """Create every Linka standard template that is missing from this clinic WABA."""
     errors: dict[str, str] = {}
     if current_statuses is None:
         try:

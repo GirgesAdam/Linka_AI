@@ -225,7 +225,7 @@ def test_direct_onboarding_explains_phone_preparation_and_current_migration_path
     assert "WhatsApp Business App" in automation
     assert "الربط اليدوي الحالي لا يستخدم Coexistence" in automation
     assert "أكمل نقل وتجهيز الرقم داخل Meta أولًا" in automation
-    assert "Inbox داخل Tia" in automation
+    assert "Inbox داخل Linka" in automation
 
 
 def test_direct_onboarding_keeps_entered_credentials_after_failed_action() -> None:
@@ -264,7 +264,7 @@ def test_pending_template_variants_are_explained_as_non_blocking() -> None:
         repo / "frontend/src/app/(dashboard)/automations/whatsapp-direct-onboarding.tsx"
     ).read_text(encoding="utf-8")
     assert "قيد مراجعة Meta" in automation
-    assert "Tia تنشئ القوالب المطلوبة وتستخدم القوالب المعتمدة فقط" in automation
+    assert "Linka تنشئ القوالب المطلوبة وتستخدم القوالب المعتمدة فقط" in automation
 
 
 def test_http_client_info_logging_is_suppressed_for_provider_secret_safety() -> None:
@@ -297,7 +297,7 @@ def test_whatsapp_setup_has_guided_manual_flow_without_embedded_signup_or_paid_b
     assert "ربط مباشر مع Meta Cloud API" in setup_page
     assert "الإعداد يتم مرة واحدة" in setup_page
     assert "جهّز الرقم في Meta" in setup_page
-    assert "انسخ البيانات إلى Tia" in setup_page
+    assert "انسخ البيانات إلى Linka" in setup_page
     assert "فعّل استقبال الرسائل" in setup_page
     assert 'href="/automations"' in setup_page
     assert not (repo / "frontend/src/app/(dashboard)/setup/whatsapp/meta-embedded-signup.tsx").exists()

@@ -11,7 +11,7 @@ export default function OnboardingPage() {
           <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-[var(--accent)] text-white shadow-[0_6px_16px_rgba(15,118,110,.18)]"><Bot /></span>
           <div>
             <h1 className="text-2xl font-black tracking-tight text-slate-950">إضافة عيادة جديدة</h1>
-            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">ابدأ بالمعلومات الأساسية، وبعدها Tia هتوضح لك الخطوات المتبقية واحدة واحدة.</p>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">ابدأ بالمعلومات الأساسية، وبعدها Linka هتوضح لك الخطوات المتبقية واحدة واحدة.</p>
           </div>
         </div>
 
@@ -23,7 +23,7 @@ export default function OnboardingPage() {
         <form action={createWorkspaceAction} className="space-y-5">
           <label className="block text-sm font-bold text-slate-800">
             اسم العيادة
-            <input name="name" required minLength={2} className="form-control mt-1.5" placeholder="مثال: Tia Clinic" />
+            <input name="name" required minLength={2} className="form-control mt-1.5" placeholder="مثال: Linka Clinic" />
           </label>
           <label className="block text-sm font-bold text-slate-800">
             المنطقة الزمنية

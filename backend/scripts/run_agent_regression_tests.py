@@ -24,7 +24,7 @@ PAUSE_BETWEEN_TESTS_SECONDS = 1.0
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run Tia AI end-to-end agent regression tests."
+        description="Run Linka end-to-end agent regression tests."
     )
     parser.add_argument("--email", default=DEFAULT_EMAIL)
     parser.add_argument("--workspace-id", default=DEFAULT_WORKSPACE_ID)
@@ -235,7 +235,7 @@ def main() -> int:
     args = parse_args()
     reporter = Reporter()
 
-    reporter.section("TIA AI AGENT REGRESSION TEST SUITE")
+    reporter.section("Linka AGENT REGRESSION TEST SUITE")
     reporter.write(f"STARTED_AT={datetime.now().isoformat(timespec='seconds')}")
     reporter.write(f"BASE_URL={args.base_url}")
     reporter.write(f"EMAIL={args.email}")

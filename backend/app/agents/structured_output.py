@@ -21,7 +21,7 @@ class StructuredOutputSchemaCompatibilityError(RuntimeError):
     pass
 
 
-# Validation keywords kept for Tia's local Pydantic validation rather than sent
+# Validation keywords kept for Linka's local Pydantic validation rather than sent
 # to the model provider. This keeps generation schemas small and deterministic.
 _LOCAL_ONLY_SCHEMA_KEYS = frozenset(
     {
@@ -42,7 +42,7 @@ _LOCAL_ONLY_SCHEMA_KEYS = frozenset(
 def canonicalize_provider_json_schema(
     schema: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compile Pydantic JSON Schema to Tia's conservative provider subset.
+    """Compile Pydantic JSON Schema to Linka's conservative provider subset.
 
     Transformations:
     - inline local `#/$defs/...` references;

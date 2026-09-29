@@ -118,7 +118,7 @@ def filter_bookable_doctor_rows(
 
 
 class TiaDatabaseClinicAdapter(ClinicAdapter):
-    """Clinic adapter backed by Tia's native PostgreSQL/SQLAlchemy schema."""
+    """Clinic adapter backed by Linka's native PostgreSQL/SQLAlchemy schema."""
 
     def __init__(self, *, db: Session, workspace: Workspace) -> None:
         self.db = db
@@ -160,7 +160,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             return UUID(str(value))
         except (TypeError, ValueError) as exc:
             raise BookingRuleError(
-                f"{field_name} is not a valid identifier for the Tia database integration."
+                f"{field_name} is not a valid identifier for the Linka database integration."
             ) from exc
 
     def catalog_revision(self) -> Hashable:
@@ -418,7 +418,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
     def create_appointment(
         self, request: CreateAppointmentRequest
     ) -> AppointmentMutationResult:
-        """Create a native Tia appointment while keeping ORM details inside the adapter."""
+        """Create a native Linka appointment while keeping ORM details inside the adapter."""
         self._require_local_appointment_write()
         self.require_capability(ClinicCapability.APPOINTMENTS_CREATE)
 
@@ -528,7 +528,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             action="appointment.created",
             entity_type="appointment",
             entity_id=appointment.id,
-            summary="Appointment created by Tia AI",
+            summary="Appointment created by Linka",
             metadata={"status": initial_status, "source": appointment.source},
         )
         self.db.flush()
@@ -746,7 +746,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
 
         The joined query intentionally replaces the old per-appointment service,
         branch, and doctor lookups. The adapter returns one canonical snapshot per
-        appointment so callers never need to know Tia's relational schema.
+        appointment so callers never need to know Linka's relational schema.
         """
         self.require_capability(ClinicCapability.APPOINTMENTS_READ)
 
@@ -847,7 +847,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         return AppointmentReadResult(appointments=tuple(appointments))
 
     def build_catalog(self) -> dict[str, Any]:
-        """Build the canonical agent catalog from Tia's native clinic tables."""
+        """Build the canonical agent catalog from Linka's native clinic tables."""
         db = self.db
         workspace = self.workspace
 

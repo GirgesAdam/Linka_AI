@@ -42,7 +42,7 @@ class SeedSettings(BaseSettings):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create idempotent demo clinic data for testing the Tia AI agent."
+        description="Create idempotent demo clinic data for testing the Linka agent."
     )
     parser.add_argument("--workspace-slug", default="tia")
     return parser.parse_args()
@@ -58,7 +58,7 @@ def get_or_create_branch(db: Session, workspace: Workspace) -> Branch:
     if branch is None:
         branch = Branch(
             workspace_id=workspace.id,
-            name="Tia Demo Branch",
+            name="Linka Demo Branch",
             code="demo-main",
             phone="+201000000000",
             address_line1="Demo address — staging only",
@@ -102,7 +102,7 @@ def get_or_create_doctor(db: Session, workspace: Workspace) -> Doctor:
             workspace_id=workspace.id,
             staff_id=staff.id,
             specialization="Aesthetic Medicine — Demo",
-            bio="Demo doctor used only for Tia AI staging tests.",
+            bio="Demo doctor used only for Linka staging tests.",
             booking_enabled=True,
             is_active=True,
         )
@@ -124,7 +124,7 @@ def get_or_create_service(db: Session, workspace: Workspace) -> Service:
             name="ليزر إزالة الشعر — Demo",
             slug="demo-laser-hair-removal",
             category="Laser",
-            description="خدمة تجريبية لاختبار Tia AI على Staging فقط.",
+            description="خدمة تجريبية لاختبار Linka على Staging فقط.",
             duration_minutes=60,
             buffer_before_minutes=0,
             buffer_after_minutes=0,
@@ -276,7 +276,7 @@ def get_or_create_patient(db: Session, workspace: Workspace, branch: Branch) -> 
             preferred_language="ar",
             preferred_branch_id=branch.id,
             source="website",
-            source_detail="Tia AI agent demo seed",
+            source_detail="Linka agent demo seed",
             status="active",
             marketing_consent=False,
         )
@@ -328,7 +328,7 @@ def main() -> int:
             print(f"Demo seed failed because of a database constraint: {exc}", file=sys.stderr)
             return 1
 
-        print("Tia AI agent demo data is ready")
+        print("Linka agent demo data is ready")
         print(f"workspace_id={workspace.id}")
         print(f"patient_id={patient.id}")
         print(f"branch_id={branch.id}")

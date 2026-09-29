@@ -22,7 +22,7 @@ CRM_CAMPAIGN_ATTRIBUTION_KINDS = ("direct_same_conversation_response",)
 class CRMCampaignConversion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Explicit, auditable campaign-to-booking attribution.
 
-    A row is created only when Tia books an appointment after a patient reply in
+    A row is created only when Linka books an appointment after a patient reply in
     the same conversation as a previously sent CRM campaign message. We never
     infer conversions later from patient/date proximity alone.
     """

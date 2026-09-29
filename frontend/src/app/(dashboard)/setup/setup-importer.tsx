@@ -326,7 +326,7 @@ export function ClinicSetupImporter({ initialSetup }: { initialSetup: ClinicSetu
       <div className="rounded-2xl border-2 border-teal-300 bg-teal-50 p-5">
         <div>
           <b className="text-lg">2. راجع البيانات ثم احفظها</b>
-          <p className="mt-1 text-xs text-[var(--muted)]">فيه زر حفظ واحد للصفحة كلها. الحفظ هو اللي ينقل الـdraft إلى قاعدة بيانات Tia، وأي صف غير مكتمل يفضل ظاهر كملاحظة بدل ما يوقع باقي الإعداد.</p>
+          <p className="mt-1 text-xs text-[var(--muted)]">فيه زر حفظ واحد للصفحة كلها. الحفظ هو اللي ينقل الـdraft إلى قاعدة بيانات Linka، وأي صف غير مكتمل يفضل ظاهر كملاحظة بدل ما يوقع باقي الإعداد.</p>
         </div>
         <Button type="button" size="lg" onClick={saveDraft} disabled={saving} className="mt-4 w-full justify-center py-6 text-lg font-bold">{saving ? <><LoaderCircle size={19} className="animate-spin" /> جاري الحفظ</> : <><Save size={19} /> حفظ إعدادات العيادة</>}</Button>
 
@@ -341,7 +341,7 @@ export function ClinicSetupImporter({ initialSetup }: { initialSetup: ClinicSetu
               <p className="text-xs text-amber-800">{dirty ? "فيه تعديلات غير محفوظة. اضغط «حفظ إعدادات العيادة» الأول." : <>كمّل المطلوب الأول: {missing.join(" • ") || "احفظ إعدادات العيادة"}</>}</p>
             </div>
           )}
-          <p className="mt-2 text-[11px] text-[var(--muted)]">البيانات التاريخية خطوة اختيارية؛ بعد تجهيز العيادة تقدر تتخطاها وتشغل Tia مباشرة.</p>
+          <p className="mt-2 text-[11px] text-[var(--muted)]">البيانات التاريخية خطوة اختيارية؛ بعد تجهيز العيادة تقدر تتخطاها وتشغل Linka مباشرة.</p>
         </div>
       </div>
     </div>

@@ -280,7 +280,7 @@ class PostgresReadonlyClinicAdapter(ClinicAdapter):
 
     @property
     def capabilities(self) -> ClinicCapabilities:
-        # Hybrid mode may deliberately keep booking/catalog ownership in Tia while
+        # Hybrid mode may deliberately keep booking/catalog ownership in Linka while
         # patients/payments (or other selected domains) sync from PostgreSQL.
         if self.native_delegate is not None:
             return self.native_delegate.capabilities

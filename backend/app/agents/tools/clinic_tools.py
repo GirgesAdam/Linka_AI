@@ -1735,7 +1735,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         """Cancel the current customer's appointment when clinic policy allows it.
 
         Reason is optional. The clinic adapter owns cancellation policy; if staff
-        approval is required, the tool converts that decision into Tia handoff state.
+        approval is required, the tool converts that decision into Linka handoff state.
         """
         reason = reason.strip() or "customer_requested"
         inputs = {"appointment_id": appointment_id, "reason": reason}
@@ -1906,14 +1906,14 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         title: str = "متابعة مع العميل",
         note: str = "",
     ) -> str:
-        """Schedule one automatic Tia follow-up for the current patient.
+        """Schedule one automatic Linka follow-up for the current patient.
 
         Use only when the customer clearly asks to be contacted/reminded later, or
         when the current conversation explicitly agrees on a future follow-up.
         due_at_local must be a specific future clinic-local datetime such as
         2026-08-26T15:30. Natural-language interpretation belongs to the model;
         Python validates the resolved time, patient, conversation, ownership, and
-        idempotency. At the due time Tia composes a fresh natural WhatsApp message
+        idempotency. At the due time Linka composes a fresh natural WhatsApp message
         from the latest conversation context and sends it through the normal outbox.
         """
         inputs = {"due_at_local": due_at_local, "title": title, "note": note}

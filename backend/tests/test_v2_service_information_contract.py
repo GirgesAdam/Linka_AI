@@ -178,7 +178,7 @@ def test_pure_service_path_bypasses_generic_responder(monkeypatch: pytest.Monkey
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("generic responder must not run")),
     )
     text, label = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="???? ?? ???????????")],
@@ -190,7 +190,7 @@ def test_pure_service_path_bypasses_generic_responder(monkeypatch: pytest.Monkey
 
 def test_stale_assistant_service_fact_cannot_override_verified_truth() -> None:
     text, label = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
@@ -209,9 +209,9 @@ def test_mixed_legacy_path_receives_only_safe_service_facts() -> None:
         {"name": "Laser", "laser_devices": [{"device_name": "Candela Gentle"}]},
         requested=["devices"],
     )
-    other = TurnOutcome(status="answered", response_goal="answer_clinic_info", facts={"clinic_info": {"clinic_name": "Tia"}})
+    other = TurnOutcome(status="answered", response_goal="answer_clinic_info", facts={"clinic_info": {"clinic_name": "Linka"}})
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="?????? ???? ????? ????????")],

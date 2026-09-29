@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy | Tia AI",
+  title: "Privacy Policy | Linka",
   description:
-    "Privacy Policy for Tia AI clinic operations, customer service, booking, and messaging services.",
+    "Privacy Policy for Linka clinic operations, customer service, booking, and messaging services.",
 };
 
 const effectiveDate = "August 16, 2026";
@@ -37,7 +37,7 @@ function List({ children }: Readonly<{ children: React.ReactNode }>) {
 }
 
 export default function PrivacyPolicyPage() {
-  const legalName = process.env.NEXT_PUBLIC_TIA_LEGAL_NAME?.trim() || "Tia AI";
+  const legalName = process.env.NEXT_PUBLIC_TIA_LEGAL_NAME?.trim() || "Linka";
   const privacyEmail = process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL?.trim();
 
   return (
@@ -46,7 +46,7 @@ export default function PrivacyPolicyPage() {
         <header className="mb-6 rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm sm:p-9">
           <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-3">
-              <p className="text-sm font-semibold text-[var(--accent)]">Tia AI</p>
+              <p className="text-sm font-semibold text-[var(--accent)]">Linka</p>
               <h1 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl">
                 Privacy Policy
               </h1>
@@ -76,7 +76,7 @@ export default function PrivacyPolicyPage() {
               {legalName} provides software that clinics and other authorized
               businesses can use to communicate with customers, manage customer
               records and appointments, automate operational workflows, and use AI
-              assistance. The clinic or business operating a Tia AI workspace is
+              assistance. The clinic or business operating a Linka workspace is
               generally responsible for the customer information it places in that
               workspace, while {legalName} processes that information to provide and
               secure the service.
@@ -112,7 +112,7 @@ export default function PrivacyPolicyPage() {
             </List>
             <p>
               A customer may choose to include health-related information in a
-              message. Tia AI is designed for clinic operations and customer
+              message. Linka is designed for clinic operations and customer
               service, not automated medical diagnosis. Requests involving medical
               diagnosis, treatment suitability, or urgent symptoms are intended to
               be escalated to qualified human staff rather than decided by the AI.
@@ -149,7 +149,7 @@ export default function PrivacyPolicyPage() {
               When AI features are enabled, relevant message content and necessary
               workspace context may be sent to configured AI model providers so the
               service can understand a request, generate a response, or produce a
-              structured action plan. Tia AI applies application-level validation,
+              structured action plan. Linka applies application-level validation,
               access controls, and business rules around AI outputs before business
               actions are executed.
             </p>
@@ -184,7 +184,7 @@ export default function PrivacyPolicyPage() {
               </li>
               <li>
                 Service providers that host, transmit, automate, secure, monitor,
-                or provide AI functionality for Tia AI.
+                or provide AI functionality for Linka.
               </li>
               <li>
                 Messaging and communications providers such as Meta/WhatsApp when
@@ -214,7 +214,7 @@ export default function PrivacyPolicyPage() {
 
           <Section title="8. Security and access control">
             <p>
-              Tia AI uses technical and organizational controls intended to protect
+              Linka uses technical and organizational controls intended to protect
               information, including workspace-level access control, role-based
               permissions, authenticated integration access, audit trails, and
               protected transport of data between services. No method of storage or
@@ -244,7 +244,7 @@ export default function PrivacyPolicyPage() {
 
           <Section title="11. Children">
             <p>
-              Tia AI is a business software service and is not directed to children
+              Linka is a business software service and is not directed to children
               for independent use. Clinics and businesses using the service are
               responsible for applying any consent, guardian, or age requirements
               that apply to their services and customers.
@@ -262,7 +262,7 @@ export default function PrivacyPolicyPage() {
           <Section title="13. Contact">
             {privacyEmail ? (
               <p>
-                For privacy questions about the Tia AI platform, contact us at{" "}
+                For privacy questions about the Linka platform, contact us at{" "}
                 <a
                   className="font-medium text-[var(--accent)] underline underline-offset-4"
                   href={`mailto:${privacyEmail}`}
@@ -276,7 +276,7 @@ export default function PrivacyPolicyPage() {
               <p>
                 For requests about customer records, contact the clinic or business
                 you interacted with using its published business contact details.
-                Workspace administrators can contact Tia AI through their normal
+                Workspace administrators can contact Linka through their normal
                 account-support channel for platform privacy requests.
               </p>
             )}
@@ -289,7 +289,7 @@ export default function PrivacyPolicyPage() {
             className="font-medium text-[var(--accent)] hover:underline"
             href="/login"
           >
-            Tia AI login
+            Linka login
           </Link>
         </footer>
       </div>

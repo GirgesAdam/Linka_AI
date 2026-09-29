@@ -103,7 +103,7 @@ def appointment_allowed_actions(
         else:
             actions.extend(("complete", "no_show"))
     elif appointment_status in {"checked_in", "in_progress"}:
-        # Legacy states stay readable but are no longer created by Tia. Allow
+        # Legacy states stay readable but are no longer created by Linka. Allow
         # existing rows to be closed without reintroducing those workflow steps.
         if now >= start_at:
             actions.extend(("complete", "no_show"))

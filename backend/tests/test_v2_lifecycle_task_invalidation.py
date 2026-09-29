@@ -62,7 +62,7 @@ def _context(adapter: FakeAdapter) -> ReadExecutionContext:
         db=SimpleNamespace(),
         workspace=SimpleNamespace(
             id=WORKSPACE_ID,
-            name="Tia Clinic",
+            name="Linka Clinic",
             timezone="Africa/Cairo",
             primary_branch_id=None,
         ),
@@ -122,7 +122,7 @@ def _appointment(*, status: str) -> AppointmentRecord:
         service_id="svc-hydra",
         service_name="Hydrafacial",
         branch_id="branch-1",
-        branch_name="Tia Clinic",
+        branch_name="Linka Clinic",
         doctor_id="doc-old",
         doctor_name="Old Doctor",
         start_at=start,

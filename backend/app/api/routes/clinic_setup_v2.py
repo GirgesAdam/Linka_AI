@@ -127,7 +127,7 @@ def download_setup_v2_template(
     return Response(
         content=build_clinic_setup_template(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="Tia_Clinic_Setup_Template_v1.xlsx"'},
+        headers={"Content-Disposition": 'attachment; filename="Linka_Clinic_Setup_Template_v1.xlsx"'},
     )
 
 
@@ -153,7 +153,7 @@ def apply_setup_draft_v2(
         result = import_clinic_setup_workbook(
             db,
             workspace=access.workspace,
-            filename="Tia_Clinic_Setup_Edited_Draft.xlsx",
+            filename="Linka_Clinic_Setup_Edited_Draft.xlsx",
             content_base64=content_base64,
         )
         _activity(
@@ -379,7 +379,7 @@ def download_history_template(
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="Tia_Import_Template_v1.xlsx"'},
+        headers={"Content-Disposition": 'attachment; filename="Linka_Import_Template_v1.xlsx"'},
     )
 
 

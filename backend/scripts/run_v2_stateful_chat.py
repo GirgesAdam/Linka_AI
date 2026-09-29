@@ -89,7 +89,7 @@ def main() -> None:
     active_task: ActiveTaskState | None = None
     turn_number = 0
 
-    print("Tia Agent Core V2 — STATEFUL TEST CHAT")
+    print("Linka Agent Core V2 — STATEFUL TEST CHAT")
     print("Real V2 interpreter/responder. Fixture reads. Writes are simulated only.")
     print("Commands: /state  /reset  /quit")
 
@@ -127,7 +127,7 @@ def main() -> None:
             turn_id=f"interactive-{turn_number}",
         )
         active_task = result.active_task
-        print(f"TIA V2> {result.reply}")
+        print(f"Linka V2> {result.reply}")
         print(f"MODEL> {result.responder_model}")
         _print_trace(result)
         history.append(AIMessage(content=result.reply))

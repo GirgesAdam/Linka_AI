@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Gmail/Google Workspace account connected to the n8n credential.",
     )
-    parser.add_argument("--display-name", default="Tia Gmail")
+    parser.add_argument("--display-name", default="Linka Gmail")
     parser.add_argument(
         "--not-default",
         action="store_true",
@@ -165,7 +165,7 @@ def main() -> int:
         print(f"adapter_token={adapter_token}")
         print(
             "Store adapter_token in an n8n HTTP Header Auth credential as "
-            "X-Channel-Token. Tia stores only its hash."
+            "X-Channel-Token. Linka stores only its hash."
         )
     return 0
 

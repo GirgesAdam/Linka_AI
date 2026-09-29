@@ -534,7 +534,7 @@ def test_return_to_tia_racing_staff_outbound_never_creates_mixed_ownership(
                     handoff=handoff,
                     conversation=conversation,
                     actor_user=user,
-                    resolution_note="return to Tia",
+                    resolution_note="return to Linka",
                     conversation_status_after="open",
                 )
                 return "returned_to_ai"

@@ -87,7 +87,7 @@ class ClinicIntegration(TimestampMixin, Base):
 
 
 class ClinicIntegrationEntityLink(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Maps a Tia canonical entity id to the clinic source system's id."""
+    """Maps a Linka canonical entity id to the clinic source system's id."""
 
     __tablename__ = "clinic_integration_entity_links"
     __table_args__ = (

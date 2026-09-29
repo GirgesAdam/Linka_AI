@@ -35,7 +35,7 @@ def _catalog() -> dict[str, object]:
             {"id": DOCTOR_1, "name": "د. سارة", "service_ids": [SERVICE_ID]},
             {"id": DOCTOR_2, "name": "د. مريم", "service_ids": [SERVICE_ID]},
         ],
-        "branches": [{"id": str(BRANCH_ID), "name": "Tia Clinic"}],
+        "branches": [{"id": str(BRANCH_ID), "name": "Linka Clinic"}],
     }
 
 
@@ -236,7 +236,7 @@ class _Adapter:
         return AvailabilityResult(
             timezone="Africa/Cairo",
             branch_id=str(BRANCH_ID),
-            branch_name="Tia Clinic",
+            branch_name="Linka Clinic",
             service_id=SERVICE_ID,
             service_name="ليزر",
             service_duration_minutes=30,
@@ -250,7 +250,7 @@ def _slot(doctor_id: str, cairo_hour: int, minute: int) -> AvailabilitySlot:
     start = datetime(2026, 9, 15, cairo_hour - 3, minute, tzinfo=UTC)
     return AvailabilitySlot(
         branch_id=str(BRANCH_ID),
-        branch_name="Tia Clinic",
+        branch_name="Linka Clinic",
         doctor_id=doctor_id,
         doctor_name="د. سارة" if doctor_id == DOCTOR_1 else "د. مريم",
         service_id=SERVICE_ID,
@@ -267,7 +267,7 @@ def test_nearest_availability_is_chosen_deterministically_across_requested_docto
     adapter = _Adapter()
     workspace = SimpleNamespace(
         id=WORKSPACE_ID,
-        name="Tia Clinic",
+        name="Linka Clinic",
         timezone="Africa/Cairo",
         primary_branch_id=BRANCH_ID,
     )

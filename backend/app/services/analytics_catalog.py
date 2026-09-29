@@ -80,7 +80,7 @@ class _Definition:
 _PERIOD = ("period",)
 _ENTITY = ("service", "branch", "doctor")
 _LIMIT = ("limit",)
-# Tia currently operates in EGP only. Money remains explicit in the domain layer,
+# Linka currently operates in EGP only. Money remains explicit in the domain layer,
 # but currency is not a user-facing analytics filter.
 _ANALYTICS_CURRENCY = "EGP"
 _MONEY: tuple[str, ...] = ()
@@ -143,7 +143,7 @@ _DEFINITIONS: tuple[_Definition, ...] = (
     # Patients
     _Definition(
         "new_patients_trend", "patients", "العملاء الجدد",
-        "عدد العملاء الجدد حسب تاريخهم الأصلي عند توفره، وإلا تاريخ إنشائهم في Tia.",
+        "عدد العملاء الجدد حسب تاريخهم الأصلي عند توفره، وإلا تاريخ إنشائهم في Linka.",
         "trend", "line", ("line", "bar", "table"), _PERIOD + _GRANULARITY,
         ("export",), "business",
         metrics=("new_patients",), default_lookback_days=180, default_granularity="month",
@@ -546,7 +546,7 @@ def _catalog_definitions(definitions: list[str], *, mode: Mode) -> list[str]:
             .replace("في العملة المحددة", "بالجنيه المصري")
         )
     prefix = (
-        "الأرقام محسوبة من البيانات المسجلة في Tia وبنفس التعريف كل مرة."
+        "الأرقام محسوبة من البيانات المسجلة في Linka وبنفس التعريف كل مرة."
         if mode != "audience"
         else "قائمة العملاء محسوبة من نفس الشروط الظاهرة، وتُعاد مراجعتها عند تنفيذ أي إجراء عليها."
     )

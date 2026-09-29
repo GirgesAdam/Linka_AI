@@ -16,17 +16,17 @@ import {
 const setupSteps = [
   {
     title: "جهّز الرقم في Meta",
-    description: "افتح Meta App وجهّز رقم العيادة على WhatsApp Cloud API. كل خانة داخل Tia معها رابط مباشر للمكان المطلوب.",
+    description: "افتح Meta App وجهّز رقم العيادة على WhatsApp Cloud API. كل خانة داخل Linka معها رابط مباشر للمكان المطلوب.",
     icon: ExternalLink,
   },
   {
-    title: "انسخ البيانات إلى Tia",
-    description: "Tia تتحقق من الحساب والرقم والصلاحيات قبل حفظ أي بيانات سرية.",
+    title: "انسخ البيانات إلى Linka",
+    description: "Linka تتحقق من الحساب والرقم والصلاحيات قبل حفظ أي بيانات سرية.",
     icon: CheckCircle2,
   },
   {
     title: "فعّل استقبال الرسائل",
-    description: "انسخ رابط الاستقبال ورمز التحقق إلى Meta مرة واحدة، وبعدها Tia تفحص الجاهزية تلقائيًا.",
+    description: "انسخ رابط الاستقبال ورمز التحقق إلى Meta مرة واحدة، وبعدها Linka تفحص الجاهزية تلقائيًا.",
     icon: Link2,
   },
 ];
@@ -41,7 +41,7 @@ export default async function WhatsAppSetupPage() {
     <>
       <PageHeader
         title="ربط WhatsApp"
-        description="ربط مباشر مع Meta Cloud API. الإعداد يتم مرة واحدة، وTia تتحقق من كل خطوة قبل التشغيل."
+        description="ربط مباشر مع Meta Cloud API. الإعداد يتم مرة واحدة، وLinka تتحقق من كل خطوة قبل التشغيل."
       />
 
       <Card className="mb-6 border-teal-200 bg-teal-50/40">
@@ -51,9 +51,9 @@ export default async function WhatsAppSetupPage() {
               <MessageCircleMore size={22} />
             </span>
             <div>
-              <b className="text-lg text-slate-950">الربط مباشر بين Tia وMeta</b>
+              <b className="text-lg text-slate-950">الربط مباشر بين Linka وMeta</b>
               <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                استخدم حساب Meta والرقم الخاصين بالعيادة. Tia ستوضح أين تجد كل قيمة وتتحقق منها قبل الحفظ، من غير ما تعرض لك تعقيد تقني أكثر من المطلوب.
+                استخدم حساب Meta والرقم الخاصين بالعيادة. Linka ستوضح أين تجد كل قيمة وتتحقق منها قبل الحفظ، من غير ما تعرض لك تعقيد تقني أكثر من المطلوب.
               </p>
             </div>
           </div>

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""High-coverage conversational stress test for Tia's customer agent.
+"""High-coverage conversational stress test for Linka's customer agent.
 
 This is intentionally a *live* Gemini + PostgreSQL regression runner. It tests the
 real service-layer agent while wrapping every scenario in a database savepoint and
@@ -14,7 +14,7 @@ The suite has two layers:
 Typical demo run:
     python scripts/run_agent_conversation_stress.py --workspace-slug tia-demo --profile full
 
-The report includes every customer turn, Tia reply, tools executed, handoff state,
+The report includes every customer turn, Linka reply, tools executed, handoff state,
 duration and deterministic findings. The runner is designed for 100-300 customer
 turns; the full profile targets roughly 200 turns.
 """
@@ -958,7 +958,7 @@ def _run_conversation_scenario(
             count += 1
             print(f"[{result.status}] e2e/{spec.category}/{spec.name}#{turn_index}: {turn.message}")
             if result.reply:
-                print("       Tia:", " ".join(result.reply.split())[:300])
+                print("       Linka:", " ".join(result.reply.split())[:300])
             if result.findings:
                 print("       Findings:", ", ".join(result.findings))
             # Once a handoff owns the conversation, later turns are intentionally not
@@ -1098,7 +1098,7 @@ def _static_architecture_findings() -> list[dict[str, str]]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Tia 100-300-turn live customer-agent stress test.")
+    parser = argparse.ArgumentParser(description="Run Linka 100-300-turn live customer-agent stress test.")
     parser.add_argument("--workspace-slug", default="tia-demo")
     parser.add_argument("--workspace-id", type=UUID, default=None)
     parser.add_argument("--profile", choices=("semantic", "e2e", "full"), default="full")
@@ -1174,7 +1174,7 @@ def main() -> int:
     }
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     counts = report.counts()
-    print("\n=== Tia Agent Stress Summary ===")
+    print("\n=== Linka Agent Stress Summary ===")
     print(json.dumps({"executed_turns": len(report.results), "counts": counts}, ensure_ascii=False, indent=2))
     print(f"Report: {report_path}")
     print("Database writes rolled back: yes")
