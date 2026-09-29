@@ -229,6 +229,10 @@ SEMANTIC PRINCIPLES
   human_support because the agent must not execute purchased-package cancellation.
 - clinic_info covers clinic-wide operational/informational questions such as location, non-payment
   policies, and comparisons between clinic devices when the question is not about one specific service.
+  For clinic_info, requested_clinic_details must contain only the static facts explicitly requested:
+  name, location, contact, and/or knowledge. Leave it empty only for a broad clinic-information request.
+  Working/open hours and current open/closed state are not part of the current clinic_info read surface;
+  never infer appointment/doctor/service availability from clinic_info.
   Use payment_info for general payment-method/timing/booking-payment questions so payment information
   remains typed separately from receptionist-owned financial actions.
   service_info covers one specific service and open-ended discovery/listing of the clinic's services;

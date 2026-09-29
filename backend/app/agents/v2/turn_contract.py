@@ -44,6 +44,7 @@ PackageUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 PackageDetail = Literal["owned", "offers"]
 PatientDetail = Literal["name", "phone", "preferred_language"]
 ServiceDetail = Literal["price", "duration", "description", "devices"]
+ClinicDetail = Literal["name", "location", "contact", "knowledge"]
 PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "financial_ledger"]
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
@@ -251,6 +252,17 @@ class TurnOperation(StrictContractModel):
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
+    requested_clinic_details: list[ClinicDetail] = Field(
+        default_factory=list,
+        description=(
+            "For clinic_info only, include exactly the static customer-facing clinic facts requested: "
+            "name for clinic identity, location for the primary customer-facing location/address, "
+            "contact for customer-facing phone/email, and knowledge for saved clinic informational "
+            "knowledge/policies. Leave empty only for a broad clinic-information request. Do not use "
+            "clinic_info or this field to claim appointment availability, doctor availability, prices, "
+            "or current open/closed status."
+        ),
+    )
     requested_patient_details: list[PatientDetail] = Field(
         default_factory=list,
         description=(

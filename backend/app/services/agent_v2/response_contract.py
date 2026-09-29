@@ -147,6 +147,26 @@ class ServiceTruth(StrictResponseContractModel):
     complete_set: bool = False
 
 
+class ClinicLocationInfo(StrictResponseContractModel):
+    name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country_code: str | None = None
+
+
+class ClinicTruth(StrictResponseContractModel):
+    requested_details: tuple[str, ...]
+    clinic_name: str | None = None
+    locations: tuple[ClinicLocationInfo, ...] = ()
+    knowledge: str | None = None
+    complete_location_set: bool = True
+
+
 class AppointmentServiceInfo(StrictResponseContractModel):
     service_name: str | None = None
     device_name: str | None = None
@@ -175,6 +195,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     package_truth: PackageTruth | None = None
     patient_truth: PatientTruth | None = None
     service_truth: ServiceTruth | None = None
+    clinic_truth: ClinicTruth | None = None
     appointment_truth: AppointmentInfoTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
@@ -887,6 +908,58 @@ def _service_truth(outcome: TurnOutcome) -> ServiceTruth | None:
     )
 
 
+def _clinic_truth(outcome: TurnOutcome) -> ClinicTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "answer_clinic_info":
+        return None
+    if "clinic_requested_details" not in outcome.facts:
+        return None
+    wrapper = outcome.facts.get("clinic_info")
+    if not isinstance(wrapper, dict):
+        return None
+
+    raw_requested = outcome.facts.get("clinic_requested_details")
+    if not isinstance(raw_requested, list) or not raw_requested:
+        return None
+    requested = tuple(str(item) for item in raw_requested)
+    allowed = {"name", "location", "contact", "knowledge"}
+    if not set(requested).issubset(allowed) or len(set(requested)) != len(requested):
+        return None
+
+    clinic_name = str(wrapper.get("clinic_name") or "").strip() or None
+    knowledge = str(wrapper.get("knowledge") or "").strip() or None
+
+    raw_locations = wrapper.get("locations", [])
+    if not isinstance(raw_locations, list) or len(raw_locations) > 1:
+        return None
+    locations: list[ClinicLocationInfo] = []
+    for raw in raw_locations:
+        if not isinstance(raw, dict):
+            return None
+        values = {
+            key: str(raw.get(key) or "").strip() or None
+            for key in (
+                "name",
+                "phone",
+                "email",
+                "address",
+                "address_line1",
+                "address_line2",
+                "city",
+                "state",
+                "country_code",
+            )
+        }
+        locations.append(ClinicLocationInfo(**values))
+
+    return ClinicTruth(
+        requested_details=requested,
+        clinic_name=clinic_name,
+        locations=tuple(locations),
+        knowledge=knowledge,
+        complete_location_set=True,
+    )
+
+
 def _patient_truth(outcome: TurnOutcome) -> PatientTruth | None:
     if outcome.status != "answered" or outcome.response_goal != "answer_customer_profile":
         return None
@@ -1073,6 +1146,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     package_truth = _package_truth(outcome)
     patient_truth = _patient_truth(outcome)
     service_truth = _service_truth(outcome)
+    clinic_truth = _clinic_truth(outcome)
     appointment_truth = _appointment_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
@@ -1112,6 +1186,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         package_truth=package_truth,
         patient_truth=patient_truth,
         service_truth=service_truth,
+        clinic_truth=clinic_truth,
         appointment_truth=appointment_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
@@ -1344,6 +1419,21 @@ def is_pure_supported_service_contract(
             "devices" not in unit.service_truth.requested_details
             or all(item.devices_complete_set for item in unit.service_truth.services)
         )
+        for unit in contract.units
+    )
+
+
+def is_pure_supported_clinic_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is verified read-only clinic information."""
+    if not contract.units:
+        return False
+    return all(
+        unit.response_goal == "answer_clinic_info"
+        and unit.status == "answered"
+        and unit.clinic_truth is not None
+        and unit.commercial_truth is None
         for unit in contract.units
     )
 
