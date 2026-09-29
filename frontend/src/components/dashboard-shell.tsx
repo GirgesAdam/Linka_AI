@@ -51,7 +51,7 @@ export function DashboardShell({
         <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/92 backdrop-blur-xl">
           <div className="flex h-16 items-center justify-between gap-4 px-4 md:px-6 lg:h-[68px] lg:px-8">
             <div className="flex min-w-0 items-center gap-3 lg:hidden">
-              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--brand-navy)] text-white">
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--shell-bg)] text-white">
                 <Waypoints size={17} />
               </span>
               <div className="min-w-0">

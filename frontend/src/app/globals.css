@@ -11,15 +11,19 @@
   --muted: #687086;
   --muted-strong: #50586d;
 
-  --brand-navy: #14213d;
-  --brand-navy-strong: #0c162c;
-  --brand-navy-soft: #eef1f7;
-  --accent: #6d5bd0;
-  --accent-strong: #5948bb;
-  --accent-soft: rgba(109, 91, 208, 0.1);
-  --accent-ring: rgba(109, 91, 208, 0.18);
-  --accent-border: #ded8f6;
-  --accent-pink: #c85a8e;
+  --brand-navy: #1e1b4b;
+  --brand-purple: #8b5cf6;
+  --brand-pink: #f472b6;
+  --brand-indigo: #6366f1;
+
+  --shell-bg: #17153d;
+  --shell-bg-strong: #12102f;
+  --shell-bg-soft: #f0eff8;
+  --accent: #7c5ce7;
+  --accent-strong: #6546d7;
+  --accent-soft: rgba(139, 92, 246, 0.1);
+  --accent-ring: rgba(139, 92, 246, 0.2);
+  --accent-border: #ddd2fb;
   --sidebar-muted: #9ba8c1;
   --sidebar-accent: #c4b5fd;
 
@@ -146,7 +150,7 @@ button:disabled { cursor: not-allowed; }
 }
 
 .app-shell-sidebar {
-  background: var(--brand-navy);
+  background: var(--shell-bg);
   color: #f8fafc;
 }
 
