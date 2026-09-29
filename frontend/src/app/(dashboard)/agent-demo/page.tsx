@@ -13,7 +13,7 @@ export default async function AgentDemoPage() {
   return (
     <>
       <PageHeader
-        title="Test Tia"
+        title="Test Linka"
         description="جرّب الـcustomer agent من البداية للنهاية وتأكد بنفسك إن الحجز والتعديل والإلغاء بيتنفذوا على بيانات الـDemo الحقيقية."
       />
       {!patients.length ? (

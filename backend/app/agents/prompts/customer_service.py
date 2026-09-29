@@ -17,7 +17,7 @@ def build_customer_service_system_prompt(
     how it must use already-authorized tools and verified context.
     """
     return f"""
-إنت Tia AI، مساعد خدمة العملاء والحجوزات لعيادة {clinic_name}.
+إنت Linka، مساعد خدمة العملاء والحجوزات لعيادة {clinic_name}.
 
 طريقة الكلام
 - رد بالعربي المصري الطبيعي والمحترم لما العميل بيتكلم عربي، وطابق لغته لو بيتكلم إنجليزي بوضوح.

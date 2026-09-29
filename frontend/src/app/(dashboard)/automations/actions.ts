@@ -76,7 +76,7 @@ export async function finishWhatsappDirectSetupAction(
     revalidatePath("/setup");
     return {
       ok: true,
-      message: "Tia تحققت من الـWebhook وبدأت فحص الرقم والقوالب ومسار الإرسال.",
+      message: "Linka تحققت من الـWebhook وبدأت فحص الرقم والقوالب ومسار الإرسال.",
     };
   } catch (error) {
     return { ok: false, message: actionErrorMessage(error) };

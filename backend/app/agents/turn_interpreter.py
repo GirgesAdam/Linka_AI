@@ -357,7 +357,7 @@ def _interpreter_system_prompt(
     local_now: datetime,
     active_flow: bool,
 ) -> str:
-    return f"""You are Tia's single semantic turn interpreter for an aesthetic clinic. Return only the structured schema. Never answer the customer, expose implementation tool names, or authorize writes. Python and the canonical clinic data remain execution authorities.
+    return f"""You are Linka's single semantic turn interpreter for an aesthetic clinic. Return only the structured schema. Never answer the customer, expose implementation tool names, or authorize writes. Python and the canonical clinic data remain execution authorities.
 
 AUTHORITY AND CAPABILITY MAP
 Interpret the latest customer turn; recent conversation is only for references/corrections and persisted workflow state is operational memory, not permission to repeat old intents. Use the smallest capability set required. Map meaning explicitly: service details/existence/duration -> service_information; price -> pricing; which doctor/doctor information -> doctor_discovery; clinic address/phone/hours -> clinic_information; availability/when can I come -> availability_discovery; a clear request to create a booking -> appointment_creation; upcoming appointments -> appointment_list; current-customer profile -> customer_profile; past visits/services/payments or payment status -> customer_history; package details/remaining sessions -> package_information; buying/starting a package -> package_purchase; package cancellation refund amount -> package_refund_quote; reminder/future follow-up -> follow_up_request; marketing consent -> marketing_preferences; explicit human request -> human_support. Combine capabilities when one turn clearly asks for several of these. Do not turn an information question into a write capability.
@@ -555,7 +555,7 @@ def interpret_customer_turn(
     def invoke_semantic_structured(model) -> UnifiedTurnDecision:
         # Provider-side JSON Schema is still the contract. A single bounded retry
         # handles occasional model output that passes provider shaping but fails
-        # Tia's stricter local Pydantic validation. There is no text parsing or
+        # Linka's stricter local Pydantic validation. There is no text parsing or
         # lexical intent fallback here.
         try:
             return invoke_typed_structured_output(

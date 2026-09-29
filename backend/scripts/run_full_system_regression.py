@@ -74,7 +74,7 @@ class Report:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Tia AI full staging end-to-end regression suite.")
+    parser = argparse.ArgumentParser(description="Linka full staging end-to-end regression suite.")
     parser.add_argument("--email", default=DEFAULT_EMAIL)
     parser.add_argument("--workspace-id", default=DEFAULT_WORKSPACE_ID)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -100,7 +100,7 @@ def main() -> int:
     args = parse_args()
     report = Report()
 
-    report.section("TIA AI FULL STAGING REGRESSION")
+    report.section("Linka FULL STAGING REGRESSION")
     report.line(f"STARTED_AT={datetime.now().isoformat(timespec='seconds')}")
     report.line(f"ENVIRONMENT={settings.environment}")
     report.line(f"BASE_URL={args.base_url}")
@@ -601,14 +601,14 @@ def main() -> int:
     processed_channel = None
     if not args.skip_llm and isinstance(inbound_first, dict):
         _, processed_channel = request(
-            "Process inbound channel event through Tia AI",
+            "Process inbound channel event through Linka",
             "POST",
             f"/channels/adapter/inbound/{inbound_first['event_id']}/process",
             headers=adapter_headers,
             predicate=lambda d: isinstance(d, dict) and d.get("status") == "processed" and d.get("outbound_message_id") is not None,
         )
     else:
-        report.result("Process inbound channel event through Tia AI", "WARN", "Skipped by --skip-llm")
+        report.result("Process inbound channel event through Linka", "WARN", "Skipped by --skip-llm")
 
     _, claimed = request(
         "Claim mock WhatsApp outbox",

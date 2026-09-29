@@ -299,7 +299,7 @@ def preview_clinic_setup_workbook(
         sheets = {_key(sheet.title): sheet for sheet in workbook.worksheets}
         recognized = [name for name in SETUP_SHEETS if name in sheets]
         if not recognized:
-            raise ClinicSetupImportError("الملف لا يحتوي على أي sheet من Tia Clinic Setup Template.")
+            raise ClinicSetupImportError("الملف لا يحتوي على أي sheet من Linka Clinic Setup Template.")
 
         profile: dict[str, str | int | float | bool | None] = {}
         if "clinic_profile" in sheets:
@@ -396,7 +396,7 @@ def import_clinic_setup_workbook(
     recognized = set(sheets).intersection(SETUP_SHEETS)
     if not recognized:
         workbook.close()
-        raise ClinicSetupImportError("الملف لا يحتوي على أي sheet من Tia Clinic Setup Template.")
+        raise ClinicSetupImportError("الملف لا يحتوي على أي sheet من Linka Clinic Setup Template.")
 
     try:
         # 1) Clinic profile. This may create the single primary branch needed by doctor/hour imports.
@@ -467,7 +467,7 @@ def import_clinic_setup_workbook(
                     duration = current.duration_minutes if current is not None else None
                 if duration is None:
                     skipped["services"] += 1
-                    _issue(issues, sheet="services", row=row_number, message="الخدمة الجديدة تحتاج duration_minutes لأن Tia تستخدمه لحساب نهاية الموعد.")
+                    _issue(issues, sheet="services", row=row_number, message="الخدمة الجديدة تحتاج duration_minutes لأن Linka تستخدمه لحساب نهاية الموعد.")
                     continue
 
                 raw_price = _clean(row.get("price"))
@@ -717,8 +717,8 @@ def build_clinic_setup_template() -> bytes:
     wb = Workbook()
     readme = wb.active
     readme.title = "README"
-    readme.append(["Tia Clinic Setup v1"])
-    readme.append(["ارفع الملف من صفحة إعدادات العيادة. أسماء الـsheets ثابتة، لكن الأعمدة الاختيارية يمكن حذفها. Tia تقرأ المتاح وتترك غير الضروري للاستكمال اليدوي."])
+    readme.append(["Linka Clinic Setup v1"])
+    readme.append(["ارفع الملف من صفحة إعدادات العيادة. أسماء الـsheets ثابتة، لكن الأعمدة الاختيارية يمكن حذفها. Linka تقرأ المتاح وتترك غير الضروري للاستكمال اليدوي."])
     readme.append(["العملة ثابتة EGP. لا يوجد branch_id لأن العيادة فرع واحد."])
 
     sheets: dict[str, list[str]] = {

@@ -10,8 +10,8 @@ from app.models.workspace import Workspace
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Provision a Tia AI workspace.")
-    parser.add_argument("--name", required=True, help="Workspace display name, e.g. Tia")
+    parser = argparse.ArgumentParser(description="Provision a Linka workspace.")
+    parser.add_argument("--name", required=True, help="Workspace display name, e.g. Linka")
     parser.add_argument("--slug", required=True, help="Unique lowercase slug, e.g. tia")
     parser.add_argument("--timezone", default="Africa/Cairo")
     return parser.parse_args()

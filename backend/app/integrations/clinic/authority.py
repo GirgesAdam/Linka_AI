@@ -143,7 +143,7 @@ def require_external_domain_authority(integration: ClinicIntegration, domain: st
 def require_tia_domain_authority(integration: ClinicIntegration, domain: str) -> None:
     if domain_authority_owner(integration, domain) != "tia":
         raise ClinicIntegrationAuthorityError(
-            f"Tia is not authoritative for the {domain} domain."
+            f"Linka is not authoritative for the {domain} domain."
         )
 
 

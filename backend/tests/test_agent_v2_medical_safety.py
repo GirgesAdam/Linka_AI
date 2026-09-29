@@ -27,7 +27,7 @@ def test_regular_medical_handoff_is_deterministic_and_matches_safe_v1_reply(monk
     )
 
     reply, model = responder.compose_v2_customer_reply(
-        clinic_name="Tia Test Clinic",
+        clinic_name="Linka Test Clinic",
         timezone_name="Africa/Cairo",
         local_now=datetime(2026, 9, 12, 12, 0, 0),
         history=[HumanMessage(content="أنا حامل، ينفع أعمل بوتوكس؟")],
@@ -46,7 +46,7 @@ def test_urgent_medical_handoff_is_deterministic_and_directs_emergency_help(monk
     )
 
     reply, model = responder.compose_v2_customer_reply(
-        clinic_name="Tia Test Clinic",
+        clinic_name="Linka Test Clinic",
         timezone_name="Africa/Cairo",
         local_now=datetime(2026, 9, 12, 12, 0, 0),
         history=[HumanMessage(content="I am having severe symptoms after the procedure")],

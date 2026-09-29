@@ -134,11 +134,11 @@ def _list_of_text(row: dict[str, Any], key: str) -> list[str]:
 
 
 class PrototypeExternalClinicAdapter(ClinicAdapter):
-    """Read-only proof that Tia can run over a non-Tia clinic schema.
+    """Read-only proof that Linka can run over a non-Linka clinic schema.
 
     The source payload intentionally uses vendor/spreadsheet-style field names
     such as ``Treatment Code``, ``Clinic Location``, ``Doctor Key`` and
-    ``Booking Ref``. The rest of Tia only receives canonical catalog,
+    ``Booking Ref``. The rest of Linka only receives canonical catalog,
     availability and appointment DTOs from :class:`ClinicAdapter`.
 
     This adapter is intentionally a Phase 2.6 prototype. It reads a fixture-like
@@ -263,7 +263,7 @@ class PrototypeExternalClinicAdapter(ClinicAdapter):
         external_patient_id = self.resolve_patient_external_id(canonical_patient_id)
         if not external_patient_id:
             raise ValueError(
-                "This Tia patient is not linked to an external clinic patient id."
+                "This Linka patient is not linked to an external clinic patient id."
             )
         return external_patient_id
 

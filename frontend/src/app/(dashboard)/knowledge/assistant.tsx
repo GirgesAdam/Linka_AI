@@ -26,19 +26,19 @@ export function AgentKnowledgeAssistant({ admin }: { admin: boolean }) {
       <div className="flex items-start gap-3">
         <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-teal-700 text-white"><Bot size={21} /></span>
         <div>
-          <div className="flex items-center gap-2"><h2 className="text-lg font-black">عدّل بيانات العيادة مع Tia</h2><Sparkles size={16} className="text-teal-700" /></div>
-          <p className="mt-1 text-sm text-slate-600">اكتب التعديل بطريقتك. Tia هتفهمه وتعرض عليك التغيير قبل ما يتنفذ.</p>
+          <div className="flex items-center gap-2"><h2 className="text-lg font-black">عدّل بيانات العيادة مع Linka</h2><Sparkles size={16} className="text-teal-700" /></div>
+          <p className="mt-1 text-sm text-slate-600">اكتب التعديل بطريقتك. Linka هتفهمه وتعرض عليك التغيير قبل ما يتنفذ.</p>
         </div>
       </div>
 
       <form action={action} className="mt-5 space-y-3">
         <textarea name="message" rows={3} className="w-full rounded-2xl border border-[var(--border)] bg-white p-3 text-sm" placeholder="مثال: خلي مواعيد فرع مدينة نصر من السبت للخميس من 10 الصبح لـ10 بالليل والجمعة إجازة" />
-        <Button type="submit" name="mode" value="propose" disabled={pending}>{pending ? <LoaderCircle className="animate-spin" size={18} /> : <Bot size={18} />} اسأل Tia</Button>
+        <Button type="submit" name="mode" value="propose" disabled={pending}>{pending ? <LoaderCircle className="animate-spin" size={18} /> : <Bot size={18} />} اسأل Linka</Button>
       </form>
 
       {proposal && (
         <div className="mt-4 rounded-2xl border border-teal-100 bg-white p-4">
-          <div className="text-xs font-black text-teal-700">Tia</div>
+          <div className="text-xs font-black text-teal-700">Linka</div>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-7">{proposal.assistant_message}</p>
           {proposal.preview_lines.length > 0 && (
             <div className="mt-4 space-y-2">

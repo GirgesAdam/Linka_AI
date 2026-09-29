@@ -77,7 +77,7 @@ def main() -> int:
         if rule.enabled and _is_explicit_test_rule(rule)
     ]
 
-    print("=== TIA AUTOMATION RUNTIME DIAGNOSTIC ===")
+    print("=== Linka AUTOMATION RUNTIME DIAGNOSTIC ===")
     print()
     print(
         "Enabled rules: "

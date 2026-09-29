@@ -1165,7 +1165,7 @@ def _write_reports(payload: dict[str, Any], json_path: Path, md_path: Path) -> N
         encoding="utf-8",
     )
     lines = [
-        "# Tia Agent Evaluation — Batch 05 Raw Baseline",
+        "# Linka Agent Evaluation — Batch 05 Raw Baseline",
         "",
         f"- Batch runtime base SHA: {payload['run_metadata']['batch5_base_sha']}",
         f"- Harness SHA: {payload['run_metadata']['git_sha']}",
@@ -1189,7 +1189,7 @@ def _write_reports(payload: dict[str, Any], json_path: Path, md_path: Path) -> N
         ])
         for turn in row["turns"]:
             lines.append(f"Customer {turn['turn_number']}: {turn['user_message']}")
-            lines.append(f"Tia: {turn['agent_response']}")
+            lines.append(f"Linka: {turn['agent_response']}")
             lines.append(
                 "Usage: "
                 f"in={turn['token_usage']['input_tokens']} "

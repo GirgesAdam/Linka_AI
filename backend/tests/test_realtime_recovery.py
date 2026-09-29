@@ -195,7 +195,7 @@ def test_composite_tool_round_goes_straight_to_finalizer_and_empty_finalizer_is_
     monkeypatch.setattr(tia_customer_agent, "build_chat_model", lambda: base)
 
     context = SimpleNamespace(
-        workspace=SimpleNamespace(name="Tia", timezone="Africa/Cairo"),
+        workspace=SimpleNamespace(name="Linka", timezone="Africa/Cairo"),
         run_id=uuid4(),
     )
     reply, _ = tia_customer_agent.run_tia_customer_agent(
@@ -260,7 +260,7 @@ def test_duplicate_read_tool_is_not_executed_twice(monkeypatch) -> None:
     monkeypatch.setattr(tia_customer_agent, "build_chat_model", lambda: base)
 
     context = SimpleNamespace(
-        workspace=SimpleNamespace(name="Tia", timezone="Africa/Cairo"),
+        workspace=SimpleNamespace(name="Linka", timezone="Africa/Cairo"),
         run_id=uuid4(),
     )
     reply, _ = tia_customer_agent.run_tia_customer_agent(
@@ -398,7 +398,7 @@ def test_unavailable_model_tool_call_gets_matching_response_and_clean_finalizer(
     monkeypatch.setattr(tia_customer_agent, "build_chat_model", lambda: base)
 
     context = SimpleNamespace(
-        workspace=SimpleNamespace(name="Tia", timezone="Africa/Cairo"),
+        workspace=SimpleNamespace(name="Linka", timezone="Africa/Cairo"),
         run_id=uuid4(),
     )
     reply, _ = tia_customer_agent.run_tia_customer_agent(

@@ -24,7 +24,7 @@ def propose_knowledge_edit(*, message: str, catalog: dict) -> KnowledgeEditDecis
     messages = [
         SystemMessage(
             content=(
-                "You are Tia's clinic knowledge editing assistant. Understand ONE administrator request "
+                "You are Linka's clinic knowledge editing assistant. Understand ONE administrator request "
                 "about the clinic data shown in the supplied canonical catalog and propose a small, safe, "
                 "structured change set. Return only the required structured output. Never claim that a write "
                 "already happened. The backend will validate every target and requires explicit admin confirmation.\n\n"

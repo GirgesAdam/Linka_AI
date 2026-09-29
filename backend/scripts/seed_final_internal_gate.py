@@ -248,7 +248,7 @@ def _seed_secondary(
 
     workspace = Workspace(
         id=secondary_id,
-        name="عيادة Tia التجريبية — Workspace B",
+        name="عيادة Linka التجريبية — Workspace B",
         slug=f"tia-final-gate-{str(primary_workspace_id)[:8]}",
         timezone="Africa/Cairo",
         is_active=True,
@@ -389,14 +389,14 @@ def main() -> int:
             member_user = User(
                 auth_user_id=auth_user_id,
                 email=args.member_email,
-                full_name="Tia QA Member",
+                full_name="Linka QA Member",
                 is_active=True,
             )
             db.add(member_user)
             db.flush()
         else:
             member_user.auth_user_id = auth_user_id
-            member_user.full_name = "Tia QA Member"
+            member_user.full_name = "Linka QA Member"
             member_user.is_active = True
             db.flush()
 

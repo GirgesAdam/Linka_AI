@@ -1,5 +1,5 @@
 {
-  "name": "Tia Automation + Clinic Sync Scheduler",
+  "name": "Linka Automation + Clinic Sync Scheduler",
   "nodes": [
     {
       "parameters": {
@@ -41,7 +41,7 @@
         0
       ],
       "id": "74f76ee8-b70f-4225-ae24-e29f4929d0e8",
-      "name": "Tia Plan + Claim",
+      "name": "Linka Plan + Claim",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
@@ -76,7 +76,7 @@
         0
       ],
       "id": "7f31e1eb-9bf3-4f00-93e5-f33cc1c4b6b9",
-      "name": "Tia Execute Automation",
+      "name": "Linka Execute Automation",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
@@ -101,7 +101,7 @@
         240
       ],
       "id": "6dd27cf9-1506-47e0-b33a-0a63f3da23ab",
-      "name": "Tia Clinic Sync Tick",
+      "name": "Linka Clinic Sync Tick",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
@@ -112,19 +112,19 @@
       "main": [
         [
           {
-            "node": "Tia Plan + Claim",
+            "node": "Linka Plan + Claim",
             "type": "main",
             "index": 0
           },
           {
-            "node": "Tia Clinic Sync Tick",
+            "node": "Linka Clinic Sync Tick",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Tia Plan + Claim": {
+    "Linka Plan + Claim": {
       "main": [
         [
           {
@@ -139,7 +139,7 @@
       "main": [
         [
           {
-            "node": "Tia Execute Automation",
+            "node": "Linka Execute Automation",
             "type": "main",
             "index": 0
           }

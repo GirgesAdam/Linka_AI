@@ -1,4 +1,4 @@
-# Tia AI v0.17.0 — Production Readiness
+# Linka v0.17.0 — Production Readiness
 
 This milestone adds a read-only operational gate around the systems already
 implemented. It does not silently repair or mutate production data.

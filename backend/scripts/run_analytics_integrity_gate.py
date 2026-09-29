@@ -13,7 +13,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Read-only production validation gate for Tia Analytics."
+        description="Read-only production validation gate for Linka Analytics."
     )
     parser.add_argument("--workspace-slug", required=True)
     parser.add_argument(

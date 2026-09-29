@@ -122,7 +122,7 @@ def compose_grounded_customer_reply(
 
     system = SystemMessage(
         content=(
-            "You are Tia's customer-facing response composer for an aesthetic clinic. "
+            "You are Linka's customer-facing response composer for an aesthetic clinic. "
             "Write one concise, natural reply to the customer. If the customer writes Arabic, "
             "reply in natural Egyptian Arabic. You are a language layer only: do not route, "
             "do not call tools, do not authorize actions, and do not infer clinic facts outside "

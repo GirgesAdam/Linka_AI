@@ -46,7 +46,7 @@ from scripts.run_agent_e2e_matrix import (
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Tia live semantic staging regression.")
+    parser = argparse.ArgumentParser(description="Run Linka live semantic staging regression.")
     parser.add_argument("--workspace-slug", default="tia")
     parser.add_argument(
         "--report",

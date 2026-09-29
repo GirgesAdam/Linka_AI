@@ -19,7 +19,7 @@ type SearchParams = {
 };
 
 const periods = [["7", "7 أيام"], ["30", "30 يوم"], ["90", "90 يوم"]] as const;
-const actors = [["", "كل المنفذين"], ["staff", "الفريق"], ["ai", "Tia"], ["system", "النظام"]] as const;
+const actors = [["", "كل المنفذين"], ["staff", "الفريق"], ["ai", "Linka"], ["system", "النظام"]] as const;
 const entities = [
   ["", "كل الأنواع"],
   ["appointment", "الحجوزات"],
@@ -106,7 +106,7 @@ const entityLabels: Record<string, string> = {
 };
 
 function actorTypeLabel(actorType: string) {
-  if (actorType === "ai") return "Tia";
+  if (actorType === "ai") return "Linka";
   if (actorType === "system") return "النظام";
   return "الفريق";
 }

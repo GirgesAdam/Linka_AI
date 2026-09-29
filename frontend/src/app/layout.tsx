@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Tia | إدارة العيادة",
+  title: "Linka | إدارة العيادة",
   description: "إدارة المواعيد والعملاء والمتابعات والتواصل من مكان واحد.",
 };
 

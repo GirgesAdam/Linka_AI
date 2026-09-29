@@ -134,7 +134,7 @@ def test_conversation_detail_exposes_takeover_claim_assign_reply_and_read_paths(
     assert "ConversationReadMarker" in detail
     assert "LiveRouteRefresh" in detail
     assert 'ctx.workspace.role === "admin"' in detail
-    assert "سلّم المحادثة لـ Tia" in detail
+    assert "سلّم المحادثة لـ Linka" in detail
 
     assert "replyToConversation" in reply_form
     assert 'event.key !== "Enter"' in reply_form

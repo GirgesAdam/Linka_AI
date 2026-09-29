@@ -36,7 +36,7 @@ async function signInAndOpenWorkspace(email: string, password: string, destinati
     });
   } catch {
     await supabase.auth.signOut();
-    redirect(loginErrorUrl("تعذر الاتصال بخدمة Tia الآن. جرّب مرة أخرى بعد قليل.", target));
+    redirect(loginErrorUrl("تعذر الاتصال بخدمة Linka الآن. جرّب مرة أخرى بعد قليل.", target));
   }
 
   if (!response.ok) {

@@ -158,7 +158,7 @@ def _compound_args() -> dict[str, object]:
         "history": [],
         "local_now": _NOW,
         "timezone_name": "Africa/Cairo",
-        "clinic_name": "Tia Test Clinic",
+        "clinic_name": "Linka Test Clinic",
         "catalog": {"fixture": True},
         "turn_id": "turn-live",
     }

@@ -46,7 +46,7 @@ def test_upper_bound_requires_whole_appointment_to_fit() -> None:
 
 def test_prompt_keeps_composite_tool_mechanics_out_of_customer_contract() -> None:
     prompt = build_customer_service_system_prompt(
-        clinic_name="Tia",
+        clinic_name="Linka",
         timezone_name="Africa/Cairo",
         local_now=datetime(2026, 8, 12, 20, 0),
     )

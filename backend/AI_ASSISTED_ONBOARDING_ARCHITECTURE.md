@@ -1,4 +1,4 @@
-# Tia AI v0.16.0 — AI-Assisted Onboarding
+# Linka v0.16.0 — AI-Assisted Onboarding
 
 ## Goal
 
@@ -7,7 +7,7 @@ An Admin can describe clinic configuration naturally, for example:
 > عندي فرعين في مدينة نصر والتجمع، بنشتغل من 10 لـ10، عندي دكتور أحمد
 > ودكتورة سارة، وضيف خدمة ليزر بـ1500 ومدتها ساعة.
 
-Tia converts the request into a typed configuration plan, validates it, asks
+Linka converts the request into a typed configuration plan, validates it, asks
 for explicit confirmation and then performs the real database writes.
 
 ## Flow

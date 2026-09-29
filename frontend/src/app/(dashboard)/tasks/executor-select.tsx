@@ -46,7 +46,7 @@ export function ExecutorSelect({
       }}
       className="h-8 max-w-48 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 disabled:cursor-wait disabled:opacity-60"
     >
-      {allowTia && <option value="tia">Tia</option>}
+      {allowTia && <option value="tia">Linka</option>}
       <option value="unassigned">غير مسندة</option>
       {members.map((member) => (
         <option key={member.user_id} value={`staff:${member.user_id}`}>{member.label}</option>

@@ -332,7 +332,7 @@ def test_stale_assistant_wording_cannot_override_verified_appointment_truth() ->
         ]
     )
     text, label = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
@@ -362,7 +362,7 @@ def test_pure_appointment_path_bypasses_generic_responder(
         ),
     )
     text, label = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="معادي الجاي إمتى؟")],
@@ -382,7 +382,7 @@ def test_mixed_generic_path_receives_only_safe_appointment_facts() -> None:
         facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
     )
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ميعادي الجاي وإيه الهيدرافيشل؟")],

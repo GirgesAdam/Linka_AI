@@ -71,7 +71,7 @@ def _graph_url(path: str) -> str:
     version = _clean_optional(settings.meta_graph_api_version)
     if not version:
         raise MetaWhatsAppConfigurationError(
-            "Meta Graph API version is not configured on the Tia platform."
+            "Meta Graph API version is not configured on the Linka platform."
         )
     normalized = version if version.startswith("v") else f"v{version}"
     return f"https://graph.facebook.com/{normalized}/{path.lstrip('/')}"
@@ -148,7 +148,7 @@ def _validate_token_and_app(*, app_id: str, app_secret: str, token: str) -> None
     returned_app_id = str(data.get("app_id") or "").strip()
     if returned_app_id and returned_app_id != app_id:
         raise MetaWhatsAppProviderError(
-            "The System User token belongs to a different Meta App than the App ID entered in Tia."
+            "The System User token belongs to a different Meta App than the App ID entered in Linka."
         )
     raw_scopes = data.get("scopes")
     scopes = {str(value) for value in raw_scopes} if isinstance(raw_scopes, list) else set()
@@ -205,7 +205,7 @@ def _verify_waba_contains_phone(token: str, waba_id: str, phone_number_id: str) 
     }
     if phone_number_id not in phone_ids:
         raise MetaWhatsAppProviderError(
-            "The Phone Number ID does not belong to the WhatsApp Business Account ID entered in Tia."
+            "The Phone Number ID does not belong to the WhatsApp Business Account ID entered in Linka."
         )
 
 
@@ -317,12 +317,12 @@ def build_whatsapp_setup_state(
     if connection is None or not credentials_ready:
         admin_action = "connect_meta_direct"
         admin_message = (
-            "اربط Meta مرة واحدة من الخطوات الموجودة هنا. Tia ستتحقق من البيانات وتخزن الأسرار مشفرة."
+            "اربط Meta مرة واحدة من الخطوات الموجودة هنا. Linka ستتحقق من البيانات وتخزن الأسرار مشفرة."
         )
     elif health_action == "reconnect_meta":
         admin_action = "connect_meta_direct"
         admin_message = (
-            "System User token لم يعد صالحًا. أنشئ Token جديد من Meta والصقه في Tia لإعادة الربط."
+            "System User token لم يعد صالحًا. أنشئ Token جديد من Meta والصقه في Linka لإعادة الربط."
         )
     elif provider_health_state == "disabled" or provider_error_code == "131031":
         admin_action = "resolve_meta_restriction"
@@ -335,7 +335,7 @@ def build_whatsapp_setup_state(
             "بيانات Meta صحيحة. انسخ Callback URL وVerify Token إلى صفحة WhatsApp Configuration ثم اضغط تحقق وكمل."
         )
     elif not transport_ready:
-        system_message = "Tia بتفحص الرقم والقوالب ومسار الإرسال المباشر مع Meta."
+        system_message = "Linka بتفحص الرقم والقوالب ومسار الإرسال المباشر مع Meta."
     elif not templates_ready:
         rejected_templates = [
             item.name for item in template_states if item.status == "rejected"
@@ -346,7 +346,7 @@ def build_whatsapp_setup_state(
                 "Meta رفضت قالب رسالة مطلوب للـAutomation. عدّل القالب أو اطلب مراجعته من WhatsApp Manager."
             )
         else:
-            system_message = "Tia أنشأت القوالب القياسية تلقائيًا وبتتابع اعتمادها من Meta."
+            system_message = "Linka أنشأت القوالب القياسية تلقائيًا وبتتابع اعتمادها من Meta."
 
     return WhatsAppSetupState(
         connection_id=connection.id if connection else None,
@@ -409,7 +409,7 @@ def connect_direct_meta(
         )
     if not direct_setup_available():
         raise MetaWhatsAppConfigurationError(
-            "Direct WhatsApp setup is not configured on the Tia platform."
+            "Direct WhatsApp setup is not configured on the Linka platform."
         )
 
     _validate_token_and_app(app_id=app_id, app_secret=app_secret, token=access_token)

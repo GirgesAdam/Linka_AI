@@ -62,7 +62,7 @@ class ProviderBranchHour(BaseModel):
     One weekly schedule rule for a branch.
 
     `weekdays=[0,1,2,3,4,5,6]` represents every day and is expanded by Python
-    into Tia's per-weekday domain rows after structured extraction.
+    into Linka's per-weekday domain rows after structured extraction.
     """
 
     model_config = ConfigDict(extra="forbid")

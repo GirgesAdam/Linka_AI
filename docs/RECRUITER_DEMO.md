@@ -1,6 +1,6 @@
-# Tia Portfolio / Recruiter Demo
+# Linka Portfolio / Recruiter Demo
 
-The public portfolio entry point is the live Tia application:
+The public portfolio entry point is the live Linka application:
 
 - Application: `https://app.tiaai.online`
 - Demo email: `demo@tiaai.online`
@@ -27,7 +27,7 @@ The account is a normal demo member so recruiters can explore operational workfl
 
 ## Isolated demo deployment option
 
-For a completely disposable recruiter environment, Tia also supports a dedicated demo deployment. Do not point that environment at real clinic data.
+For a completely disposable recruiter environment, Linka also supports a dedicated demo deployment. Do not point that environment at real clinic data.
 
 Backend:
 

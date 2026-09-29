@@ -54,7 +54,7 @@ class FakeAdapter:
 def _workspace():
     return SimpleNamespace(
         id=WORKSPACE_ID,
-        name="Tia Clinic",
+        name="Linka Clinic",
         timezone="Africa/Cairo",
         primary_branch_id=BRANCH_ID,
     )
@@ -109,7 +109,7 @@ def _catalog():
         "branches": [
             {
                 "id": str(BRANCH_ID),
-                "name": "Tia Clinic",
+                "name": "Linka Clinic",
                 "phone": "0200000000",
                 "city": "Cairo",
             }
@@ -132,7 +132,7 @@ def _slot(*, doctor_id: str, start_hour_utc: int) -> AvailabilitySlot:
     start = datetime(2026, 9, 17, start_hour_utc, 0, tzinfo=UTC)
     return AvailabilitySlot(
         branch_id=str(BRANCH_ID),
-        branch_name="Tia Clinic",
+        branch_name="Linka Clinic",
         doctor_id=doctor_id,
         doctor_name="مريم" if doctor_id == "doctor-maryam" else "سارة",
         service_id=str(SERVICE_ID),
@@ -151,7 +151,7 @@ def _availability(slots) -> AvailabilityResult:
     return AvailabilityResult(
         timezone="Africa/Cairo",
         branch_id=str(BRANCH_ID),
-        branch_name="Tia Clinic",
+        branch_name="Linka Clinic",
         service_id=str(SERVICE_ID),
         service_name="ليزر إبط",
         service_duration_minutes=30,
@@ -175,7 +175,7 @@ def _appointment(
         service_id=str(SERVICE_ID),
         service_name="ليزر إبط",
         branch_id=str(BRANCH_ID),
-        branch_name="Tia Clinic",
+        branch_name="Linka Clinic",
         doctor_id=doctor_id,
         doctor_name="مريم",
         start_at=start,

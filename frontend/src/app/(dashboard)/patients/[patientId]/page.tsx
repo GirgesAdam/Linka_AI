@@ -49,7 +49,7 @@ const handoffEventLabels: Record<string, string> = {
 function actorLabel(event: PatientTimelineEvent) {
   if (event.actor_name) return event.actor_name;
   if (event.actor_type === "patient") return "العميل";
-  if (event.actor_type === "ai") return "Tia";
+  if (event.actor_type === "ai") return "Linka";
   if (event.actor_type === "staff") return "الفريق";
   return "النظام";
 }
@@ -97,7 +97,7 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
       </div>
     );
   } else if (message) {
-    title = message.sender_type === "patient" ? "رسالة من العميل" : message.sender_type === "ai" ? "رد Tia" : "رد الفريق";
+    title = message.sender_type === "patient" ? "رسالة من العميل" : message.sender_type === "ai" ? "رد Linka" : "رد الفريق";
     body = (
       <div className="space-y-2">
         <p className="whitespace-pre-wrap text-sm leading-6">{message.content || "رسالة بدون نص"}</p>
@@ -230,7 +230,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                     <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">
                       {patient.whatsapp_opt_in
                         ? `مسجلة${patient.whatsapp_opt_in_at ? ` · ${formatDateTime(patient.whatsapp_opt_in_at)}` : ""}`
-                        : "لا تبدأ Tia رسائل واتساب تلقائية لهذا العميل حتى تُسجل موافقته."}
+                        : "لا تبدأ Linka رسائل واتساب تلقائية لهذا العميل حتى تُسجل موافقته."}
                     </div>
                   </div>
                   <form action={setPatientWhatsappOptIn}>
@@ -267,14 +267,14 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                   <label className="block text-xs font-bold text-slate-700">
                     المسؤول عن المتابعة
                     <select name="execution_mode" defaultValue="ai" className="form-control mt-1 h-10 min-h-10">
-                      <option value="ai">Tia — متابعة تلقائية عبر WhatsApp</option>
+                      <option value="ai">Linka — متابعة تلقائية عبر WhatsApp</option>
                       <option value="human">الفريق — متابعة يدوية</option>
                     </select>
                   </label>
                   <div role="note" className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-950">
                     <CircleAlert size={16} className="mt-0.5 shrink-0 text-amber-700" />
                     <div className="min-w-0">
-                      <b className="block">مهم عند اختيار Tia</b>
+                      <b className="block">مهم عند اختيار Linka</b>
                       <p className="mt-1 leading-5">
                         لو مرّ أكثر من 24 ساعة على آخر رسالة من العميل، سياسات WhatsApp من Meta تسمح للمتابعة التلقائية فقط باستخدام قالب معتمد.
                       </p>
@@ -284,9 +284,9 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                     </div>
                   </div>
                   <label className="block text-xs font-bold text-slate-700">
-                    ماذا تريد أن تقول Tia للعميل؟
+                    ماذا تريد أن تقول Linka للعميل؟
                     <Textarea name="description" maxLength={5000} className="mt-1" placeholder="مثال: اسأليه إذا كان مناسب له نثبت ميعاد الجلسة القادمة، ولو محتاج يغير الموعد ساعديه." />
-                    <span className="mt-1 block font-normal leading-5 text-[var(--muted)]">Tia تستخدم التعليمات دي مع سياق المحادثة وتصيغ الرسالة بشكل طبيعي وقت الإرسال.</span>
+                    <span className="mt-1 block font-normal leading-5 text-[var(--muted)]">Linka تستخدم التعليمات دي مع سياق المحادثة وتصيغ الرسالة بشكل طبيعي وقت الإرسال.</span>
                   </label>
                   <Button className="w-full"><ListTodo size={15} /> حفظ المتابعة</Button>
                 </form>

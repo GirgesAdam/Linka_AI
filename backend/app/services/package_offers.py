@@ -206,7 +206,7 @@ def purchase_package_offer(
     """Create a patient package from one verified offer snapshot.
 
     Payment amount is recorded but never controls whether package sessions can be
-    reserved or consumed. The clinic keeps that operational decision outside Tia.
+    reserved or consumed. The clinic keeps that operational decision outside Linka.
     """
     offer = get_active_package_offer(
         db,

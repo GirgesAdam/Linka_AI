@@ -191,7 +191,7 @@ def _test_environment() -> V2FixtureEnvironment:
     catalog["branches"] = [
         {
             "id": "single-location",
-            "name": "Tia Test Clinic",
+            "name": "Linka Test Clinic",
             "phone": "01000000000",
             "address": "القاهرة",
             "city": "Cairo",
@@ -205,10 +205,10 @@ def _test_environment() -> V2FixtureEnvironment:
     return V2FixtureEnvironment(
         catalog=catalog,
         clinic_info={
-            "clinic_name": "Tia Test Clinic",
+            "clinic_name": "Linka Test Clinic",
             "phone": "01000000000",
             "timezone": TZ,
-            "locations": [{"name": "Tia Test Clinic", "city": "Cairo"}],
+            "locations": [{"name": "Linka Test Clinic", "city": "Cairo"}],
             "working_hours": "يوميًا من 10 صباحًا إلى 10 مساءً",
         },
     )
@@ -257,7 +257,7 @@ def _run_turn(*, history: list[BaseMessage], env: V2FixtureEnvironment) -> V2Har
     if plan.handoff_category is not None:
         outcome = build_handoff_outcome(plan)
         reply, model = compose_v2_customer_reply(
-            clinic_name="Tia Test Clinic",
+            clinic_name="Linka Test Clinic",
             timezone_name=TZ,
             local_now=NOW,
             history=history,
@@ -305,7 +305,7 @@ def _run_turn(*, history: list[BaseMessage], env: V2FixtureEnvironment) -> V2Har
         outcomes.append(outcome)
 
     reply, model = compose_v2_customer_reply(
-        clinic_name="Tia Test Clinic",
+        clinic_name="Linka Test Clinic",
         timezone_name=TZ,
         local_now=NOW,
         history=history,
@@ -384,7 +384,7 @@ def _assert_expected_turn(
 
 
 def main() -> None:
-    print("TIA V2 — 15 NEW CONVERSATIONS / 30 TURNS")
+    print("Linka V2 — 15 NEW CONVERSATIONS / 30 TURNS")
     print("V1 is never called. Writes are simulated and never persisted.\n")
     total_turns = 0
     simulated_writes = 0
@@ -408,7 +408,7 @@ def main() -> None:
             print(f"\nTURN {turn_index}")
             print(f"CUSTOMER: {customer_text}")
             print("V2_META:", json.dumps(meta, ensure_ascii=False, default=str))
-            print(f"TIA V2: {result.reply}")
+            print(f"Linka V2: {result.reply}")
             if meta["simulated_writes"]:
                 print("[SIMULATED WRITE — NO DATABASE MUTATION]")
                 simulated_writes += len(meta["simulated_writes"])

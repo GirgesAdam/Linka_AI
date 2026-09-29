@@ -43,7 +43,7 @@ def _test_environment() -> V2FixtureEnvironment:
     catalog["branches"] = [
         {
             "id": "single-location",
-            "name": "Tia Test Clinic",
+            "name": "Linka Test Clinic",
             "working_hours": [
                 {"weekday": weekday, "start": "10:00", "end": "22:00"}
                 for weekday in range(7)
@@ -98,7 +98,7 @@ def run_matrix(now: datetime) -> None:
 
 
 def run_interactive(now: datetime) -> None:
-    print("Tia V2-only test chat")
+    print("Linka V2-only test chat")
     print("Fixtures only. V1 is not called. Writes are simulated and never persisted.")
     print("Type /reset to clear dialogue history, /quit to exit.\n")
     history: list[BaseMessage] = []
@@ -116,7 +116,7 @@ def run_interactive(now: datetime) -> None:
 
         turn_history = [*history, HumanMessage(content=customer_text)]
         result = run_v2_fixture_turn(history=turn_history, local_now=now, env=env)
-        print(f"Tia V2: {result.reply}")
+        print(f"Linka V2: {result.reply}")
         if any(trace.simulated_write for trace in result.traces):
             print("[SIMULATED WRITE — no database mutation]")
         print()

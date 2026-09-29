@@ -1,5 +1,5 @@
 {
-  "name": "Tia WhatsApp Transport Tick",
+  "name": "Linka WhatsApp Transport Tick",
   "nodes": [
     {
       "parameters": {
@@ -38,7 +38,7 @@
         0
       ],
       "id": "c6ef1180-fc1f-4cb1-99b0-d8d59b531320",
-      "name": "Tia Native WhatsApp Tick",
+      "name": "Linka Native WhatsApp Tick",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
@@ -49,7 +49,7 @@
       "main": [
         [
           {
-            "node": "Tia Native WhatsApp Tick",
+            "node": "Linka Native WhatsApp Tick",
             "type": "main",
             "index": 0
           }
@@ -64,7 +64,7 @@
   },
   "meta": {
     "templateCredsSetupCompleted": false,
-    "note": "This workflow uses one Tia platform X-Tia-Transport-Token credential. Clinic Meta credentials stay encrypted in Tia and are never configured in n8n."
+    "note": "This workflow uses one Linka platform X-Tia-Transport-Token credential. Clinic Meta credentials stay encrypted in Linka and are never configured in n8n."
   },
   "tags": []
 }

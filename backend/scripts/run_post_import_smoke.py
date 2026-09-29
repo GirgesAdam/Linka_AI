@@ -27,7 +27,7 @@ def _check(key: str, ok: bool, message: str, **details: Any) -> Check:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Read-only smoke test for canonical runtime data after Tia historical import."
+        description="Read-only smoke test for canonical runtime data after Linka historical import."
     )
     parser.add_argument("--workspace-id")
     parser.add_argument("--workspace-slug")
@@ -302,7 +302,7 @@ def main() -> int:
     if args.json_output:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     else:
-        print(f"=== TIA POST-IMPORT SMOKE — {workspace.name} ({workspace.slug}) ===")
+        print(f"=== Linka POST-IMPORT SMOKE — {workspace.name} ({workspace.slug}) ===")
         for item in checks:
             print(f"[{item.status.upper()}] {item.key} — {item.message}")
             if item.details:

@@ -1,6 +1,6 @@
-# Tia AI public privacy and deletion pages
+# Linka public privacy and deletion pages
 
-Tia AI exposes two public pages required for the Meta/WhatsApp app setup:
+Linka exposes two public pages required for the Meta/WhatsApp app setup:
 
 - `/privacy`
 - `/data-deletion`
@@ -13,7 +13,7 @@ Meta reviewers and customers can access them without logging in.
 Set these in the frontend deployment environment:
 
 ```text
-NEXT_PUBLIC_TIA_LEGAL_NAME=Tia AI
+NEXT_PUBLIC_TIA_LEGAL_NAME=Linka
 NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL=privacy@your-real-domain.com
 ```
 
@@ -22,7 +22,7 @@ address just to satisfy a form.
 
 If no privacy email is configured, the pages direct customers to the clinic or
 business they interacted with and direct workspace administrators to their normal
-Tia AI support channel.
+Linka support channel.
 
 ## Deployment check
 

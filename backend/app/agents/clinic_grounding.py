@@ -126,7 +126,7 @@ def build_clinic_catalog(db: Session, workspace: Workspace) -> dict[str, Any]:
     """Build/reuse the canonical clinic catalog through the workspace adapter.
 
     The semantic layer no longer knows how services, branches, doctors, or
-    schedules are stored. Tia's native adapter currently reads PostgreSQL; a
+    schedules are stored. Linka's native adapter currently reads PostgreSQL; a
     future clinic adapter can provide the same canonical catalog from an API or
     another source system without changing the LLM interpreter.
     """
@@ -141,7 +141,7 @@ def build_clinic_catalog(db: Session, workspace: Workspace) -> dict[str, Any]:
         cached = _catalog_cache_get(workspace.id, cache_signature)
         if cached is not None:
             logger.info(
-                "Tia clinic catalog workspace_id=%s adapter=%s cache_hit=true revision_ms=%s",
+                "Linka clinic catalog workspace_id=%s adapter=%s cache_hit=true revision_ms=%s",
                 workspace.id,
                 adapter.cache_namespace,
                 revision_ms,
@@ -156,7 +156,7 @@ def build_clinic_catalog(db: Session, workspace: Workspace) -> dict[str, Any]:
         _catalog_cache_put(workspace.id, cache_signature, catalog)
 
     logger.info(
-        "Tia clinic catalog workspace_id=%s adapter=%s cache_hit=false revision_ms=%s build_ms=%s",
+        "Linka clinic catalog workspace_id=%s adapter=%s cache_hit=false revision_ms=%s build_ms=%s",
         workspace.id,
         adapter.cache_namespace,
         revision_ms,

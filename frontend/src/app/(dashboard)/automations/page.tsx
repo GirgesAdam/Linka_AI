@@ -181,7 +181,7 @@ export default async function AutomationsPage() {
                       : "كمّل ربط واتساب مرة واحدة قبل تشغيل الرسائل المفعّلة فعليًا."}
                 </p>
                 <p className="mt-1.5 text-xs leading-5 text-slate-600">
-                  خارج نافذة الـ24 ساعة من آخر رسالة للعميل، WhatsApp يتطلب قالبًا معتمدًا من Meta. Tia تجهّز القوالب المطلوبة وتستخدم المعتمد منها فقط.
+                  خارج نافذة الـ24 ساعة من آخر رسالة للعميل، WhatsApp يتطلب قالبًا معتمدًا من Meta. Linka تجهّز القوالب المطلوبة وتستخدم المعتمد منها فقط.
                 </p>
               </div>
             </div>
@@ -288,7 +288,7 @@ export default async function AutomationsPage() {
                   <div><div className="text-[11px] font-bold text-slate-400">تبدأ متى؟</div><div className="mt-1 font-bold text-slate-800">{triggerLabel(rule)}</div></div>
                   <div><div className="text-[11px] font-bold text-slate-400">المستلم</div><div className="mt-1 flex items-center gap-1.5 font-bold text-slate-800"><UserRound size={13} /> {recipients[rule.key] || "العميل المرتبط بالمتابعة"}</div></div>
                   <div><div className="text-[11px] font-bold text-slate-400">القناة</div><div className="mt-1 flex items-center gap-1.5 font-bold text-slate-800"><MessageCircleMore size={13} /> WhatsApp</div></div>
-                  <div><div className="text-[11px] font-bold text-slate-400">الرسالة</div><div className="mt-1 font-bold text-slate-800">قالب Tia المعتمد في Meta</div></div>
+                  <div><div className="text-[11px] font-bold text-slate-400">الرسالة</div><div className="mt-1 font-bold text-slate-800">قالب Linka المعتمد في Meta</div></div>
                 </div>
 
                 {ctx.workspace.role === "admin" && hasTiming && (

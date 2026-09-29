@@ -182,7 +182,7 @@ def _fixture(db: Session, *, demo: bool = True, slug_prefix: str = "demo"):
     )
     worker = AutomationWorker(
         workspace_id=workspace.id,
-        name="Tia Railway Automation Scheduler",
+        name="Linka Railway Automation Scheduler",
         token_hash=uuid4().hex + uuid4().hex,
         status="active",
         created_by_user_id=None,

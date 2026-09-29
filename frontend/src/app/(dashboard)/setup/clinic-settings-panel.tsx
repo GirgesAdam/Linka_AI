@@ -67,7 +67,7 @@ export function ClinicSettingsPanel({
       <Card>
         <CardHeader>
           <CardTitle>بيانات العيادة</CardTitle>
-          <CardDescription>البيانات الأساسية التي تظهر وتمثل العيادة داخل Tia.</CardDescription>
+          <CardDescription>البيانات الأساسية التي تظهر وتمثل العيادة داخل Linka.</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={saveClinicProfileFormAction} className="grid gap-4 md:grid-cols-2">
@@ -107,13 +107,13 @@ export function ClinicSettingsPanel({
 
       <Card id="tia-knowledge">
         <CardHeader>
-          <CardTitle>معلومات Tia</CardTitle>
-          <CardDescription>اكتب هنا فقط المعلومات التفسيرية التي تريد Tia أن تعرفها وتشرحها للعملاء: نبذة العيادة، شرح الخدمات، الفرق بين الأجهزة، التعليمات والسياسات والأسئلة الشائعة.</CardDescription>
+          <CardTitle>معلومات Linka</CardTitle>
+          <CardDescription>اكتب هنا فقط المعلومات التفسيرية التي تريد Linka أن تعرفها وتشرحها للعملاء: نبذة العيادة، شرح الخدمات، الفرق بين الأجهزة، التعليمات والسياسات والأسئلة الشائعة.</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={saveKnowledgeTextFormAction} className="space-y-4">
             <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4">
-              <div className="mb-2 text-sm font-bold text-teal-950">مثال حقيقي لمعلومات Tia</div>
+              <div className="mb-2 text-sm font-bold text-teal-950">مثال حقيقي لمعلومات Linka</div>
               <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{KNOWLEDGE_EXAMPLE}</div>
             </div>
 
@@ -128,12 +128,12 @@ export function ClinicSettingsPanel({
                 defaultValue={knowledgeText}
                 rows={14}
                 maxLength={6000}
-                placeholder="اكتب هنا معلومات عيادتك التي تريد Tia أن تستخدمها في الشرح للعملاء..."
+                placeholder="اكتب هنا معلومات عيادتك التي تريد Linka أن تستخدمها في الشرح للعملاء..."
                 className="min-h-64 w-full resize-y rounded-xl border border-[var(--border)] bg-background px-4 py-3 text-sm leading-7 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
               />
             </label>
-            <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات والباقات لا تُكتب هنا؛ تظل مأخوذة من بيانات Tia التشغيلية، والنص هنا هو مصدر الشرح الحر الوحيد للرد على استفسارات العملاء.</p>
-            <Button type="submit">حفظ معلومات Tia</Button>
+            <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات والباقات لا تُكتب هنا؛ تظل مأخوذة من بيانات Linka التشغيلية، والنص هنا هو مصدر الشرح الحر الوحيد للرد على استفسارات العملاء.</p>
+            <Button type="submit">حفظ معلومات Linka</Button>
           </form>
         </CardContent>
       </Card>
@@ -141,13 +141,13 @@ export function ClinicSettingsPanel({
       <Card id="historical-data">
         <CardHeader>
           <CardTitle>البيانات القديمة</CardTitle>
-          <CardDescription>لو عندك بيانات من النظام السابق، ارفعها هنا لنقل العملاء والمواعيد والمدفوعات والباقات إلى Tia.</CardDescription>
+          <CardDescription>لو عندك بيانات من النظام السابق، ارفعها هنا لنقل العملاء والمواعيد والمدفوعات والباقات إلى Linka.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <b className="text-sm">قالب الاستيراد</b>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">استخدم قالب Tia الثابت لو محتاج تجهيز البيانات قبل الرفع.</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">استخدم قالب Linka الثابت لو محتاج تجهيز البيانات قبل الرفع.</p>
             </div>
             <a href="/api/clinic-history-template" className={buttonVariants({ variant: "outline" })}><Download size={16} /> تحميل القالب</a>
           </div>

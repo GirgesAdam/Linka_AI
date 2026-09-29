@@ -57,7 +57,7 @@ def test_responder_preserves_native_dialogue_roles_and_keeps_latest_customer_las
     ]
 
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=history,
@@ -74,7 +74,7 @@ def test_responder_preserves_native_dialogue_roles_and_keeps_latest_customer_las
 
 def test_responder_payload_removes_internal_ids_and_formats_money_before_llm() -> None:
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ليزر الإبط بكام؟")],
@@ -108,7 +108,7 @@ def test_responder_receives_explicit_device_price_pairs_for_availability() -> No
         },
     )
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
@@ -180,7 +180,7 @@ def test_device_price_guard_replaces_unbound_transliterated_reply(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
@@ -212,7 +212,7 @@ def test_device_price_guard_applies_after_availability_fallback(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
@@ -244,7 +244,7 @@ def test_device_price_guard_keeps_correct_canonical_pairs(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="اختار جهاز إيه؟")],
@@ -277,7 +277,7 @@ def test_compound_outcomes_are_given_to_one_responder_call() -> None:
         ),
     ]
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="الإبط بكام وإيه المتاح بكرة؟")],
@@ -302,7 +302,7 @@ def test_pure_price_reply_is_deterministic_and_skips_model(
     )
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="الإبط بكام؟")],
@@ -325,7 +325,7 @@ def test_pure_price_reply_includes_verified_requested_duration(
     outcome.facts["service_catalog"]["service"]["duration_minutes"] = 60
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="الإبط بكام وبيستغرق قد إيه؟")],
@@ -343,7 +343,7 @@ def test_pure_doctor_list_is_complete_once_and_skips_model(monkeypatch: pytest.M
     monkeypatch.setattr(responder, "build_realtime_composer_model", fail_if_built)
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="مين الدكاترة اللي بيعملوا ليزر الإبط؟")],
@@ -373,7 +373,7 @@ def test_doctor_list_does_not_bypass_model_for_compound_answer(
     )
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="مين الدكاترة والسعر كام؟")],
@@ -403,7 +403,7 @@ def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(LLMProviderError):
         compose_v2_customer_reply(
-            clinic_name="Tia Clinic",
+            clinic_name="Linka Clinic",
             timezone_name="Africa/Cairo",
             local_now=NOW,
             history=[HumanMessage(content="قولي تفاصيل الخدمة")],
@@ -446,7 +446,7 @@ def test_prp_verified_price_cannot_be_reinvented_by_responder(
     )
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="PRP للبشرة بكام؟")],
@@ -480,7 +480,7 @@ def test_verified_normal_price_changes_without_code_constant(
     )
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="السعر كام؟")],
@@ -518,7 +518,7 @@ def test_selected_candela_price_is_deterministic(
     )
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="طب Candela؟")],
@@ -557,7 +557,7 @@ def test_multiple_device_prices_are_presented_without_silent_selection(
     )
 
     text, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="ليزر الإبط بكام؟")],
@@ -598,7 +598,7 @@ def test_package_backed_booking_keeps_package_fact_and_scopes_pulse_guidance() -
     )
 
     messages = _build_responder_messages(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
@@ -640,7 +640,7 @@ def test_doctor_compatibility_reply_is_deterministic_and_does_not_claim_time_ava
     )
 
     reply, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="احجزيلي مع أحمد محمود")],
@@ -676,7 +676,7 @@ def test_device_compatibility_reply_is_deterministic_and_actionable(
     )
 
     reply, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="عايزاه على Candela Gentle")],

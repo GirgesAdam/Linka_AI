@@ -56,7 +56,7 @@ export const channelLabels: Record<string, string> = {
 export const sourceLabels: Record<string, string> = {
   manual: "إدخال يدوي",
   admin: "فريق العيادة",
-  ai: "Tia",
+  ai: "Linka",
   whatsapp: "واتساب",
   web: "الموقع",
   widget: "الحجز الإلكتروني",

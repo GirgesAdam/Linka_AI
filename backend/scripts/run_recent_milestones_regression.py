@@ -50,7 +50,7 @@ def main():
     args=ap.parse_args()
 
     report=Report()
-    report.line("TIA AI — RECENT MILESTONES REGRESSION")
+    report.line("Linka — RECENT MILESTONES REGRESSION")
     report.line(f"STARTED_AT={datetime.now().isoformat(timespec='seconds')}")
     report.line(f"WORKSPACE_ID={args.workspace_id}")
     report.line(f"PATIENT_ID={args.patient_id}")

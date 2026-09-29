@@ -17,7 +17,7 @@ export default async function SignupPage({
         <div className="mb-7 flex items-start gap-3">
           <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-[var(--accent)] text-white"><Bot /></span>
           <div>
-            <h1 className="text-2xl font-black">إنشاء حساب Tia</h1>
+            <h1 className="text-2xl font-black">إنشاء حساب Linka</h1>
             <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
               أنشئ حسابك، وبعد تسجيل الدخول هنمشي معاك مباشرة في إعداد العيادة خطوة بخطوة.
             </p>

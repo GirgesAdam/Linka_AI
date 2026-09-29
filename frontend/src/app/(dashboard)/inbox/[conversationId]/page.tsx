@@ -37,7 +37,7 @@ const categoryLabels: Record<string, string> = {
 function senderLabel(senderType: string) {
   if (senderType === "patient") return "العميل";
   if (senderType === "staff") return "الفريق";
-  if (senderType === "ai") return "Tia";
+  if (senderType === "ai") return "Linka";
   return "العيادة";
 }
 
@@ -116,7 +116,7 @@ export default async function ConversationPage({
               <CardTitle>المحادثة</CardTitle>
               <div className="flex flex-wrap gap-2">
                 <Badge tone={conversation.owner_type === "human" ? "yellow" : "green"}>
-                  {conversation.owner_type === "human" ? "الفريق يتولى الرد" : "Tia تتولى الرد"}
+                  {conversation.owner_type === "human" ? "الفريق يتولى الرد" : "Linka تتولى الرد"}
                 </Badge>
                 <Badge tone={toneForStatus(conversation.status)}>{labelForStatus(conversation.status)}</Badge>
               </div>
@@ -174,7 +174,7 @@ export default async function ConversationPage({
                 </div>
               ) : conversation.owner_type === "ai" ? (
                 <div className="flex flex-col gap-3 rounded-xl bg-teal-50 p-4 text-sm text-teal-900 sm:flex-row sm:items-center sm:justify-between">
-                  <span>Tia تتولى المحادثة حاليًا. استلم المحادثة إذا احتاج الفريق إلى الرد مباشرة.</span>
+                  <span>Linka تتولى المحادثة حاليًا. استلم المحادثة إذا احتاج الفريق إلى الرد مباشرة.</span>
                   <form action={takeOverConversation}>
                     <input type="hidden" name="conversation_id" value={conversation.id} />
                     <Button size="sm">استلام المحادثة</Button>
@@ -190,7 +190,7 @@ export default async function ConversationPage({
                   </div>
                   {followupState === "pending" && (
                     <div className="rounded-lg border border-amber-200 bg-white/70 px-3 py-2 text-xs font-semibold leading-5">
-                      Tia طلبت قالب المتابعة من Meta. الإرسال هيتاح بمجرد اعتماد القالب، من غير ما يعطل باقي واتساب أو الـAutomations.
+                      Linka طلبت قالب المتابعة من Meta. الإرسال هيتاح بمجرد اعتماد القالب، من غير ما يعطل باقي واتساب أو الـAutomations.
                     </div>
                   )}
                   {followupState === "unavailable" && (
@@ -240,7 +240,7 @@ export default async function ConversationPage({
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-[var(--muted)]">المتابعة الحالية</span>
-                  <b>{conversation.owner_type === "human" ? "الفريق" : "Tia"}</b>
+                  <b>{conversation.owner_type === "human" ? "الفريق" : "Linka"}</b>
                 </div>
                 {conversation.owner_type === "human" && (
                   <div className="flex items-center justify-between gap-3">
@@ -309,11 +309,11 @@ export default async function ConversationPage({
                       <Textarea name="resolution_note" placeholder="ملاحظة ختامية - اختياري" />
                       <label className="flex items-start gap-2 text-xs leading-5 text-[var(--muted)]">
                         <input type="checkbox" name="close_conversation" className="mt-1" />
-                        إغلاق المحادثة وعدم إعادتها لـ Tia
+                        إغلاق المحادثة وعدم إعادتها لـ Linka
                       </label>
                       <Button variant="secondary" className="w-full">
                         <CheckCircle2 size={16} />
-                        سلّم المحادثة لـ Tia
+                        سلّم المحادثة لـ Linka
                       </Button>
                     </form>
                   )}

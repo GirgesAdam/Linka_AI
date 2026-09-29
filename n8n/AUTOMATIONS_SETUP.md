@@ -1,13 +1,13 @@
-# Tia AI Automations Engine — n8n Setup
+# Linka Automations Engine — n8n Setup
 
 ## Architecture
 
-PostgreSQL/Tia remains the source of truth. n8n is a shared platform scheduler only:
-it wakes Tia on schedule. It does **not** hold a clinic's Meta access token, WhatsApp
+PostgreSQL/Linka remains the source of truth. n8n is a shared platform scheduler only:
+it wakes Linka on schedule. It does **not** hold a clinic's Meta access token, WhatsApp
 credential, WABA ID, phone-number credential, booking state, reminder eligibility,
 idempotency, retries, clinic-sync cursors, mapping, or financial decisions.
 
-For WhatsApp, Meta calls Tia's webhook directly and Tia sends to Meta Graph API
+For WhatsApp, Meta calls Linka's webhook directly and Linka sends to Meta Graph API
 directly with the encrypted credential belonging to the correct clinic connection.
 Onboarding a new clinic does not require a new n8n workflow or WhatsApp credential.
 
@@ -33,7 +33,7 @@ Only the appointment reminder is enabled by default. Other optional features can
 be enabled or disabled independently by the admin.
 
 The admin can configure reminder/follow-up timing in minutes, hours, or days from
-the Automations page. Tia stores the resulting `offset_minutes` on the rule and
+the Automations page. Linka stores the resulting `offset_minutes` on the rule and
 replans pending jobs deterministically. There is no product-level seven-day timing
 cap; planning query windows expand to cover the configured offset.
 
@@ -68,10 +68,10 @@ n8n/workflows/tia_automation_scheduler.json
 ```
 
 Set `TIA_API_BASE_URL` in the n8n environment and use the Automation Worker
-header credential for the Tia HTTP nodes.
+header credential for the Linka HTTP nodes.
 
 The workflow runs once per minute. It does not sleep until individual appointment
-times. Tia plans idempotent jobs in PostgreSQL and returns only jobs that are due.
+times. Linka plans idempotent jobs in PostgreSQL and returns only jobs that are due.
 The same scheduler also wakes the clinic-sync runtime; the backend owns that sync
 state and its retry/backoff behavior.
 
@@ -90,14 +90,14 @@ The admin provides once:
 5. System User Access Token with `whatsapp_business_management` and
    `whatsapp_business_messaging`.
 
-Every input has a direct Meta link in the UI. Tia validates that the token belongs
+Every input has a direct Meta link in the UI. Linka validates that the token belongs
 to the entered app, checks the required scopes, verifies that the phone belongs to
 the WABA, and stores the access token and App Secret encrypted per clinic.
 
-Tia then generates a connection-scoped Callback URL and Verify Token. The admin
+Linka then generates a connection-scoped Callback URL and Verify Token. The admin
 pastes those two values in the clinic Meta App's WhatsApp Configuration page,
 clicks **Verify and Save**, and subscribes the `messages` webhook field. After that,
-Tia subscribes the app to the WABA and owns provider/template health monitoring.
+Linka subscribes the app to the WABA and owns provider/template health monitoring.
 
 The callback shape is:
 
@@ -111,7 +111,7 @@ the encrypted App Secret for that exact clinic connection.
 Per-clinic credentials live in `channel_provider_credentials`. Raw access tokens
 and App Secrets are never returned to the dashboard after they are saved.
 
-The Tia platform itself only needs shared runtime configuration such as:
+The Linka platform itself only needs shared runtime configuration such as:
 
 ```text
 META_GRAPH_API_VERSION
@@ -124,14 +124,14 @@ platform credentials.
 
 ## WhatsApp templates
 
-Tia owns the standard template catalog. The admin does not type template names and
+Linka owns the standard template catalog. The admin does not type template names and
 does not need to decide which templates to create.
 
-As soon as direct Meta credentials are accepted for a clinic, Tia checks the
+As soon as direct Meta credentials are accepted for a clinic, Linka checks the
 clinic WABA and automatically creates **all** missing standard templates —
 independent of which optional Automation toggles are enabled. The Automation page
 shows every template and its live Meta status, for example `approved`, `pending`,
-`rejected`, or a provisioning error. Tia keeps refreshing statuses automatically.
+`rejected`, or a provisioning error. Linka keeps refreshing statuses automatically.
 
 Current standard template names:
 
@@ -166,7 +166,7 @@ should run. In the UI an enabled rule may therefore show **في انتظار ا�
 until its own template is approved, and **شغالة** only when the WhatsApp connection,
 webhook, native transport, and that rule's template are ready.
 
-If a Meta-approved template is still pending, Tia waits instead of attempting an
+If a Meta-approved template is still pending, Linka waits instead of attempting an
 invalid proactive send. If Meta rejects a template, the Automation page surfaces
 that status. Existing dispatch safety only releases a proactive template when Meta
 reports that exact template as approved.
@@ -178,7 +178,7 @@ multiple automatic messages.
 ### AI CRM follow-ups and the 24-hour WhatsApp window
 
 Existing AI CRM follow-ups use free-form text only while WhatsApp's 24-hour
-customer-service window is open. Outside that window, Tia does not try to bypass
+customer-service window is open. Outside that window, Linka does not try to bypass
 Meta policy with free-form text.
 
 The standard `tia_ai_followup_ar` Meta-approved template is automatically created
@@ -196,7 +196,7 @@ automation engine.
 
 ## WhatsApp proactive-message safety
 
-Tia stores WhatsApp opt-in separately from marketing consent. A customer inbound
+Linka stores WhatsApp opt-in separately from marketing consent. A customer inbound
 WhatsApp message records the WhatsApp-contact opt-in, while staff can explicitly
 record or withdraw it from the patient profile. Proactive templates and automation
 sends are blocked when opt-in is missing.
@@ -212,7 +212,7 @@ clinic does not stop other tenants.
 
 ## WhatsApp transport worker
 
-Import once for the Tia platform:
+Import once for the Linka platform:
 
 ```text
 n8n/workflows/tia_whatsapp_outbox_worker.json
@@ -272,5 +272,5 @@ The Meta template is `tia_cancellation_recovery_ar` with four positional body pa
 
 `lead_not_booked_followup` is optional and disabled by default. The admin chooses the delay after the lead's latest recorded contact, falling back to lead creation time.
 The planner creates one idempotent system AI CRM follow-up task per lead and reuses the existing `crm_follow_up` AutomationJob runtime; there is no lead-specific job type or workflow engine.
-Before sending, Tia verifies that the rule is still enabled, the lead is still `new`, `contacted`, or `qualified`, and no other active follow-up task is already handling that lead. `booked`, `won`, `lost`, and `spam` leads are not contacted by this automation.
+Before sending, Linka verifies that the rule is still enabled, the lead is still `new`, `contacted`, or `qualified`, and no other active follow-up task is already handling that lead. `booked`, `won`, `lost`, and `spam` leads are not contacted by this automation.
 Inside WhatsApp's 24-hour window the normal AI follow-up composer is used. Outside that window the automatically provisioned `tia_ai_followup_ar` Meta template is required to be approved.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Realistic manual-review journeys for Tia.
+"""Realistic manual-review journeys for Linka.
 
 This is intentionally not a PASS/FAIL suite. Each scenario creates isolated fake
 patient state, exercises the real OpenAI-backed Agent and PostgreSQL clinic adapter,
@@ -712,7 +712,7 @@ def _scenario_plan(
     if name == "human_takeover_and_return":
         slot = _find_slot(db, workspace, HYDRA)
         return (
-            "نبدأ مع AI، ثم نحول المحادثة للريسبشن فيصمت AI، ثم نعيدها لـTia ولا تستأنف إلا مع رسالة عميل جديدة.",
+            "نبدأ مع AI، ثم نحول المحادثة للريسبشن فيصمت AI، ثم نعيدها لـLinka ولا تستأنف إلا مع رسالة عميل جديدة.",
             [
                 "ممكن أعرف سعر الهيدرافيشل؟",
                 f"طيب احجزلي مع {slot.doctor_name} يوم {slot.date_text} الساعة {slot.time_text}.",

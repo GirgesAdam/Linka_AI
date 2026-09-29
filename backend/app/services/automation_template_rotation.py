@@ -27,9 +27,9 @@ def sync_approved_automation_template_rotation(
     *,
     workspace_id: UUID,
 ) -> int:
-    """Keep automatic rotation limited to Meta-approved Tia templates.
+    """Keep automatic rotation limited to Meta-approved Linka templates.
 
-    The patient-facing wording is selected by Tia, not by the clinic admin. Rules
+    The patient-facing wording is selected by Linka, not by the clinic admin. Rules
     keep their normal ON/OFF and timing controls; this function only maintains the
     approved message pool used by the existing deterministic template selectors.
     """

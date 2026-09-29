@@ -138,7 +138,7 @@ def test_best_doctor_question_does_not_create_ranking_or_model_call(
         ),
     )
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="مين أحسن دكتور؟")],
@@ -171,7 +171,7 @@ def test_pure_doctor_choice_bypasses_generic_model_and_legacy_guard(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="مريم ولا سارة؟")],
@@ -258,7 +258,7 @@ def test_mixed_doctor_and_service_response_stays_entirely_legacy(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="مين الدكاترة وإيه تفاصيل الخدمة؟")],

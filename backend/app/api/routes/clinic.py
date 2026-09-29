@@ -136,7 +136,7 @@ def propose_agent_knowledge_change(
         # Provider/internal diagnostics stay in backend logs. Do not expose model details to the UI.
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Tia could not prepare that clinic-data edit. Try rephrasing the request.",
+            detail="Linka could not prepare that clinic-data edit. Try rephrasing the request.",
         ) from exc
 
 

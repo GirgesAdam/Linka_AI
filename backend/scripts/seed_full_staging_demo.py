@@ -191,7 +191,7 @@ def ensure_clinic(
         name="ليزر ريجريشن",
         slug="regression-laser",
         category="Laser",
-        description="خدمة staging لاختبارات Tia.",
+        description="خدمة staging لاختبارات Linka.",
         duration_minutes=60,
         buffer_before_minutes=0,
         buffer_after_minutes=0,
@@ -1168,7 +1168,7 @@ def main() -> int:
             ).limit(1)
         )
         if admin_membership is None:
-            print("No active admin exists in the Tia workspace.", file=sys.stderr)
+            print("No active admin exists in the Linka workspace.", file=sys.stderr)
             return 1
         admin_user = db.get(User, admin_membership.user_id)
         if admin_user is None:
@@ -1188,7 +1188,7 @@ def main() -> int:
                 return 1
             workspace = Workspace(
                 id=REGRESSION_WORKSPACE_ID,
-                name="Tia Regression",
+                name="Linka Regression",
                 slug=REGRESSION_WORKSPACE_SLUG,
                 timezone=primary_workspace.timezone,
                 is_active=True,
@@ -1196,7 +1196,7 @@ def main() -> int:
             db.add(workspace)
             db.flush()
         else:
-            workspace.name = "Tia Regression"
+            workspace.name = "Linka Regression"
             workspace.slug = REGRESSION_WORKSPACE_SLUG
             workspace.timezone = primary_workspace.timezone
             workspace.is_active = True
@@ -1287,7 +1287,7 @@ def main() -> int:
                 "production_blocked": True,
             },
         }
-        print("Tia full staging regression data is ready")
+        print("Linka full staging regression data is ready")
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         print()
         print("Mock adapter tokens are deterministic staging-only values used by the regression runner.")

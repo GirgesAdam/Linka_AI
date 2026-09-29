@@ -124,14 +124,14 @@ def _run(db: _Db, monkeypatch, write_executor):
     _patch_runtime(monkeypatch, plan)
     return target.orchestrate_v2_turn(
         db=db,
-        workspace=SimpleNamespace(id=WORKSPACE_ID, name="Tia"),
+        workspace=SimpleNamespace(id=WORKSPACE_ID, name="Linka"),
         patient=SimpleNamespace(id=PATIENT_ID),
         conversation_id=CONVERSATION_ID,
         run_id=RUN_ID,
         history=[],
         local_now=datetime(2026, 9, 13, 9, 0, tzinfo=UTC),
         timezone_name="Africa/Cairo",
-        clinic_name="Tia",
+        clinic_name="Linka",
         write_executor=write_executor,
         turn_id="atomicity-test",
     )

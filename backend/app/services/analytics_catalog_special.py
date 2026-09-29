@@ -145,7 +145,7 @@ def _peak_weekdays(
         return CatalogSpecialResult(
             period.label,
             "مفيش مواعيد مسجلة في الفترة والشروط المختارة.",
-            ["اليوم يُحسب من وقت بداية الموعد المسجل في Tia."],
+            ["اليوم يُحسب من وقت بداية الموعد المسجل في Linka."],
             [],
             AnalyticsCatalogChartDataRead(labels=[], series=[]),
             [],
@@ -170,7 +170,7 @@ def _peak_weekdays(
     return CatalogSpecialResult(
         period.label,
         f"أكثر يوم ازدحامًا هو {busiest.label} بعدد {busiest.metrics[0].value} موعد.",
-        ["اليوم يُحسب من وقت بداية الموعد المسجل في Tia.", "المواعيد المعاد جدولتها لا تدخل في الحجم التشغيلي."],
+        ["اليوم يُحسب من وقت بداية الموعد المسجل في Linka.", "المواعيد المعاد جدولتها لا تدخل في الحجم التشغيلي."],
         ranked,
         AnalyticsCatalogChartDataRead(
             labels=[row.label for row in ranked],
@@ -275,7 +275,7 @@ def _time_grid(
         return CatalogSpecialResult(
             period.label,
             "مفيش مواعيد مسجلة في الفترة والشروط المختارة.",
-            ["الخريطة تستخدم وقت بداية الموعد المسجل في Tia."],
+            ["الخريطة تستخدم وقت بداية الموعد المسجل في Linka."],
             [],
             chart_data,
             [],

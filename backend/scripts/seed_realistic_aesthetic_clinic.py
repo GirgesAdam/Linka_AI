@@ -676,7 +676,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Seed a realistic multi-branch aesthetic/laser clinic fixture into a non-production "
-            "Tia workspace."
+            "Linka workspace."
         )
     )
     parser.add_argument("--workspace-id", type=UUID, default=None)
@@ -1622,7 +1622,7 @@ def main() -> int:
                 },
             }
         )
-        print("Tia realistic aesthetic clinic fixture is ready")
+        print("Linka realistic aesthetic clinic fixture is ready")
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

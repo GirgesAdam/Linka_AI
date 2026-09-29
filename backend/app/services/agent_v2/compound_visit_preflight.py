@@ -46,7 +46,7 @@ def _strip_sequence_facts(facts: dict[str, object]) -> dict[str, object]:
 
 
 def _service_buffers(context: ReadExecutionContext, service_id: object) -> tuple[int, int]:
-    """Read native Tia service buffers when available; external adapters safely fall back to zero."""
+    """Read native Linka service buffers when available; external adapters safely fall back to zero."""
     try:
         service_uuid = UUID(str(service_id))
         row = context.db.get(Service, service_uuid)

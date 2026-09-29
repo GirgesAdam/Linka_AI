@@ -84,7 +84,7 @@ export function AnalyticsAudienceActions({ result, allowedActions }: { result: A
         <div>
           <div className="font-black text-indigo-950">استخدم قائمة العملاء دي</div>
           <p className="mt-1 text-xs leading-5 text-indigo-900/70">
-            اختر الخطوة التالية. قبل التنفيذ، Tia هتراجع نفس الشروط مرة أخرى وتتأكد إن القائمة ما زالت صحيحة.
+            اختر الخطوة التالية. قبل التنفيذ، Linka هتراجع نفس الشروط مرة أخرى وتتأكد إن القائمة ما زالت صحيحة.
           </p>
         </div>
       </div>

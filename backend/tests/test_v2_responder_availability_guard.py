@@ -58,7 +58,7 @@ def _run_with_draft(monkeypatch, *, draft: ResponderDraft, outcomes: list[TurnOu
         lambda **kwargs: SimpleNamespace(value=draft, model_name="test-model"),
     )
     return compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=datetime.fromisoformat("2026-09-13T18:00:00+03:00"),
         history=[HumanMessage(content="لو الساعة 6 مش متاحة وريني البدائل")],

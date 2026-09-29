@@ -38,7 +38,7 @@ def _print_process(proc: subprocess.CompletedProcess[str], limit: int = 12000) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run only the Tia Final Gate frontend Playwright E2E."
+        description="Run only the Linka Final Gate frontend Playwright E2E."
     )
     parser.add_argument("--email", default=DEFAULT_EMAIL)
     parser.add_argument("--workspace-id", default=DEFAULT_WORKSPACE_ID)
@@ -46,7 +46,7 @@ def main() -> int:
     parser.add_argument("--keep-fixtures", action="store_true")
     args = parser.parse_args()
 
-    print("=== TIA AI FRONTEND E2E FOCUSED GATE ===")
+    print("=== Linka FRONTEND E2E FOCUSED GATE ===")
 
     if settings.is_production:
         print("[FAIL] Refusing to create test fixtures in production.")

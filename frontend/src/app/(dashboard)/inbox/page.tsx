@@ -30,7 +30,7 @@ type DeliveryHealthNotice = {
 };
 
 const PAGE_SIZE = 50;
-const ownerOptions = [["", "الكل"], ["human", "الفريق"], ["ai", "Tia"]] as const;
+const ownerOptions = [["", "الكل"], ["human", "الفريق"], ["ai", "Linka"]] as const;
 const statusOptions = [["", "كل الحالات"], ["open", "مفتوحة"], ["pending", "بانتظار رد"], ["closed", "مغلقة"]] as const;
 
 function filterHref(current: InboxFilters, key: keyof InboxFilters, value: string) {
@@ -56,7 +56,7 @@ function pageHref(filters: InboxFilters, page: number) {
 function senderLabel(senderType?: string) {
   if (senderType === "patient") return "العميل";
   if (senderType === "staff") return "الفريق";
-  if (senderType === "ai") return "Tia";
+  if (senderType === "ai") return "Linka";
   return "رسالة";
 }
 
@@ -150,7 +150,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       <LiveRouteRefresh />
       <PageHeader
         title="الرسائل"
-        description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Tia والمحادثات التي تحتاج تدخل الفريق."
+        description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Linka والمحادثات التي تحتاج تدخل الفريق."
       />
 
       {deliveryHealth && (
@@ -260,7 +260,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                         <Badge tone={conversation.owner_type === "human" ? "yellow" : "green"}>
                           <span className="inline-flex items-center gap-1">
                             {conversation.owner_type === "human" ? <UserRound size={11} /> : <Bot size={11} />}
-                            {conversation.owner_type === "human" ? "مع الفريق" : "تديرها Tia"}
+                            {conversation.owner_type === "human" ? "مع الفريق" : "تديرها Linka"}
                           </span>
                         </Badge>
                         <Badge tone={toneForStatus(conversation.status)}>{labelForStatus(conversation.status)}</Badge>

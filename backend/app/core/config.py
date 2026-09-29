@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "Tia AI"
+    app_name: str = "Linka"
     environment: str = "staging"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     supabase_publishable_key: str
     supabase_secret_key: str
 
-    # Tia uses OpenAI for all LLM generation. Luna is the normal low-cost model;
+    # Linka uses OpenAI for all LLM generation. Luna is the normal low-cost model;
     # GPT-5 mini is a separate affordable model used only for cross-model failover.
     llm_provider: Literal["openai"] = "openai"
     openai_api_key: str | None = None

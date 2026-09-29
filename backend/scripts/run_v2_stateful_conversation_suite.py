@@ -47,7 +47,7 @@ def _print_turn(message: str, result) -> None:
                 "has_options": result.active_task.option_snapshot is not None,
             },
         )
-    print("TIA V2:", result.reply)
+    print("Linka V2:", result.reply)
     print("MODEL:", result.responder_model)
 
 

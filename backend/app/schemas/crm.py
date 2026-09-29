@@ -67,7 +67,7 @@ def normalize_phone(value: str | None) -> tuple[str | None, str | None]:
 def normalize_patient_identity_phone(value: str | None) -> tuple[str | None, str | None]:
     """Return a stable phone identity key for clinic imports without rewriting legacy CRM storage.
 
-    Tia is currently Egypt/EGP-first, so common Egyptian mobile representations
+    Linka is currently Egypt/EGP-first, so common Egyptian mobile representations
     (010..., +2010..., 002010..., 2010...) are treated as the same source identity.
     Other numbers keep the normal CRM representation.
     """

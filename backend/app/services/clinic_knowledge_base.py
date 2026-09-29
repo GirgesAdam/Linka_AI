@@ -69,7 +69,7 @@ def read_runtime_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
 
     Legacy service/device-scoped rows remain readable by the setup migration UI so no
     historical admin text is destroyed, but customer runtime must never consume them.
-    A saved "معلومات Tia" field is represented by one active clinic-wide row with the
+    A saved "معلومات Linka" field is represented by one active clinic-wide row with the
     canonical title below.
     """
     entry = db.scalar(

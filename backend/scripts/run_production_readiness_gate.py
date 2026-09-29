@@ -15,13 +15,13 @@ from app.services.operational_readiness import build_workspace_operational_readi
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Read-only Tia workspace production-readiness gate."
+        description="Read-only Linka workspace production-readiness gate."
     )
     parser.add_argument("--workspace-id", required=True)
     args = parser.parse_args()
 
     workspace_id = UUID(args.workspace_id)
-    print("=== TIA AI v0.17.0 PRODUCTION READINESS GATE ===")
+    print("=== Linka v0.17.0 PRODUCTION READINESS GATE ===")
 
     with SessionLocal() as db:
         result = build_workspace_operational_readiness(

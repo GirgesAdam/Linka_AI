@@ -136,7 +136,7 @@ def transfer_campaign_booking_conversion(
     from_appointment_id: UUID,
     to_appointment_id: UUID,
 ) -> CRMCampaignConversion | None:
-    """Follow a tracked booking across Tia's replacement-row reschedule model."""
+    """Follow a tracked booking across Linka's replacement-row reschedule model."""
     conversion = db.scalar(
         select(CRMCampaignConversion).where(
             CRMCampaignConversion.workspace_id == workspace_id,

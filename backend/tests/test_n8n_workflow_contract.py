@@ -68,7 +68,7 @@ def test_automation_scheduler_execute_url_is_a_real_expression() -> None:
     workflow = json.loads(path.read_text(encoding="utf-8"))
     by_name = {node["name"]: node for node in workflow["nodes"]}
 
-    execute_url = by_name["Tia Execute Automation"]["parameters"]["url"]
+    execute_url = by_name["Linka Execute Automation"]["parameters"]["url"]
     assert "$env.TIA_API_BASE_URL" in execute_url
     assert "/api/v1/automations/adapter/jobs/" in execute_url
     assert "+ $json.job_id +" in execute_url
@@ -161,7 +161,7 @@ def test_oracle_healthcheck_enforces_and_repairs_scheduler_only_state() -> None:
     assert "LEGACY_ACTIVE_COUNT" in script
     assert "bash ./publish-scheduler.sh" in script
     assert "id IN ('tiaWAInbound0001','tiaWAOutbox00001')" in script
-    assert "Expected 3 active Tia production workflows" not in script
+    assert "Expected 3 active Linka production workflows" not in script
 
 
 def test_oracle_backup_verifier_requires_scheduler_and_no_active_legacy_transport() -> None:
@@ -171,4 +171,4 @@ def test_oracle_backup_verifier_requires_scheduler_and_no_active_legacy_transpor
     assert "SCHEDULER_ACTIVE_COUNT" in script
     assert "LEGACY_ACTIVE_COUNT" in script
     assert "id = 'tiaAutoSched0001' AND active IS TRUE" in script
-    assert "Expected 3 active Tia production workflows" not in script
+    assert "Expected 3 active Linka production workflows" not in script

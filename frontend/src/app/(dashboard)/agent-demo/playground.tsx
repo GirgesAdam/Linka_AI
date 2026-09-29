@@ -38,7 +38,7 @@ export function AgentDemoPlayground({ patients }: { patients: Patient[] }) {
           <div className="flex items-center gap-3">
             <span className="grid size-11 place-items-center rounded-2xl bg-teal-700 text-white"><Bot size={21} /></span>
             <div>
-              <h2 className="font-black text-slate-950">محادثة عميل حقيقية مع Tia</h2>
+              <h2 className="font-black text-slate-950">محادثة عميل حقيقية مع Linka</h2>
               <p className="mt-1 text-xs leading-5 text-slate-500">نفس الـAgent ونفس booking tools المستخدمة في النظام — لكن داخل Demo معزولة.</p>
             </div>
           </div>
@@ -57,12 +57,12 @@ export function AgentDemoPlayground({ patients }: { patients: Patient[] }) {
           {currentState.messages.map((item, index) => (
             <div key={`${item.role}-${index}`} className={`flex ${item.role === "patient" ? "justify-start" : "justify-end"}`}>
               <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-7 ${item.role === "patient" ? "bg-white text-slate-900 shadow-sm" : "bg-teal-700 text-white"}`}>
-                <div className={`mb-1 text-[10px] font-black ${item.role === "patient" ? "text-slate-400" : "text-teal-100"}`}>{item.role === "patient" ? "العميل" : "Tia"}</div>
+                <div className={`mb-1 text-[10px] font-black ${item.role === "patient" ? "text-slate-400" : "text-teal-100"}`}>{item.role === "patient" ? "العميل" : "Linka"}</div>
                 <div className="whitespace-pre-wrap">{item.content}</div>
               </div>
             </div>
           ))}
-          {pending && <div className="flex justify-end"><div className="flex items-center gap-2 rounded-2xl bg-teal-700 px-4 py-3 text-sm text-white"><LoaderCircle className="animate-spin" size={16} />Tia بتنفذ الطلب...</div></div>}
+          {pending && <div className="flex justify-end"><div className="flex items-center gap-2 rounded-2xl bg-teal-700 px-4 py-3 text-sm text-white"><LoaderCircle className="animate-spin" size={16} />Linka بتنفذ الطلب...</div></div>}
         </div>
 
         <form action={action} className="border-t border-slate-100 p-4">

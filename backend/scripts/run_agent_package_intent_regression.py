@@ -169,7 +169,7 @@ def _primary_branch_row(workspace: Workspace, catalog: dict[str, Any]) -> dict[s
         raise RuntimeError("Primary branch was not found in the active catalog.")
     if len(branches) == 1:
         return branches[0]
-    raise RuntimeError("This suite expects Tia's current single-branch product model.")
+    raise RuntimeError("This suite expects Linka's current single-branch product model.")
 
 
 def _doctor_name(row: dict[str, Any]) -> str:
@@ -518,7 +518,7 @@ def case_existing_package_implicit_exact_booking_mentions_remaining(**ctx) -> Ca
             },
             error=(
                 "When the customer already has a same-service package and books normally "
-                "without mentioning it, Tia should use that package automatically and the "
+                "without mentioning it, Linka should use that package automatically and the "
                 "booking reply should tell them the remaining session count."
             ),
         )
@@ -725,7 +725,7 @@ def case_existing_package_explicit_standard_override(**ctx) -> CaseResult:
             },
             error=(
                 "If the customer explicitly says this appointment is NOT from the package, "
-                "Tia must respect that and leave package sessions untouched."
+                "Linka must respect that and leave package sessions untouched."
             ),
         )
     except Exception as exc:
@@ -1429,7 +1429,7 @@ def case_no_package_claims_existing_package_but_none_exists(**ctx) -> CaseResult
             },
             error=(
                 "If the customer explicitly asks to book from a package but no usable package exists, "
-                "Tia must not silently create a standard paid appointment."
+                "Linka must not silently create a standard paid appointment."
             ),
         )
     except Exception as exc:

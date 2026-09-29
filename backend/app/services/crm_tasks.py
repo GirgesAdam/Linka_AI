@@ -257,7 +257,7 @@ def create_crm_task(
     if execution_mode not in {"human", "ai"}:
         raise CRMTaskError("Unsupported task execution mode.")
     if execution_mode == "ai" and task_type != "follow_up":
-        raise CRMTaskError("Only follow-up tasks can be executed by Tia.")
+        raise CRMTaskError("Only follow-up tasks can be executed by Linka.")
     if execution_mode == "ai" and assigned_user_id is not None:
         raise CRMTaskError("AI follow-ups cannot be assigned to a staff member at the same time.")
 

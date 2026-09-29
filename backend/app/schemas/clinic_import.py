@@ -73,7 +73,7 @@ class DoctorHoursSheetMapping(BaseModel):
     end_time: str
 
 
-# Integration-facing lifecycle is deliberately smaller than Tia's internal
+# Integration-facing lifecycle is deliberately smaller than Linka's internal
 # operational appointment state machine.
 ImportAppointmentLifecycle = Literal[
     "scheduled",
@@ -332,7 +332,7 @@ class ClinicImportOverrides(BaseModel):
     appointment_source_map: dict[str, AppointmentSource] = Field(default_factory=dict)
     reference_mappings: list[ClinicImportReferenceMappingOverride] = Field(default_factory=list, max_length=1000)
     # Import-repair overrides are administrator-approved corrections applied only to
-    # the current import batch. They let Tia repair contradictory legacy exports
+    # the current import batch. They let Linka repair contradictory legacy exports
     # without forcing the clinic to edit Excel/CSV files and re-upload them.
     package_patient_assignments: dict[str, str] = Field(default_factory=dict)
     package_service_assignments: dict[str, str] = Field(default_factory=dict)
@@ -344,7 +344,7 @@ class ClinicImportOverrides(BaseModel):
     deferred_package_external_ids: list[str] = Field(default_factory=list, max_length=5000)
     deferred_payment_external_ids: list[str] = Field(default_factory=list, max_length=10000)
     # Appointment rows whose catalog references are still genuinely ambiguous after
-    # Tia's fast alias pass. They are preserved in the post-setup data-issue inbox
+    # Linka's fast alias pass. They are preserved in the post-setup data-issue inbox
     # and omitted from the current materialization so onboarding can finish without
     # inventing a service/branch/doctor relationship.
     deferred_appointment_external_ids: list[str] = Field(default_factory=list, max_length=20000)

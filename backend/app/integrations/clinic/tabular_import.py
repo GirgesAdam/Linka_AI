@@ -1232,7 +1232,7 @@ def build_import_preview(
                         path=f"doctor_source:{doctor_mapping.sheet}",
                         message=(
                             f"{deferred_doctor_alias_rows} row(s) in {doctor_mapping.sheet!r} contain "
-                            "human-readable values inside a doctor ID/code column. Tia did not promote those "
+                            "human-readable values inside a doctor ID/code column. Linka did not promote those "
                             "values into new canonical doctors; they remain appointment aliases that must be "
                             "matched to the discovered doctor IDs using evidence or administrator review."
                         ),
@@ -1264,7 +1264,7 @@ def build_import_preview(
                         code="doctor_catalog_discovered_from_appointment_source",
                         path=f"doctor_source:{doctor_mapping.sheet}",
                         message=(
-                            f"No separate doctor catalog was mapped. Tia discovered {len(doctors)} doctor "
+                            f"No separate doctor catalog was mapped. Linka discovered {len(doctors)} doctor "
                             f"candidate(s) from exact doctor labels in appointment source {doctor_mapping.sheet!r} "
                             "and will use appointment history as service/branch evidence. Review the catalog "
                             "before import; no fuzzy-name merge was performed."
@@ -1486,7 +1486,7 @@ def build_import_preview(
                                 path=f"appointment_source:{appointment_mapping.sheet}/branch",
                                 message=(
                                     f"Appointment source {appointment_mapping.sheet!r} has no branch data and "
-                                    "its source name does not uniquely identify a catalog branch. Tia will "
+                                    "its source name does not uniquely identify a catalog branch. Linka will "
                                     "preserve these appointments under an inactive Unknown branch instead of guessing."
                                 ),
                                 occurrence_count=len(appointment_rows),
@@ -1800,7 +1800,7 @@ def build_import_preview(
                         path=f"appointment_source:{appointment_mapping.sheet}/doctor",
                         message=(
                             f"{unknown_doctor_count} appointment row(s) in {appointment_mapping.sheet!r} "
-                            "do not record a doctor. Tia will preserve them under an inactive Unknown / "
+                            "do not record a doctor. Linka will preserve them under an inactive Unknown / "
                             "Unassigned doctor and will not treat that placeholder as a booking resource."
                         ),
                         occurrence_count=unknown_doctor_count,
@@ -1817,7 +1817,7 @@ def build_import_preview(
                         message=(
                             f"{historical_completed_inferred_count} past appointment row(s) in "
                             f"{appointment_mapping.sheet!r} have no contrary terminal status evidence. "
-                            "Tia will treat them as completed even when the old source left status blank "
+                            "Linka will treat them as completed even when the old source left status blank "
                             "or still marked them scheduled/confirmed; cancelled/no-show evidence is preserved. "
                             "Review this historical default before final import."
                         ),
@@ -2039,7 +2039,7 @@ def build_import_preview(
                 path=f"appointment_source:{sheet_name}",
                 message=(
                     f"{count} appointment rows in {sheet_name!r} have patient names but no stable "
-                    "patient ID or phone. Tia preserved every appointment without merging patients "
+                    "patient ID or phone. Linka preserved every appointment without merging patients "
                     "by name; cross-visit patient history for those rows remains unlinked."
                 ),
                 occurrence_count=count,
@@ -2646,7 +2646,7 @@ def build_import_preview(
                 path=f"appointment_status:{_normalized_status}",
                 message=(
                     f"Appointment status {raw_value!r} is not mapped in {count} appointment row(s); "
-                    "map this source value before import so Tia does not invent an operational status."
+                    "map this source value before import so Linka does not invent an operational status."
                 ),
                 occurrence_count=count,
                 source_value=raw_value,
@@ -2700,7 +2700,7 @@ def build_import_preview(
             patient_phones_from_appointments.add(normalized_phone)
 
     # Explicit allocation rows are authoritative. A payment may remain entirely
-    # patient-level/unallocated; Tia never chooses the "nearest" appointment.
+    # patient-level/unallocated; Linka never chooses the "nearest" appointment.
     explicit_allocations_by_payment: dict[str, list[NormalizedPaymentAllocationImport]] = {}
     seen_allocation_pairs: set[tuple[str, str]] = set()
     for allocation in payment_allocations:
@@ -3022,7 +3022,7 @@ def build_import_preview(
                     repair_group=f"package:{package.external_id}:service",
                     repair_title=f"تحديد خدمة الباقة «{package.name or package.external_id}»",
                     repair_detail=(
-                        "اختار الخدمة المقابلة من كتالوج العيادة مرة واحدة. Tia هتستخدم الاختيار "
+                        "اختار الخدمة المقابلة من كتالوج العيادة مرة واحدة. Linka هتستخدم الاختيار "
                         "داخل الاستيراد من غير تعديل الملف الأصلي."
                     ),
                     repair_options=service_repair_options,
@@ -3156,7 +3156,7 @@ def build_import_preview(
                     repair_group=f"package:{package.external_id}",
                     repair_title=f"تأكيد صاحب الباقة «{package.name or package.external_id}»",
                     repair_detail=(
-                        "Tia راجعت الجلسات المرتبطة بالباقة وطلعت العملاء الأكثر احتمالًا. "
+                        "Linka راجعت الجلسات المرتبطة بالباقة وطلعت العملاء الأكثر احتمالًا. "
                         "اختر العميل الصحيح مرة واحدة؛ مش محتاج تعدّل ملف المصدر."
                     ),
                     repair_options=repair_options,
@@ -3280,7 +3280,7 @@ def build_import_preview(
                     repair_group=f"package_usage:{usage.appointment_external_id}",
                     repair_title=f"مراجعة استخدام الباقة في الموعد {usage.appointment_external_id}",
                     repair_detail=(
-                        "الموعد مسجل لعميل مختلف عن صاحب الباقة الحالية. Tia جهزت الباقات "
+                        "الموعد مسجل لعميل مختلف عن صاحب الباقة الحالية. Linka جهزت الباقات "
                         "المتوافقة مع العميل والخدمة عشان تختار من غير تعديل الملف."
                     ),
                     repair_options=patient_candidates,

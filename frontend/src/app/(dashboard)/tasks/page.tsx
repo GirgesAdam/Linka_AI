@@ -54,7 +54,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader
         title="المتابعات"
-        description="حدد موعد المتابعة واختر Tia أو أحد أفراد الفريق من القائمة. Tia ترسل المتابعة تلقائيًا في موعدها."
+        description="حدد موعد المتابعة واختر Linka أو أحد أفراد الفريق من القائمة. Linka ترسل المتابعة تلقائيًا في موعدها."
       />
 
       <div className="surface-toolbar mb-4">
@@ -87,7 +87,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                 const active = task.status === "pending" || task.status === "in_progress";
                 const canManage = ctx.workspace.role === "admin" || (task.execution_mode === "human" && task.assigned_user_id === ctx.me.user.id);
                 const canClaim = active && (task.execution_mode === "ai" || !task.assigned_user_id);
-                const assignee = task.execution_mode === "ai" ? "Tia" : task.assigned_user_name || task.assigned_user_email || "بدون مسؤول";
+                const assignee = task.execution_mode === "ai" ? "Linka" : task.assigned_user_name || task.assigned_user_email || "بدون مسؤول";
                 const executorValue = task.execution_mode === "ai"
                   ? "tia"
                   : task.assigned_user_id
@@ -104,7 +104,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                         {task.is_overdue && active && (
                           <Badge tone="red"><CircleAlert size={11} className="ml-1" />متأخرة</Badge>
                         )}
-                        {task.execution_mode === "ai" && active && <Badge tone="purple">Tia</Badge>}
+                        {task.execution_mode === "ai" && active && <Badge tone="purple">Linka</Badge>}
                       </div>
                       {task.description && <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--muted)]">{task.description}</p>}
                       <div className="mt-2 flex flex-wrap gap-3 text-xs text-[var(--muted)]">

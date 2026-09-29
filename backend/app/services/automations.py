@@ -890,7 +890,7 @@ def _fallback_text(rule_key: str, data: dict) -> str:
             f"أهلًا {data['patient_name']}، لاحظت إن ميعاد {data['service_name']} فات. "
             "لو حابة نرتب ميعاد تاني ابعتيلي هنا وأنا أساعدك."
         )
-    return "عندك تحديث جديد من Tia."
+    return "عندك تحديث جديد من Linka."
 
 
 def _rule_template_candidates(rule: AutomationRule) -> list[tuple[str, str]]:

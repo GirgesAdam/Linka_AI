@@ -1,18 +1,18 @@
-# Tia AI v0.18.0 — External Integration Architecture
+# Linka v0.18.0 — External Integration Architecture
 
 ## Boundary
 
-Tia owns intent, policy, CRM state, booking state, handoffs, messages, dispatch
+Linka owns intent, policy, CRM state, booking state, handoffs, messages, dispatch
 state and automation idempotency.
 
 n8n owns external provider credentials and provider execution.
 
-No Meta access token, Google OAuth token, Gmail password, or raw Tia adapter
+No Meta access token, Google OAuth token, Gmail password, or raw Linka adapter
 credential is stored in `channel_connections.config`.
 
 ## Customer contact contract
 
-Tia does not collect or persist patient/customer email addresses. Customer identity
+Linka does not collect or persist patient/customer email addresses. Customer identity
 and CRM contact resolution use the external entity link and normalized phone number.
 The old patient-email semantic capability and `send_email_to_customer` tool were
 retired in v0.37.4.1. Staff/admin/doctor account emails remain separate operational

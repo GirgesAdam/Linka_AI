@@ -1,6 +1,6 @@
-# Tia AI Architecture
+# Linka Architecture
 
-Tia separates AI interpretation from business truth. The AI layer can interpret intent and select capabilities, while authorization, patient identity, booking constraints, payment accounting, package consumption/refunds, imports, and analytics calculations are enforced by deterministic application services and PostgreSQL constraints.
+Linka separates AI interpretation from business truth. The AI layer can interpret intent and select capabilities, while authorization, patient identity, booking constraints, payment accounting, package consumption/refunds, imports, and analytics calculations are enforced by deterministic application services and PostgreSQL constraints.
 
 ## Main layers
 

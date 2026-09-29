@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Automated Tia conversational regression matrix.
+"""Automated Linka conversational regression matrix.
 
 This runner exercises the real FastAPI service-layer agent without WhatsApp or n8n.
 It uses the real Gemini runtime and the real PostgreSQL clinic data, but by default
@@ -492,7 +492,7 @@ def _find_future_slot(
     days: int = 35,
 ):
     # Pick the fixture slot from the same source of truth used by the customer
-    # agent. Using native Tia availability directly here can disagree with a
+    # agent. Using native Linka availability directly here can disagree with a
     # configured clinic adapter and create a false conversational booking fail.
     adapter = get_clinic_adapter(db=db, workspace=workspace)
     adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
@@ -870,7 +870,7 @@ def run_e2e_matrix(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Tia automated semantic + conversational E2E matrix.")
+    parser = argparse.ArgumentParser(description="Run Linka automated semantic + conversational E2E matrix.")
     parser.add_argument("--workspace-slug", default="tia")
     parser.add_argument("--workspace-id", type=UUID, default=None)
     parser.add_argument(

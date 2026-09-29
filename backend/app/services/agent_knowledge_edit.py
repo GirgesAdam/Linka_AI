@@ -233,7 +233,7 @@ def apply_agent_knowledge_edit(
 ) -> KnowledgeEditApplyResponse:
     snapshot = build_agent_knowledge_snapshot(db, workspace)
     if agent_knowledge_configuration_fingerprint(snapshot) != base_fingerprint:
-        raise KnowledgeEditConflictError("Clinic knowledge changed after the proposal. Ask Tia to propose the edit again.")
+        raise KnowledgeEditConflictError("Clinic knowledge changed after the proposal. Ask Linka to propose the edit again.")
     _validate_actions(snapshot, actions)
     wid = workspace.id
 

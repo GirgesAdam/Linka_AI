@@ -12,7 +12,7 @@ from app.services.agent_v2.read_executor import ReadExecutionContext, execute_st
 def _read_context() -> ReadExecutionContext:
     workspace = SimpleNamespace(
         id="workspace-1",
-        name="Tia Clinic",
+        name="Linka Clinic",
         timezone="Africa/Cairo",
         primary_branch_id=None,
     )
@@ -103,7 +103,7 @@ def test_service_explanation_uses_only_saved_clinic_knowledge(monkeypatch) -> No
                 {
                     "scope_type": "clinic",
                     "title": "معلومات العيادة",
-                    "content": "ده الشرح المحفوظ في معلومات Tia.",
+                    "content": "ده الشرح المحفوظ في معلومات Linka.",
                 }
             ],
         },
@@ -118,7 +118,7 @@ def test_service_explanation_uses_only_saved_clinic_knowledge(monkeypatch) -> No
 
     assert result.ok is True
     service = result.payload["service"]
-    assert service["description"] == "ده الشرح المحفوظ في معلومات Tia."
+    assert service["description"] == "ده الشرح المحفوظ في معلومات Linka."
     assert "وصف قديم" not in str(result.payload)
 
 

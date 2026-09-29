@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""10 focused tests for Tia package booking + tracking.
+"""10 focused tests for Linka package booking + tracking.
 
 Business rules under test:
 - A package contains sessions for exactly one service_id.
@@ -108,7 +108,7 @@ def _primary_branch_row(workspace: Workspace, catalog: dict[str, Any]) -> dict[s
         raise RuntimeError("Primary branch was not found in the active catalog.")
     if len(branches) == 1:
         return branches[0]
-    raise RuntimeError("This focused suite expects Tia's current single-branch model.")
+    raise RuntimeError("This focused suite expects Linka's current single-branch model.")
 
 
 def _doctor_name(row: dict[str, Any]) -> str:

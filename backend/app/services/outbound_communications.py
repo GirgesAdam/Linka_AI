@@ -1,5 +1,5 @@
-"""Customer email delivery is intentionally not part of the Tia patient contract.
+"""Customer email delivery is intentionally not part of the Linka patient contract.
 
-Tia does not collect or persist patient/customer email addresses. Staff/account email
+Linka does not collect or persist patient/customer email addresses. Staff/account email
 features live in their own auth/team models and are unaffected by this module.
 """

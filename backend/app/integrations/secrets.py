@@ -29,13 +29,13 @@ def _resolve_env(reference: str) -> str:
     value = os.getenv(name)
     if value is None or not value.strip():
         raise SecretResolutionError(
-            f"Environment secret reference {name!r} is not configured on the Tia server."
+            f"Environment secret reference {name!r} is not configured on the Linka server."
         )
     return value.strip()
 
 
 def resolve_secret_ref(secret_ref: str | None) -> str:
-    """Resolve server-side secret material without persisting it in Tia's database.
+    """Resolve server-side secret material without persisting it in Linka's database.
 
     References use ``scheme:value`` or ``scheme://value``. Only the reference is
     persisted. Secret values stay in the resolver backend and are never included
@@ -51,7 +51,7 @@ def resolve_secret_ref(secret_ref: str | None) -> str:
     resolver = _RESOLVERS.get(scheme.strip().lower())
     if resolver is None:
         raise SecretResolutionError(
-            f"Secret resolver scheme {scheme.strip().lower()!r} is not installed on this Tia server."
+            f"Secret resolver scheme {scheme.strip().lower()!r} is not installed on this Linka server."
         )
     try:
         resolved = resolver(value)

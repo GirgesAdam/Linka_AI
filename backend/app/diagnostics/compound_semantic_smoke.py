@@ -1,7 +1,7 @@
 """Run exactly five read-only live semantic conversations for compound requests.
 
 This module lives under ``app`` so it is included in the production/staging image.
-It exercises Tia's configured LLM through the real semantic interpreter and clinic
+It exercises Linka's configured LLM through the real semantic interpreter and clinic
 catalog and performs no appointment or package writes.
 """
 

@@ -13,7 +13,7 @@ export default function DashboardError({ reset }: { error: Error & { digest?: st
         </span>
         <h2 className="mt-4 text-xl font-black text-slate-950">تعذر تحميل الصفحة</h2>
         <p className="mt-2 text-sm leading-6 text-slate-500">
-          حصلت مشكلة مؤقتة أثناء تحميل البيانات. جرّب مرة أخرى؛ لو المشكلة في جزء واحد من Tia، باقي بيانات العيادة تفضل آمنة كما هي.
+          حصلت مشكلة مؤقتة أثناء تحميل البيانات. جرّب مرة أخرى؛ لو المشكلة في جزء واحد من Linka، باقي بيانات العيادة تفضل آمنة كما هي.
         </p>
         <Button className="mt-5" onClick={reset}>
           <RefreshCw size={16} />

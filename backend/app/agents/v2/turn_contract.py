@@ -226,7 +226,7 @@ class TurnOperation(StrictContractModel):
         description=(
             "Choose the customer's semantic action. Use payment_info for read-only general clinic "
             "payment-method/timing/policy questions that do not ask to inspect or change a customer's "
-            "financial ledger. Use book whenever the customer is asking Tia "
+            "financial ledger. Use book whenever the customer is asking Linka "
             "to create/reserve a new appointment now, even when required booking details are still "
             "missing and Python will need to clarify them. Do not downgrade an incomplete booking "
             "request to availability. Use availability only when the customer is asking to inspect "

@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         description="Create/rotate the real n8n automation scheduler worker."
     )
     parser.add_argument("--workspace-id", required=True)
-    parser.add_argument("--name", default="Tia n8n Runtime")
+    parser.add_argument("--name", default="Linka n8n Runtime")
     parser.add_argument("--allow-production", action="store_true")
     return parser.parse_args()
 
@@ -107,7 +107,7 @@ def main() -> int:
         print(f"worker_token={raw}")
         print(
             "Store worker_token in n8n Header Auth as X-Automation-Token. "
-            "Tia stores only its hash."
+            "Linka stores only its hash."
         )
     return 0
 

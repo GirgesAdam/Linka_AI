@@ -50,7 +50,7 @@ export async function runAgentDemoAction(
     revalidatePath("/inbox");
 
     const reply = response.reply || (response.handoff_required
-      ? "Tia نقلت المحادثة للفريق البشري."
+      ? "Linka نقلت المحادثة للفريق البشري."
       : "تم تنفيذ الدور بدون رد نصي.");
 
     return {
@@ -66,7 +66,7 @@ export async function runAgentDemoAction(
       conversationId,
       messages: history,
       model: safePreviousState.model,
-      error: error instanceof Error ? error.message : "تعذر تشغيل Tia الآن.",
+      error: error instanceof Error ? error.message : "تعذر تشغيل Linka الآن.",
     };
   }
 }

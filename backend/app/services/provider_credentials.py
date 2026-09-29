@@ -18,7 +18,7 @@ def _fernet() -> Fernet:
     raw = meta_whatsapp_settings.channel_credential_encryption_key
     if not raw or not raw.strip():
         raise ProviderCredentialError(
-            "Provider credential encryption is not configured on the Tia platform."
+            "Provider credential encryption is not configured on the Linka platform."
         )
     try:
         return Fernet(raw.strip().encode("utf-8"))

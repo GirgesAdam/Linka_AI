@@ -464,7 +464,7 @@ def test_phase63_migration_runtime_and_n8n_contracts_are_deterministic() -> None
     assert '"/integration/sync/run"' in clinic_routes
     assert '"/integration/sync/schedule"' in clinic_routes
     assert '"/adapter/clinic-sync/tick"' in automation_routes
-    assert any(node.get("name") == "Tia Clinic Sync Tick" for node in workflow["nodes"])
+    assert any(node.get("name") == "Linka Clinic Sync Tick" for node in workflow["nodes"])
     assert "eval(" not in runtime_source
     assert "re.compile" not in runtime_source
     assert "re.search" not in runtime_source

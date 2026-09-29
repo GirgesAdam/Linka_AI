@@ -84,7 +84,7 @@ export function SavedCohortCampaignForm({
           <div className="mt-1 text-[var(--muted)]">{statusLabel(row.status)}</div>
         </div>)}
       </div>
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-6 text-amber-950">قبل الإرسال، Tia هتراجع حالة العملاء وموافقتهم على الرسائل مرة أخيرة. أي عميل لم يعد مؤهلًا سيتم استبعاده تلقائيًا.</div>
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-6 text-amber-950">قبل الإرسال، Linka هتراجع حالة العملاء وموافقتهم على الرسائل مرة أخيرة. أي عميل لم يعد مؤهلًا سيتم استبعاده تلقائيًا.</div>
       <form action={confirmAction}>
         <input type="hidden" name="campaign_id" value={campaign.id}/>
         <input type="hidden" name="confirmation_id" value={confirmationId}/>

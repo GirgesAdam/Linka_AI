@@ -262,7 +262,7 @@ def test_pure_package_information_bypasses_generic_responder(
         ),
     )
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="فاضلي كام جلسة في الباكدج؟")],
@@ -309,7 +309,7 @@ def test_mixed_package_and_unsupported_family_stays_legacy(
     )
 
     text, _source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="قولّي باكدجاتي والخدمة")],

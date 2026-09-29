@@ -1,8 +1,8 @@
-# Tia AI v0.14.0 — Semantic Capability Routing + Stateful Workflows
+# Linka v0.14.0 — Semantic Capability Routing + Stateful Workflows
 
 ## Core principle
 
-Tia no longer forces each customer turn into one exclusive intent.
+Linka no longer forces each customer turn into one exclusive intent.
 
 The semantic layer describes:
 
@@ -23,7 +23,7 @@ Customer turn
 → semantic capabilities
 → deterministic capability policy
 → filtered tool set
-→ Tia customer agent
+→ Linka customer agent
 → authorized tool
 → domain/business validation
 → PostgreSQL/integration
@@ -102,7 +102,7 @@ Each flow has a monotonically increasing `version`.
 
 State transitions use `UPDATE ... WHERE version = expected_version`.
 
-If two turns attempt to mutate stale state, Tia returns a conflict rather than
+If two turns attempt to mutate stale state, Linka returns a conflict rather than
 silently applying a write against old workflow state.
 
 ## Audit
@@ -121,7 +121,7 @@ This is useful for debugging, analytics, compliance, and later onboarding flows.
 
 ## Gemini runtime
 
-Tia now uses role-specific Gemini models while keeping the orchestration architecture model-independent:
+Linka now uses role-specific Gemini models while keeping the orchestration architecture model-independent:
 
 - Semantic capability router: Gemini 3.7 Flash / low thinking
 - Active flow interpreter: Gemini 3.7 Flash / low thinking

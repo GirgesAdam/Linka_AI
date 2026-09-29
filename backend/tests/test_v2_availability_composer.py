@@ -499,7 +499,7 @@ def test_invalid_model_draft_falls_back_without_legacy_guard(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="إيه المتاح؟")],
@@ -547,7 +547,7 @@ def test_valid_availability_path_never_calls_legacy_responder_or_guard(
     )
 
     text, source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="إيه المتاح؟")],
@@ -594,7 +594,7 @@ def test_mixed_availability_and_unsupported_family_stays_legacy(
     )
 
     text, _source = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="إيه المتاح وتفاصيل الخدمة؟")],

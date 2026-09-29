@@ -93,7 +93,7 @@ def _reads_for_step(step) -> ReadExecutionBundle:
                     kind="clinic_info",
                     ok=True,
                     payload={
-                        "clinic_name": "Tia Clinic",
+                        "clinic_name": "Linka Clinic",
                         "timezone": TZ,
                         "locations": [{"name": "العيادة", "city": "Cairo"}],
                         "knowledge": KNOWLEDGE_TEXT,
@@ -159,7 +159,7 @@ def _run_case(message: str, *, expected_operation: str, knowledge_expected: bool
         raise AssertionError("Legacy Service.description leaked into a customer-visible V2 outcome.")
 
     reply, model = compose_v2_customer_reply(
-        clinic_name="Tia Clinic",
+        clinic_name="Linka Clinic",
         timezone_name=TZ,
         local_now=NOW,
         history=history,
@@ -172,7 +172,7 @@ def _run_case(message: str, *, expected_operation: str, knowledge_expected: bool
     print("CUSTOMER:", message)
     print("OPERATION:", turn.operations[0].type)
     print("VISIBLE_OUTCOME:", encoded)
-    print("TIA V2:", reply)
+    print("Linka V2:", reply)
     print("MODEL:", model)
 
 

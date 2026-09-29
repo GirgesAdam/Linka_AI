@@ -236,7 +236,7 @@ def run_tia_customer_agent(
             operation=f"customer-agent-round-{model_call_index}",
         )
         logger.info(
-            "Tia agent run_id=%s stage=model round=%s tool_calls=%s",
+            "Linka agent run_id=%s stage=model round=%s tool_calls=%s",
             tool_context.run_id,
             model_call_index,
             _tool_call_names(response),
@@ -286,7 +286,7 @@ def run_tia_customer_agent(
                     )
                 )
                 logger.warning(
-                    "Tia agent run_id=%s stage=tool-unavailable round=%s name=%s",
+                    "Linka agent run_id=%s stage=tool-unavailable round=%s name=%s",
                     tool_context.run_id,
                     tool_rounds,
                     name,
@@ -306,7 +306,7 @@ def run_tia_customer_agent(
                     )
                 )
                 logger.warning(
-                    "Tia agent run_id=%s stage=tool-dedup round=%s name=%s",
+                    "Linka agent run_id=%s stage=tool-dedup round=%s name=%s",
                     tool_context.run_id,
                     tool_rounds,
                     name,
@@ -335,7 +335,7 @@ def run_tia_customer_agent(
                 )
             )
         logger.info(
-            "Tia agent run_id=%s stage=tools round=%s names=%s duration_ms=%s",
+            "Linka agent run_id=%s stage=tools round=%s names=%s duration_ms=%s",
             tool_context.run_id,
             tool_rounds,
             names,
@@ -399,7 +399,7 @@ def run_tia_customer_agent(
             if not safe_reply:
                 raise
             logger.warning(
-                "Tia agent run_id=%s stage=finalizer-provider-fallback tool_rounds=%s",
+                "Linka agent run_id=%s stage=finalizer-provider-fallback tool_rounds=%s",
                 tool_context.run_id,
                 tool_rounds,
             )
@@ -408,13 +408,13 @@ def run_tia_customer_agent(
             safe_reply = _verified_tool_fallback(state["messages"])
             if safe_reply:
                 logger.warning(
-                    "Tia agent run_id=%s stage=finalizer-empty-fallback tool_rounds=%s",
+                    "Linka agent run_id=%s stage=finalizer-empty-fallback tool_rounds=%s",
                     tool_context.run_id,
                     tool_rounds,
                 )
                 response = AIMessage(content=safe_reply)
         logger.info(
-            "Tia agent run_id=%s stage=finalizer tool_rounds=%s",
+            "Linka agent run_id=%s stage=finalizer tool_rounds=%s",
             tool_context.run_id,
             tool_rounds,
         )
@@ -468,7 +468,7 @@ def run_tia_customer_agent(
             reply = ""
         if reply:
             logger.warning(
-                "Tia agent run_id=%s stage=empty-response-recovered",
+                "Linka agent run_id=%s stage=empty-response-recovered",
                 tool_context.run_id,
             )
     if not reply:
@@ -476,11 +476,11 @@ def run_tia_customer_agent(
         # intentionally makes no clinic-data claim and authorizes no action.
         reply = "معلش، حصلت مشكلة مؤقتة وأنا بجهز الرد. ممكن تبعت طلبك تاني؟"
         logger.error(
-            "Tia agent run_id=%s stage=empty-response-safe-fallback",
+            "Linka agent run_id=%s stage=empty-response-safe-fallback",
             tool_context.run_id,
         )
     logger.info(
-        "Tia agent run_id=%s completed model_calls=%s tool_rounds=%s duration_ms=%s model=%s",
+        "Linka agent run_id=%s completed model_calls=%s tool_rounds=%s duration_ms=%s model=%s",
         tool_context.run_id,
         model_call_index + finalizer_calls,
         tool_rounds,

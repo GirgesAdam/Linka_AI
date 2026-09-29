@@ -1,6 +1,6 @@
-# Tia AI Dashboard — v0.11.0
+# Linka Dashboard — v0.11.0
 
-Next.js 16 App Router dashboard for the Tia AI clinic platform.
+Next.js 16 App Router dashboard for the Linka clinic platform.
 
 ## Local setup
 

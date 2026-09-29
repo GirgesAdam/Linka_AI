@@ -305,7 +305,7 @@ def test_semantic_contract_covers_reference_persistence_reschedule_context_and_a
 
 @pytest.mark.skipif(
     not settings.openai_api_key,
-    reason="Live contextual regression uses the configured Tia OpenAI model.",
+    reason="Live contextual regression uses the configured Linka OpenAI model.",
 )
 def test_live_reference_resolution_survives_side_reads() -> None:
     local_now = datetime(2026, 9, 9, 14, 0)
@@ -334,7 +334,7 @@ def test_live_reference_resolution_survives_side_reads() -> None:
 
 @pytest.mark.skipif(
     not settings.openai_api_key,
-    reason="Live contextual regression uses the configured Tia OpenAI model.",
+    reason="Live contextual regression uses the configured Linka OpenAI model.",
 )
 def test_live_reschedule_same_phrase_changes_meaning_with_context() -> None:
     local_now = datetime(2026, 9, 9, 14, 0)
@@ -366,7 +366,7 @@ def test_live_reschedule_same_phrase_changes_meaning_with_context() -> None:
 
 @pytest.mark.skipif(
     not settings.openai_api_key,
-    reason="Live contextual regression uses the configured Tia OpenAI model.",
+    reason="Live contextual regression uses the configured Linka OpenAI model.",
 )
 def test_live_ambiguous_same_time_does_not_guess_doctor() -> None:
     decision = interpret_customer_turn(

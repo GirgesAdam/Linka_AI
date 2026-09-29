@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Focused regression suite for Tia booking/inquiry/time semantic problems.
+"""Focused regression suite for Linka booking/inquiry/time semantic problems.
 
 Unlike the broad matrix, this runner contains only previously problematic
 surfaces plus new nearby variants. Each case evaluates the structured turn
@@ -359,7 +359,7 @@ def _run_case(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run only Tia's currently problematic booking/inquiry/time regressions."
+        description="Run only Linka's currently problematic booking/inquiry/time regressions."
     )
     parser.add_argument("--workspace-slug", default="tia")
     parser.add_argument("--workspace-id", type=UUID, default=None)

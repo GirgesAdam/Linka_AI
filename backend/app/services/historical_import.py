@@ -202,7 +202,7 @@ def _iter_rows(documents: list[HistoricalImportDocument]) -> Iterable[tuple[str,
             yield document.name, sheet, row_number, row
     if not recognized:
         raise HistoricalImportError(
-            "No recognized historical-data sheet was found. Use the Tia Import Template v1."
+            "No recognized historical-data sheet was found. Use the Linka Import Template v1."
         )
 
 
@@ -377,7 +377,7 @@ def _normalize_appointment(
         return None, "appointment_patient_identity_missing", "Appointment requires patient_id or patient_phone."
     service = _resolve_service(row, services_by_id, services_by_name)
     if service is None:
-        return None, "appointment_service_unknown", "Appointment service must match a configured Tia service."
+        return None, "appointment_service_unknown", "Appointment service must match a configured Linka service."
     day = _parse_date(row.get("date") or row.get("appointment_date"))
     start_time = _parse_time(row.get("start_time") or row.get("time"))
     if day is None:
@@ -389,7 +389,7 @@ def _normalize_appointment(
         local_start = datetime.combine(day, start_time, tzinfo=EGYPT_TZ)
         status = "completed" if local_start <= datetime.now(EGYPT_TZ) else "pending"
     if status not in VALID_APPOINTMENT_STATUSES:
-        return None, "appointment_status_invalid", "Appointment status is not a supported Tia status."
+        return None, "appointment_status_invalid", "Appointment status is not a supported Linka status."
     explicit = _clean(row.get("appointment_id"))
     fallback = "|".join([
         identity,
@@ -477,7 +477,7 @@ def _normalize_package(
         return None, "package_patient_identity_missing", "Package requires patient_id or patient_phone."
     service = _resolve_service(row, services_by_id, services_by_name)
     if service is None:
-        return None, "package_service_unknown", "Package service must match a configured Tia service."
+        return None, "package_service_unknown", "Package service must match a configured Linka service."
     remaining = _int_value(row.get("sessions_remaining"))
     if remaining is None or remaining < 0:
         return None, "package_remaining_invalid", "Package sessions_remaining must be zero or greater."
@@ -1058,7 +1058,7 @@ def _safe_remove_previous_imports(
         )
         if runtime_payment_ref is not None:
             raise HistoricalImportConflictError(
-                "Some previously imported appointments have newer Tia payment activity. Use Append instead of Replace."
+                "Some previously imported appointments have newer Linka payment activity. Use Append instead of Replace."
             )
 
     if package_ids:
@@ -1081,7 +1081,7 @@ def _safe_remove_previous_imports(
         )
         if runtime_package_payment is not None:
             raise HistoricalImportConflictError(
-                "Some imported packages have newer Tia payment activity. Use Append instead of Replace."
+                "Some imported packages have newer Linka payment activity. Use Append instead of Replace."
             )
 
     if payment_ids:
@@ -1094,7 +1094,7 @@ def _safe_remove_previous_imports(
         )
         if referenced is not None:
             raise HistoricalImportConflictError(
-                "A newer Tia refund references an imported payment. Use Append instead of Replace."
+                "A newer Linka refund references an imported payment. Use Append instead of Replace."
             )
 
     # Preserve agent audit history. Only clear the nullable appointment pointer.
@@ -1501,9 +1501,9 @@ def apply_historical_import(
 
 
 def build_historical_import_template() -> bytes:
-    """Return the stable Tia History v1 workbook contract.
+    """Return the stable Linka History v1 workbook contract.
 
-    The workbook intentionally mirrors clinic-facing facts rather than Tia's
+    The workbook intentionally mirrors clinic-facing facts rather than Linka's
     internal database schema. Currency is always EGP, patient email is not part
     of the contract, appointment end time is derived from the configured service
     duration, every patient is treated as female without a gender import column,
@@ -1512,14 +1512,14 @@ def build_historical_import_template() -> bytes:
     workbook = Workbook()
     instructions = workbook.active
     instructions.title = "README"
-    instructions.append(["Tia Historical Import v1"])
+    instructions.append(["Linka Historical Import v1"])
     instructions.append(["All sheets are optional. Keep only the sheets you have data for."])
-    instructions.append(["Patients are identified by patient_id or phone. If patient_id is missing, Tia creates a stable identity from the normalized phone number."])
-    instructions.append(["Appointments need patient identity, service identity, date and start_time. end_at is calculated from the service duration configured in Tia."])
+    instructions.append(["Patients are identified by patient_id or phone. If patient_id is missing, Linka creates a stable identity from the normalized phone number."])
+    instructions.append(["Appointments need patient identity, service identity, date and start_time. end_at is calculated from the service duration configured in Linka."])
     instructions.append(["Payments use EGP. Positive amount = payment; negative amount = refund. transaction_id is optional."])
     instructions.append(["payment_allocations is optional and only used when both transaction_id and appointment_id exist explicitly."])
     instructions.append(["Active packages can be migrated using sessions_remaining. sessions_total may be left blank if the old system does not know it."])
-    instructions.append(["Before import, Tia shows a preview and asks whether to append or replace previous historical-import records. Tia-created runtime data is never deleted by this flow."])
+    instructions.append(["Before import, Linka shows a preview and asks whether to append or replace previous historical-import records. Linka-created runtime data is never deleted by this flow."])
 
     sheets: dict[str, list[str]] = {
         "patients": [

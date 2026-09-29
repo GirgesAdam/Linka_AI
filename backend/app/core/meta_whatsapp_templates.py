@@ -118,7 +118,7 @@ STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
             "أهلًا {{1}}، بنتابع معاكي بخصوص {{2}}. آخر متابعة كانت يوم {{3}} الساعة {{4}} من {{5}}. "
             "لو حابة تكملي الحجز ابعتيلي هنا."
         ),
-        example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Tia Clinic"),
+        example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Linka Clinic"),
     ),
     StandardWhatsAppTemplate(
         rule_key="lead_not_booked_followup",
@@ -130,7 +130,7 @@ STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
             "أهلًا {{1}} 👋 رجعنا نطمن بخصوص {{2}}. آخر تواصل كان يوم {{3}} الساعة {{4}} مع {{5}}. "
             "لو في أي سؤال أو تحب تكمل الحجز ابعتلنا هنا."
         ),
-        example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Tia Clinic"),
+        example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Linka Clinic"),
     ),
     StandardWhatsAppTemplate(
         rule_key="lead_not_booked_followup",
@@ -143,7 +143,7 @@ STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
             "آخر تواصل كان يوم {{3}} الساعة {{4}} مع {{5}}. "
             "لو حابب/حابة تكمل الحجز أو عندك أي سؤال، ابعتلنا هنا وإحنا نساعدك."
         ),
-        example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Tia Clinic"),
+        example_body_parameters=("مريم", "استفسار عن الليزر", "12/09/2026", "17:00", "Linka Clinic"),
     ),
 )
 

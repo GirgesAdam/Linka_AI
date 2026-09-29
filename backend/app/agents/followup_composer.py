@@ -46,7 +46,7 @@ def compose_followup_message(
     """
     system = SystemMessage(
         content=(
-            "You write one proactive WhatsApp follow-up for Tia, an aesthetic clinic assistant. "
+            "You write one proactive WhatsApp follow-up for Linka, an aesthetic clinic assistant. "
             "Write only the customer-visible message. Keep it concise and natural, like a skilled "
             "Egyptian clinic receptionist continuing the same conversation. Match the customer's "
             "language and tone; if Arabic, use natural Egyptian Arabic, not formal Arabic.\n\n"

@@ -71,7 +71,7 @@ def plan_composable_analytics(
 ) -> tuple[AnalyticsComposePlan, str | None]:
     system = SystemMessage(
         content=(
-            "You are Tia's semantic analytics and action-intent planner for clinic staff. "
+            "You are Linka's semantic analytics and action-intent planner for clinic staff. "
             "Return only the typed plan. You never execute writes, never write SQL, never inspect raw tables, "
             "and never invent patient identities or financial attribution. The backend performs all reads and any later confirmed writes.\n\n"
             "All output fields must be present. Use null for unused nullable fields and [] for unused collections. "

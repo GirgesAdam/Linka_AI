@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Data Deletion Instructions | Tia AI",
+  title: "Data Deletion Instructions | Linka",
   description:
-    "Instructions for requesting deletion of personal data associated with Tia AI services.",
+    "Instructions for requesting deletion of personal data associated with Linka services.",
 };
 
 export default function DataDeletionPage() {
-  const legalName = process.env.NEXT_PUBLIC_TIA_LEGAL_NAME?.trim() || "Tia AI";
+  const legalName = process.env.NEXT_PUBLIC_TIA_LEGAL_NAME?.trim() || "Linka";
   const privacyEmail = process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL?.trim();
 
   return (
@@ -16,13 +16,13 @@ export default function DataDeletionPage() {
       <div className="mx-auto max-w-3xl">
         <article className="rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm sm:p-9">
           <div className="space-y-3 border-b border-[var(--border)] pb-7">
-            <p className="text-sm font-semibold text-[var(--accent)]">Tia AI</p>
+            <p className="text-sm font-semibold text-[var(--accent)]">Linka</p>
             <h1 className="text-3xl font-bold tracking-tight text-[var(--text)] sm:text-4xl">
               Data Deletion Instructions
             </h1>
             <p className="text-sm leading-7 text-[var(--muted)] sm:text-base">
               These instructions explain how to request deletion of personal data
-              associated with {legalName} and a Tia AI workspace.
+              associated with {legalName} and a Linka workspace.
             </p>
           </div>
 
@@ -33,7 +33,7 @@ export default function DataDeletionPage() {
               </h2>
               <p>
                 If you contacted a clinic or business through WhatsApp or another
-                channel connected to Tia AI, please first contact that clinic or
+                channel connected to Linka, please first contact that clinic or
                 business using its published contact details. The clinic or business
                 operating the workspace controls the customer relationship and can
                 identify the relevant conversation, CRM record, or appointment.
@@ -42,15 +42,15 @@ export default function DataDeletionPage() {
 
             <section className="space-y-3 border-t border-[var(--border)] pt-7">
               <h2 className="text-xl font-semibold text-[var(--text)]">
-                Tia AI platform requests
+                Linka platform requests
               </h2>
               {privacyEmail ? (
                 <p>
-                  To request deletion of data associated with the Tia AI platform,
+                  To request deletion of data associated with the Linka platform,
                   email{" "}
                   <a
                     className="font-medium text-[var(--accent)] underline underline-offset-4"
-                    href={`mailto:${privacyEmail}?subject=Tia%20AI%20Data%20Deletion%20Request`}
+                    href={`mailto:${privacyEmail}?subject=Linka%20AI%20Data%20Deletion%20Request`}
                   >
                     {privacyEmail}
                   </a>
@@ -60,7 +60,7 @@ export default function DataDeletionPage() {
               ) : (
                 <p>
                   Workspace administrators should submit a deletion request through
-                  their normal Tia AI support channel. Customers should contact the
+                  their normal Linka support channel. Customers should contact the
                   clinic or business they interacted with using that organization&apos;s
                   published contact details.
                 </p>
@@ -111,7 +111,7 @@ export default function DataDeletionPage() {
                   className="font-medium text-[var(--accent)] underline underline-offset-4"
                   href="/privacy"
                 >
-                  Tia AI Privacy Policy
+                  Linka Privacy Policy
                 </Link>
                 .
               </p>

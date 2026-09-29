@@ -337,7 +337,7 @@ def customer_visible_verified_data(value: Any) -> Any:
     """Remove internal location and scheduling-duration metadata before customer composition.
 
     Appointment date/time remains customer-visible. Service/session duration is an
-    internal scheduling fact and must never be exposed in Tia's customer reply.
+    internal scheduling fact and must never be exposed in Linka's customer reply.
     """
     if isinstance(value, dict):
         return {

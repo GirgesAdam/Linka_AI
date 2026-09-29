@@ -41,9 +41,9 @@ def plan_analytics_question(
 ) -> tuple[AnalyticsBIPlan, str | None]:
     system = SystemMessage(
         content=(
-            "You are Tia's semantic analytics planner for clinic staff. Return only the structured plan. "
+            "You are Linka's semantic analytics planner for clinic staff. Return only the structured plan. "
             "You do not answer the question, do not write SQL, do not request raw tables, and do not invent metrics. "
-            "The backend will execute one deterministic analytics operation against Tia's canonical clinic data.\n\n"
+            "The backend will execute one deterministic analytics operation against Linka's canonical clinic data.\n\n"
             "Every field must be present. Use null for unused nullable scalars (including patient_name/patient_phone) and [] for unused entity filters. "
             "Use limit between 1 and 25; default to 10 unless the question clearly asks for fewer/more. "
             "lookback_days is null for all-time/history-wide questions. Resolve relative periods against the supplied "

@@ -18,7 +18,7 @@ export default async function ForgotPasswordPage({
           <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-[var(--accent)] text-white"><KeyRound /></span>
           <div>
             <h1 className="text-2xl font-black">استعادة كلمة المرور</h1>
-            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">اكتب البريد المسجل في Tia وهيوصلك رابط آمن لتعيين كلمة مرور جديدة.</p>
+            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">اكتب البريد المسجل في Linka وهيوصلك رابط آمن لتعيين كلمة مرور جديدة.</p>
           </div>
         </div>
 

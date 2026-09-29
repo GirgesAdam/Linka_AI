@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 
 class ClinicSyncDomain(StrEnum):
-    """Canonical domains that Phase 6.2c can synchronize into Tia.
+    """Canonical domains that Phase 6.2c can synchronize into Linka.
 
     The connector/extractor owns vendor-specific reads and structural mapping.
     The sync engine only consumes these canonical facts.
@@ -104,7 +104,7 @@ class ClinicRawSyncPage:
     """Vendor/raw page used only behind an approved structural mapping.
 
     ``tables`` may include the paged fact table plus deterministic lookup slices
-    needed by joins. Tia core never consumes these rows directly.
+    needed by joins. Linka core never consumes these rows directly.
     """
 
     domain: ClinicSyncDomain

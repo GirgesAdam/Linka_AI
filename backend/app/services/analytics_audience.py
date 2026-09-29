@@ -159,7 +159,7 @@ def _zero_result_diagnostics(
     if requested_total == 0:
         return (
             "فيه مواعيد لنفس الخدمة والفترة، لكن ولا واحد حالته من الحالات التي تعتبرها الخطة جلسة مطابقة. "
-            "Tia لم تحوّل confirmed/pending القديمة إلى completed تلقائيًا حتى لا تحسب حجزًا لم يتم كجلسة فعلية.",
+            "Linka لم تحوّل confirmed/pending القديمة إلى completed تلقائيًا حتى لا تحسب حجزًا لم يتم كجلسة فعلية.",
             notes,
         )
     return (
@@ -389,14 +389,14 @@ def execute_audience_plan(
         )
 
     definitions = [
-        "المجموعة مبنية على بيانات المرضى والمواعيد canonical داخل Tia، وليس على تخمين نصي من الـAI.",
+        "المجموعة مبنية على بيانات المرضى والمواعيد canonical داخل Linka، وليس على تخمين نصي من الـAI.",
         "عدد الزيارات وآخر نشاط يُحسبان فقط من المواعيد التي تطابق الخدمة/الفرع/الدكتور والحالات والفترة المحددة في الخطة.",
     ]
     service_names = _selected_service_names(db, workspace_id=workspace_id, plan=plan)
     if service_names:
         definitions.append("الخدمات التي طبقتها الخطة: " + "، ".join(service_names) + ".")
     if plan.has_future_appointment is False:
-        definitions.append("تم استبعاد أي مريض لديه موعد نشط قادم في Tia.")
+        definitions.append("تم استبعاد أي مريض لديه موعد نشط قادم في Linka.")
     if value_source is not None:
         definitions.append(
             "القيمة المالية = payments ناقص refunds؛ وعند فلترة خدمة/فرع/دكتور تُستخدم payment allocations الصريحة فقط."

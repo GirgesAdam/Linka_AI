@@ -1,6 +1,6 @@
 # Security Policy
 
-Tia AI handles operational clinic data and should be treated as a security-sensitive application.
+Linka handles operational clinic data and should be treated as a security-sensitive application.
 
 Do not open public issues for vulnerabilities. Report them privately to the repository owner/security contact.
 

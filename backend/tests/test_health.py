@@ -9,7 +9,7 @@ def test_root() -> None:
     response = client.get("/")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["name"] == "Tia AI"
+    assert payload["name"] == "Linka"
     assert payload["status"] == "running"
 
 
@@ -18,7 +18,7 @@ def test_liveness() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "alive"
-    assert payload["app"] == "Tia AI"
+    assert payload["app"] == "Linka"
 
 
 def test_request_id_is_returned() -> None:

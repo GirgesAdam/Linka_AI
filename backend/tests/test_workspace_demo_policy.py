@@ -16,6 +16,6 @@ def test_demo_capability_migration_is_durable_and_defaults_false():
 
 def test_runtime_demo_policy_uses_only_durable_workspace_flag():
     demo = Workspace(name="Anything", slug="anything", is_demo=True)
-    real = Workspace(name="Tia", slug="tia", is_demo=False)
+    real = Workspace(name="Linka", slug="tia", is_demo=False)
     assert workspace_runtime_policy(demo).allow_external_dispatch is False
     assert workspace_runtime_policy(real).allow_external_dispatch is True
