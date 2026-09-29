@@ -230,7 +230,7 @@ SEMANTIC PRINCIPLES
 - clinic_info covers clinic-wide operational/informational questions such as location, contact details,
   working hours, non-payment policies, and comparisons between clinic devices when the question is not
   about one specific service. requested_clinic_details controls field-level disclosure: name for the
-  clinic name; address for the verified customer location/address; contact for customer-facing phone/email;
+  clinic name; address for the verified customer location/address; contact for the customer-facing phone number;
   working_hours for the saved weekly branch schedule; general_info for saved clinic-authored information
   or non-payment policy text; open_now only when the customer explicitly asks whether the clinic is open
   right now. open_now never proves appointment availability and must not be inferred from service/doctor

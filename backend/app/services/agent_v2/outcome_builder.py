@@ -455,9 +455,8 @@ def _clinic_information_response_facts(
                     safe_location[key] = location[key]
 
         if "contact" in requested_details:
-            for key in ("phone", "email"):
-                if location.get(key) not in (None, ""):
-                    safe_location[key] = location[key]
+            if location.get("phone") not in (None, ""):
+                safe_location["phone"] = location["phone"]
 
         if (
             "working_hours" in requested_details

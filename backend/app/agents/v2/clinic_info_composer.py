@@ -121,12 +121,6 @@ def _detail_reply(truth: ClinicTruth, *, arabic: bool) -> str:
                     if arabic
                     else f"Contact phone: {location.phone}."
                 )
-            if location and location.email:
-                contact_parts.append(
-                    f"البريد الإلكتروني: {location.email}."
-                    if arabic
-                    else f"Email: {location.email}."
-                )
             if contact_parts:
                 parts.extend(contact_parts)
             else:

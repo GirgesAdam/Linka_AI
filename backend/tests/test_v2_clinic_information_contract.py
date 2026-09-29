@@ -105,13 +105,13 @@ def test_exact_clinic_address_and_contact_are_backend_owned() -> None:
     assert truth.location.name == "Main"
     assert truth.location.address == "10 Verified Street, Cairo"
     assert truth.location.phone == "01012345678"
-    assert truth.location.email == "hello@example.test"
+    assert "email" not in truth.location.model_dump()
 
     text = deterministic_clinic_contract_reply(contract, arabic=False)
     assert "Tia Verified Clinic" in text
     assert "10 Verified Street, Cairo" in text
     assert "01012345678" in text
-    assert "hello@example.test" in text
+    assert "hello@example.test" not in text
 
 
 def test_working_hours_are_exact_and_do_not_create_availability_claim() -> None:
@@ -188,7 +188,6 @@ def test_clinic_outcome_shaping_removes_internal_config_and_unrequested_fields()
             {
                 "name": "Main",
                 "phone": "01012345678",
-                "email": "hello@example.test",
             }
         ],
     }
@@ -200,6 +199,7 @@ def test_clinic_outcome_shaping_removes_internal_config_and_unrequested_fields()
         "working_hours",
         "address_line1",
         "knowledge",
+        "hello@example.test",
     ):
         assert forbidden not in dumped
 
@@ -420,7 +420,6 @@ def test_native_catalog_projects_customer_contact_without_internal_config() -> N
 
     for expected in (
         '"phone": row.phone',
-        '"email": row.email',
         '"address_line1": row.address_line1',
         '"address_line2": row.address_line2',
         '"state": row.state',
@@ -430,6 +429,7 @@ def test_native_catalog_projects_customer_contact_without_internal_config() -> N
     ):
         assert expected in source
     for forbidden in (
+        '"email": row.email',
         "access_token",
         "api_key",
         "webhook_secret",
