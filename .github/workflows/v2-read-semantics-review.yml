@@ -1,4 +1,4 @@
-name: V2 Read Semantics Review
+﻿name: V2 Read Semantics Review
 
 on:
   workflow_dispatch:
@@ -13,6 +13,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -22,8 +36,8 @@ jobs:
       ENVIRONMENT: staging
       DEBUG: "false"
       DOCS_ENABLED: "false"
-      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_v2_read_review_unused
       SUPABASE_SECRET_KEY: sb_secret_v2_read_review_unused
@@ -51,11 +65,55 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Verify staging secrets
+      - name: Verify live-model secret
+        shell: bash
+        run: test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+      - name: Bootstrap isolated PostgreSQL
+        env:
+          PGPASSWORD: ci_password
         shell: bash
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
-          test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+          python -m alembic upgrade head
+          python - <<'PY'
+          from uuid import uuid4
+          from sqlalchemy import create_engine
+          from sqlalchemy.orm import Session
+          from app.core.config import settings
+          from app.models.user import User
+          from app.models.workspace import Workspace
+          from app.models.workspace_member import WorkspaceMember
+
+          engine = create_engine(settings.database_url)
+          with Session(engine) as db:
+              user = User(email='phase3g-admin@example.test', auth_user_id=uuid4())
+              workspace = Workspace(
+                  name='Tia', slug='tia', timezone='Africa/Cairo',
+                  is_active=True, is_demo=True,
+              )
+              db.add_all([user, workspace])
+              db.flush()
+              db.add(WorkspaceMember(
+                  workspace_id=workspace.id,
+                  user_id=user.id,
+                  role='admin',
+                  is_active=True,
+              ))
+              db.commit()
+          engine.dispose()
+          PY
+          python scripts/seed_full_staging_demo.py
       - name: Run focused V2 service information review
         run: python scripts/run_v2_service_info_live_review.py
       - name: Upload focused V2 service information artifact
