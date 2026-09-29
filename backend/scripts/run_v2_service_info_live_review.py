@@ -65,7 +65,7 @@ def _run_one(engine, name: str, message_builder) -> Result:
         join_transaction_mode="create_savepoint",
     )
     try:
-        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
+        workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia-regression"))
         if workspace is None:
             raise RuntimeError("Workspace tia not found")
         patient = base._base_patient(db, workspace)
