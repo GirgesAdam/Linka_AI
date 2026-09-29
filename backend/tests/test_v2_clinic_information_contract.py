@@ -261,14 +261,34 @@ def test_pure_clinic_path_bypasses_generic_responder(
     assert "01012345678" in text
 
 
+def test_explicit_clinic_email_question_returns_phone_only_truth() -> None:
+    text, source = compose_v2_customer_reply(
+        clinic_name="Tia",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="إيميل العيادة إيه؟")],
+        outcomes=[_build_outcome("contact")],
+    )
+
+    assert source == "deterministic:clinic-information-contract"
+    assert "01012345678" in text
+    assert "hello@example.test" not in text
+    assert "email" not in text.casefold()
+
+
 def test_stale_assistant_contact_cannot_override_verified_truth() -> None:
     text, source = compose_v2_customer_reply(
         clinic_name="Tia",
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
-            AIMessage(content="رقم العيادة 01199999999 والعنوان Old Street."),
-            HumanMessage(content="طب الرقم والعنوان المسجلين إيه؟"),
+            AIMessage(
+                content=(
+                    "رقم العيادة 01199999999 والعنوان Old Street "
+                    "والإيميل old-clinic@example.test."
+                )
+            ),
+            HumanMessage(content="طب الرقم والعنوان ووسيلة التواصل المسجلين إيه؟"),
         ],
         outcomes=[_build_outcome("address", "contact")],
     )
@@ -278,6 +298,7 @@ def test_stale_assistant_contact_cannot_override_verified_truth() -> None:
     assert "10 Verified Street, Cairo" in text
     assert "01199999999" not in text
     assert "Old Street" not in text
+    assert "old-clinic@example.test" not in text
 
 
 def test_payment_info_is_not_claimed_by_clinic_truth() -> None:
@@ -413,6 +434,15 @@ def test_clinic_read_does_not_pick_first_branch_when_single_location_is_ambiguou
     assert result.payload["locations"] == []
     assert "Address A" not in str(result.payload)
     assert "Address B" not in str(result.payload)
+
+
+def test_legacy_clinic_public_info_payload_is_phone_only() -> None:
+    from app.services.agent_chat import _clinic_public_info_payload
+
+    source = getsource(_clinic_public_info_payload)
+
+    assert '"phone": location.phone' in source
+    assert '"email": location.email' not in source
 
 
 def test_native_catalog_projects_customer_contact_without_internal_config() -> None:
