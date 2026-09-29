@@ -1,12 +1,12 @@
 import { cn } from "@/lib/utils";
 
 const styles = {
-  green: "bg-emerald-50 text-emerald-700 ring-emerald-600/15",
-  yellow: "bg-amber-50 text-amber-800 ring-amber-600/15",
-  red: "bg-rose-50 text-rose-700 ring-rose-600/15",
-  blue: "bg-sky-50 text-sky-700 ring-sky-600/15",
-  gray: "bg-slate-50 text-slate-600 ring-slate-500/15",
-  purple: "bg-violet-50 text-violet-700 ring-violet-600/15",
+  green: "bg-[var(--status-success-soft)] text-[var(--status-success)] ring-emerald-600/15",
+  yellow: "bg-[var(--status-warning-soft)] text-[var(--status-warning)] ring-amber-600/15",
+  red: "bg-[var(--status-danger-soft)] text-[var(--status-danger)] ring-rose-600/15",
+  blue: "bg-[var(--status-info-soft)] text-[var(--status-info)] ring-sky-600/15",
+  gray: "bg-[var(--status-neutral-soft)] text-[var(--status-neutral)] ring-slate-500/15",
+  purple: "bg-[var(--accent-soft)] text-[var(--accent-strong)] ring-[var(--accent-border)]",
 } as const;
 
 export function Badge({

@@ -66,9 +66,143 @@ export const sourceLabels: Record<string, string> = {
   api: "نظام متصل",
 };
 
-export function labelForStatus(status: string | null | undefined) {
-  if (!status) return "—";
-  return appointmentLabels[status] || statusLabels[status] || "غير محدد";
+export type BadgeTone = "green" | "yellow" | "red" | "blue" | "gray" | "purple";
+export type StatusIntent = "success" | "warning" | "danger" | "info" | "neutral" | "accent";
+export type StatusIconKey = "check" | "clock" | "user-check" | "activity" | "x" | "user-x" | "calendar" | "message" | "alert" | "pause" | "link" | "dot";
+export type StatusDomain = "appointment" | "conversation" | "handoff" | "automation" | "patient" | "task" | "connection" | "message" | "priority" | "generic";
+
+export type StatusPresentation = {
+  label: string;
+  intent: StatusIntent;
+  tone: BadgeTone;
+  icon: StatusIconKey;
+};
+
+const toneByIntent: Record<StatusIntent, BadgeTone> = {
+  success: "green",
+  warning: "yellow",
+  danger: "red",
+  info: "blue",
+  neutral: "gray",
+  accent: "purple",
+};
+
+function status(label: string, intent: StatusIntent, icon: StatusIconKey): StatusPresentation {
+  return { label, intent, icon, tone: toneByIntent[intent] };
+}
+
+const appointmentStatus: Record<string, StatusPresentation> = {
+  pending: status("قيد الانتظار", "warning", "clock"),
+  confirmed: status("مؤكد", "success", "check"),
+  checked_in: status("وصل", "info", "user-check"),
+  in_progress: status("داخل الجلسة", "info", "activity"),
+  completed: status("مكتمل", "success", "check"),
+  cancelled: status("ملغي", "danger", "x"),
+  no_show: status("لم يحضر", "danger", "user-x"),
+  rescheduled: status("تم تغيير الموعد", "info", "calendar"),
+};
+
+const domainStatus: Record<Exclude<StatusDomain, "appointment" | "generic">, Record<string, StatusPresentation>> = {
+  conversation: {
+    open: status("مفتوحة", "info", "message"),
+    pending: status("بانتظار رد", "warning", "clock"),
+    closed: status("مغلقة", "neutral", "check"),
+  },
+  handoff: {
+    open: status("تحتاج تدخل الفريق", "warning", "alert"),
+    claimed: status("قيد المتابعة", "info", "user-check"),
+    in_progress: status("قيد المتابعة", "info", "activity"),
+    resolved: status("تمت المتابعة", "neutral", "check"),
+    closed: status("مغلقة", "neutral", "check"),
+  },
+  automation: {
+    queued: status("بانتظار التنفيذ", "warning", "clock"),
+    processing: status("جارٍ التنفيذ", "info", "activity"),
+    dispatched: status("تم الإرسال", "info", "check"),
+    sent: status("تم الإرسال", "info", "check"),
+    delivered: status("تم التسليم", "success", "check"),
+    failed: status("تحتاج مراجعة", "danger", "alert"),
+    paused: status("متوقف مؤقتًا", "warning", "pause"),
+  },
+  patient: {
+    active: status("نشط", "success", "check"),
+    inactive: status("غير نشط", "neutral", "pause"),
+  },
+  task: {
+    open: status("مفتوحة", "warning", "clock"),
+    pending: status("قيد الانتظار", "warning", "clock"),
+    in_progress: status("قيد التنفيذ", "info", "activity"),
+    completed: status("مكتمل", "success", "check"),
+    cancelled: status("ملغي", "neutral", "x"),
+  },
+  connection: {
+    connected: status("متصل", "success", "link"),
+    disconnected: status("غير متصل", "neutral", "link"),
+    enabled: status("مفعّل", "success", "check"),
+    disabled: status("متوقف", "neutral", "pause"),
+  },
+  message: {
+    queued: status("بانتظار الإرسال", "warning", "clock"),
+    processing: status("جارٍ الإرسال", "info", "activity"),
+    dispatched: status("تم الإرسال", "info", "check"),
+    sent: status("تم الإرسال", "info", "check"),
+    received: status("تم الاستلام", "info", "check"),
+    delivered: status("تم التسليم", "success", "check"),
+    read: status("مقروء", "success", "check"),
+    failed: status("فشل الإرسال", "danger", "alert"),
+  },
+  priority: {
+    low: status("منخفضة", "neutral", "dot"),
+    normal: status("عادية", "neutral", "dot"),
+    medium: status("متوسطة", "info", "dot"),
+    high: status("مرتفعة", "warning", "alert"),
+    urgent: status("عاجلة", "danger", "alert"),
+  },
+};
+
+const genericStatus: Record<string, StatusPresentation> = {
+  active: status("نشط", "success", "check"),
+  inactive: status("غير نشط", "neutral", "pause"),
+  open: status("مفتوحة", "info", "dot"),
+  closed: status("مغلقة", "neutral", "check"),
+  pending: status("قيد الانتظار", "warning", "clock"),
+  confirmed: status("مؤكد", "success", "check"),
+  completed: status("مكتمل", "success", "check"),
+  cancelled: status("ملغي", "danger", "x"),
+  failed: status("تحتاج مراجعة", "danger", "alert"),
+  queued: status("بانتظار التنفيذ", "warning", "clock"),
+  processing: status("جارٍ التنفيذ", "info", "activity"),
+  dispatched: status("تم الإرسال", "info", "check"),
+  sent: status("تم الإرسال", "info", "check"),
+  received: status("تم الاستلام", "info", "check"),
+  delivered: status("تم التسليم", "success", "check"),
+  read: status("مقروء", "success", "check"),
+  paused: status("متوقف مؤقتًا", "warning", "pause"),
+  disconnected: status("غير متصل", "neutral", "link"),
+  connected: status("متصل", "success", "link"),
+  resolved: status("تمت المتابعة", "neutral", "check"),
+  claimed: status("قيد المتابعة", "info", "user-check"),
+  in_progress: status("قيد التنفيذ", "info", "activity"),
+  enabled: status("مفعّل", "success", "check"),
+  disabled: status("متوقف", "neutral", "pause"),
+  checked_in: status("وصل", "info", "user-check"),
+  no_show: status("لم يحضر", "danger", "user-x"),
+  rescheduled: status("تم تغيير الموعد", "info", "calendar"),
+  urgent: status("عاجلة", "danger", "alert"),
+  high: status("مرتفعة", "warning", "alert"),
+};
+
+export function statusPresentation(domain: StatusDomain, value: string | null | undefined): StatusPresentation {
+  if (!value) return status("غير محدد", "neutral", "dot");
+  const normalized = value.toLowerCase();
+  if (domain === "appointment") return appointmentStatus[normalized] || genericStatus[normalized] || status("غير محدد", "neutral", "dot");
+  if (domain !== "generic") return domainStatus[domain][normalized] || genericStatus[normalized] || status("غير محدد", "neutral", "dot");
+  return genericStatus[normalized] || status(labelForStatus(normalized), "neutral", "dot");
+}
+
+export function labelForStatus(value: string | null | undefined) {
+  if (!value) return "—";
+  return appointmentLabels[value] || statusLabels[value] || "غير محدد";
 }
 
 export function labelForPriority(priority: string | null | undefined) {
@@ -86,33 +220,4 @@ export function labelForSource(source: string | null | undefined) {
   return sourceLabels[source.toLowerCase()] || "مصدر خارجي";
 }
 
-export const toneForStatus = (s: string): "green" | "yellow" | "red" | "blue" | "gray" | "purple" =>
-  ({
-    confirmed: "green",
-    completed: "green",
-    active: "green",
-    connected: "green",
-    enabled: "green",
-    delivered: "green",
-    read: "green",
-    pending: "yellow",
-    queued: "yellow",
-    processing: "blue",
-    checked_in: "blue",
-    in_progress: "blue",
-    claimed: "blue",
-    dispatched: "blue",
-    sent: "blue",
-    received: "blue",
-    failed: "red",
-    cancelled: "red",
-    no_show: "red",
-    urgent: "red",
-    high: "yellow",
-    resolved: "gray",
-    closed: "gray",
-    paused: "yellow",
-    disconnected: "gray",
-    inactive: "gray",
-    disabled: "gray",
-  }[s] as never) || "gray";
+export const toneForStatus = (value: string): BadgeTone => statusPresentation("generic", value).tone;
