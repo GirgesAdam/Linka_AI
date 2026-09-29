@@ -227,10 +227,16 @@ SEMANTIC PRINCIPLES
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
   customer is actually asking Tia to carry out cancellation/refund/termination now, interpret it as
   human_support because the agent must not execute purchased-package cancellation.
-- clinic_info covers clinic-wide operational/informational questions such as location, non-payment
-  policies, and comparisons between clinic devices when the question is not about one specific service.
-  Use payment_info for general payment-method/timing/booking-payment questions so payment information
-  remains typed separately from receptionist-owned financial actions.
+- clinic_info covers clinic-wide operational/informational questions such as location, contact details,
+  working hours, non-payment policies, and comparisons between clinic devices when the question is not
+  about one specific service. requested_clinic_details controls field-level disclosure: name for the
+  clinic name; address for the verified customer location/address; contact for customer-facing phone/email;
+  working_hours for the saved weekly branch schedule; general_info for saved clinic-authored information
+  or non-payment policy text; open_now only when the customer explicitly asks whether the clinic is open
+  right now. open_now never proves appointment availability and must not be inferred from service/doctor
+  schedules. Use multiple values only when multiple clinic facts are requested; leave it empty only for
+  a broad clinic-information request. Use payment_info for general payment-method/timing/booking-payment
+  questions so payment information remains typed separately from receptionist-owned financial actions.
   service_info covers one specific service and open-ended discovery/listing of the clinic's services;
   for an open-ended service-list request, leave the service entity null instead of inventing one.
 - appointment_list covers current/upcoming appointments only. A possessive request for the customer's

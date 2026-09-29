@@ -147,6 +147,34 @@ class ServiceTruth(StrictResponseContractModel):
     complete_set: bool = False
 
 
+class ClinicWorkingHour(StrictResponseContractModel):
+    weekday: int
+    start: str
+    end: str
+
+
+class ClinicLocationInfo(StrictResponseContractModel):
+    name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    country_code: str | None = None
+    timezone: str | None = None
+    working_hours: tuple[ClinicWorkingHour, ...] = ()
+
+
+class ClinicTruth(StrictResponseContractModel):
+    clinic_name: str
+    timezone: str | None = None
+    location: ClinicLocationInfo | None = None
+    knowledge: str | None = None
+    requested_details: tuple[str, ...] = ()
+
+
 class AppointmentServiceInfo(StrictResponseContractModel):
     service_name: str | None = None
     device_name: str | None = None
@@ -175,6 +203,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     package_truth: PackageTruth | None = None
     patient_truth: PatientTruth | None = None
     service_truth: ServiceTruth | None = None
+    clinic_truth: ClinicTruth | None = None
     appointment_truth: AppointmentInfoTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
@@ -887,6 +916,145 @@ def _service_truth(outcome: TurnOutcome) -> ServiceTruth | None:
     )
 
 
+def _clinic_truth(outcome: TurnOutcome) -> ClinicTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "answer_clinic_info":
+        return None
+    if "clinic_requested_details" not in outcome.facts:
+        return None
+
+    wrapper = outcome.facts.get("clinic_info")
+    if not isinstance(wrapper, dict):
+        return None
+    requested_raw = outcome.facts.get("clinic_requested_details")
+    if not isinstance(requested_raw, list) or not requested_raw:
+        return None
+    requested = tuple(str(item) for item in requested_raw)
+    allowed = {
+        "name",
+        "address",
+        "contact",
+        "working_hours",
+        "general_info",
+        "open_now",
+    }
+    if not set(requested).issubset(allowed) or len(set(requested)) != len(requested):
+        return None
+
+    clinic_name = str(wrapper.get("clinic_name") or "").strip()
+    if not clinic_name:
+        return None
+    timezone = str(wrapper.get("timezone") or "").strip() or None
+    knowledge = str(wrapper.get("knowledge") or "").strip() or None
+    if "general_info" not in requested and knowledge is not None:
+        return None
+    if (
+        "working_hours" not in requested
+        and "open_now" not in requested
+        and timezone is not None
+    ):
+        return None
+
+    raw_locations = wrapper.get("locations", [])
+    if not isinstance(raw_locations, list) or len(raw_locations) > 1:
+        return None
+
+    location: ClinicLocationInfo | None = None
+    if raw_locations:
+        raw_location = raw_locations[0]
+        if not isinstance(raw_location, dict):
+            return None
+        safe = _safe_value(raw_location)
+        if not isinstance(safe, dict):
+            return None
+
+        address_fields = (
+            "address",
+            "address_line1",
+            "address_line2",
+            "city",
+            "state",
+            "country_code",
+        )
+        if "address" not in requested and any(
+            safe.get(key) not in (None, "") for key in address_fields
+        ):
+            return None
+        if "contact" not in requested and any(
+            safe.get(key) not in (None, "") for key in ("phone", "email")
+        ):
+            return None
+        if (
+            "working_hours" not in requested
+            and "open_now" not in requested
+            and (
+                safe.get("timezone") not in (None, "")
+                or safe.get("working_hours") not in (None, [], {})
+            )
+        ):
+            return None
+
+        hours: list[ClinicWorkingHour] = []
+        raw_hours = safe.get("working_hours", [])
+        if not isinstance(raw_hours, list):
+            return None
+        seen_hours: set[tuple[int, str, str]] = set()
+        for row in raw_hours:
+            if not isinstance(row, dict):
+                return None
+            weekday = row.get("weekday")
+            start = str(row.get("start") or "").strip()
+            end = str(row.get("end") or "").strip()
+            if (
+                not isinstance(weekday, int)
+                or not 0 <= weekday <= 6
+                or len(start) != 5
+                or len(end) != 5
+                or start[2:3] != ":"
+                or end[2:3] != ":"
+                or not (start[:2] + start[3:]).isdigit()
+                or not (end[:2] + end[3:]).isdigit()
+                or int(start[:2]) > 23
+                or int(end[:2]) > 23
+                or int(start[3:]) > 59
+                or int(end[3:]) > 59
+                or start >= end
+            ):
+                return None
+            key = (weekday, start, end)
+            if key in seen_hours:
+                return None
+            seen_hours.add(key)
+            hours.append(
+                ClinicWorkingHour(
+                    weekday=weekday,
+                    start=start,
+                    end=end,
+                )
+            )
+
+        location = ClinicLocationInfo(
+            name=str(safe.get("name") or "").strip() or None,
+            phone=str(safe.get("phone") or "").strip() or None,
+            email=str(safe.get("email") or "").strip() or None,
+            address=str(safe.get("address") or "").strip() or None,
+            address_line1=str(safe.get("address_line1") or "").strip() or None,
+            address_line2=str(safe.get("address_line2") or "").strip() or None,
+            city=str(safe.get("city") or "").strip() or None,
+            state=str(safe.get("state") or "").strip() or None,
+            country_code=str(safe.get("country_code") or "").strip() or None,
+            timezone=str(safe.get("timezone") or "").strip() or None,
+            working_hours=tuple(hours),
+        )
+
+    return ClinicTruth(
+        clinic_name=clinic_name,
+        timezone=timezone,
+        location=location,
+        knowledge=knowledge,
+        requested_details=requested,
+    )
+
+
 def _patient_truth(outcome: TurnOutcome) -> PatientTruth | None:
     if outcome.status != "answered" or outcome.response_goal != "answer_customer_profile":
         return None
@@ -1073,6 +1241,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     package_truth = _package_truth(outcome)
     patient_truth = _patient_truth(outcome)
     service_truth = _service_truth(outcome)
+    clinic_truth = _clinic_truth(outcome)
     appointment_truth = _appointment_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
@@ -1112,6 +1281,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         package_truth=package_truth,
         patient_truth=patient_truth,
         service_truth=service_truth,
+        clinic_truth=clinic_truth,
         appointment_truth=appointment_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
@@ -1343,6 +1513,27 @@ def is_pure_supported_service_contract(
         and (
             "devices" not in unit.service_truth.requested_details
             or all(item.devices_complete_set for item in unit.service_truth.services)
+        )
+        for unit in contract.units
+    )
+
+
+def is_pure_supported_clinic_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is verified read-only clinic information."""
+    if not contract.units:
+        return False
+
+    return all(
+        unit.response_goal == "answer_clinic_info"
+        and unit.status == "answered"
+        and unit.clinic_truth is not None
+        and unit.commercial_truth is None
+        and unit.availability_truth is None
+        and all(
+            fact.key in {"clinic_info", "clinic_requested_details"}
+            for fact in unit.facts
         )
         for unit in contract.units
     )

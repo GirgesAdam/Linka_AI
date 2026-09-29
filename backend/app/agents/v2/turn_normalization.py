@@ -188,6 +188,7 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
         operation.selection.model_dump_json() if operation.selection is not None else None,
         operation.package_usage,
         tuple(operation.requested_service_details),
+        tuple(operation.requested_clinic_details),
         tuple(operation.requested_pulse_details),
     )
 
