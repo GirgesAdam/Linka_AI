@@ -12,6 +12,7 @@ import scripts.run_live_agent_ux_review as base
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.branch import Branch
+from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
 from app.models.workspace import Workspace
 from app.services.agent_v2.live_chat import run_agent_chat as run_agent_chat_v2
@@ -67,7 +68,25 @@ def _run_one(engine, name: str, message: str) -> Result:
         branch.country_code = "EG"
         db.flush()
 
-        patient = base._base_patient(db, workspace)
+        patient = db.scalar(
+            select(Patient)
+            .where(Patient.workspace_id == workspace.id, Patient.status != "blocked")
+            .order_by(Patient.created_at.asc())
+            .limit(1)
+        )
+        if patient is None:
+            patient = Patient(
+                workspace_id=workspace.id,
+                first_name="Clinic",
+                last_name="Review",
+                phone="01000000000",
+                phone_normalized="201000000000",
+                preferred_language="ar",
+                source="other",
+                status="active",
+            )
+            db.add(patient)
+            db.flush()
         before_a = _count(db, Appointment, workspace.id)
         before_f = _count(db, PaymentTransaction, workspace.id)
         reply = run_agent_chat_v2(
