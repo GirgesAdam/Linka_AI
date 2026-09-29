@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bot, Building2, ChevronDown, LogOut, Plus } from "lucide-react";
+import { Building2, ChevronDown, LogOut, Plus, Waypoints } from "lucide-react";
 
 import { logoutAction, switchWorkspace } from "@/app/(dashboard)/actions";
 import { DesktopNavigation, MobileNavigation } from "@/components/dashboard-navigation";
@@ -23,23 +23,23 @@ export function DashboardShell({
   const otherWorkspaces = me.workspaces.filter((item) => item.workspace_id !== workspace.workspace_id);
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[256px_minmax(0,1fr)]">
-      <aside className="hidden h-screen border-l border-slate-200/80 bg-white lg:sticky lg:top-0 lg:flex lg:flex-col">
-        <div className="flex h-[76px] items-center gap-3 border-b border-slate-100 px-5">
-          <span className="grid size-10 place-items-center rounded-xl bg-teal-700 text-white shadow-[0_4px_12px_rgba(15,118,110,.18)]">
-            <Bot size={19} />
+    <div className="min-h-screen lg:grid lg:grid-cols-[272px_minmax(0,1fr)]">
+      <aside className="app-shell-sidebar hidden h-screen border-l app-shell-sidebar-border lg:sticky lg:top-0 lg:flex lg:flex-col">
+        <div className="flex h-[76px] items-center gap-3 border-b app-shell-sidebar-border px-5">
+          <span className="grid size-10 place-items-center rounded-xl border border-white/10 bg-white/10 text-[var(--sidebar-accent)]">
+            <Waypoints size={19} />
           </span>
           <div className="min-w-0">
-            <div className="text-[17px] font-black tracking-[-0.02em] text-slate-950">Linka</div>
-            <div className="mt-0.5 truncate text-[11px] font-semibold text-slate-500">{workspace.workspace_name}</div>
+            <div className="bidi-ltr text-[17px] font-bold tracking-[-0.02em] text-white">Linka</div>
+            <div className="mt-0.5 truncate text-[11px] font-medium text-[var(--sidebar-muted)]">{workspace.workspace_name}</div>
           </div>
         </div>
 
         <DesktopNavigation isAdmin={workspace.role === "admin"} />
 
-        <div className="border-t border-slate-100 p-3">
+        <div className="border-t app-shell-sidebar-border p-3">
           <form action={logoutAction}>
-            <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-900">
+            <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.06] hover:text-white">
               <LogOut size={17} />
               تسجيل الخروج
             </button>
@@ -51,11 +51,11 @@ export function DashboardShell({
         <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/92 backdrop-blur-xl">
           <div className="flex h-16 items-center justify-between gap-4 px-4 md:px-6 lg:h-[68px] lg:px-8">
             <div className="flex min-w-0 items-center gap-3 lg:hidden">
-              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-teal-700 text-white shadow-sm">
-                <Bot size={17} />
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--shell-bg)] text-white">
+                <Waypoints size={17} />
               </span>
               <div className="min-w-0">
-                <div className="font-black tracking-tight">Linka</div>
+                <div className="bidi-ltr font-bold tracking-tight">Linka</div>
                 <div className="truncate text-[10px] font-semibold text-slate-500">{workspace.workspace_name}</div>
               </div>
             </div>
@@ -67,7 +67,7 @@ export function DashboardShell({
                   <select
                     name="workspace_id"
                     defaultValue={workspace.workspace_id}
-                    className="h-9 max-w-72 rounded-lg border border-[var(--border)] bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition hover:border-[var(--border-strong)] focus:border-teal-500 focus:ring-2 focus:ring-[var(--accent-ring)]"
+                    className="h-9 max-w-72 rounded-lg border border-[var(--border)] bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-ring)]"
                     aria-label="اختيار العيادة"
                   >
                     <option value={workspace.workspace_id}>{workspace.workspace_name}</option>
@@ -92,22 +92,22 @@ export function DashboardShell({
 
             <div className="flex items-center gap-3">
               <div className="hidden text-left sm:block">
-                <div className="max-w-52 truncate text-sm font-bold text-slate-900">{me.user.full_name || me.user.email}</div>
+                <div className="max-w-52 truncate text-sm font-bold text-slate-900" dir={me.user.full_name ? undefined : "ltr"}>{me.user.full_name || me.user.email}</div>
                 <div className="mt-0.5 text-[11px] font-semibold text-slate-500">{roleLabels[workspace.role]}</div>
               </div>
 
               <details className="group relative lg:hidden">
                 <summary className="flex list-none cursor-pointer items-center gap-1 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] [&::-webkit-details-marker]:hidden" aria-label="فتح قائمة الحساب">
-                  <span className="grid size-10 place-items-center rounded-full border border-teal-100 bg-teal-50 text-xs font-black text-teal-800">
+                  <span className="grid size-10 place-items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] text-xs font-bold text-[var(--accent-strong)]">
                     {initials(me.user.full_name, me.user.email)}
                   </span>
                   <ChevronDown size={14} className="text-slate-400 transition group-open:rotate-180" />
                 </summary>
                 <div className="absolute left-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_50px_rgba(15,23,42,.16)]">
                   <div className="border-b border-slate-100 px-2 pb-3">
-                    <div className="truncate text-sm font-black text-slate-950">{me.user.full_name || me.user.email}</div>
-                    <div className="mt-1 truncate text-xs text-slate-500">{me.user.email}</div>
-                    <div className="mt-1 text-xs font-semibold text-teal-700">{roleLabels[workspace.role]}</div>
+                    <div className="truncate text-sm font-bold text-slate-950" dir={me.user.full_name ? undefined : "ltr"}>{me.user.full_name || me.user.email}</div>
+                    <div className="mt-1 truncate text-left text-xs text-slate-500" dir="ltr">{me.user.email}</div>
+                    <div className="mt-1 text-xs font-semibold text-[var(--accent-strong)]">{roleLabels[workspace.role]}</div>
                   </div>
 
                   <div className="py-3">
@@ -134,7 +134,7 @@ export function DashboardShell({
                     )}
                   </div>
 
-                  <Link href="/onboarding" className="mb-2 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-bold text-teal-700 transition hover:bg-teal-50">
+                  <Link href="/onboarding" className="mb-2 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-bold text-[var(--accent-strong)] transition hover:bg-[var(--accent-soft)]">
                     <Plus size={17} /> إضافة عيادة
                   </Link>
 
@@ -146,7 +146,7 @@ export function DashboardShell({
                 </div>
               </details>
 
-              <div className="hidden size-9 place-items-center rounded-full border border-teal-100 bg-teal-50 text-xs font-black text-teal-800 lg:grid">
+              <div className="hidden size-9 place-items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] text-xs font-bold text-[var(--accent-strong)] lg:grid">
                 {initials(me.user.full_name, me.user.email)}
               </div>
             </div>
@@ -158,7 +158,7 @@ export function DashboardShell({
             Admin Demo · كل التعديلات والحجوزات هنا على بيانات تجريبية معزولة، والإرسال الخارجي متوقف.
           </div>
         )}
-        <main className="mx-auto w-full max-w-[1440px] p-4 pb-28 md:p-6 md:pb-28 lg:p-8 lg:pb-20">{children}</main>
+        <main className="mx-auto w-full max-w-[1480px] p-4 pb-28 md:p-6 md:pb-28 lg:p-8 lg:pb-20">{children}</main>
         <MobileNavigation isAdmin={workspace.role === "admin"} />
       </div>
     </div>

@@ -10,11 +10,11 @@ import {
   ContactRound,
   History,
   Inbox,
+  LayoutDashboard,
   ListTodo,
   Menu,
   PackageSearch,
   Settings2,
-  Sparkles,
   Stethoscope,
   Tags,
   UsersRound,
@@ -26,26 +26,39 @@ import { cn } from "@/lib/utils";
 
 const inboxPollIntervalMs = 15_000;
 
-const primaryItems = [
-  { href: "/dashboard", label: "الرئيسية", icon: Sparkles },
+const dailyItems = [
+  { href: "/dashboard", label: "الرئيسية", icon: LayoutDashboard },
   { href: "/inbox", label: "الرسائل", icon: Inbox },
   { href: "/appointments", label: "المواعيد", icon: CalendarDays },
-  { href: "/doctors", label: "الدكاترة", icon: Stethoscope },
+] as const;
+
+const patientItems = [
   { href: "/patients", label: "العملاء", icon: ContactRound },
   { href: "/tasks", label: "المتابعات", icon: ListTodo },
+] as const;
+
+const clinicItems = [
+  { href: "/doctors", label: "الدكاترة", icon: Stethoscope },
+] as const;
+
+const clinicAdminItems = [
+  { href: "/services", label: "الخدمات والأسعار", icon: Tags },
+  { href: "/inventory", label: "المخزن", icon: PackageSearch },
+] as const;
+
+const managementItems = [
   { href: "/analytics", label: "التقارير", icon: BarChart3 },
   { href: "/finance", label: "المالية", icon: Banknote },
 ] as const;
 
-const adminItems = [
-  { href: "/services", label: "الخدمات والأسعار", icon: Tags },
-  { href: "/inventory", label: "المخزن", icon: PackageSearch },
-  { href: "/setup", label: "إعدادات العيادة", icon: Settings2 },
+const managementAdminItems = [
   { href: "/automations", label: "الرسائل التلقائية", icon: Workflow },
   { href: "/team", label: "الفريق", icon: UsersRound },
+  { href: "/setup", label: "إعدادات العيادة", icon: Settings2 },
   { href: "/activity", label: "سجل النشاط", icon: History },
 ] as const;
 
+const coreItems = [...dailyItems, ...patientItems, ...clinicItems, ...managementItems];
 const mobilePrimaryHrefs = new Set(["/dashboard", "/inbox", "/appointments", "/patients"]);
 
 type InboxSummary = {
@@ -108,7 +121,7 @@ function InboxUnreadBadge({ count, compact = false }: { count: number; compact?:
     <span
       aria-label={count > 99 ? "أكثر من 99 محادثة غير مقروءة" : `${count} محادثة غير مقروءة`}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full bg-rose-600 font-black leading-none text-white shadow-sm",
+        "inline-flex shrink-0 items-center justify-center rounded-full bg-rose-600 font-bold leading-none text-white",
         compact ? "absolute -left-2 -top-2 min-w-4 px-1 py-0.5 text-[9px]" : "min-w-5 px-1.5 py-1 text-[10px]",
       )}
     >
@@ -126,7 +139,7 @@ function DesktopNavItem({
 }: {
   href: string;
   label: string;
-  Icon: typeof Sparkles;
+  Icon: typeof LayoutDashboard;
   active: boolean;
   unreadCount?: number;
 }) {
@@ -136,11 +149,15 @@ function DesktopNavItem({
       aria-current={active ? "page" : undefined}
       className={cn(
         "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition",
-        active ? "bg-teal-50 text-teal-900" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+        active ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/[0.06] hover:text-white",
       )}
     >
-      {active && <span className="absolute right-0 h-5 w-1 rounded-l-full bg-teal-700" />}
-      <Icon size={18} strokeWidth={active ? 2.1 : 1.8} className={active ? "text-teal-700" : "text-slate-500 group-hover:text-slate-700"} />
+      {active && <span className="absolute right-0 h-5 w-1 rounded-l-full bg-[var(--accent)]" />}
+      <Icon
+        size={18}
+        strokeWidth={active ? 2.1 : 1.8}
+        className={active ? "text-[var(--sidebar-accent)]" : "text-[var(--sidebar-muted)] group-hover:text-slate-200"}
+      />
       <span className="min-w-0 flex-1">{label}</span>
       <InboxUnreadBadge count={unreadCount} />
     </Link>
@@ -150,39 +167,39 @@ function DesktopNavItem({
 export function DesktopNavigation({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const unreadCount = useInboxUnreadCount("(min-width: 1024px)");
+  const groups = [
+    { label: "اليوم", items: [...dailyItems] },
+    { label: "العملاء والمتابعة", items: [...patientItems] },
+    { label: "تشغيل العيادة", items: [...clinicItems, ...(isAdmin ? clinicAdminItems : [])] },
+    { label: "الإدارة", items: [...managementItems, ...(isAdmin ? managementAdminItems : [])] },
+  ];
 
   return (
-    <nav className="flex-1 overflow-y-auto px-3 py-5 scrollbar-thin" aria-label="التنقل الرئيسي">
-      <div className="px-3 pb-2 text-[10px] font-black tracking-[0.08em] text-slate-400">العمل اليومي</div>
-      <div className="space-y-1">
-        {primaryItems.map(({ href, label, icon }) => (
-          <DesktopNavItem
-            key={href}
-            href={href}
-            label={label}
-            Icon={icon}
-            active={activeFor(pathname, href)}
-            unreadCount={href === "/inbox" ? unreadCount : 0}
-          />
-        ))}
-      </div>
-
-      {isAdmin && (
-        <>
-          <div className="mx-3 my-5 border-t border-slate-100" />
-          <div className="px-3 pb-2 text-[10px] font-black tracking-[0.08em] text-slate-400">الإدارة</div>
+    <nav className="flex-1 overflow-y-auto px-3 py-4 scrollbar-thin" aria-label="التنقل الرئيسي">
+      {groups.map((group, index) => (
+        <div key={group.label} className={cn(index > 0 && "mt-4 border-t border-white/[0.07] pt-4")}>
+          <div className="px-3 pb-2 text-[10px] font-bold tracking-[0.04em] text-[var(--sidebar-muted)]">
+            {group.label}
+          </div>
           <div className="space-y-1">
-            {adminItems.map(({ href, label, icon }) => (
-              <DesktopNavItem key={href} href={href} label={label} Icon={icon} active={activeFor(pathname, href)} />
+            {group.items.map(({ href, label, icon }) => (
+              <DesktopNavItem
+                key={href}
+                href={href}
+                label={label}
+                Icon={icon}
+                active={activeFor(pathname, href)}
+                unreadCount={href === "/inbox" ? unreadCount : 0}
+              />
             ))}
           </div>
-        </>
-      )}
+        </div>
+      ))}
     </nav>
   );
 }
 
-function MobileNavLink({ href, label, Icon, onNavigate }: { href: string; label: string; Icon: typeof Sparkles; onNavigate?: () => void }) {
+function MobileNavLink({ href, label, Icon, onNavigate }: { href: string; label: string; Icon: typeof LayoutDashboard; onNavigate?: () => void }) {
   const pathname = usePathname();
   const active = activeFor(pathname, href);
   return (
@@ -192,12 +209,34 @@ function MobileNavLink({ href, label, Icon, onNavigate }: { href: string; label:
       onClick={onNavigate}
       className={cn(
         "flex min-h-12 items-center gap-3 rounded-xl px-3 text-sm font-bold transition",
-        active ? "bg-teal-50 text-teal-900" : "text-slate-700 hover:bg-slate-50",
+        active ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "text-slate-700 hover:bg-slate-50",
       )}
     >
-      <Icon size={18} className={active ? "text-teal-700" : "text-slate-500"} />
+      <Icon size={18} className={active ? "text-[var(--accent)]" : "text-slate-500"} />
       {label}
     </Link>
+  );
+}
+
+function MobileSection({
+  label,
+  items,
+  onNavigate,
+}: {
+  label: string;
+  items: Array<{ href: string; label: string; icon: typeof LayoutDashboard }>;
+  onNavigate: () => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <section className="border-t border-slate-100 pt-4 first:border-t-0 first:pt-0">
+      <div className="section-kicker px-2 pb-2">{label}</div>
+      <div className="space-y-1">
+        {items.map(({ href, label: itemLabel, icon }) => (
+          <MobileNavLink key={href} href={href} label={itemLabel} Icon={icon} onNavigate={onNavigate} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -205,9 +244,11 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const unreadCount = useInboxUnreadCount("(max-width: 1023px)");
-  const mobilePrimary = primaryItems.filter((item) => mobilePrimaryHrefs.has(item.href));
-  const morePrimary = primaryItems.filter((item) => !mobilePrimaryHrefs.has(item.href));
-  const moreActive = [...morePrimary, ...(isAdmin ? adminItems : [])].some((item) => activeFor(pathname, item.href));
+  const mobilePrimary = coreItems.filter((item) => mobilePrimaryHrefs.has(item.href));
+  const morePatient = patientItems.filter((item) => !mobilePrimaryHrefs.has(item.href));
+  const moreClinic = [...clinicItems, ...(isAdmin ? clinicAdminItems : [])];
+  const moreManagement = [...managementItems, ...(isAdmin ? managementAdminItems : [])];
+  const moreActive = [...morePatient, ...moreClinic, ...moreManagement].some((item) => activeFor(pathname, item.href));
 
   const close = () => dialogRef.current?.close();
 
@@ -226,7 +267,7 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
               aria-current={active ? "page" : undefined}
               className={cn(
                 "flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-bold transition",
-                active ? "bg-teal-50 text-teal-800" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
+                active ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
               )}
             >
               <span className="relative inline-flex">
@@ -243,7 +284,7 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
           aria-haspopup="dialog"
           className={cn(
             "flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-bold transition",
-            moreActive ? "bg-teal-50 text-teal-800" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
+            moreActive ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
           )}
         >
           <Menu size={18} strokeWidth={moreActive ? 2.2 : 1.8} />
@@ -262,8 +303,8 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
         <div className="absolute inset-x-0 bottom-0 max-h-[82vh] overflow-y-auto rounded-t-3xl bg-white p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl">
           <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
-              <div id="mobile-more-title" className="font-black text-slate-950">المزيد</div>
-              <div className="mt-0.5 text-xs text-slate-500">باقي أدوات العيادة والإدارة</div>
+              <div id="mobile-more-title" className="font-bold text-slate-950">المزيد</div>
+              <div className="mt-0.5 text-xs text-slate-500">أدوات العملاء وتشغيل العيادة والإدارة</div>
             </div>
             <button
               type="button"
@@ -275,24 +316,11 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
             </button>
           </div>
 
-          <div className="section-kicker px-2 pb-2">العمل اليومي</div>
-          <div className="space-y-1">
-            {morePrimary.map(({ href, label, icon }) => (
-              <MobileNavLink key={href} href={href} label={label} Icon={icon} onNavigate={close} />
-            ))}
+          <div className="space-y-4">
+            <MobileSection label="العملاء والمتابعة" items={[...morePatient]} onNavigate={close} />
+            <MobileSection label="تشغيل العيادة" items={moreClinic} onNavigate={close} />
+            <MobileSection label="الإدارة" items={moreManagement} onNavigate={close} />
           </div>
-
-          {isAdmin && (
-            <>
-              <div className="my-4 border-t border-slate-100" />
-              <div className="section-kicker px-2 pb-2">الإدارة</div>
-              <div className="space-y-1">
-                {adminItems.map(({ href, label, icon }) => (
-                  <MobileNavLink key={href} href={href} label={label} Icon={icon} onNavigate={close} />
-                ))}
-              </div>
-            </>
-          )}
         </div>
       </dialog>
     </>
