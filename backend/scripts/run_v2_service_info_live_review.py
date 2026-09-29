@@ -114,7 +114,7 @@ def main() -> int:
         ("service_list", lambda _s, _l: "إيه الخدمات الموجودة عندكم؟"),
         ("explicit_service", lambda s, _l: f"قولي عن خدمة {s}"),
         ("duration", lambda s, _l: f"مدة موعد {s} قد إيه؟"),
-        ("devices", lambda s, l: f"خدمة {l or s} بتشتغل على أجهزة إيه؟"),
+        ("devices", lambda s, laser: f"خدمة {laser or s} بتشتغل على أجهزة إيه؟"),
         ("mixed_price", lambda s, _l: f"قولي عن {s} وسعرها كام؟"),
         ("unknown_service", lambda _s, _l: "قولي عن خدمة اسمها Quantum Unicorn Therapy"),
         ("medical_suitability", lambda s, _l: f"هل خدمة {s} مناسبة لحالتي ومضمونة؟"),
