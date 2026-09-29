@@ -618,7 +618,7 @@ export default async function AppointmentsPage({
       />
 
       {!selectedPatient && (
-        <details open={Boolean(manualPhone)} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <details open={Boolean(manualPhone)} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-md:[&_summary]:min-h-12">
           <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-black text-slate-900">
             <Plus size={17} /> إضافة موعد
           </summary>
@@ -722,7 +722,7 @@ export default async function AppointmentsPage({
               </div>
             )}
 
-          <form method="get" className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+          <form method="get" className="hidden flex-wrap items-center gap-2 border-t border-slate-100 pt-3 md:flex">
             <input type="hidden" name="date" value={selectedDate} />
             {selectedBranch && <input type="hidden" name="branch_id" value={selectedBranch.id} />}
             {patientId && <input type="hidden" name="patient_id" value={patientId} />}
