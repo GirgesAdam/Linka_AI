@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { resolvePublicLegalName } from "@/lib/public-brand";
+
 export const metadata: Metadata = {
   title: "Data Deletion Instructions | Linka",
   description:
@@ -8,7 +10,7 @@ export const metadata: Metadata = {
 };
 
 export default function DataDeletionPage() {
-  const legalName = process.env.NEXT_PUBLIC_TIA_LEGAL_NAME?.trim() || "Linka";
+  const legalName = resolvePublicLegalName(process.env.NEXT_PUBLIC_TIA_LEGAL_NAME);
   const privacyEmail = process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL?.trim();
 
   return (

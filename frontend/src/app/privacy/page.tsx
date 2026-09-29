@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { resolvePublicLegalName } from "@/lib/public-brand";
+
 export const metadata: Metadata = {
   title: "Privacy Policy | Linka",
   description:
@@ -37,7 +39,7 @@ function List({ children }: Readonly<{ children: React.ReactNode }>) {
 }
 
 export default function PrivacyPolicyPage() {
-  const legalName = process.env.NEXT_PUBLIC_TIA_LEGAL_NAME?.trim() || "Linka";
+  const legalName = resolvePublicLegalName(process.env.NEXT_PUBLIC_TIA_LEGAL_NAME);
   const privacyEmail = process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL?.trim();
 
   return (
@@ -63,7 +65,7 @@ export default function PrivacyPolicyPage() {
           </div>
 
           <div className="mt-7 rounded-2xl border border-[var(--border)] bg-[var(--accent-soft)] p-4 text-sm leading-7 text-[var(--text)]">
-            <strong>ملخص بالعربي:</strong> تيا بتستخدم بيانات العملاء والمحادثات
+            <strong>ملخص بالعربي:</strong> Linka بتستخدم بيانات العملاء والمحادثات
             والحجوزات علشان تشغّل خدمة العملاء والحجز وتساعد فريق العيادة. البيانات
             لا يتم بيعها للمعلنين. أي أسئلة طبية تشخيصية أو عن ملاءمة علاج معيّن
             يتم تصعيدها لفريق بشري بدل اتخاذ قرار طبي آلي.
