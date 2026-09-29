@@ -234,6 +234,16 @@ def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> se
     return details
 
 
+def _requested_clinic_details(step: PlanStep, turn: TiaTurnUnderstanding) -> set[str]:
+    try:
+        operation = turn.operations[step.operation_index]
+    except IndexError:
+        return set()
+    if operation.type != "clinic_info":
+        return set()
+    return set(operation.requested_clinic_details)
+
+
 def _priced_laser_devices(service: dict[str, object]) -> list[dict[str, object]]:
     raw_devices = service.get("laser_devices")
     if not isinstance(raw_devices, list):
@@ -438,6 +448,60 @@ def _package_information_response_facts(
                 ]
             }
 
+    return shaped
+
+
+def _clinic_information_response_facts(
+    facts: dict[str, object],
+    *,
+    requested_details: set[str],
+) -> dict[str, object]:
+    """Expose only intent-relevant static clinic facts to the response boundary."""
+    shaped = dict(facts)
+    wrapper = shaped.get("clinic_info")
+    if not isinstance(wrapper, dict):
+        return shaped
+
+    requested = set(requested_details) or {"name", "location", "contact", "knowledge"}
+    safe: dict[str, object] = {}
+
+    if "name" in requested and wrapper.get("clinic_name") not in (None, ""):
+        safe["clinic_name"] = wrapper["clinic_name"]
+
+    raw_locations = wrapper.get("locations")
+    location_rows: list[dict[str, object]] = []
+    if isinstance(raw_locations, list):
+        for row in raw_locations:
+            if not isinstance(row, dict):
+                continue
+            visible: dict[str, object] = {}
+            if row.get("name") not in (None, ""):
+                visible["name"] = row["name"]
+            if "location" in requested:
+                for key in (
+                    "address",
+                    "address_line1",
+                    "address_line2",
+                    "city",
+                    "state",
+                    "country_code",
+                ):
+                    if row.get(key) not in (None, ""):
+                        visible[key] = row[key]
+            if "contact" in requested:
+                for key in ("phone", "email"):
+                    if row.get(key) not in (None, ""):
+                        visible[key] = row[key]
+            if visible:
+                location_rows.append(visible)
+    if location_rows and ({"location", "contact"} & requested):
+        safe["locations"] = location_rows[:1]
+
+    if "knowledge" in requested and wrapper.get("knowledge") not in (None, ""):
+        safe["knowledge"] = wrapper["knowledge"]
+
+    shaped["clinic_info"] = safe
+    shaped["clinic_requested_details"] = sorted(requested)
     return shaped
 
 
@@ -847,6 +911,7 @@ def build_step_outcome(
 ) -> TurnOutcome:
     """Convert deterministic planning/execution facts into one responder-safe outcome."""
     requested_details = _requested_service_details(step, turn)
+    requested_clinic_details = _requested_clinic_details(step, turn)
     selected_device_key = (
         str(step.facts["device_key"])
         if step.facts.get("device_key") not in (None, "")
@@ -860,6 +925,11 @@ def build_step_outcome(
     base_facts = {**_visible_dict(step.facts), **read_facts}
     if step.operation_type == "service_info":
         base_facts["service_requested_details"] = sorted(requested_details)
+    if step.operation_type == "clinic_info":
+        base_facts = _clinic_information_response_facts(
+            base_facts,
+            requested_details=requested_clinic_details,
+        )
     if step.response_goal == "package_information":
         base_facts = _package_information_response_facts(base_facts)
     if step.operation_type == "appointment_list":
