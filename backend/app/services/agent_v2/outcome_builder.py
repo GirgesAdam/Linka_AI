@@ -318,7 +318,13 @@ def _service_catalog_facts(
         if "description" in requested_details and visible_service.get("description") not in (None, ""):
             shaped["description"] = visible_service["description"]
         if "devices" in requested_details and visible_service.get("laser_devices") not in (None, [], {}):
-            shaped["laser_devices"] = visible_service["laser_devices"]
+            raw_devices = visible_service["laser_devices"]
+            if isinstance(raw_devices, list):
+                shaped["laser_devices"] = [
+                    {"device_name": row["device_name"]}
+                    for row in raw_devices
+                    if isinstance(row, dict) and row.get("device_name") not in (None, "")
+                ]
     return {"service": shaped}
 
 
@@ -852,6 +858,8 @@ def build_step_outcome(
         selected_device_key=selected_device_key,
     )
     base_facts = {**_visible_dict(step.facts), **read_facts}
+    if step.operation_type == "service_info":
+        base_facts["service_requested_details"] = sorted(requested_details)
     if step.response_goal == "package_information":
         base_facts = _package_information_response_facts(base_facts)
     if step.operation_type == "appointment_list":

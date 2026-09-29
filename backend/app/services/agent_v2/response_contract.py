@@ -131,6 +131,22 @@ class PatientTruth(StrictResponseContractModel):
     preferred_language: str | None = None
 
 
+class ServiceInfo(StrictResponseContractModel):
+    name: str
+    description: str | None = None
+    customer_duration_text: str | None = None
+    duration_minutes: int | None = None
+    device_names: tuple[str, ...] = ()
+    devices_complete_set: bool = False
+
+
+class ServiceTruth(StrictResponseContractModel):
+    kind: Literal["service_detail", "service_list"]
+    services: tuple[ServiceInfo, ...] = ()
+    requested_details: tuple[str, ...] = ()
+    complete_set: bool = False
+
+
 class AppointmentServiceInfo(StrictResponseContractModel):
     service_name: str | None = None
     device_name: str | None = None
@@ -158,6 +174,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     doctor_truth: DoctorTruth | None = None
     package_truth: PackageTruth | None = None
     patient_truth: PatientTruth | None = None
+    service_truth: ServiceTruth | None = None
     appointment_truth: AppointmentInfoTruth | None = None
     facts: tuple[ResponseFact, ...] = ()
     choices: tuple[ResponseChoice, ...] = ()
@@ -794,6 +811,82 @@ def _appointment_truth(outcome: TurnOutcome) -> AppointmentInfoTruth | None:
     )
 
 
+def _service_truth(outcome: TurnOutcome) -> ServiceTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "answer_service":
+        return None
+    wrapper = outcome.facts.get("service_catalog")
+    if not isinstance(wrapper, dict) or "service_requested_details" not in outcome.facts:
+        return None
+
+    requested_raw = outcome.facts.get("service_requested_details", [])
+    requested = tuple(str(item) for item in requested_raw) if isinstance(requested_raw, list) else ()
+    allowed = {"duration", "description", "devices"}
+    if not set(requested).issubset(allowed) or len(set(requested)) != len(requested):
+        return None
+
+    raw_service = wrapper.get("service")
+    if isinstance(raw_service, dict):
+        name = str(raw_service.get("name") or "").strip()
+        if not name:
+            return None
+        description = str(raw_service.get("description") or "").strip() or None
+        customer_duration_text = str(raw_service.get("customer_duration_text") or "").strip() or None
+        duration_minutes = None
+        if raw_service.get("duration_minutes") not in (None, ""):
+            try:
+                duration_minutes = int(raw_service["duration_minutes"])
+            except (TypeError, ValueError):
+                return None
+            if duration_minutes <= 0:
+                return None
+        raw_devices = raw_service.get("laser_devices", [])
+        if not isinstance(raw_devices, list):
+            return None
+        device_names: list[str] = []
+        for row in raw_devices:
+            if not isinstance(row, dict):
+                return None
+            device_name = str(row.get("device_name") or "").strip()
+            if device_name:
+                device_names.append(device_name)
+        if len(device_names) != len(set(device_names)):
+            return None
+        return ServiceTruth(
+            kind="service_detail",
+            services=(ServiceInfo(
+                name=name,
+                description=description,
+                customer_duration_text=customer_duration_text,
+                duration_minutes=duration_minutes,
+                device_names=tuple(device_names),
+                devices_complete_set="devices" in requested,
+            ),),
+            requested_details=requested,
+            complete_set=False,
+        )
+
+    raw_services = wrapper.get("services")
+    if not isinstance(raw_services, list):
+        return None
+    services: list[ServiceInfo] = []
+    for row in raw_services:
+        if not isinstance(row, dict):
+            return None
+        name = str(row.get("name") or "").strip()
+        if not name:
+            return None
+        services.append(ServiceInfo(name=name))
+    names = [item.name.casefold() for item in services]
+    if len(names) != len(set(names)):
+        return None
+    return ServiceTruth(
+        kind="service_list",
+        services=tuple(services),
+        requested_details=(),
+        complete_set=True,
+    )
+
+
 def _patient_truth(outcome: TurnOutcome) -> PatientTruth | None:
     if outcome.status != "answered" or outcome.response_goal != "answer_customer_profile":
         return None
@@ -979,6 +1072,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     doctor_truth = _doctor_truth(outcome)
     package_truth = _package_truth(outcome)
     patient_truth = _patient_truth(outcome)
+    service_truth = _service_truth(outcome)
     appointment_truth = _appointment_truth(outcome)
     if goal in _TERMINAL_GOALS:
         expected_action = TERMINAL_ACTION_BY_GOAL[goal]
@@ -1017,6 +1111,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         doctor_truth=doctor_truth,
         package_truth=package_truth,
         patient_truth=patient_truth,
+        service_truth=service_truth,
         appointment_truth=appointment_truth,
         facts=tuple(facts),
         choices=tuple(_choice_contract(choice, goal) for choice in outcome.choices),
@@ -1230,6 +1325,25 @@ def is_pure_supported_patient_contract(
         unit.response_goal == "answer_customer_profile"
         and unit.status == "answered"
         and unit.patient_truth is not None
+        for unit in contract.units
+    )
+
+
+def is_pure_supported_service_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is verified read-only service information."""
+    if not contract.units:
+        return False
+    return all(
+        unit.response_goal == "answer_service"
+        and unit.status == "answered"
+        and unit.service_truth is not None
+        and unit.commercial_truth is None
+        and (
+            "devices" not in unit.service_truth.requested_details
+            or all(item.devices_complete_set for item in unit.service_truth.services)
+        )
         for unit in contract.units
     )
 
