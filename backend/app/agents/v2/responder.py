@@ -923,7 +923,6 @@ _REQUESTED_INFORMATION_GOALS = frozenset(
         "no_availability",
         "package_information",
         "pulse_information",
-        "package_refund_quote",
     }
 )
 
@@ -1008,7 +1007,6 @@ def _deterministic_missing_requested_unit_fallback(
             "requested_time_unavailable": "مش قادر أأكد حالة الوقت المطلوب من البيانات الحالية.",
             "no_availability": "مش قادر أأكد عدم وجود مواعيد من البيانات الحالية.",
             "package_information": "معلومات الباكدج المطلوبة مش ظاهرة في البيانات المؤكدة الحالية.",
-            "package_refund_quote": "تفاصيل الاسترجاع دي محتاجة مراجعة فريق العيادة قبل ما أأكدها.",
         }[goal]
 
     return {
@@ -1022,7 +1020,6 @@ def _deterministic_missing_requested_unit_fallback(
         "requested_time_unavailable": "I cannot verify the requested time status from the current data.",
         "no_availability": "I cannot verify that there is no availability from the current data.",
         "package_information": "The requested package information is not available in the current verified data.",
-        "package_refund_quote": "The clinic team needs to review the refund details before I can confirm them.",
     }[goal]
 
 def _compose_mixed_typed_contract_reply(
