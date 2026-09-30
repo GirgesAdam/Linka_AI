@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from app.agents.clinic_grounding import build_clinic_catalog
+
 from tools.agent_eval.harness import local_slot, send_turn, service_by_slug
 from tools.agent_eval.readiness_common import named_patient, new_patient, run_group
 from tools.agent_eval.run_batch_01 import created_appointments, doctor_name
@@ -16,7 +17,11 @@ from tools.agent_eval.run_batch_03 import (
     extended_state_snapshot,
     make_result,
 )
-from tools.agent_eval.run_batch_04 import _availability_for, _doctor_row, _replacement_rows
+from tools.agent_eval.run_batch_04 import (
+    _availability_for,
+    _doctor_row,
+    _replacement_rows,
+)
 
 
 def _messages(db, ws, patient, sid, messages):

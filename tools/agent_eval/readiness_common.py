@@ -5,16 +5,26 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
-
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from uuid import uuid4
 
 from app.core.config import settings
 from app.models.patient import Patient
 from app.models.workspace import Workspace
-from tools.agent_eval.harness import ScenarioResult, assert_demo_only, batch_token_summary, jsonable
-from tools.agent_eval.run_batch_03 import db_delta, extended_state_snapshot, make_result, run_case
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from tools.agent_eval.harness import (
+    ScenarioResult,
+    assert_demo_only,
+    batch_token_summary,
+    jsonable,
+)
+from tools.agent_eval.run_batch_03 import (
+    db_delta,
+    extended_state_snapshot,
+    make_result,
+    run_case,
+)
 
 
 def named_patient(db: Session, workspace: Workspace, first: str, last: str = "") -> Patient:
