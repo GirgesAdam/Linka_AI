@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -273,7 +272,8 @@ def test_pure_package_information_bypasses_generic_responder(
     assert "المتبقي: 3" in text
 
 
-def test_mixed_package_and_unsupported_family_stays_legacy(
+
+def test_mixed_package_and_unsupported_family_preserves_verified_package(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes = [
@@ -284,31 +284,15 @@ def test_mixed_package_and_unsupported_family_stays_legacy(
             facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
         ),
     ]
-    called = {"legacy": False}
-
     monkeypatch.setattr(
         responder,
-        "_build_responder_messages",
-        lambda **_kwargs: (
-            called.__setitem__("legacy", True)
-            or [HumanMessage(content="legacy")]
-        ),
-    )
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
-    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="رد legacy grounded",
-                availability_claim="not_applicable",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("mixed typed package response must not invoke the generic model")
         ),
     )
 
-    text, _source = compose_v2_customer_reply(
+    text, source = compose_v2_customer_reply(
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
@@ -316,9 +300,9 @@ def test_mixed_package_and_unsupported_family_stays_legacy(
         outcomes=outcomes,
     )
 
-    assert called["legacy"] is True
-    assert text == "رد legacy grounded"
-
+    assert source == "deterministic:mixed-typed-contract"
+    assert "Laser 6 Sessions" in text
+    assert "3" in text
 
 def test_package_information_response_facts_remove_phase3b_commercial_fields() -> None:
     shaped = _package_information_response_facts(

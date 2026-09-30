@@ -148,45 +148,61 @@ def test_terminal_start_only_verification_evidence_never_triggers_availability_f
     assert source == "contract-composer:test-model"
 
 
-@pytest.mark.parametrize(
-    ("goal", "status", "facts", "bad_claim", "expected_fragment"),
-    [
-        ("present_availability", "answered", {"availability": _availability()}, "no_availability", "7 م"),
-        (
-            "requested_time_unavailable",
-            "blocked",
-            {"availability": {"available_option_count": 0}},
-            "not_applicable",
-            "مش متاح",
-        ),
-        (
-            "no_availability",
-            "blocked",
-            {"availability": {"available_option_count": 0}},
-            "not_applicable",
-            "مفيش مواعيد",
-        ),
-    ],
-)
-def test_true_availability_outcomes_still_activate_guard(
+def test_legacy_untyped_availability_outcome_still_activates_guard(
     monkeypatch: pytest.MonkeyPatch,
-    goal: str,
-    status: str,
-    facts: dict[str, object],
-    bad_claim: str,
-    expected_fragment: str,
 ) -> None:
-    outcome = TurnOutcome(status=status, response_goal=goal, facts=facts)
+    outcome = TurnOutcome(
+        status="blocked",
+        response_goal="requested_time_unavailable",
+        facts={"availability": {"available_option_count": 0}},
+    )
 
     text, source = _run_with_draft(
         monkeypatch,
         outcome=outcome,
         reply="رد غير متوافق مع الحقيقة المؤكدة.",
-        claim=bad_claim,
-        force_mixed_availability=True,
+        claim="not_applicable",
     )
 
     assert source.startswith("deterministic:availability-guard:")
+    assert "مش متاح" in text
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_fragment"),
+    [
+        (
+            TurnOutcome(
+                status="answered",
+                response_goal="present_availability",
+                facts={"availability": _availability()},
+            ),
+            "7 مساء",
+        ),
+        (
+            TurnOutcome(
+                status="blocked",
+                response_goal="no_availability",
+                facts={"availability": {"available_option_count": 0}},
+            ),
+            "مفيش مواعيد",
+        ),
+    ],
+)
+def test_typed_availability_in_mixed_reply_bypasses_legacy_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: TurnOutcome,
+    expected_fragment: str,
+) -> None:
+    text, source = _run_with_draft(
+        monkeypatch,
+        outcome=outcome,
+        reply="رد غير متوافق مع الحقيقة المؤكدة.",
+        claim="not_applicable",
+        force_mixed_availability=True,
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
     assert expected_fragment in text
 
 

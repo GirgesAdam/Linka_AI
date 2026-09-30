@@ -259,7 +259,7 @@ def test_representative_typed_mixes_preserve_complete_verified_units(
     assert source == "deterministic:mixed-typed-contract"
 
 
-def test_unsupported_legacy_segment_never_receives_typed_outcome(
+def test_low_risk_companion_cannot_reintroduce_free_form_fact_corruption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     social = TurnOutcome(
@@ -267,30 +267,26 @@ def test_unsupported_legacy_segment_never_receives_typed_outcome(
         response_goal="social_ack",
         facts={"acknowledgment": "thanks"},
     )
-    observed: list[list[str]] = []
+    model_calls = 0
 
-    def fake_messages(**kwargs):
-        observed.append([item.response_goal for item in kwargs["outcomes"]])
-        return [HumanMessage(content="legacy-only")]
-
-    monkeypatch.setattr(responder, "_build_responder_messages", fake_messages)
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
+    def corrupting_model(**_kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        return SimpleNamespace(
             value=responder.ResponderDraft(
-                reply="تمام.",
+                reply="تمام، وبالمناسبة السعر 900 جنيه.",
                 availability_claim="not_applicable",
             ),
-            model_name="test-model",
-        ),
-    )
-    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
+            model_name="corrupting-model",
+        )
+
+    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(responder, "invoke_with_model_chain", corrupting_model)
 
     text, source = _compose("شكرًا، والسعر؟", [social, _price("500.00 EGP")])
 
-    assert observed == [["social_ack"]]
+    assert model_calls == 0
     assert "500" in text
+    assert "900" not in text
     assert "تمام" in text
-    assert source == "mixed-typed-contract:test-model"
+    assert source == "deterministic:mixed-typed-contract"

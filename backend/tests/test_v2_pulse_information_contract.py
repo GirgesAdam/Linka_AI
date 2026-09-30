@@ -493,7 +493,8 @@ def test_build_step_outcome_uses_requested_detail_whitelist() -> None:
     }
 
 
-def test_mixed_pulse_and_other_family_keeps_existing_legacy_path(
+
+def test_mixed_pulse_and_other_family_preserves_verified_balance_without_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes = [
@@ -504,27 +505,11 @@ def test_mixed_pulse_and_other_family_keeps_existing_legacy_path(
             facts={"service_catalog": {"service": {"name": "Hydrafacial", "description": "Verified"}}},
         ),
     ]
-    called = {"legacy": False}
-
     monkeypatch.setattr(
         responder,
-        "_build_responder_messages",
-        lambda **_kwargs: (
-            called.__setitem__("legacy", True)
-            or [HumanMessage(content="legacy")]
-        ),
-    )
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
-    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="رد grounded مختلط",
-                availability_claim="not_applicable",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("mixed typed Pulse response must not invoke the generic model")
         ),
     )
 
@@ -536,10 +521,9 @@ def test_mixed_pulse_and_other_family_keeps_existing_legacy_path(
         outcomes=outcomes,
     )
 
-    assert called["legacy"] is True
-    assert text == "رد grounded مختلط"
-    assert source == "test-model"
-
+    assert source == "deterministic:mixed-typed-contract"
+    assert "Candela Gentle" in text
+    assert "1250" in text
 
 def test_purchase_fallback_pulse_information_is_not_claimed_by_read_only_shaper() -> None:
     turn = TiaTurnUnderstanding(

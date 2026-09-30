@@ -38,17 +38,17 @@ For a mixed response set:
 
 No typed value is passed to the generic responder for supported mixed typed units.
 
-If a mixed set also contains a low-risk generic unit, only that unsupported unit subset is sent to the legacy responder. Allowed low-risk coexistence is intentionally narrow:
+A post-merge adversarial probe found one remaining edge: a separately composed low-risk legacy companion could still invent a conflicting exact value even though it never received the typed outcome. Example: social acknowledgment + verified 500 EGP could produce "900 EGP" in the legacy fragment beside the correct deterministic 500 EGP fragment.
+
+The final hardening therefore removes free-form companion composition whenever a mixed set contains typed truth. Low-risk non-factual companions are rendered deterministically for:
 - social_ack;
 - handoff;
 - active_task_cancelled;
-- clarification with no verified choices;
-- customer-history prose when it is not AppointmentInfoTruth;
-- general payment-policy information carrying booking_requires_payment + payment_execution_owner.
+- clarification with no verified choices.
 
-Other unsupported factual shapes remain on the pre-existing legacy path rather than being silently promoted into this fix.
+Unsupported-only turns still use the existing generic responder. Unsupported factual/choice units are not promoted into a new contract in this task.
 
-Device-price clarification remains excluded from the new deterministic mixed-unit path so the existing mixed device-price guard remains production-reachable. Pure device-price clarification remains owned by the existing Price/Device contract.
+Device-price clarification remains excluded from the per-unit deterministic typed renderer so the existing legacy mixed device-price guard stays reachable when no other protected typed unit exists. When it coexists with another protected typed unit, the same existing CommercialTruth deterministic fallback renders it without a model.
 
 ## Existing truth owners reused
 
@@ -99,7 +99,7 @@ Each typed fragment is generated from the same already-built verified contract. 
 - 0 Pulse recalculation;
 - 0 third-model calls.
 
-Legacy generic segments retain their existing responder fallback/guard behavior and are never given the supported typed outcomes.
+Mixed replies containing typed truth do not include any free-form generic responder fragment. Unsupported-only turns retain the existing generic responder fallback/guard behavior.
 
 ## Guard reachability
 
@@ -120,7 +120,12 @@ Potential cleanup is explicitly out of scope.
 ## Focused validation
 
 Mixed/adversarial + responder/grounding/architecture:
-- 33 passed.
+- 33 passed after the post-merge companion hardening.
+
+Additional post-merge adversarial control:
+- verified price 500 EGP + low-risk social companion + forced model draft claiming 900 EGP;
+- responder model calls = 0;
+- final contains 500 EGP and does not contain 900 EGP.
 
 Program-level representative regression:
 - 303 passed.

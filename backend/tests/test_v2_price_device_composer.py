@@ -545,7 +545,8 @@ def test_provider_failure_uses_same_contract_deterministic_fallback(
     assert "Prime Lase" in text and "550 جنيه" in text
 
 
-def test_mixed_unsupported_response_stays_entirely_legacy(
+
+def test_mixed_price_and_unsupported_family_preserves_verified_price(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes = [
@@ -565,22 +566,9 @@ def test_mixed_unsupported_response_stays_entirely_legacy(
     ]
     monkeypatch.setattr(
         responder,
-        "compose_price_device_contract_reply",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("mixed response must not enter commercial composer")
-        ),
-    )
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
-    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="السعر 1200 جنيه، ووصف الخدمة موثق.",
-                availability_claim="not_applicable",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("mixed typed price must not invoke the generic model")
         ),
     )
 
@@ -592,9 +580,8 @@ def test_mixed_unsupported_response_stays_entirely_legacy(
         outcomes=outcomes,
     )
 
-    assert source == "test-model"
+    assert source == "deterministic:mixed-typed-contract"
     assert "1200" in text
-
 
 def test_deterministic_fallback_preserves_all_required_price_options() -> None:
     contract = build_customer_response_contract([_multi_device_price()])
