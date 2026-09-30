@@ -316,3 +316,128 @@ def test_single_hybrid_price_unit_preserves_verified_commercial_truth_without_mo
     assert "2000" in text
     assert "900" not in text
     assert source == "deterministic:verified-price"
+
+
+def _pulse_unavailable() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="pulse_information",
+        facts={"pulse_requested_details": ["balance"]},
+    )
+
+
+def _price_unavailable() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
+    )
+
+
+def _availability_unavailable() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="present_availability",
+        facts={
+            "availability": {
+                "service_name": "Hydrafacial",
+                "availability_windows": [],
+                "available_option_count": 0,
+                "checked_dates": ["2026-10-01"],
+            }
+        },
+    )
+
+
+def _service_without_typed_truth() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="answer_service",
+        facts={
+            "service_requested_details": ["description"],
+        },
+    )
+
+
+def test_missing_pulse_unit_is_covered_next_to_verified_appointment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+
+    text, source = _compose(
+        "رصيدي من الـPulses كام، وميعادي الجاي إمتى؟",
+        [_pulse_unavailable(), _appointment()],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "رصيد الـPulses الحالي مش ظاهر" in text
+    assert "5:00 مساء" in text
+    assert text.count("رصيد الـPulses الحالي مش ظاهر") == 1
+    assert text.count("ميعادك الجاي") == 1
+
+
+def test_unavailable_price_unit_does_not_disappear_next_to_service_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+
+    text, source = _compose(
+        "خدمة Hydrafacial بتعمل إيه وسعرها كام؟",
+        [_service(), _price_unavailable()],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "الخدمة: Hydrafacial." in text
+    assert "Verified service description" in text
+    assert "السعر المؤكد لخدمة Hydrafacial مش متاح" in text
+
+
+def test_unavailable_availability_unit_gets_scoped_fallback_next_to_clinic_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+
+    text, source = _compose(
+        "رقم العيادة كام وإيه المواعيد المتاحة للهيدرافيشل؟",
+        [_clinic(), _availability_unavailable()],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "01012345678" in text
+    assert "مش قادر أعرض مواعيد متاحة مؤكدة" in text
+
+
+def test_multiple_missing_requested_units_get_bounded_deterministic_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+
+    text, source = _compose(
+        "رصيدي من الـPulses كام، وتفاصيل خدمة Hydrafacial إيه؟",
+        [_pulse_unavailable(), _service_without_typed_truth()],
+    )
+
+    assert source == "deterministic:mixed-unit-completeness"
+    assert "رصيد الـPulses الحالي مش ظاهر" in text
+    assert "تفاصيل الخدمة المطلوبة مش ظاهرة" in text
+
+
+def test_typed_missing_and_social_units_are_all_covered_without_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+    social = TurnOutcome(
+        status="answered",
+        response_goal="social_ack",
+        facts={"acknowledgment": "thanks"},
+    )
+
+    text, source = _compose(
+        "شكرًا، ورصيدي من الـPulses كام وميعادي الجاي إمتى؟",
+        [social, _pulse_unavailable(), _appointment()],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "تمام." in text
+    assert "رصيد الـPulses الحالي مش ظاهر" in text
+    assert "5:00 مساء" in text
