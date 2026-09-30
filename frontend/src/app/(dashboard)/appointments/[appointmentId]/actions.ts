@@ -62,6 +62,9 @@ export type AppointmentServiceChangeState = { ok: boolean; error: string | null 
 function serviceChangeError(error: unknown) {
   if (!(error instanceof TiaApiError)) return "ØªØ¹Ø°Ø± ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù…ÙˆØ¹Ø¯. Ø­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
   const detail = error.technicalMessage || "";
+  if (detail.includes("same service category")) {
+    return "الميعاد ده غير متاح لأن فيه جلسة تانية في نفس فئة الخدمات خلال نفس الوقت. اختار وقت مختلف.";
+  }
   if (
     detail.includes("not available for the selected service/device with the selected doctor") ||
     detail.includes("Requested appointment time is not available")

@@ -77,6 +77,52 @@ def _overlapping_appointment_id(
     return db.scalar(stmt.limit(1))
 
 
+def _ensure_operational_category_available(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    branch_id: UUID,
+    service_id: UUID,
+    busy_start_at: datetime,
+    busy_end_at: datetime,
+) -> None:
+    service = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace_id,
+            Service.id == service_id,
+        )
+    )
+    if service is None:
+        raise StaffAppointmentEditError("Service not found or inactive.")
+    if service.requires_laser_device:
+        return
+
+    conflict_id = db.scalar(
+        select(Appointment.id)
+        .join(
+            Service,
+            (Service.workspace_id == Appointment.workspace_id)
+            & (Service.id == Appointment.service_id),
+        )
+        .where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.branch_id == branch_id,
+            Appointment.id != appointment_id,
+            Appointment.is_quick_booking.is_(False),
+            Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            Appointment.busy_start_at < busy_end_at,
+            Appointment.busy_end_at > busy_start_at,
+            Service.operational_category == service.operational_category,
+        )
+        .limit(1)
+    )
+    if conflict_id is not None:
+        raise StaffAppointmentEditError(
+            "Another appointment in the same service category already occupies this time."
+        )
+
+
 def _same_start_slot_for_current_doctor(
     db: Session,
     *,
@@ -232,13 +278,24 @@ def _validated_slot_for_existing_appointment(
 
     current_start = appointment.start_at.astimezone(UTC)
     if doctor_id == appointment.doctor_id and requested_start == current_start:
-        return _same_start_slot_for_current_doctor(
+        slot = _same_start_slot_for_current_doctor(
             db,
             workspace=workspace,
             appointment=appointment,
             service_id=service_id,
             laser_device_key=laser_device_key,
         )
+        if service_id != appointment.service_id:
+            _ensure_operational_category_available(
+                db,
+                workspace_id=workspace.id,
+                appointment_id=appointment.id,
+                branch_id=appointment.branch_id,
+                service_id=slot.service_id,
+                busy_start_at=slot.busy_start_at,
+                busy_end_at=slot.busy_end_at,
+            )
+        return slot
 
     booking_date = requested_start.astimezone(timezone).date()
     # Staff correction/rescheduling should not be blocked by minimum notice or
@@ -263,6 +320,16 @@ def _validated_slot_for_existing_appointment(
 
     for slot in slots:
         if slot.start_at == requested_start:
+            if requested_start != current_start or service_id != appointment.service_id:
+                _ensure_operational_category_available(
+                    db,
+                    workspace_id=workspace.id,
+                    appointment_id=appointment.id,
+                    branch_id=appointment.branch_id,
+                    service_id=slot.service_id,
+                    busy_start_at=slot.busy_start_at,
+                    busy_end_at=slot.busy_end_at,
+                )
             return slot
     raise StaffAppointmentEditError(
         "Requested appointment time is not available for the selected service/device with the selected doctor."

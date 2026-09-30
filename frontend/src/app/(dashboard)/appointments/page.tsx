@@ -155,7 +155,7 @@ function appointmentTime(value: string, timezone: string) {
   }).format(new Date(value));
 }
 
-type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick" | "other";
+type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick";
 
 const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
   { id: "prime", label: "Prime" },
@@ -163,7 +163,6 @@ const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
   { id: "dermatology", label: "جلدية" },
   { id: "slimming", label: "تخسيس" },
   { id: "quick", label: "حجوزات سريعة" },
-  { id: "other", label: "أخرى" },
 ];
 
 function requestedColumns(value: SearchParams["column"]) {
@@ -178,9 +177,8 @@ function appointmentColumn(appointment: Appointment, serviceById: Map<string, Se
   if (appointment.laser_device_key === "prime_lase") return "prime";
   if (appointment.laser_device_key === "candela_gentle") return "candela";
   const category = serviceById.get(appointment.service_id)?.operational_category;
-  if (category === "dermatology") return "dermatology";
   if (category === "slimming") return "slimming";
-  return "other";
+  return "dermatology";
 }
 
 function appointmentsForColumn(
@@ -395,9 +393,6 @@ function DailySchedule({
           const end = toMinutes(interval.end_time);
           return (
             <div key={`${interval.start_time}-${interval.end_time}-${intervalIndex}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-              <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-bold text-slate-600">
-                ساعات العمل: {minuteLabel(start)} – {minuteLabel(end)}
-              </div>
               <div className="overflow-x-auto">
                 <div className="grid min-w-max" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(230px, 1fr))` }}>
                   {columns.map((column) => {

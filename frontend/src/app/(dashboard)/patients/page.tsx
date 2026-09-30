@@ -32,10 +32,6 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
     <>
       <PageHeader title="العملاء" description="ابحث عن أي عميل وافتح ملفه لمراجعة بيانات التواصل والمواعيد والمتابعات." />
 
-      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
-        حالة العميل هنا هي الحالة المسجلة في النظام. «نشط» لا تعني تلقائيًا أنه تواصل خلال آخر 3 شهور؛ آخر تواصل ظاهر في عمود منفصل.
-      </div>
-
       <form className="mb-4 grid gap-2 md:grid-cols-[minmax(260px,1fr)_180px_190px_auto]">
         <div className="relative">
           <Search className="absolute right-3 top-3.5 text-slate-400" size={16} />

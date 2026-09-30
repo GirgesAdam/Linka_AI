@@ -76,7 +76,7 @@ export function AppointmentServiceEditor({
   return (
     <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
       <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900">
-        <Stethoscope size={16} /> تعديل الموعد يدويًا
+        <Stethoscope size={16} /> تعديل الموعد
       </summary>
       <form action={formAction} className="mt-4 space-y-3">
         <input type="hidden" name="appointment_id" value={appointmentId} />
@@ -93,7 +93,7 @@ export function AppointmentServiceEditor({
             }}
             className="form-control mt-1.5 h-10 min-h-10"
           >
-            {services.filter((service) => service.is_active).map((service) => (
+            {services.filter((service) => service.is_active || service.id === currentServiceId).map((service) => (
               <option key={service.id} value={service.id}>{service.name}</option>
             ))}
           </select>
