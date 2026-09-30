@@ -24,6 +24,11 @@ from app.agents.v2.availability_composer import (
     compose_availability_contract_reply,
     deterministic_availability_fallback,
 )
+from app.agents.v2.choice_composer import (
+    compose_verified_choice_contract_reply,
+    deterministic_verified_choice_unit_reply,
+    is_pure_supported_verified_choice_contract,
+)
 from app.agents.v2.clinic_info_composer import (
     compose_clinic_contract_reply,
     deterministic_clinic_contract_reply,
@@ -811,6 +816,8 @@ def _compose_pure_supported_contract_reply(
         return compose_pulse_contract_reply(history=history, contract=contract)
     if is_pure_supported_patient_contract(contract):
         return compose_patient_contract_reply(history=history, contract=contract)
+    if is_pure_supported_verified_choice_contract(contract):
+        return compose_verified_choice_contract_reply(history=history, contract=contract)
     return None
 
 
@@ -871,6 +878,9 @@ def _deterministic_typed_unit_reply(
         return deterministic_pulse_contract_reply(contract, arabic=arabic)
     if is_pure_supported_patient_contract(contract):
         return deterministic_patient_contract_reply(contract, arabic=arabic)
+    choice_reply = deterministic_verified_choice_unit_reply(unit, arabic=arabic)
+    if choice_reply is not None:
+        return choice_reply
     return None
 
 
