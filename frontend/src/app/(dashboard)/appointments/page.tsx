@@ -23,6 +23,7 @@ import { QuickAppointmentDialog } from "./quick-appointment-dialog";
 
 type SearchParams = {
   patient_id?: string;
+  book?: string;
   date?: string;
   branch_id?: string;
   manual_phone?: string;
@@ -582,6 +583,13 @@ export default async function AppointmentsPage({
     quickWindow ? findPatientByPhone(quickPhone) : Promise.resolve(null),
   ]);
 
+  const [selectedPackages, selectedPulseBalances] = selectedPatient
+    ? await Promise.all([
+        tiaRequest<PatientPackage[]>(`/booking/patients/${selectedPatient.id}/packages?usable_only=true`).catch(() => []),
+        tiaRequest<PulseBalance[]>(`/booking/patients/${selectedPatient.id}/pulse-balance`).catch(() => []),
+      ])
+    : [[], []];
+
   const [manualPackages, manualHistory, manualPulseBalances] = manualPatient
     ? await Promise.all([
         tiaRequest<PatientPackage[]>(`/booking/patients/${manualPatient.id}/packages?usable_only=true`).catch(() => []),
@@ -633,6 +641,30 @@ export default async function AppointmentsPage({
           ) : undefined
         }
       />
+
+      {selectedPatient && selectedBranch && (
+        <details open={raw.book === "1"} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-md:[&_summary]:min-h-12">
+          <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-black text-slate-900">
+            <Plus size={17} /> حجز موعد جديد للعميل
+          </summary>
+          <div className="border-t border-slate-100 p-4">
+            <ManualAppointmentForm
+              mode="existing"
+              phone={selectedPatient.phone || ""}
+              bookingDate={selectedDate}
+              branchId={selectedBranch.id}
+              patientId={selectedPatient.id}
+              patientName={`${selectedPatient.first_name} ${selectedPatient.last_name || ""}`.trim()}
+              services={services}
+              doctors={doctors}
+              staff={staff}
+              packages={selectedPackages}
+              pulseBalances={selectedPulseBalances}
+              timezone={timezone}
+            />
+          </div>
+        </details>
+      )}
 
       {!selectedPatient && (
         <details open={Boolean(manualPhone)} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-md:[&_summary]:min-h-12">

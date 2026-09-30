@@ -113,7 +113,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
 
                 {item.effective_status === "active" && item.balance_due_minor > 0 && (
                   <details className="mt-3 rounded-lg border border-[var(--border)] p-2">
-                    <summary className="cursor-pointer text-xs font-bold text-teal-700">تسجيل دفعة للباكيدج</summary>
+                    <summary className="flex min-h-10 cursor-pointer items-center text-xs font-bold text-[var(--interactive)]">تسجيل دفعة للباكيدج</summary>
                     <form action={recordPatientPackagePayment} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                       <input type="hidden" name="patient_id" value={patientId} />
                       <input type="hidden" name="package_id" value={item.id} />
@@ -132,7 +132,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
                         <option value="visa">Visa</option>
                         <option value="instapay">InstaPay</option>
                       </select>
-                      <Button type="submit" size="sm">حفظ الدفعة</Button>
+                      <Button type="submit">حفظ الدفعة</Button>
                     </form>
                   </details>
                 )}
@@ -163,7 +163,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
         )}
 
         <details className="rounded-xl border border-[var(--border)] p-3">
-          <summary className="cursor-pointer text-sm font-bold text-slate-800">بيع باكيدج جديدة</summary>
+          <summary className="flex min-h-10 cursor-pointer items-center text-sm font-bold text-slate-800">بيع باكيدج جديدة</summary>
           {offers.length ? (
             <form action={purchasePatientPackage} className="mt-4 space-y-3">
               <input type="hidden" name="patient_id" value={patientId} />
