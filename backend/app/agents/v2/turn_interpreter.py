@@ -193,9 +193,13 @@ SEMANTIC PRINCIPLES
   the ledger/action concern reception. The marker never authorizes a financial read or write; Python
   converts it to Reception ownership deterministically.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
-  Pulse-pack offers, or per-device overage price. Use balance for an aggregate remaining Pulse balance
-  by device. Use owned_packs when the customer asks about a particular pack they own, including that
-  pack's purchased/used/remaining Pulses, status, or expiry. A cost/price question about a prepaid Pulse pack is
+  Pulse-pack offers, or per-device overage price. Use balance only for the aggregate remaining Pulse
+  balance by device. Use owned_packs when the customer anchors the question to a particular pack they
+  own, including that pack's purchased/used/remaining Pulses, status, or expiry. Do not collapse an
+  owned-pack question into balance merely because the customer asks "how many are left": for example,
+  "الباقة اللي عندي على Candela فاضل فيها كام Pulse؟" and "how many Pulses are left in my Candela pack?"
+  are owned_packs; "رصيدي كام Pulse على Candela؟" and "what is my Candela Pulse balance?" are balance.
+  A cost/price question about a prepaid Pulse pack is
   pulse_info with requested_pulse_details=[offers]; it does not require a service. A question about
   extra/excess/overage Pulses is pulse_info with requested_pulse_details=[overage_price], even when
   the customer gives an exact Pulse count; preserve that count in entities.pulse_count so Python can

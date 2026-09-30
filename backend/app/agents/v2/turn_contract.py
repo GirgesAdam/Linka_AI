@@ -281,10 +281,12 @@ class TurnOperation(StrictContractModel):
     requested_pulse_details: list[PulseDetail] = Field(
         default_factory=list,
         description=(
-            "For pulse_info only, include exactly the Pulse facts requested: balance, owned_packs, "
-            "offers, overage_price, and/or financial_ledger. financial_ledger is a semantic ownership "
-            "marker for receptionist-owned money/payment facts about an owned Pulse pack; it never "
-            "authorizes a financial read. Do not add unrelated Pulse data."
+            "For pulse_info only, include exactly the Pulse facts requested: balance for the aggregate "
+            "remaining balance by device; owned_packs when the customer asks about a particular owned "
+            "pack's purchased/used/remaining Pulses, status, or expiry; offers; overage_price; and/or "
+            "financial_ledger. A particular owned-pack remaining question is owned_packs, not balance. "
+            "financial_ledger is a semantic ownership marker for receptionist-owned money/payment facts "
+            "about an owned Pulse pack; it never authorizes a financial read. Do not add unrelated Pulse data."
         ),
     )
     financial_ownership: FinancialOwnership = Field(
