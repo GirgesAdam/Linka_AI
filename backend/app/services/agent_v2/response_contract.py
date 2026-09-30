@@ -123,6 +123,49 @@ class PackageTruth(StrictResponseContractModel):
     offers_complete_set: bool = False
 
 
+class PulseBalanceInfo(StrictResponseContractModel):
+    device_name: str
+    pulses_remaining: int
+    active_pack_count: int
+
+
+class OwnedPulsePackInfo(StrictResponseContractModel):
+    device_name: str
+    pulses_purchased: int
+    pulses_consumed: int
+    pulses_remaining: int
+    effective_status: str
+    purchased_at: str | None = None
+    expires_at: str | None = None
+
+
+class PulseOfferInfo(StrictResponseContractModel):
+    device_name: str
+    pulses_count: int
+    price: str
+    currency: str
+
+
+class PulseOverageInfo(StrictResponseContractModel):
+    device_name: str
+    unit_price: str | None = None
+    currency: str | None = None
+    requested_pulse_count: int | None = None
+    total_price: str | None = None
+
+
+class PulseTruth(StrictResponseContractModel):
+    requested_details: tuple[str, ...]
+    balances: tuple[PulseBalanceInfo, ...] = ()
+    owned_packs: tuple[OwnedPulsePackInfo, ...] = ()
+    available_offers: tuple[PulseOfferInfo, ...] = ()
+    overage_options: tuple[PulseOverageInfo, ...] = ()
+    balance_complete_set: bool = False
+    owned_complete_set: bool = False
+    offers_complete_set: bool = False
+    overage_complete_set: bool = False
+
+
 class PatientTruth(StrictResponseContractModel):
     requested_details: tuple[str, ...]
     first_name: str | None = None
@@ -200,6 +243,7 @@ class CustomerResponseUnit(StrictResponseContractModel):
     commercial_truth: CommercialTruth | None = None
     doctor_truth: DoctorTruth | None = None
     package_truth: PackageTruth | None = None
+    pulse_truth: PulseTruth | None = None
     patient_truth: PatientTruth | None = None
     service_truth: ServiceTruth | None = None
     clinic_truth: ClinicTruth | None = None
@@ -785,6 +829,207 @@ def _package_truth(outcome: TurnOutcome) -> PackageTruth | None:
     )
 
 
+def _pulse_balance_info(raw: object) -> PulseBalanceInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    device_name = str(safe.get("device_name") or "").strip()
+    if not device_name:
+        return None
+    try:
+        remaining = int(safe.get("pulses_remaining"))
+        active_pack_count = int(safe.get("active_pack_count"))
+    except (TypeError, ValueError):
+        return None
+    if remaining < 0 or active_pack_count < 0:
+        return None
+    return PulseBalanceInfo(
+        device_name=device_name,
+        pulses_remaining=remaining,
+        active_pack_count=active_pack_count,
+    )
+
+
+def _owned_pulse_pack_info(raw: object) -> OwnedPulsePackInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    device_name = str(safe.get("device_name") or "").strip()
+    effective_status = str(safe.get("effective_status") or "").strip()
+    if not device_name or not effective_status:
+        return None
+    try:
+        purchased = int(safe.get("pulses_purchased"))
+        consumed = int(safe.get("pulses_consumed"))
+        remaining = int(safe.get("pulses_remaining"))
+    except (TypeError, ValueError):
+        return None
+    if min(purchased, consumed, remaining) < 0:
+        return None
+    return OwnedPulsePackInfo(
+        device_name=device_name,
+        pulses_purchased=purchased,
+        pulses_consumed=consumed,
+        pulses_remaining=remaining,
+        effective_status=effective_status,
+        purchased_at=str(safe.get("purchased_at") or "").strip() or None,
+        expires_at=str(safe.get("expires_at") or "").strip() or None,
+    )
+
+
+def _pulse_offer_info(raw: object) -> PulseOfferInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    device_name = str(safe.get("device_name") or "").strip()
+    price = str(safe.get("price") or "").strip()
+    currency = str(safe.get("currency") or "").strip().upper()
+    try:
+        count = int(safe.get("pulses_count"))
+    except (TypeError, ValueError):
+        return None
+    if not device_name or not price or not currency or count <= 0:
+        return None
+    return PulseOfferInfo(
+        device_name=device_name,
+        pulses_count=count,
+        price=price,
+        currency=currency,
+    )
+
+
+def _pulse_overage_info(
+    raw: object,
+    *,
+    requested_pulse_count: object = None,
+    total_price: object = None,
+) -> PulseOverageInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    safe = _safe_value(raw)
+    if not isinstance(safe, dict):
+        return None
+    device_name = str(safe.get("device_name") or "").strip()
+    if not device_name:
+        return None
+    unit_price = str(safe.get("overage_price") or "").strip() or None
+    currency = str(safe.get("currency") or "").strip().upper() or None
+    count: int | None = None
+    if requested_pulse_count is not None:
+        try:
+            count = int(requested_pulse_count)
+        except (TypeError, ValueError):
+            return None
+        if count <= 0:
+            return None
+    total = str(total_price or "").strip() or None
+    if total is not None and count is None:
+        return None
+    return PulseOverageInfo(
+        device_name=device_name,
+        unit_price=unit_price,
+        currency=currency,
+        requested_pulse_count=count,
+        total_price=total,
+    )
+
+
+def _pulse_truth(outcome: TurnOutcome) -> PulseTruth | None:
+    if outcome.status != "answered" or outcome.response_goal != "pulse_information":
+        return None
+
+    raw_requested = outcome.facts.get("pulse_requested_details")
+    if not isinstance(raw_requested, list):
+        return None
+    requested = tuple(
+        str(detail)
+        for detail in raw_requested
+        if str(detail) in {"balance", "owned_packs", "offers", "overage_price"}
+    )
+    if not requested or len(requested) != len(raw_requested):
+        return None
+
+    balances: list[PulseBalanceInfo] = []
+    if "balance" in requested:
+        wrapper = outcome.facts.get("pulse_balance")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("balances", [])
+        if not isinstance(rows, list):
+            return None
+        for raw in rows:
+            item = _pulse_balance_info(raw)
+            if item is None:
+                return None
+            balances.append(item)
+
+    owned: list[OwnedPulsePackInfo] = []
+    if "owned_packs" in requested:
+        wrapper = outcome.facts.get("pulse_packs")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("packs", [])
+        if not isinstance(rows, list):
+            return None
+        for raw in rows:
+            item = _owned_pulse_pack_info(raw)
+            if item is None:
+                return None
+            owned.append(item)
+
+    offers: list[PulseOfferInfo] = []
+    if "offers" in requested:
+        wrapper = outcome.facts.get("pulse_pack_offers")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("offers", [])
+        if not isinstance(rows, list):
+            return None
+        for raw in rows:
+            item = _pulse_offer_info(raw)
+            if item is None:
+                return None
+            offers.append(item)
+
+    overage: list[PulseOverageInfo] = []
+    if "overage_price" in requested:
+        wrapper = outcome.facts.get("pulse_billing_settings")
+        if not isinstance(wrapper, dict):
+            return None
+        rows = wrapper.get("devices", [])
+        if not isinstance(rows, list):
+            return None
+        shared_count = wrapper.get("requested_pulse_count")
+        shared_total = wrapper.get("overage_total")
+        for raw in rows:
+            item = _pulse_overage_info(
+                raw,
+                requested_pulse_count=(shared_count if len(rows) == 1 else None),
+                total_price=(shared_total if len(rows) == 1 else None),
+            )
+            if item is None:
+                return None
+            overage.append(item)
+
+    return PulseTruth(
+        requested_details=requested,
+        balances=tuple(balances),
+        owned_packs=tuple(owned),
+        available_offers=tuple(offers),
+        overage_options=tuple(overage),
+        balance_complete_set="balance" in requested,
+        owned_complete_set="owned_packs" in requested,
+        offers_complete_set="offers" in requested,
+        overage_complete_set="overage_price" in requested,
+    )
+
+
 def _appointment_truth(outcome: TurnOutcome) -> AppointmentInfoTruth | None:
     if outcome.status != "answered" or outcome.response_goal != "answer_customer_history":
         return None
@@ -1235,6 +1480,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
     commercial_truth = _commercial_truth(outcome)
     doctor_truth = _doctor_truth(outcome)
     package_truth = _package_truth(outcome)
+    pulse_truth = _pulse_truth(outcome)
     patient_truth = _patient_truth(outcome)
     service_truth = _service_truth(outcome)
     clinic_truth = _clinic_truth(outcome)
@@ -1275,6 +1521,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
         commercial_truth=commercial_truth,
         doctor_truth=doctor_truth,
         package_truth=package_truth,
+        pulse_truth=pulse_truth,
         patient_truth=patient_truth,
         service_truth=service_truth,
         clinic_truth=clinic_truth,
@@ -1476,6 +1723,43 @@ def is_pure_supported_package_contract(
         if truth.offers_requested is not truth.offers_complete_set:
             return False
 
+
+    return True
+
+
+def is_pure_supported_pulse_contract(
+    contract: CustomerResponseContract,
+) -> bool:
+    """Whether every unit is verified read-only Pulse information."""
+    if not contract.units:
+        return False
+
+    allowed_fact_keys = {
+        "pulse_requested_details",
+        "pulse_balance",
+        "pulse_packs",
+        "pulse_pack_offers",
+        "pulse_billing_settings",
+    }
+    for unit in contract.units:
+        truth = unit.pulse_truth
+        if (
+            unit.response_goal != "pulse_information"
+            or unit.status != "answered"
+            or truth is None
+        ):
+            return False
+        if not truth.requested_details:
+            return False
+        if any(fact.key not in allowed_fact_keys for fact in unit.facts):
+            return False
+        if (
+            ("balance" in truth.requested_details) is not truth.balance_complete_set
+            or ("owned_packs" in truth.requested_details) is not truth.owned_complete_set
+            or ("offers" in truth.requested_details) is not truth.offers_complete_set
+            or ("overage_price" in truth.requested_details) is not truth.overage_complete_set
+        ):
+            return False
 
     return True
 
