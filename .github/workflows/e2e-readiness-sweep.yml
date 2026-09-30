@@ -1,0 +1,64 @@
+name: E2E Production Readiness Sweep
+
+on:
+  push:
+    branches:
+      - eval/e2e-production-readiness-20260930
+    paths:
+      - .github/workflows/e2e-readiness-sweep.yml
+      - tools/agent_eval/**
+      - backend/app/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    name: Inspect current Demo dataset
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ".:.."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_readiness_unused
+      SUPABASE_SECRET_KEY: sb_secret_readiness_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_V2_LIVE_ENABLED: "true"
+      TIA_AGENT_EVAL_CONFIRM_DEMO: "1"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Inspect current Demo/test data
+        run: |
+          python -m tools.agent_eval.clean_preflight
+          python -m tools.agent_eval.inspect_readiness_dataset
