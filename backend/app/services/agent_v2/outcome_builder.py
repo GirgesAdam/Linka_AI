@@ -234,6 +234,25 @@ def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> se
     return details
 
 
+_PULSE_DETAIL_ORDER = ("balance", "owned_packs", "offers", "overage_price")
+
+
+def _requested_pulse_details(
+    step: PlanStep,
+    turn: TiaTurnUnderstanding,
+) -> tuple[str, ...]:
+    try:
+        operation = turn.operations[step.operation_index]
+    except IndexError:
+        return ()
+    if operation.type != "pulse_info":
+        return ()
+    requested = list(dict.fromkeys(operation.requested_pulse_details))
+    if not requested:
+        requested = ["balance"]
+    return tuple(detail for detail in _PULSE_DETAIL_ORDER if detail in requested)
+
+
 _CLINIC_DETAIL_ORDER = (
     "name",
     "address",
@@ -493,6 +512,106 @@ def _clinic_information_response_facts(
 
     shaped["clinic_info"] = safe
     shaped["clinic_requested_details"] = list(requested_details)
+    return shaped
+
+
+def _pulse_information_response_facts(
+    facts: dict[str, object],
+    *,
+    requested_details: tuple[str, ...],
+) -> dict[str, object]:
+    """Expose only the requested read-only Pulse information to the response boundary."""
+    shaped: dict[str, object] = {
+        "pulse_requested_details": list(requested_details),
+    }
+
+    if "balance" in requested_details:
+        wrapper = facts.get("pulse_balance")
+        rows = wrapper.get("balances") if isinstance(wrapper, dict) else None
+        if isinstance(rows, list):
+            shaped["pulse_balance"] = {
+                "balances": [
+                    {
+                        key: row[key]
+                        for key in ("device_name", "pulses_remaining", "active_pack_count")
+                        if isinstance(row, dict)
+                        and row.get(key) not in (None, "", [], {})
+                    }
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            }
+
+    if "owned_packs" in requested_details:
+        wrapper = facts.get("pulse_packs")
+        rows = wrapper.get("packs") if isinstance(wrapper, dict) else None
+        if isinstance(rows, list):
+            shaped["pulse_packs"] = {
+                "packs": [
+                    {
+                        key: row[key]
+                        for key in (
+                            "device_name",
+                            "pulses_purchased",
+                            "pulses_consumed",
+                            "pulses_remaining",
+                            "purchased_at",
+                            "expires_at",
+                            "status",
+                            "effective_status",
+                        )
+                        if isinstance(row, dict)
+                        and row.get(key) not in (None, "", [], {})
+                    }
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            }
+
+    if "offers" in requested_details:
+        wrapper = facts.get("pulse_pack_offers")
+        rows = wrapper.get("offers") if isinstance(wrapper, dict) else None
+        if isinstance(rows, list):
+            shaped["pulse_pack_offers"] = {
+                "offers": [
+                    {
+                        key: row[key]
+                        for key in (
+                            "device_name",
+                            "pulses_count",
+                            "price",
+                            "currency",
+                            "is_active",
+                        )
+                        if isinstance(row, dict)
+                        and row.get(key) not in (None, "", [], {})
+                    }
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            }
+
+    if "overage_price" in requested_details:
+        wrapper = facts.get("pulse_billing_settings")
+        if isinstance(wrapper, dict):
+            safe_settings: dict[str, object] = {}
+            rows = wrapper.get("devices")
+            if isinstance(rows, list):
+                safe_settings["devices"] = [
+                    {
+                        key: row[key]
+                        for key in ("device_name", "overage_price", "currency")
+                        if isinstance(row, dict)
+                        and row.get(key) not in (None, "", [], {})
+                    }
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            for key in ("requested_pulse_count", "overage_total", "currency"):
+                if wrapper.get(key) not in (None, "", [], {}):
+                    safe_settings[key] = wrapper[key]
+            shaped["pulse_billing_settings"] = safe_settings
+
     return shaped
 
 
@@ -961,6 +1080,7 @@ def build_step_outcome(
 ) -> TurnOutcome:
     """Convert deterministic planning/execution facts into one responder-safe outcome."""
     requested_details = _requested_service_details(step, turn)
+    requested_pulse_details = _requested_pulse_details(step, turn)
     requested_clinic_details = _requested_clinic_details(step, turn)
     selected_device_key = (
         str(step.facts["device_key"])
@@ -979,6 +1099,14 @@ def build_step_outcome(
         base_facts = _clinic_information_response_facts(
             base_facts,
             requested_details=requested_clinic_details,
+        )
+    if (
+        step.operation_type == "pulse_info"
+        and step.response_goal == "pulse_information"
+    ):
+        base_facts = _pulse_information_response_facts(
+            base_facts,
+            requested_details=requested_pulse_details,
         )
     if step.response_goal == "package_information":
         base_facts = _package_information_response_facts(base_facts)

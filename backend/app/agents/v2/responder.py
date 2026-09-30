@@ -23,6 +23,7 @@ from app.agents.v2.doctor_composer import compose_doctor_contract_reply
 from app.agents.v2.package_composer import compose_package_contract_reply
 from app.agents.v2.patient_composer import compose_patient_contract_reply
 from app.agents.v2.price_device_composer import compose_price_device_contract_reply
+from app.agents.v2.pulse_composer import compose_pulse_contract_reply
 from app.agents.v2.service_info_composer import compose_service_contract_reply
 from app.agents.v2.terminal_composer import compose_terminal_contract_reply
 from app.core.config import settings
@@ -37,6 +38,7 @@ from app.services.agent_v2.response_contract import (
     is_pure_supported_package_contract,
     is_pure_supported_patient_contract,
     is_pure_supported_price_device_contract,
+    is_pure_supported_pulse_contract,
     is_pure_supported_service_contract,
     is_pure_supported_terminal_contract,
 )
@@ -798,6 +800,11 @@ def compose_v2_customer_reply(
         )
     if is_pure_supported_package_contract(response_contract):
         return compose_package_contract_reply(
+            history=history,
+            contract=response_contract,
+        )
+    if is_pure_supported_pulse_contract(response_contract):
+        return compose_pulse_contract_reply(
             history=history,
             contract=response_contract,
         )
