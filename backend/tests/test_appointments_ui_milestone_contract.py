@@ -60,6 +60,13 @@ def test_appointment_detail_uses_single_edit_surface_and_preserves_current_defau
     assert "useEffect" not in editor
     assert "service.is_active || service.id === currentServiceId" in editor
     assert "item.is_active || item.id === appointment.doctor_id" in page
+    assert 'type="datetime-local"' not in editor
+    assert "getAppointmentEditAvailability" in editor
+    assert "عرض المواعيد المتاحة" in editor
+    assert "من {timeLabel(slot.start_at" in editor
+    assert "إلى {timeLabel(slot.end_at" in editor
+    assert "setServiceId(currentServiceId)" in editor
+    assert "setDoctorId(currentDoctorId)" in editor
 
 
 def test_appointment_schedule_has_no_other_column_or_working_hours_banner() -> None:

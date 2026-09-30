@@ -59,8 +59,76 @@ export async function updateAppointmentStatus(formData: FormData) {
 
 export type AppointmentServiceChangeState = { ok: boolean; error: string | null };
 
+export type AppointmentEditAvailabilitySlot = {
+  start_at: string;
+  end_at: string;
+};
+
+export type AppointmentEditAvailabilityResult = {
+  ok: boolean;
+  message: string;
+  timezone: string;
+  slots: AppointmentEditAvailabilitySlot[];
+};
+
+type AppointmentEditAvailabilityResponse = {
+  timezone: string;
+  slots: AppointmentEditAvailabilitySlot[];
+};
+
+export async function getAppointmentEditAvailability(input: {
+  appointmentId: string;
+  branchId: string;
+  serviceId: string;
+  doctorId: string;
+  date: string;
+  laserDeviceKey?: string;
+}): Promise<AppointmentEditAvailabilityResult> {
+  const appointmentId = input.appointmentId.trim();
+  const branchId = input.branchId.trim();
+  const serviceId = input.serviceId.trim();
+  const doctorId = input.doctorId.trim();
+  const date = input.date.trim();
+  if (!appointmentId || !branchId || !serviceId || !doctorId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return {
+      ok: false,
+      message: "بيانات الموعد أو الخدمة أو الدكتور غير مكتملة.",
+      timezone: "Africa/Cairo",
+      slots: [],
+    };
+  }
+
+  try {
+    const query = new URLSearchParams({
+      branch_id: branchId,
+      service_id: serviceId,
+      doctor_id: doctorId,
+      date,
+      exclude_appointment_id: appointmentId,
+      allow_immediate: "true",
+    });
+    if (input.laserDeviceKey) query.set("laser_device_key", input.laserDeviceKey);
+    const response = await tiaRequest<AppointmentEditAvailabilityResponse>(
+      `/booking/availability?${query.toString()}`,
+    );
+    return {
+      ok: true,
+      message: response.slots.length ? "" : "مفيش مواعيد متاحة للاختيارات دي في اليوم المحدد.",
+      timezone: response.timezone,
+      slots: response.slots,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "تعذر تحميل المواعيد المتاحة.",
+      timezone: "Africa/Cairo",
+      slots: [],
+    };
+  }
+}
+
 function serviceChangeError(error: unknown) {
-  if (!(error instanceof TiaApiError)) return "ØªØ¹Ø°Ø± ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù…ÙˆØ¹Ø¯. Ø­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
+  if (!(error instanceof TiaApiError)) return "تعذر تعديل الموعد. حاول مرة أخرى.";
   const detail = error.technicalMessage || "";
   if (detail.includes("same service category")) {
     return "الميعاد ده غير متاح لأن فيه جلسة تانية في نفس فئة الخدمات خلال نفس الوقت. اختار وقت مختلف.";
@@ -69,16 +137,16 @@ function serviceChangeError(error: unknown) {
     detail.includes("not available for the selected service/device with the selected doctor") ||
     detail.includes("Requested appointment time is not available")
   ) {
-    return "Ø§Ù„Ø®Ø¯Ù…Ø© Ø£Ùˆ Ø§Ù„Ø¬Ù‡Ø§Ø² Ø£Ùˆ Ø§Ù„Ø¯ÙƒØªÙˆØ± Ù…Ø´ Ù…ØªØ§Ø­ÙŠÙ† ÙÙŠ Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø®ØªØ§Ø±. ØºÙŠÙ‘Ø± Ø§Ù„ÙˆÙ‚Øª Ø£Ùˆ Ø§Ø®ØªØ§Ø± Ø¯ÙƒØªÙˆØ± ØªØ§Ù†ÙŠ.";
+    return "الخدمة أو الجهاز أو الدكتور مش متاحين في الوقت المختار. اختار وقت مختلف أو دكتور تاني.";
   }
   if (detail.includes("another appointment") || detail.includes("already booked at this time")) {
-    return "ÙÙŠÙ‡ ØªØ¹Ø§Ø±Ø¶ Ù…Ø¹ Ù…ÙˆØ¹Ø¯ ØªØ§Ù†ÙŠ Ù„Ù„Ø¯ÙƒØªÙˆØ± Ø£Ùˆ Ø§Ù„Ø¬Ù‡Ø§Ø² ÙÙŠ Ø§Ù„ÙˆÙ‚Øª Ø¯Ù‡. Ø§Ø®ØªØ§Ø± ÙˆÙ‚Øª Ù…Ø®ØªÙ„Ù.";
+    return "فيه تعارض مع موعد تاني للدكتور أو الجهاز في الوقت ده. اختار وقت مختلف.";
   }
   if (detail.includes("not assigned") || detail.includes("does not provide")) {
-    return "Ø§Ù„Ø¯ÙƒØªÙˆØ± Ø§Ù„Ù…Ø®ØªØ§Ø± ØºÙŠØ± Ù…ØªØ§Ø­ Ù„ØªÙ†ÙÙŠØ° Ø§Ù„Ø®Ø¯Ù…Ø© Ø¯ÙŠ. Ø§Ø®ØªØ§Ø± Ø¯ÙƒØªÙˆØ± ØªØ§Ù†ÙŠ Ù„Ù„Ø®Ø¯Ù…Ø©.";
+    return "الدكتور المختار غير متاح لتنفيذ الخدمة دي. اختار دكتور تاني للخدمة.";
   }
   if (detail.includes("device") && detail.includes("price")) {
-    return "Ø³Ø¹Ø± Ø¬Ù‡Ø§Ø² Ø§Ù„Ù„ÙŠØ²Ø± Ø§Ù„Ù…Ø®ØªØ§Ø± ØºÙŠØ± Ù…ÙØ¹Ù‘Ù„ Ù„Ù„Ø®Ø¯Ù…Ø© Ø¯ÙŠ.";
+    return "سعر جهاز الليزر المختار غير مفعّل للخدمة دي.";
   }
   return error.message;
 }
@@ -94,7 +162,7 @@ export async function changeAppointmentService(
   const laserDeviceKey = String(formData.get("laser_device_key") || "").trim();
   const startAt = String(formData.get("start_at") || "").trim();
   if (!appointmentId || !serviceId || !doctorId) {
-    return { ok: false, error: "Ø§Ø®ØªØ§Ø± Ø§Ù„Ø®Ø¯Ù…Ø© ÙˆØ§Ù„Ø¯ÙƒØªÙˆØ± Ù‚Ø¨Ù„ Ø§Ù„Ø­ÙØ¸." };
+    return { ok: false, error: "اختار الخدمة والدكتور قبل الحفظ." };
   }
   try {
     await tiaRequest(`/booking/appointments/${appointmentId}/service`, {
