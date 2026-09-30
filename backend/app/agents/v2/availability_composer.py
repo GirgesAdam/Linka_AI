@@ -69,6 +69,105 @@ _ALLOWED_CLOSING_BY_STATE: dict[str, frozenset[str]] = {
     "no_availability": frozenset({"offer_other_scope", "none"}),
 }
 
+AVAILABILITY_PRESENTATION_PAGE_SIZE = 3
+
+
+def availability_window_key(window: dict[str, object]) -> str:
+    """Stable customer-visible range identity used only for presentation pagination."""
+    return "|".join(
+        " ".join(str(window.get(key) or "").split()).casefold()
+        for key in (
+            "doctor_name",
+            "laser_device_name",
+            "start_local",
+            "end_local",
+            "start_time_24h",
+            "end_time_24h",
+        )
+    )
+
+
+def _presentation_window_selection(
+    unit: CustomerResponseUnit,
+    *,
+    excluded_window_keys: frozenset[str],
+    limit: int,
+) -> tuple[list[dict[str, object]], bool]:
+    fact = _window_fact(unit)
+    if fact is None or not isinstance(fact.value, list):
+        return [], False
+    remaining = [
+        dict(value)
+        for value in fact.value
+        if isinstance(value, dict)
+        and availability_window_key(value) not in excluded_window_keys
+    ]
+    selected = remaining[: max(limit, 1)]
+    return selected, len(remaining) > len(selected)
+
+
+def presented_availability_window_keys(
+    contract: CustomerResponseContract,
+    *,
+    excluded_window_keys: frozenset[str] = frozenset(),
+    limit: int = AVAILABILITY_PRESENTATION_PAGE_SIZE,
+) -> tuple[str, ...]:
+    if len(contract.units) != 1:
+        return ()
+    unit = contract.units[0]
+    if (
+        unit.availability_truth is None
+        or unit.availability_truth.state != "options_available"
+    ):
+        return ()
+    selected, _has_more = _presentation_window_selection(
+        unit,
+        excluded_window_keys=excluded_window_keys,
+        limit=limit,
+    )
+    return tuple(availability_window_key(window) for window in selected)
+
+
+def _project_availability_contract_for_presentation(
+    contract: CustomerResponseContract,
+    *,
+    excluded_window_keys: frozenset[str],
+    limit: int,
+) -> tuple[CustomerResponseContract, bool, bool]:
+    """Keep full verified truth intact while creating a bounded presentation view."""
+    if len(contract.units) != 1:
+        return contract, False, False
+    unit = contract.units[0]
+    if (
+        unit.availability_truth is None
+        or unit.availability_truth.state != "options_available"
+    ):
+        return contract, False, False
+
+    fact = _window_fact(unit)
+    if fact is None or not isinstance(fact.value, list):
+        return contract, False, False
+    selected, has_more = _presentation_window_selection(
+        unit,
+        excluded_window_keys=excluded_window_keys,
+        limit=limit,
+    )
+    if not selected and fact.value:
+        return contract, False, True
+
+    projected_facts = tuple(
+        item.model_copy(update={"value": selected, "complete_set": True})
+        if item.key == "availability_windows"
+        else item
+        for item in unit.facts
+    )
+    projected_unit = unit.model_copy(update={"facts": projected_facts})
+    return (
+        CustomerResponseContract(units=(projected_unit,)),
+        has_more,
+        False,
+    )
+
 _AR_MONTHS = {
     1: "يناير",
     2: "فبراير",
@@ -477,6 +576,8 @@ def _render_present(
     draft: AvailabilityComposerUnitDraft,
     *,
     arabic: bool,
+    has_more: bool = False,
+    continuation: bool = False,
 ) -> str:
     intro_by_style = (
         {
@@ -491,7 +592,12 @@ def _render_present(
             "friendly": "I found these times for you",
         }
     )
-    intro = intro_by_style[draft.style]
+    if continuation:
+        intro = "كمان عندنا" if arabic else "Also available"
+    elif has_more:
+        intro = "أقرب المواعيد المتاحة" if arabic else "Nearest available times"
+    else:
+        intro = intro_by_style[draft.style]
     context = _optional_context(
         unit,
         draft.optional_fact_keys,
@@ -580,6 +686,8 @@ def _render_unit(
     draft: AvailabilityComposerUnitDraft,
     *,
     arabic: bool,
+    has_more: bool = False,
+    continuation: bool = False,
 ) -> str:
     truth = unit.availability_truth
     if truth is None:
@@ -587,7 +695,13 @@ def _render_unit(
             "Availability unit is missing backend truth."
         )
     if truth.state == "options_available":
-        return _render_present(unit, draft, arabic=arabic)
+        return _render_present(
+            unit,
+            draft,
+            arabic=arabic,
+            has_more=has_more,
+            continuation=continuation,
+        )
     if truth.state == "requested_time_unavailable":
         return _render_requested_miss(unit, draft, arabic=arabic)
     if truth.state == "no_availability":
@@ -600,6 +714,8 @@ def resolve_availability_composer_draft(
     draft: AvailabilityComposerDraft,
     *,
     arabic: bool,
+    has_more: bool = False,
+    continuation: bool = False,
 ) -> str:
     validate_availability_composer_draft(contract, draft)
     chunks: list[str] = []
@@ -622,7 +738,13 @@ def resolve_availability_composer_draft(
             effective_draft = draft_unit.model_copy(
                 update={"closing_action": "none"}
             )
-        rendered = _render_unit(unit, effective_draft, arabic=arabic)
+        rendered = _render_unit(
+            unit,
+            effective_draft,
+            arabic=arabic,
+            has_more=has_more,
+            continuation=continuation,
+        )
         if index == 0:
             chunks.append(rendered)
             continue
@@ -648,6 +770,8 @@ def deterministic_availability_fallback(
     contract: CustomerResponseContract,
     *,
     arabic: bool,
+    has_more: bool = False,
+    continuation: bool = False,
 ) -> str:
     units: list[AvailabilityComposerUnitDraft] = []
     for index, unit in enumerate(contract.units):
@@ -677,6 +801,39 @@ def deterministic_availability_fallback(
         contract,
         AvailabilityComposerDraft(units=units),
         arabic=arabic,
+        has_more=has_more,
+        continuation=continuation,
+    )
+
+
+def deterministic_bounded_availability_reply(
+    contract: CustomerResponseContract,
+    *,
+    arabic: bool,
+    excluded_window_keys: frozenset[str] = frozenset(),
+    continuation: bool = False,
+) -> str:
+    """Render one bounded verified availability page without invoking a model."""
+    presentation_contract, has_more, exhausted = (
+        _project_availability_contract_for_presentation(
+            contract,
+            excluded_window_keys=excluded_window_keys,
+            limit=AVAILABILITY_PRESENTATION_PAGE_SIZE,
+        )
+    )
+    if exhausted:
+        return (
+            "دي كل الفترات المتاحة في النطاق اللي اتفحص. "
+            "أقدر أشوفلك نطاق تاني لو تحب."
+            if arabic
+            else "Those are all the available ranges in the checked scope. "
+            "I can check another range if you want."
+        )
+    return deterministic_availability_fallback(
+        presentation_contract,
+        arabic=arabic,
+        has_more=has_more,
+        continuation=continuation,
     )
 
 
@@ -684,18 +841,40 @@ def compose_availability_contract_reply(
     *,
     history: list[BaseMessage],
     contract: CustomerResponseContract,
+    excluded_window_keys: frozenset[str] = frozenset(),
+    continuation: bool = False,
 ) -> tuple[str, str]:
-    """Compose pure availability outcomes without model-authored availability facts."""
+    """Compose bounded verified availability without changing the truth layer."""
     arabic = _latest_customer_is_arabic(history)
+    presentation_contract, has_more, exhausted = (
+        _project_availability_contract_for_presentation(
+            contract,
+            excluded_window_keys=excluded_window_keys,
+            limit=AVAILABILITY_PRESENTATION_PAGE_SIZE,
+        )
+    )
+    if exhausted:
+        return (
+            deterministic_bounded_availability_reply(
+                contract,
+                arabic=arabic,
+                excluded_window_keys=excluded_window_keys,
+                continuation=continuation,
+            ),
+            "deterministic:availability-contract-exhausted",
+        )
+
     fallback_text = deterministic_availability_fallback(
-        contract,
+        presentation_contract,
         arabic=arabic,
+        has_more=has_more,
+        continuation=continuation,
     )
 
     try:
         messages = _build_availability_composer_messages(
             history=history,
-            contract=contract,
+            contract=presentation_contract,
         )
         primary_name = settings.openai_model
         fallback_name = settings.openai_fallback_model
@@ -734,9 +913,11 @@ def compose_availability_contract_reply(
             ),
         )
         text = resolve_availability_composer_draft(
-            contract,
+            presentation_contract,
             invocation.value,
             arabic=arabic,
+            has_more=has_more,
+            continuation=continuation,
         )
         return text, f"availability-contract:{model_label(invocation.model_name)}"
     except (

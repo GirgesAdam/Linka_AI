@@ -104,7 +104,10 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
     if not isinstance(slots, list):
         return []
 
-    grouped: dict[tuple[str, str, str, str], list[tuple[datetime, datetime]]] = defaultdict(list)
+    grouped: dict[
+        tuple[str, str, str, str, str, str],
+        list[tuple[datetime, datetime]],
+    ] = defaultdict(list)
     for slot in slots:
         if not isinstance(slot, dict):
             continue
@@ -112,16 +115,36 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
         end = _parse_dt(slot.get("end_local"))
         if start is None or end is None or end <= start:
             continue
+        service_id = str(slot.get("service_id") or "")
+        service_name = str(slot.get("service_name") or "").strip()
         doctor_id = str(slot.get("doctor_id") or "")
         doctor_name = str(slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
         device_key, device_name = _device_from_slot(slot)
-        grouped[(doctor_id, doctor_name, device_key, device_name)].append((start, end))
+        grouped[
+            (
+                service_id,
+                service_name,
+                doctor_id,
+                doctor_name,
+                device_key,
+                device_name,
+            )
+        ].append((start, end))
 
     windows: list[dict[str, Any]] = []
-    for (doctor_id, doctor_name, device_key, device_name), intervals in grouped.items():
+    for (
+        service_id,
+        service_name,
+        doctor_id,
+        doctor_name,
+        device_key,
+        device_name,
+    ), intervals in grouped.items():
         for start, end in _bookable_start_runs(intervals):
             windows.append(
                 {
+                    "service_id": service_id or None,
+                    "service_name": service_name or None,
                     "doctor_id": doctor_id or None,
                     "doctor_name": doctor_name,
                     "laser_device_key": device_key or None,
@@ -135,9 +158,10 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
 
     windows.sort(
         key=lambda row: (
+            str(row.get("start_local") or ""),
+            str(row.get("service_name") or ""),
             str(row.get("laser_device_name") or ""),
             str(row.get("doctor_name") or ""),
-            str(row.get("start_local") or ""),
         )
     )
     return windows

@@ -22,10 +22,11 @@ from app.agents.v2.appointment_info_composer import (
 )
 from app.agents.v2.availability_composer import (
     compose_availability_contract_reply,
-    deterministic_availability_fallback,
+    deterministic_bounded_availability_reply,
 )
 from app.agents.v2.choice_composer import (
     compose_verified_choice_contract_reply,
+    deduplicate_equivalent_choice_outcomes,
     deterministic_verified_choice_unit_reply,
     is_pure_supported_verified_choice_contract,
 )
@@ -794,12 +795,19 @@ def _compose_pure_supported_contract_reply(
     *,
     history: list[BaseMessage],
     contract: CustomerResponseContract,
+    availability_excluded_window_keys: frozenset[str] = frozenset(),
+    availability_continuation: bool = False,
 ) -> tuple[str, str] | None:
     """Keep the established pure-domain response paths unchanged."""
     if is_pure_supported_terminal_contract(contract):
         return compose_terminal_contract_reply(history=history, contract=contract)
     if is_pure_supported_availability_contract(contract):
-        return compose_availability_contract_reply(history=history, contract=contract)
+        return compose_availability_contract_reply(
+            history=history,
+            contract=contract,
+            excluded_window_keys=availability_excluded_window_keys,
+            continuation=availability_continuation,
+        )
     if is_pure_supported_appointment_contract(contract):
         return compose_appointment_info_contract_reply(history=history, contract=contract)
     if is_pure_supported_service_contract(contract):
@@ -839,6 +847,8 @@ def _deterministic_typed_unit_reply(
     *,
     history: list[BaseMessage],
     unit: CustomerResponseUnit,
+    availability_excluded_window_keys: frozenset[str] = frozenset(),
+    availability_continuation: bool = False,
 ) -> str | None:
     """Render one supported typed unit from backend-owned truth only."""
     contract = CustomerResponseContract(units=(unit,))
@@ -847,7 +857,12 @@ def _deterministic_typed_unit_reply(
     if is_pure_supported_terminal_contract(contract):
         return deterministic_terminal_fallback(contract, arabic=arabic)
     if is_pure_supported_availability_contract(contract):
-        return deterministic_availability_fallback(contract, arabic=arabic)
+        return deterministic_bounded_availability_reply(
+            contract,
+            arabic=arabic,
+            excluded_window_keys=availability_excluded_window_keys,
+            continuation=availability_continuation,
+        )
     if is_pure_supported_appointment_contract(contract):
         return deterministic_appointment_info_reply(contract, arabic=arabic)
     if is_pure_supported_service_contract(contract):
@@ -1027,6 +1042,8 @@ def _compose_mixed_typed_contract_reply(
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
     contract: CustomerResponseContract,
+    availability_excluded_window_keys: frozenset[str] = frozenset(),
+    availability_continuation: bool = False,
 ) -> tuple[str, str] | None:
     """Compose multi-unit replies without dropping requested units or mutating typed truth."""
     if not outcomes or len(contract.units) != len(outcomes):
@@ -1035,7 +1052,12 @@ def _compose_mixed_typed_contract_reply(
     arabic = _latest_customer_is_arabic(history)
     typed_chunks: dict[int, str] = {}
     for index, unit in enumerate(contract.units):
-        rendered = _deterministic_typed_unit_reply(history=history, unit=unit)
+        rendered = _deterministic_typed_unit_reply(
+            history=history,
+            unit=unit,
+            availability_excluded_window_keys=availability_excluded_window_keys,
+            availability_continuation=availability_continuation,
+        )
         if rendered is not None and rendered.strip():
             typed_chunks[index] = rendered.strip()
 
@@ -1122,12 +1144,17 @@ def compose_v2_customer_reply(
     local_now: datetime,
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
+    availability_excluded_window_keys: frozenset[str] = frozenset(),
+    availability_continuation: bool = False,
 ) -> tuple[str, str]:
     """Render one customer reply from verified V2 outcomes; never execute actions or tools."""
-    response_contract = build_customer_response_contract(outcomes)
+    presentation_outcomes = deduplicate_equivalent_choice_outcomes(outcomes)
+    response_contract = build_customer_response_contract(presentation_outcomes)
     pure_reply = _compose_pure_supported_contract_reply(
         history=history,
         contract=response_contract,
+        availability_excluded_window_keys=availability_excluded_window_keys,
+        availability_continuation=availability_continuation,
     )
     if pure_reply is not None:
         return pure_reply
@@ -1146,8 +1173,10 @@ def compose_v2_customer_reply(
 
     mixed_reply = _compose_mixed_typed_contract_reply(
         history=history,
-        outcomes=outcomes,
+        outcomes=presentation_outcomes,
         contract=response_contract,
+        availability_excluded_window_keys=availability_excluded_window_keys,
+        availability_continuation=availability_continuation,
     )
     if mixed_reply is not None:
         return mixed_reply
