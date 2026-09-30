@@ -18,10 +18,13 @@ export interface DashboardSummary {
   active_patients: number;
   appointments_today: number;
   upcoming_appointments: number;
+  appointments_after_today: number;
   open_handoffs: number;
   active_channels: number;
   failed_automation_jobs: number;
   recent_appointments: DashboardAppointment[];
+  today_appointments: DashboardAppointment[];
+  next_appointments: DashboardAppointment[];
 }
 export interface DashboardAppointment {
   id: string; patient_id: string; patient_name: string; service_name: string;
