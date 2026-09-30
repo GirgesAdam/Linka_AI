@@ -17,13 +17,13 @@ from tools.agent_eval.harness import (
     ScenarioResult,
     assert_demo_only,
     batch_token_summary,
+    default_evaluation,
     jsonable,
 )
 from tools.agent_eval.run_batch_03 import (
     db_delta,
     extended_state_snapshot,
     make_result,
-    run_case,
 )
 
 
@@ -138,6 +138,60 @@ def stage_metrics(results: list[ScenarioResult]) -> dict[str, Any]:
     }
 
 
+def run_isolated_case(engine, workspace_slug: str, case_fn) -> ScenarioResult:
+    connection = engine.connect()
+    outer = connection.begin()
+    db = Session(
+        bind=connection,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    try:
+        workspace = db.scalar(
+            select(Workspace).where(Workspace.slug == workspace_slug)
+        )
+        if workspace is None:
+            raise RuntimeError("Workspace not found")
+        assert_demo_only(workspace)
+        return case_fn(db, workspace)
+    except Exception as exc:
+        return ScenarioResult(
+            id=case_fn.__name__.removeprefix("case_"),
+            category="infrastructure",
+            purpose="Scenario execution failed before review.",
+            turns=[],
+            state_before={},
+            state_after={},
+            db_verification={},
+            evaluation=default_evaluation(db_ok=False, grounding_ok=False),
+            issues=[],
+            token_usage={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "uncached_input_tokens": 0,
+                "total_tokens": 0,
+                "calls": 0,
+                "metadata_missing_calls": 0,
+            },
+            execution_error=f"{type(exc).__name__}: {exc}",
+            review={
+                "status": "INFRASTRUCTURE_FAILURE",
+                "expected": "",
+                "observed": {},
+                "reviewer_notes": f"{type(exc).__name__}: {exc}",
+                "severity": None,
+                "root_cause": "Evaluation infrastructure or scenario fixture failure",
+            },
+        )
+    finally:
+        db.close()
+        if outer.is_active:
+            outer.rollback()
+        connection.close()
+
+
 def run_group(cases, *, output_name: str) -> int:
     if os.getenv("TIA_AGENT_EVAL_CONFIRM_DEMO") != "1":
         raise RuntimeError("Set TIA_AGENT_EVAL_CONFIRM_DEMO=1")
@@ -148,7 +202,7 @@ def run_group(cases, *, output_name: str) -> int:
             raise RuntimeError("Demo workspace not found")
         assert_demo_only(ws)
 
-    results = [run_case(engine, "tia", case) for case in cases]
+    results = [run_isolated_case(engine, "tia", case) for case in cases]
     summary = {
         "scenarios": len(results),
         "turns": sum(len(row.turns) for row in results),
