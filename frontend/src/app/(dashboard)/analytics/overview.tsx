@@ -1,6 +1,6 @@
-import { CalendarCheck2, CircleDollarSign, ReceiptText, TrendingDown, TrendingUp } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { CalendarCheck2, CircleDollarSign, ReceiptText, TrendingUp, UsersRound } from "lucide-react";
 
-import { StatCard } from "@/components/stat-card";
 import { formatMoney } from "@/lib/format";
 import { tiaRequest } from "@/lib/tia/api";
 import type { AnalyticsCatalogRun, AnalyticsCatalogRunRequest } from "@/lib/types";
@@ -59,6 +59,35 @@ function metricNumber(result: AnalyticsCatalogRun, key: string) {
   return typeof metric?.value === "number" ? metric.value : 0;
 }
 
+function OverviewMetric({
+  label,
+  value,
+  detail,
+  icon: Icon,
+  emphasis = false,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  icon: LucideIcon;
+  emphasis?: boolean;
+}) {
+  return (
+    <div className={`rounded-2xl border p-4 shadow-sm ${emphasis ? "border-[var(--accent-border)] bg-[var(--accent-soft)]" : "border-[var(--border)] bg-white"}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-bold text-[var(--muted)]">{label}</div>
+          <div className="mt-2 text-2xl font-black tracking-tight text-[var(--text)]">{value}</div>
+          <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">{detail}</div>
+        </div>
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white text-[var(--accent)] shadow-sm">
+          <Icon size={18} />
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export async function AnalyticsOverviewPanel({
   startDate,
   endDate,
@@ -91,21 +120,55 @@ export async function AnalyticsOverviewPanel({
   const newPatientSeries = newPatients.chart_data.series.find((item) => item.key === "new_patients") || newPatients.chart_data.series[0];
   const newPatientCount = newPatientSeries?.values.reduce<number>((sum, value) => sum + (value ?? 0), 0) ?? 0;
   const paymentMethods = paymentBreakdown.rows.filter((row) => row.currency === currency);
+  const totalAppointments = metricNumber(appointments, "appointments");
+  const completedAppointments = metricNumber(appointments, "completed_appointments");
 
   return (
-    <section className="mb-7">
-      <div className="mb-3">
+    <section className="mb-8">
+      <div className="mb-4">
         <h2 className="text-lg font-black text-slate-950">ملخص {periodLabel}</h2>
-        <p className="mt-1 text-xs text-[var(--muted)]">الفترة كاملة من {startDate} إلى {endDate}. الأرقام المالية مبنية على المدفوعات والمرتجعات والمصروفات المسجلة فعليًا.</p>
+        <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+          ملخص مالي وتشغيلي للفترة من {startDate} إلى {endDate} مبني على البيانات المسجلة فعليًا.
+        </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <StatCard label="إجمالي المقبوضات" value={finance ? formatMoney(finance.gross_payments_minor, currency) : "—"} detail="دفعات فعلية مسجلة خلال الفترة" icon={CircleDollarSign} />
-        <StatCard label="المرتجعات" value={finance ? formatMoney(finance.refunds_minor, currency) : "—"} detail="مبالغ مرتجعة مسجلة خلال الفترة" icon={TrendingDown} />
-        <StatCard label="صافي الدخل" value={finance ? formatMoney(finance.net_revenue_minor, currency) : "—"} detail="المقبوضات بعد خصم المرتجعات" icon={TrendingUp} />
-        <StatCard label="المصروفات" value={finance ? formatMoney(finance.expenses_minor, currency) : "—"} detail="المصروفات المسجلة بتاريخ وقوعها" icon={ReceiptText} />
-        <StatCard label="الربح المسجل" value={finance ? formatMoney(finance.profit_minor, currency) : "—"} detail="صافي الدخل بعد المصروفات المسجلة" icon={TrendingUp} />
-        <StatCard label="إجمالي المواعيد" value={metricNumber(appointments, "appointments")} detail={`${metricNumber(appointments, "completed_appointments").toLocaleString("ar-EG")} جلسة مكتملة · ${newPatientCount.toLocaleString("ar-EG")} عميل جديد`} icon={CalendarCheck2} />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <OverviewMetric
+          label="صافي الدخل"
+          value={finance ? formatMoney(finance.net_revenue_minor, currency) : "—"}
+          detail="المقبوضات بعد خصم المرتجعات المسجلة"
+          icon={TrendingUp}
+          emphasis
+        />
+        <OverviewMetric
+          label="الربح المسجل"
+          value={finance ? formatMoney(finance.profit_minor, currency) : "—"}
+          detail="صافي الدخل بعد المصروفات المسجلة"
+          icon={CircleDollarSign}
+        />
+        <OverviewMetric
+          label="إجمالي المواعيد"
+          value={totalAppointments.toLocaleString("ar-EG")}
+          detail={`${completedAppointments.toLocaleString("ar-EG")} جلسة مكتملة خلال الفترة`}
+          icon={CalendarCheck2}
+        />
+        <OverviewMetric
+          label="عملاء جدد"
+          value={newPatientCount.toLocaleString("ar-EG")}
+          detail="عملاء أضيفوا خلال الفترة وفق عقد التقرير الحالي"
+          icon={UsersRound}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-white px-4 py-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-[var(--muted)]"><CircleDollarSign size={16} /> إجمالي المقبوضات</div>
+          <div className="text-sm font-black text-[var(--text)]">{finance ? formatMoney(finance.gross_payments_minor, currency) : "—"}</div>
+        </div>
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border)] bg-white px-4 py-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-[var(--muted)]"><ReceiptText size={16} /> المصروفات المسجلة</div>
+          <div className="text-sm font-black text-[var(--text)]">{finance ? formatMoney(finance.expenses_minor, currency) : "—"}</div>
+        </div>
       </div>
 
       <div className="mt-5">
@@ -118,7 +181,7 @@ export async function AnalyticsOverviewPanel({
           newPatientValues={newPatientSeries?.values || []}
           paymentMethods={paymentMethods.map((row) => ({ payment_method: row.payment_method, amount_minor: row.amount_minor }))}
           appointments={{
-            completed: metricNumber(appointments, "completed_appointments"),
+            completed: completedAppointments,
             noShow: metricNumber(appointments, "no_show_appointments"),
             cancelled: metricNumber(appointments, "cancelled_appointments"),
           }}

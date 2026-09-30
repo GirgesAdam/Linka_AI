@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bookmark, CalendarRange, HandCoins, Megaphone } from "lucide-react";
+import { Bookmark, CalendarRange, Megaphone } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -91,13 +91,16 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
     <>
       <PageHeader
         title="التقارير والتحليلات"
-        description="تابع أداء الشهر الحالي افتراضيًا، أو ارجع لأي شهر سابق أو اعرض سنة كاملة."
+        description="راجع الأداء المالي والتشغيلي في فترة واضحة، ثم افتح التقرير التفصيلي الذي تحتاجه."
         action={<Link href="/analytics/campaigns" className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm font-bold"><Megaphone size={16}/>أداء الحملات</Link>}
       />
 
-      <Card className="mb-5">
+      <Card className="mb-6 overflow-hidden">
         <CardContent className="flex flex-wrap items-end gap-3 p-4 sm:p-4">
-          <div className="ml-auto flex items-center gap-2 text-sm font-black text-slate-900"><CalendarRange size={18} /> فترة الداشبورد</div>
+          <div className="ml-auto">
+            <div className="flex items-center gap-2 text-sm font-black text-slate-900"><CalendarRange size={18} /> الفترة</div>
+            <div className="mt-1 text-[11px] text-[var(--muted)]">الملخص العلوي يتغير حسب الشهر أو السنة المختارة.</div>
+          </div>
           <form method="get" className="flex flex-wrap items-end gap-2">
             <label className="text-xs font-bold text-slate-600">اختر شهرًا
               <input type="month" name="month" defaultValue={period.selectedMonth || period.currentMonth} max={period.currentMonth} className="form-control mt-1 min-w-[175px]" />
@@ -126,16 +129,8 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
       <section>
         <div className="mb-3">
           <h2 className="text-lg font-black text-slate-950">التقارير التفصيلية</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">اختر من الأداء أو العملاء. تحت كل تقرير ستجد فائدته وطريقة حسابه باختصار.</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">اختر التقرير المناسب للسؤال الذي تريد إجابته، واضبط فترته وفلاتره عند الحاجة.</p>
         </div>
-
-        <Link href="/analytics/outstanding-balances" className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 transition hover:border-amber-300 hover:bg-amber-50">
-          <div>
-            <div className="font-black text-slate-950">العملاء اللي عليهم مبالغ</div>
-            <div className="mt-1 text-xs font-semibold text-slate-600">تقرير اختياري للعملاء الذين أكملوا جلسة وما زال جزء من قيمتها غير مدفوع.</div>
-          </div>
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white text-amber-700"><HandCoins size={18} /></span>
-        </Link>
 
         <AnalyticsCatalogPanel catalog={visibleCatalog} savedViews={visibleSavedViews} />
       </section>
@@ -152,7 +147,7 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
           {cohorts.length ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {cohorts.map((cohort) => (
-                <Link key={cohort.id} href={`/analytics/cohorts/${cohort.id}`} className="rounded-2xl border border-[var(--border)] p-3 transition hover:border-teal-300 hover:bg-teal-50/30">
+                <Link key={cohort.id} href={`/analytics/cohorts/${cohort.id}`} className="rounded-2xl border border-[var(--border)] p-3 transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]">
                   <div className="font-black">{cohort.name}</div>
                   <div className="mt-1 text-xs text-[var(--muted)]">{cohort.member_count.toLocaleString("ar-EG")} عميل · {cohort.period_label}</div>
                 </Link>
