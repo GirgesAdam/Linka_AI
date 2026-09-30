@@ -4,7 +4,7 @@ import { ChevronLeft, Phone, Search, UsersRound } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
@@ -25,6 +25,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
   if (q) query.set("q", q);
   if (status) query.set("status", status);
   if (source) query.set("source", source);
+  const hasActiveFilters = Boolean(q || status || source);
   const patients = await tiaRequest<Patient[]>(`/crm/patients?${query.toString()}`);
 
   return (
@@ -107,8 +108,9 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
           ) : (
             <EmptyState
               icon={UsersRound}
-              title={q ? "لا يوجد عميل مطابق للبحث" : "لا يوجد عملاء بعد"}
-              description={q ? "جرّب البحث بجزء من الاسم أو رقم الهاتف." : "سيظهر العملاء هنا بعد إضافتهم أو استيراد بيانات العيادة."}
+              title={hasActiveFilters ? "لا توجد نتائج مطابقة" : "لا يوجد عملاء بعد"}
+              description={hasActiveFilters ? "جرّب تعديل البحث أو الفلاتر الحالية." : "سيظهر العملاء هنا بعد إضافتهم أو استيراد بيانات العيادة."}
+              action={hasActiveFilters ? <Link href="/patients" className={buttonVariants({ variant: "outline" })}>عرض كل العملاء</Link> : undefined}
             />
           )}
         </CardContent>

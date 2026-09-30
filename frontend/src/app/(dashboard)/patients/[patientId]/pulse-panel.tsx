@@ -30,7 +30,7 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
         {balances.length ? (
           <div className="grid gap-3 sm:grid-cols-2">
             {balances.map((balance) => (
-              <div key={balance.device_key} className="rounded-xl border border-teal-100 bg-[var(--interactive-soft)]/50 p-4">
+              <div key={balance.device_key} className="rounded-xl border border-[var(--border)] bg-[var(--interactive-soft)]/50 p-4">
                 <div className="text-xs font-bold text-[var(--interactive)]">{balance.device_name}</div>
                 <div className="mt-1 text-2xl font-black text-slate-950">
                   {balance.pulses_remaining.toLocaleString("ar-EG")} <span className="text-sm">Pulse</span>
@@ -89,7 +89,7 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
 
         {offers.length > 0 && (
           <details className="rounded-xl border border-[var(--border)] p-3">
-            <summary className="cursor-pointer text-sm font-black text-[var(--interactive)]">بيع باقة Pulses جديدة</summary>
+            <summary className="flex min-h-10 cursor-pointer items-center text-sm font-black text-[var(--interactive)]">بيع باقة Pulses جديدة</summary>
             <form action={purchasePatientPulsePack} className="mt-3 grid gap-3 md:grid-cols-2">
               <input type="hidden" name="patient_id" value={patientId} />
               <label className="grid gap-1.5 text-xs font-bold text-slate-700 md:col-span-2">

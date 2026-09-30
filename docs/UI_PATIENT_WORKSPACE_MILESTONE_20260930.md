@@ -102,3 +102,63 @@ Engineering gates:
 - frontend typecheck
 - production build
 - full CI before merge
+
+## PR #153 review fixes
+
+The pre-merge review tightened operational truth without changing backend business semantics:
+
+- **Next action ordering:** `next_task_at` and `next_appointment_at` are compared directly; the earlier timestamp owns the card and its contextual CTA. An overdue/open task can therefore appear ahead of a later appointment.
+- **Contextual booking:** the profile's primary booking action opens patient-filtered Appointments with the existing standard `ManualAppointmentForm` pre-bound to the patient. It reuses existing availability, package and pulse contracts; no booking endpoint or write semantics changed.
+- **Attention disclosure:** overdue tasks and active handoffs keep separate labels when both are present; their sum remains the displayed attention count.
+- **Patient-specific follow-up context:** Tasks now accepts the backend's existing `patient_id` filter so next-task and overdue-task links stay scoped to the patient.
+- **Filtered empty state:** name/phone search, status and source all count as active filters. A zero-result filter state now says no matching results and offers a clear “show all patients” action.
+- **Linka cleanup:** the remaining Patient-area teal border was replaced with the neutral shared border token; semantic green/amber/red remain semantic.
+- **Pinned notes:** `is_pinned` is presented neutrally as “مثبتة”. The pre-existing profile write behavior remains unchanged; the UI no longer equates the persistence flag with a new “important for the team” product meaning.
+- **Mobile touch targets:** Patient Workspace collapsible summaries and profile/package settlement actions were raised to the shared 40px interaction height where they are direct controls.
+
+## Actual runtime / visual verification
+
+Because the local authenticated Supabase session was not available in this worktree, verification used a **temporary, non-shipping synthetic preview harness** that rendered the production Patient components/styles and the existing contextual booking form. The preview route, temporary public-path allowance, Playwright script and screenshots were removed before the final commit; no auth bypass or test route ships with the milestone.
+Playwright drove installed Chrome at the requested viewports:
+
+- **1440×900**
+- **768×1024**
+- **390×844**
+
+The synthetic state matrix covered:
+- earlier overdue follow-up with a later appointment, and a separate appointment-only state;
+- overdue tasks + active handoff together;
+- long patient identity and mixed Arabic/English labels;
+- active/partially consumed package with outstanding balance and payment form;
+- multiple device-specific pulse balances and pulse-pack payment;
+- no package/pulse entitlement;
+- WhatsApp opt-in and opt-out presentation;
+- long chronological timeline and long Arabic/mixed-language note;
+- empty patient activity/current-action state;
+- filtered Patient List with zero results;
+- the real existing-patient `ManualAppointmentForm` at desktop/tablet/mobile sizes.
+Automated DOM checks on every scenario/viewpoint reported:
+- HTTP 200 for every preview state;
+- no product-content horizontal overflow (`scrollWidth == viewport width`);
+- no form/button/summary control below 40px after the touch-target pass.
+
+Manual screenshot inspection confirmed PageHeader action wrapping, current-state card stacking, package/pulse density, booking/profile form layout, timeline readability, long-text wrapping and filtered/empty states at all three breakpoints.
+
+### Verification limitation
+
+The visual pass validates layout/runtime rendering with synthetic data, not an authenticated local backend session. Business behavior remains separately guarded by contract/relevant backend tests and the full GitHub CI suite. No production capability is represented in the preview that is not backed by an existing application contract.
+
+## Review-fix validation results
+
+Local frontend validation after the PR review fixes:
+- `npm run lint`: 0 errors; 2 pre-existing warnings remain in `automations/page.tsx`.
+- `npx next typegen`: passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed on Next.js 16.3.4.
+
+Relevant backend / UI contract validation:
+- 72 tests passed, 1 existing date-boundary package test deselected locally.
+- The deselected case uses local `date.today()` against UTC runtime time and is unreliable during the Cairo/UTC date rollover; no package logic was modified by this milestone.
+- Full GitHub CI remains the authoritative all-suite gate before merge.
+
+The temporary preview harness and public-path exception were removed before staging the final review-fix commit.

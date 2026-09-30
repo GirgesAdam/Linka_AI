@@ -15,7 +15,7 @@ import type { CRMTask, WorkspaceMember } from "@/lib/types";
 import { claimTask, setTaskStatus } from "./actions";
 import { ExecutorSelect } from "./executor-select";
 
-type TaskSearchParams = { scope?: string; status?: string; mine?: string };
+type TaskSearchParams = { scope?: string; status?: string; mine?: string; patient_id?: string };
 const scopes = [["all", "الكل"], ["overdue", "متأخرة"], ["today", "اليوم"], ["upcoming", "قادمة"]] as const;
 const statuses = [["", "كل الحالات"], ["pending", "قيد الانتظار"], ["completed", "مكتملة"], ["cancelled", "ملغاة"]] as const;
 
@@ -33,11 +33,13 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     scope: scopes.some(([value]) => value === raw.scope) ? raw.scope : "all",
     status: statuses.some(([value]) => value === raw.status) ? raw.status : "",
     mine: raw.mine === "1" ? "1" : "",
+    patient_id: (raw.patient_id || "").trim(),
   };
   const ctx = await getAppContext();
   const query = new URLSearchParams({ limit: "100", scope: filters.scope || "all" });
   if (filters.status) query.set("status", filters.status);
   if (filters.mine) query.set("assigned_to_me", "true");
+  if (filters.patient_id) query.set("patient_id", filters.patient_id);
 
   const [tasks, members] = await Promise.all([
     tiaRequest<CRMTask[]>(`/crm/tasks?${query.toString()}`),
@@ -56,6 +58,13 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
         title="المتابعات"
         description="حدد موعد المتابعة واختر Linka أو أحد أفراد الفريق من القائمة. Linka ترسل المتابعة تلقائيًا في موعدها."
       />
+
+      {filters.patient_id && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs">
+          <span className="font-bold text-slate-700">عرض متابعات هذا العميل فقط</span>
+          <Link href={hrefFor(filters, "patient_id", "")} className="font-bold text-[var(--interactive)]">عرض كل العملاء</Link>
+        </div>
+      )}
 
       <div className="surface-toolbar mb-4">
         {scopes.map(([value, label]) => (

@@ -43,7 +43,7 @@ export function PackageCancellationForm({
 
   return (
     <details className="mt-3 rounded-lg border border-red-200 bg-red-50/40 p-3">
-      <summary className="cursor-pointer text-xs font-black text-red-800">إلغاء الباكيدج وتسوية الحساب</summary>
+      <summary className="flex min-h-10 cursor-pointer items-center text-xs font-black text-red-800">إلغاء الباكيدج وتسوية الحساب</summary>
       <form action={cancelPatientPackage} className="mt-3 space-y-3">
         <input type="hidden" name="patient_id" value={patientId} />
         <input type="hidden" name="package_id" value={packageId} />
@@ -92,7 +92,7 @@ export function PackageCancellationForm({
         )}
         {difference <= 0 && <input type="hidden" name="payment_method" value="cash" />}
 
-        <Button type="submit" size="sm" variant="danger">تأكيد إلغاء الباكيدج</Button>
+        <Button type="submit" variant="danger">تأكيد إلغاء الباكيدج</Button>
       </form>
     </details>
   );

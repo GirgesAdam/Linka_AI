@@ -14,6 +14,8 @@ def test_patient_list_preserves_search_filters_and_responsive_views() -> None:
     assert 'md:hidden' in page
     assert 'hidden md:block' in page
     assert '<StatusBadge domain="patient"' in page
+    assert "hasActiveFilters = Boolean(q || status || source)" in page
+    assert 'href="/patients"' in page
 
 
 def test_patient_workspace_prioritizes_current_context_before_history() -> None:
@@ -24,7 +26,14 @@ def test_patient_workspace_prioritizes_current_context_before_history() -> None:
     assert "آخر تواصل" in page
     assert 'order-2 xl:order-1' in page
     assert 'order-1 space-y-5 xl:order-2' in page
+    assert "function nextOperationalAction" in page
+    assert "Date.parse(taskAt) <= Date.parse(appointmentAt)" in page
+    assert 'nextAction?.kind === "task"' in page
+    assert 'nextAction?.kind === "appointment"' in page
+    assert "/tasks?scope=all&patient_id=" in page
     assert "/appointments?patient_id=" in page
+    assert "stats.overdue_tasks > 0" in page
+    assert "stats.active_handoffs > 0" in page
     assert "/inbox/" in page
 
 
@@ -59,3 +68,20 @@ def test_patient_timeline_keeps_operational_truth_and_deep_links() -> None:
     assert "message.delivery_status" in page
     assert "payment.transaction_type" in page
     assert "note?.is_pinned" in page
+    assert "مثبتة" in page
+    assert ">مهمة للفريق</span>" not in page
+
+
+def test_patient_contextual_booking_and_task_filter_use_existing_contracts() -> None:
+    appointments = (_root() / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+    tasks = (_root() / "frontend/src/app/(dashboard)/tasks/page.tsx").read_text(encoding="utf-8")
+    pulses = (_root() / "frontend/src/app/(dashboard)/patients/[patientId]/pulse-panel.tsx").read_text(encoding="utf-8")
+
+    assert 'book?: string' in appointments
+    assert 'open={raw.book === "1"}' in appointments
+    assert 'mode="existing"' in appointments
+    assert "packages={selectedPackages}" in appointments
+    assert "pulseBalances={selectedPulseBalances}" in appointments
+    assert 'patient_id?: string' in tasks
+    assert 'query.set("patient_id", filters.patient_id)' in tasks
+    assert "teal-" not in pulses

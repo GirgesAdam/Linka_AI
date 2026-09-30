@@ -54,6 +54,16 @@ function actorLabel(event: PatientTimelineEvent) {
   return "النظام";
 }
 
+function nextOperationalAction(stats: PatientProfile["stats"]) {
+  const appointmentAt = stats.next_appointment_at;
+  const taskAt = stats.next_task_at;
+  if (!appointmentAt && !taskAt) return null;
+  if (taskAt && (!appointmentAt || Date.parse(taskAt) <= Date.parse(appointmentAt))) {
+    return { kind: "task" as const, at: taskAt };
+  }
+  return appointmentAt ? { kind: "appointment" as const, at: appointmentAt } : null;
+}
+
 function TimelineIcon({ event }: { event: PatientTimelineEvent }) {
   if (event.kind === "message") return event.actor_type === "ai" ? <Bot size={16} /> : <MessageSquareMore size={16} />;
   if (event.kind === "note") return <StickyNote size={16} />;
@@ -143,7 +153,7 @@ function TimelineEvent({ event, patientId, isLast }: { event: PatientTimelineEve
         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             <div className="font-bold">{title}</div>
-            {note?.is_pinned && <span className="text-[11px] font-bold text-[var(--interactive)]">مهمة للفريق</span>}
+            {note?.is_pinned && <span className="text-[11px] font-bold text-[var(--interactive)]">مثبتة</span>}
             {appointment && <StatusBadge domain="appointment" status={appointment.to_status || appointment.status} showIcon={false} />}
           </div>
           <div className="text-xs text-[var(--muted)]">{formatDateTime(event.occurred_at)}</div>
@@ -163,6 +173,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
   const profile = await tiaRequest<PatientProfile>(`/crm/patients/${patientId}/profile?timeline_limit=75`);
   const { patient, stats } = profile;
   const patientName = `${patient.first_name} ${patient.last_name || ""}`.trim();
+  const nextAction = nextOperationalAction(stats);
 
   return (
     <>
@@ -171,8 +182,8 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
         description={patient.phone || "ملف العميل"}
         action={
           <div className="flex flex-wrap gap-2">
-            <Link href={`/appointments?patient_id=${patient.id}`} className={buttonVariants()}>
-              <CalendarClock size={15} /> حجز / مواعيد
+            <Link href={`/appointments?patient_id=${patient.id}&book=1`} className={buttonVariants()}>
+              <CalendarClock size={15} /> حجز موعد
             </Link>
             {profile.latest_conversation_id && (
               <Link href={`/inbox/${profile.latest_conversation_id}`} className={buttonVariants({ variant: "outline" })}>
@@ -198,13 +209,30 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
       <section className="grid gap-3 rounded-2xl border border-[var(--border)] bg-white p-4 shadow-sm sm:grid-cols-3">
         <div className="rounded-xl bg-[var(--surface-2)] p-4">
           <div className="flex items-center gap-2 text-xs font-bold text-[var(--muted)]"><CalendarClock size={15} /> الخطوة القادمة</div>
-          <div className="mt-2 text-sm font-black">{stats.next_appointment_at ? formatDateTime(stats.next_appointment_at) : stats.next_task_at ? `متابعة ${formatDateTime(stats.next_task_at)}` : "لا يوجد إجراء مجدول"}</div>
-          <Link href={`/appointments?patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-[var(--interactive)]">عرض حجوزات العميل</Link>
+          <div className="mt-2 text-sm font-black">
+            {nextAction
+              ? `${nextAction.kind === "task" ? "متابعة" : "موعد"} · ${formatDateTime(nextAction.at)}`
+              : "لا يوجد إجراء مجدول"}
+          </div>
+          {nextAction?.kind === "task" ? (
+            <Link href={`/tasks?scope=all&patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-[var(--interactive)]">فتح متابعة العميل</Link>
+          ) : nextAction?.kind === "appointment" ? (
+            <Link href={`/appointments?patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-[var(--interactive)]">عرض مواعيد العميل</Link>
+          ) : (
+            <span className="mt-2 block text-xs text-[var(--muted)]">أضف موعدًا أو متابعة عندما يكون هناك إجراء مطلوب.</span>
+          )}
         </div>
         <div className={`rounded-xl border p-4 ${stats.overdue_tasks || stats.active_handoffs ? "border-amber-200 bg-amber-50/70" : "border-[var(--border)]"}`}>
           <div className="flex items-center gap-2 text-xs font-bold text-[var(--muted)]"><CircleAlert size={15} /> يحتاج انتباه</div>
           <div className="mt-2 text-sm font-black">{stats.overdue_tasks || stats.active_handoffs ? `${stats.overdue_tasks + stats.active_handoffs} إجراء` : "لا شيء عاجل"}</div>
-          <div className="mt-1 text-xs text-[var(--muted)]">{stats.overdue_tasks ? `${stats.overdue_tasks} متابعة متأخرة` : stats.active_handoffs ? `${stats.active_handoffs} تصعيد نشط` : "لا توجد متابعة متأخرة أو تصعيد نشط"}</div>
+          <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
+            {stats.overdue_tasks > 0 && <div>{stats.overdue_tasks} متابعة متأخرة</div>}
+            {stats.active_handoffs > 0 && <div>{stats.active_handoffs} تصعيد نشط</div>}
+            {!stats.overdue_tasks && !stats.active_handoffs && <div>لا توجد متابعة متأخرة أو تصعيد نشط</div>}
+          </div>
+          {stats.overdue_tasks > 0 && (
+            <Link href={`/tasks?scope=overdue&patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-amber-800 underline underline-offset-2">فتح المتابعات المتأخرة</Link>
+          )}
         </div>
         <div className="rounded-xl border border-[var(--border)] p-4">
           <div className="flex items-center gap-2 text-xs font-bold text-[var(--muted)]"><MessageSquareMore size={15} /> آخر تواصل</div>
@@ -257,7 +285,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                   <form action={setPatientWhatsappOptIn}>
                     <input type="hidden" name="patient_id" value={patient.id} />
                     <input type="hidden" name="whatsapp_opt_in" value={String(!patient.whatsapp_opt_in)} />
-                    <Button type="submit" size="sm" variant="outline">
+                    <Button type="submit" variant="outline">
                       {patient.whatsapp_opt_in ? "سحب الموافقة" : "تسجيل الموافقة"}
                     </Button>
                   </form>
@@ -273,7 +301,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
             </CardHeader>
             <CardContent className="space-y-3">
               <details className="rounded-xl border border-[var(--border)] p-3">
-                <summary className="cursor-pointer text-sm font-bold text-slate-800">جدولة متابعة</summary>
+                <summary className="flex min-h-10 cursor-pointer items-center text-sm font-bold text-slate-800">جدولة متابعة</summary>
                 <form action={createPatientTask} className="mt-4 space-y-3">
                   <input type="hidden" name="patient_id" value={patient.id} />
                   <input type="hidden" name="conversation_id" value={profile.latest_conversation_id || ""} />
@@ -314,7 +342,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
               </details>
 
               <details className="rounded-xl border border-[var(--border)] p-3">
-                <summary className="cursor-pointer text-sm font-bold text-slate-800">إضافة ملاحظة</summary>
+                <summary className="flex min-h-10 cursor-pointer items-center text-sm font-bold text-slate-800">إضافة ملاحظة</summary>
                 <form action={addPatientNote} className="mt-4 space-y-3">
                   <input type="hidden" name="patient_id" value={patient.id} />
                   <select name="note_type" defaultValue="general" className="form-control h-10 min-h-10">
@@ -339,7 +367,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
               {profile.notes.length ? profile.notes.slice(0, 5).map((note) => (
                 <div key={note.id} className="rounded-xl border border-[var(--border)] p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex flex-wrap gap-1.5"><Badge>{noteLabels[note.note_type] || "ملاحظة"}</Badge>{note.is_pinned && <span className="rounded-full bg-[var(--interactive-soft)] px-2 py-1 text-[10px] font-bold text-[var(--interactive-strong)]">مهمة للفريق</span>}</div>
+                    <div className="flex flex-wrap gap-1.5"><Badge>{noteLabels[note.note_type] || "ملاحظة"}</Badge>{note.is_pinned && <span className="rounded-full bg-[var(--interactive-soft)] px-2 py-1 text-[10px] font-bold text-[var(--interactive-strong)]">مثبتة</span>}</div>
                     <div className="text-[11px] text-[var(--muted)]">{formatDateTime(note.created_at)}</div>
                   </div>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{note.content}</p>
