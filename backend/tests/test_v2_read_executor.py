@@ -166,8 +166,9 @@ def _appointment(
     appointment_id: str = "appointment-1",
     status: str = "confirmed",
     doctor_id: str = "doctor-maryam",
+    start_at: datetime | None = None,
 ) -> AppointmentRecord:
-    start = datetime(2026, 9, 17, 16, 0, tzinfo=UTC)
+    start = start_at or datetime(2026, 9, 17, 16, 0, tzinfo=UTC)
     return AppointmentRecord(
         appointment_id=appointment_id,
         patient_id=str(PATIENT_ID),
@@ -213,6 +214,45 @@ def test_service_and_doctor_reads_use_exact_canonical_catalog_relationships() ->
     assert [row["id"] for row in doctor_bundle.results[0].payload["doctors"]] == [
         "doctor-maryam"
     ]
+
+
+def test_appointment_list_date_range_filters_upcoming_rows() -> None:
+    adapter = FakeAdapter(
+        appointments=[
+            _appointment(
+                appointment_id="inside-range",
+                start_at=datetime(2026, 9, 12, 10, 0, tzinfo=UTC),
+            ),
+            _appointment(
+                appointment_id="outside-range",
+                start_at=datetime(2026, 9, 20, 10, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="appointment_list",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="appointments",
+                parameters={
+                    "date": {
+                        "mode": "range",
+                        "start_date": "2026-09-07",
+                        "end_date": "2026-09-13",
+                    }
+                },
+            )
+        ],
+        response_goal="answer_customer_history",
+    )
+
+    bundle = execute_step_reads(step, _context(adapter))
+
+    rows = bundle.results[0].payload["appointments"]
+    assert [row["appointment_id"] for row in rows] == ["inside-range"]
+    assert bundle.results[0].payload["visit_count"] == 1
 
 
 def test_exact_availability_returns_one_verified_slot_without_writing() -> None:

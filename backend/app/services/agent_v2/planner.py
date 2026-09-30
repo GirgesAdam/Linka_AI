@@ -726,11 +726,16 @@ def _plan_operation(
         )
 
     if operation.type == "appointment_list":
+        appointment_params = {
+            key: value
+            for key, value in params.items()
+            if key in {"appointment_id", "service_id", "doctor_id", "device_key", "date", "time"}
+        }
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
             disposition="read",
-            reads=[ReadRequest(kind="appointments")],
+            reads=[ReadRequest(kind="appointments", parameters=appointment_params)],
             response_goal="answer_customer_history",
         )
 

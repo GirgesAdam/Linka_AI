@@ -86,6 +86,50 @@ def test_availability_can_never_create_booking_write_intent() -> None:
     assert [item.kind for item in step.reads] == ["availability"]
 
 
+def test_appointment_list_preserves_temporal_scope_in_read_request() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _operation(
+                "appointment_list",
+                date=DateConstraint(
+                    mode="range",
+                    start_date="2026-09-07",
+                    end_date="2026-09-13",
+                ),
+                time=TimeConstraint(
+                    mode="after",
+                    start_time="12:00",
+                    end_time=None,
+                ),
+            )
+        ],
+        safety_signals=[],
+    )
+
+    step = plan_turn(turn, _context()).steps[0]
+
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_customer_history"
+    assert [read.kind for read in step.reads] == ["appointments"]
+    assert step.reads[0].parameters["date"] == turn.operations[0].entities.date.model_dump(
+        mode="json"
+    )
+    assert step.reads[0].parameters["time"] == turn.operations[0].entities.time.model_dump(
+        mode="json"
+    )
+
+
+def test_broad_appointment_list_keeps_unscoped_upcoming_read() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[_operation("appointment_list")],
+        safety_signals=[],
+    )
+
+    step = plan_turn(turn, _context()).steps[0]
+
+    assert step.reads == [ReadRequest(kind="appointments", parameters={})]
+
+
 def test_exact_booking_is_not_write_ready_until_one_verified_slot_exists() -> None:
     turn = TiaTurnUnderstanding(
         operations=[
