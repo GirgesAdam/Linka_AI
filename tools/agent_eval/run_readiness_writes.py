@@ -4,6 +4,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from app.agents.clinic_grounding import build_clinic_catalog
+from app.models.patient import Patient
+from app.models.patient_package import PatientPackage
+from app.models.pulse_billing import PatientPulsePack
+from sqlalchemy import select
 
 from tools.agent_eval.harness import local_slot, send_turn, service_by_slug
 from tools.agent_eval.readiness_common import named_patient, new_patient, run_group
@@ -292,8 +296,19 @@ def case_30_cancel_already_cancelled(db, ws):
 
 
 def case_31_package_booking(db, ws):
-    patient = named_patient(db, ws, "Omar", "Ahmed")
     service = service_by_slug(db, ws, "prp-skin")
+    package = db.scalar(
+        select(PatientPackage).where(
+            PatientPackage.workspace_id == ws.id,
+            PatientPackage.service_id == service.id,
+            PatientPackage.status == "active",
+        ).order_by(PatientPackage.purchased_at.desc()).limit(1)
+    )
+    if package is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: usable PRP package missing")
+    patient = db.get(Patient, package.patient_id)
+    if patient is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: package owner missing")
     available, slot = _availability_for(db, ws, service=service)
     doctor = _doctor_row(build_clinic_catalog(db, ws), slot.doctor_id)
     day, time_text = local_slot(available, slot)
@@ -322,7 +337,18 @@ def case_31_package_booking(db, ws):
 
 
 def case_32_pulse_no_auto_use(db, ws):
-    patient = named_patient(db, ws, "gggg", "")
+    pack = db.scalar(
+        select(PatientPulsePack).where(
+            PatientPulsePack.workspace_id == ws.id,
+            PatientPulsePack.status == "active",
+            PatientPulsePack.device_key == "prime_lase",
+        ).order_by(PatientPulsePack.purchased_at.desc()).limit(1)
+    )
+    if pack is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: active Prime Pulse pack missing")
+    patient = db.get(Patient, pack.patient_id)
+    if patient is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: Pulse owner missing")
     before = extended_state_snapshot(db, ws, patient)
     turns = _messages(db, ws, patient, "w32_pulse_no_auto_use", [
         "عندي pulse على Prime بس لو حجزت ليزر عايزة أدفع الجلسة عادي، ما تخصميش من الرصيد"
