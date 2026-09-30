@@ -41,7 +41,7 @@ def test_explicit_prompt_cache_support_is_model_family_scoped() -> None:
 def test_interpreter_primary_and_fallback_cache_configs_are_independent(monkeypatch) -> None:
     _cached_openai_model.cache_clear()
     monkeypatch.setattr(settings, "openai_api_key", "sk-test-not-a-real-key")
-    monkeypatch.setattr(settings, "openai_model", "gpt-5.6-luna")
+    monkeypatch.setattr(settings, "openai_model", "gpt-6-luna")
     monkeypatch.setattr(settings, "openai_fallback_model", "gpt-5-mini")
     monkeypatch.setattr(settings, "openai_reasoning_effort", "low")
     monkeypatch.setattr(settings, "openai_fallback_reasoning_effort", "low")
@@ -162,7 +162,7 @@ def test_structured_retry_reuses_same_cache_wrapped_messages(monkeypatch) -> Non
     seen_messages = []
 
     monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: model)
-    monkeypatch.setattr(settings, "openai_model", "gpt-5.6-luna")
+    monkeypatch.setattr(settings, "openai_model", "gpt-6-luna")
     monkeypatch.setattr(settings, "openai_fallback_model", "")
 
     def fake_structured_output(*, model, schema, messages):
@@ -188,7 +188,7 @@ def test_structured_retry_reuses_same_cache_wrapped_messages(monkeypatch) -> Non
         "invoke_with_model_chain",
         lambda *, model_calls, **_kwargs: SimpleNamespace(
             value=model_calls[0][1](),
-            model_name="gpt-5.6-luna",
+            model_name="gpt-6-luna",
             used_fallback=False,
         ),
     )

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # GPT-5 mini is a separate affordable model used only for cross-model failover.
     llm_provider: Literal["openai"] = "openai"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5.6-luna"
+    openai_model: str = "gpt-6-luna"
     openai_fallback_model: str | None = "gpt-5-mini"
     openai_reasoning_effort: Literal[
         "none", "low", "medium", "high", "xhigh", "max"
