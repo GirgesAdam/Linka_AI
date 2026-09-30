@@ -4,7 +4,7 @@ from app.core.config import Settings
 
 
 def test_realtime_defaults_use_luna_then_gpt5_mini() -> None:
-    assert Settings.model_fields["openai_model"].default == "gpt-5.6-luna"
+    assert Settings.model_fields["openai_model"].default == "gpt-6-luna"
     assert Settings.model_fields["openai_fallback_model"].default == "gpt-5-mini"
     assert Settings.model_fields["openai_reasoning_effort"].default == "low"
     assert Settings.model_fields["openai_fallback_reasoning_effort"].default == "low"

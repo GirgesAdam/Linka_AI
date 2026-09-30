@@ -20,7 +20,7 @@ def test_openai_is_the_only_configured_provider(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.llm_provider == "openai"
-    assert settings.openai_model == "gpt-5.6-luna"
+    assert settings.openai_model == "gpt-6-luna"
     assert settings.openai_fallback_model == "gpt-5-mini"
     assert settings.llm_realtime_max_retries == 0
 

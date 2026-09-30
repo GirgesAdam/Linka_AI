@@ -127,5 +127,5 @@ def test_no_configured_fallback_surfaces_primary_503(monkeypatch) -> None:
 def test_default_models_use_luna_primary_and_gpt5_mini_fallback() -> None:
     from app.core.config import Settings
 
-    assert Settings.model_fields["openai_model"].default == "gpt-5.6-luna"
+    assert Settings.model_fields["openai_model"].default == "gpt-6-luna"
     assert Settings.model_fields["openai_fallback_model"].default == "gpt-5-mini"

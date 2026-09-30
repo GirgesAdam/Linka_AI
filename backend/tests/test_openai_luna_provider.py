@@ -24,7 +24,7 @@ def test_openai_only_settings_use_luna_with_gpt5_mini_fallback() -> None:
     )
 
     assert configured.llm_provider == "openai"
-    assert configured.openai_model == "gpt-5.6-luna"
+    assert configured.openai_model == "gpt-6-luna"
     assert configured.openai_fallback_model == "gpt-5-mini"
     assert configured.openai_reasoning_effort == "low"
     assert configured.openai_fallback_reasoning_effort == "low"
@@ -34,7 +34,7 @@ def test_openai_only_settings_use_luna_with_gpt5_mini_fallback() -> None:
 
 def test_openai_provider_builds_responses_api_primary_and_fallback(monkeypatch) -> None:
     monkeypatch.setattr(settings, "openai_api_key", "sk-test-not-a-real-key")
-    monkeypatch.setattr(settings, "openai_model", "gpt-5.6-luna")
+    monkeypatch.setattr(settings, "openai_model", "gpt-6-luna")
     monkeypatch.setattr(settings, "openai_fallback_model", "gpt-5-mini")
     monkeypatch.setattr(settings, "openai_reasoning_effort", "low")
     monkeypatch.setattr(settings, "openai_fallback_reasoning_effort", "low")
@@ -43,7 +43,7 @@ def test_openai_provider_builds_responses_api_primary_and_fallback(monkeypatch) 
     fallback = build_chat_fallback_model()
 
     assert isinstance(primary, ChatOpenAI)
-    assert primary.model_name == "gpt-5.6-luna"
+    assert primary.model_name == "gpt-6-luna"
     assert primary.use_responses_api is True
     assert primary.store is False
     assert primary.reasoning == {"effort": "low"}
