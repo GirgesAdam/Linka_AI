@@ -120,15 +120,21 @@ Potential cleanup is explicitly out of scope.
 ## Focused validation
 
 Mixed/adversarial + responder/grounding/architecture:
-- 33 passed after the post-merge companion hardening.
+- 34 passed after the hybrid single-unit follow-up.
 
 Additional post-merge adversarial control:
 - verified price 500 EGP + low-risk social companion + forced model draft claiming 900 EGP;
 - responder model calls = 0;
 - final contains 500 EGP and does not contain 900 EGP.
 
+Final production-smoke follow-up:
+- a reachable service+price turn produced one hybrid answer_price unit carrying verified price plus service-description facts;
+- this shape bypassed the mixed-unit guard and still reported an OpenAI responder source;
+- the follow-up narrows only the already-verified CommercialTruth projection for rendering, while the established deterministic price helper remains first for single price+duration behavior;
+- no business read/write/repricing logic changed.
+
 Program-level representative regression:
-- 303 passed.
+- 304 passed.
 
 Static:
 - Ruff PASS.

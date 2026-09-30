@@ -290,3 +290,29 @@ def test_low_risk_companion_cannot_reintroduce_free_form_fact_corruption(
     assert "900" not in text
     assert "تمام" in text
     assert source == "deterministic:mixed-typed-contract"
+
+
+def test_single_hybrid_price_unit_preserves_verified_commercial_truth_without_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "service_catalog": {
+                "service": {
+                    "name": "PRP للبشرة",
+                    "price": "2000.00 EGP",
+                    "currency": "EGP",
+                    "description": "Verified service description",
+                }
+            }
+        },
+    )
+
+    text, source = _compose("الخدمة بتعمل إيه وسعرها كام؟", [outcome])
+
+    assert "2000" in text
+    assert "900" not in text
+    assert source == "deterministic:verified-price"

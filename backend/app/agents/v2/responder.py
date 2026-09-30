@@ -814,6 +814,20 @@ def _compose_pure_supported_contract_reply(
     return None
 
 
+def _commercial_projection(unit: CustomerResponseUnit) -> CustomerResponseUnit | None:
+    """Narrow a hybrid price unit to the already-verified commercial surface."""
+    if unit.commercial_truth is None:
+        return None
+    filtered_facts = tuple(
+        fact
+        for fact in unit.facts
+        if fact.key not in {"description", "duration_minutes", "customer_duration_text"}
+    )
+    projected = unit.model_copy(update={"facts": filtered_facts})
+    contract = CustomerResponseContract(units=(projected,))
+    return projected if is_pure_supported_price_device_contract(contract) else None
+
+
 def _deterministic_typed_unit_reply(
     *,
     history: list[BaseMessage],
@@ -840,6 +854,15 @@ def _deterministic_typed_unit_reply(
             # this clarification is the only protected shape in the mixed set.
             return None
         return deterministic_price_device_fallback(contract, arabic=arabic)
+
+    projected_commercial = _commercial_projection(unit)
+    if projected_commercial is not None:
+        projected_truth = projected_commercial.commercial_truth
+        if projected_truth is not None and projected_truth.kind != "device_price_clarification":
+            return deterministic_price_device_fallback(
+                CustomerResponseContract(units=(projected_commercial,)),
+                arabic=arabic,
+            )
     if is_pure_supported_doctor_contract(contract):
         return deterministic_doctor_contract_reply(contract, arabic=arabic)
     if is_pure_supported_package_contract(contract):
@@ -883,7 +906,7 @@ def _compose_mixed_typed_contract_reply(
     contract: CustomerResponseContract,
 ) -> tuple[str, str] | None:
     """Compose mixed typed truth without any free-form model-authored factual text."""
-    if len(outcomes) < 2 or len(contract.units) != len(outcomes):
+    if not outcomes or len(contract.units) != len(outcomes):
         return None
 
     arabic = _latest_customer_is_arabic(history)
@@ -947,6 +970,10 @@ def compose_v2_customer_reply(
     if deterministic_compatibility is not None:
         return deterministic_compatibility, "deterministic:compatibility"
 
+    deterministic_price = _deterministic_pure_price_reply(history, outcomes)
+    if deterministic_price is not None:
+        return deterministic_price
+
     mixed_reply = _compose_mixed_typed_contract_reply(
         history=history,
         outcomes=outcomes,
@@ -958,10 +985,6 @@ def compose_v2_customer_reply(
     deterministic_doctors = _deterministic_pure_doctor_list_reply(history, outcomes)
     if deterministic_doctors is not None:
         return deterministic_doctors, "deterministic:doctor-list"
-
-    deterministic_price = _deterministic_pure_price_reply(history, outcomes)
-    if deterministic_price is not None:
-        return deterministic_price
 
     messages = _build_responder_messages(
         clinic_name=clinic_name,
