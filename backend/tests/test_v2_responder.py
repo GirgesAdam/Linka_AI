@@ -356,19 +356,14 @@ def test_pure_doctor_list_is_complete_once_and_skips_model(monkeypatch: pytest.M
     assert text.count("د. نور") == 1
 
 
-def test_doctor_list_does_not_bypass_model_for_compound_answer(
+def test_doctor_and_price_compound_answer_preserves_typed_truth_without_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
     monkeypatch.setattr(
         responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="الدكاترة د. مريم ود. سارة ود. نور، وسعر ليزر الإبط 500 جنيه.",
-                availability_claim="not_applicable",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("typed mixed response must not invoke the generic model")
         ),
     )
 
@@ -380,7 +375,7 @@ def test_doctor_list_does_not_bypass_model_for_compound_answer(
         outcomes=[_doctor_outcome(), _price_outcome()],
     )
 
-    assert model == "openai:test-model"
+    assert model == "deterministic:mixed-typed-contract"
     assert "500 جنيه" in text
     assert text.count("د. مريم") == 1
     assert text.count("د. سارة") == 1

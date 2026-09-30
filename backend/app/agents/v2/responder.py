@@ -16,20 +16,52 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
-from app.agents.v2.appointment_info_composer import compose_appointment_info_contract_reply
-from app.agents.v2.availability_composer import compose_availability_contract_reply
-from app.agents.v2.clinic_info_composer import compose_clinic_contract_reply
-from app.agents.v2.doctor_composer import compose_doctor_contract_reply
-from app.agents.v2.package_composer import compose_package_contract_reply
-from app.agents.v2.patient_composer import compose_patient_contract_reply
-from app.agents.v2.price_device_composer import compose_price_device_contract_reply
-from app.agents.v2.pulse_composer import compose_pulse_contract_reply
-from app.agents.v2.service_info_composer import compose_service_contract_reply
-from app.agents.v2.terminal_composer import compose_terminal_contract_reply
+from app.agents.v2.appointment_info_composer import (
+    compose_appointment_info_contract_reply,
+    deterministic_appointment_info_reply,
+)
+from app.agents.v2.availability_composer import (
+    compose_availability_contract_reply,
+    deterministic_availability_fallback,
+)
+from app.agents.v2.clinic_info_composer import (
+    compose_clinic_contract_reply,
+    deterministic_clinic_contract_reply,
+)
+from app.agents.v2.doctor_composer import (
+    compose_doctor_contract_reply,
+    deterministic_doctor_contract_reply,
+)
+from app.agents.v2.package_composer import (
+    compose_package_contract_reply,
+    deterministic_package_contract_reply,
+)
+from app.agents.v2.patient_composer import (
+    compose_patient_contract_reply,
+    deterministic_patient_contract_reply,
+)
+from app.agents.v2.price_device_composer import (
+    compose_price_device_contract_reply,
+    deterministic_price_device_fallback,
+)
+from app.agents.v2.pulse_composer import (
+    compose_pulse_contract_reply,
+    deterministic_pulse_contract_reply,
+)
+from app.agents.v2.service_info_composer import (
+    compose_service_contract_reply,
+    deterministic_service_contract_reply,
+)
+from app.agents.v2.terminal_composer import (
+    compose_terminal_contract_reply,
+    deterministic_terminal_fallback,
+)
 from app.core.config import settings
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import customer_visible_outcome
 from app.services.agent_v2.response_contract import (
+    CustomerResponseContract,
+    CustomerResponseUnit,
     build_customer_response_contract,
     is_pure_supported_appointment_contract,
     is_pure_supported_availability_contract,
@@ -753,6 +785,147 @@ def _build_responder_messages(
     ]
 
 
+def _compose_pure_supported_contract_reply(
+    *,
+    history: list[BaseMessage],
+    contract: CustomerResponseContract,
+) -> tuple[str, str] | None:
+    """Keep the established pure-domain response paths unchanged."""
+    if is_pure_supported_terminal_contract(contract):
+        return compose_terminal_contract_reply(history=history, contract=contract)
+    if is_pure_supported_availability_contract(contract):
+        return compose_availability_contract_reply(history=history, contract=contract)
+    if is_pure_supported_appointment_contract(contract):
+        return compose_appointment_info_contract_reply(history=history, contract=contract)
+    if is_pure_supported_service_contract(contract):
+        return compose_service_contract_reply(history=history, contract=contract)
+    if is_pure_supported_clinic_contract(contract):
+        return compose_clinic_contract_reply(history=history, contract=contract)
+    if is_pure_supported_price_device_contract(contract):
+        return compose_price_device_contract_reply(history=history, contract=contract)
+    if is_pure_supported_doctor_contract(contract):
+        return compose_doctor_contract_reply(history=history, contract=contract)
+    if is_pure_supported_package_contract(contract):
+        return compose_package_contract_reply(history=history, contract=contract)
+    if is_pure_supported_pulse_contract(contract):
+        return compose_pulse_contract_reply(history=history, contract=contract)
+    if is_pure_supported_patient_contract(contract):
+        return compose_patient_contract_reply(history=history, contract=contract)
+    return None
+
+
+def _deterministic_typed_unit_reply(
+    *,
+    history: list[BaseMessage],
+    unit: CustomerResponseUnit,
+) -> str | None:
+    """Render one supported typed unit from backend-owned truth only."""
+    contract = CustomerResponseContract(units=(unit,))
+    arabic = _latest_customer_is_arabic(history)
+
+    if is_pure_supported_terminal_contract(contract):
+        return deterministic_terminal_fallback(contract, arabic=arabic)
+    if is_pure_supported_availability_contract(contract):
+        return deterministic_availability_fallback(contract, arabic=arabic)
+    if is_pure_supported_appointment_contract(contract):
+        return deterministic_appointment_info_reply(contract, arabic=arabic)
+    if is_pure_supported_service_contract(contract):
+        return deterministic_service_contract_reply(contract, arabic=arabic)
+    if is_pure_supported_clinic_contract(contract):
+        return deterministic_clinic_contract_reply(contract, arabic=arabic)
+    if is_pure_supported_price_device_contract(contract):
+        truth = unit.commercial_truth
+        if truth is not None and truth.kind == "device_price_clarification":
+            # Keep the existing mixed clarification guard reachable. Pure clarification
+            # remains owned by the normal Price/Device contract path above.
+            return None
+        return deterministic_price_device_fallback(contract, arabic=arabic)
+    if is_pure_supported_doctor_contract(contract):
+        return deterministic_doctor_contract_reply(contract, arabic=arabic)
+    if is_pure_supported_package_contract(contract):
+        return deterministic_package_contract_reply(contract, arabic=arabic)
+    if is_pure_supported_pulse_contract(contract):
+        return deterministic_pulse_contract_reply(contract, arabic=arabic)
+    if is_pure_supported_patient_contract(contract):
+        return deterministic_patient_contract_reply(contract, arabic=arabic)
+    return None
+
+
+def _safe_legacy_mixed_unit(unit: CustomerResponseUnit) -> bool:
+    """Whether a non-typed unit may coexist without expanding this focused fix."""
+    if unit.response_goal in {"social_ack", "handoff", "active_task_cancelled"}:
+        return True
+    if unit.response_goal == "clarification" and not unit.choices:
+        return True
+    if unit.response_goal == "answer_customer_history" and unit.appointment_truth is None:
+        return True
+    if unit.response_goal == "answer_clinic_info":
+        keys = {fact.key for fact in unit.facts}
+        return {"booking_requires_payment", "payment_execution_owner"}.issubset(keys)
+    return False
+
+
+def _compose_mixed_typed_contract_reply(
+    *,
+    clinic_name: str,
+    timezone_name: str,
+    local_now: datetime,
+    history: list[BaseMessage],
+    outcomes: list[TurnOutcome],
+    contract: CustomerResponseContract,
+) -> tuple[str, str] | None:
+    """Keep typed unit contents immutable when a turn mixes response families."""
+    if len(outcomes) < 2 or len(contract.units) != len(outcomes):
+        return None
+
+    typed_chunks: dict[int, str] = {}
+    unsupported_indexes: list[int] = []
+    for index, unit in enumerate(contract.units):
+        rendered = _deterministic_typed_unit_reply(history=history, unit=unit)
+        if rendered is None:
+            unsupported_indexes.append(index)
+            continue
+        typed_chunks[index] = rendered.strip()
+
+    if not typed_chunks:
+        return None
+    if any(
+        not _safe_legacy_mixed_unit(contract.units[index])
+        for index in unsupported_indexes
+    ):
+        return None
+
+    legacy_text: str | None = None
+    legacy_source: str | None = None
+    if unsupported_indexes:
+        legacy_outcomes = [outcomes[index] for index in unsupported_indexes]
+        legacy_text, legacy_source = compose_v2_customer_reply(
+            clinic_name=clinic_name,
+            timezone_name=timezone_name,
+            local_now=local_now,
+            history=history,
+            outcomes=legacy_outcomes,
+        )
+
+    chunks: list[str] = []
+    inserted_legacy = False
+    unsupported = set(unsupported_indexes)
+    for index in range(len(outcomes)):
+        typed = typed_chunks.get(index)
+        if typed:
+            chunks.append(typed)
+        elif index in unsupported and not inserted_legacy and legacy_text:
+            chunks.append(legacy_text.strip())
+            inserted_legacy = True
+
+    text = "\n".join(chunk for chunk in chunks if chunk).strip()
+    if not text:
+        return None
+    if legacy_source is None:
+        return text, "deterministic:mixed-typed-contract"
+    return text, f"mixed-typed-contract:{legacy_source}"
+
+
 def compose_v2_customer_reply(
     *,
     clinic_name: str,
@@ -763,56 +936,23 @@ def compose_v2_customer_reply(
 ) -> tuple[str, str]:
     """Render one customer reply from verified V2 outcomes; never execute actions or tools."""
     response_contract = build_customer_response_contract(outcomes)
-    if is_pure_supported_terminal_contract(response_contract):
-        return compose_terminal_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_availability_contract(response_contract):
-        return compose_availability_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_appointment_contract(response_contract):
-        return compose_appointment_info_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_service_contract(response_contract):
-        return compose_service_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_clinic_contract(response_contract):
-        return compose_clinic_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_price_device_contract(response_contract):
-        return compose_price_device_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_doctor_contract(response_contract):
-        return compose_doctor_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_package_contract(response_contract):
-        return compose_package_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_pulse_contract(response_contract):
-        return compose_pulse_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
-    if is_pure_supported_patient_contract(response_contract):
-        return compose_patient_contract_reply(
-            history=history,
-            contract=response_contract,
-        )
+    pure_reply = _compose_pure_supported_contract_reply(
+        history=history,
+        contract=response_contract,
+    )
+    if pure_reply is not None:
+        return pure_reply
+
+    mixed_reply = _compose_mixed_typed_contract_reply(
+        clinic_name=clinic_name,
+        timezone_name=timezone_name,
+        local_now=local_now,
+        history=history,
+        outcomes=outcomes,
+        contract=response_contract,
+    )
+    if mixed_reply is not None:
+        return mixed_reply
 
     deterministic_medical = _deterministic_medical_handoff_reply(history, outcomes)
     if deterministic_medical is not None:
