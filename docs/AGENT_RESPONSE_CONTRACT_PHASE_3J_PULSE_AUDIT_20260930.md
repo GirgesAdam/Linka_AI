@@ -248,3 +248,33 @@ additional_llm_calls = 0
 The live bounded scenarios are intentionally deferred until the focused PR is merged and the same merged
 SHA is available in an execution environment. The existing Railway tia-agent-eval service is pinned to the
 older feat/agent-pulse-domain-core branch and is therefore not valid evidence for this Phase 3J patch.
+
+## Live validation finding and focused semantic follow-up
+
+Initial post-merge bounded Demo run on merge SHA 3e35b15892918b334b4a7c7a74690771da4d6648
+executed seven selected cases through the existing tools.agent_eval.run_pulse_domain harness with
+Railway production environment injection. Each case ran inside its own outer SQL transaction and rolled
+back on exit.
+
+Initial result:
+- 6/7 fully correct.
+- balance: PASS, deterministic:pulse-contract, exact 1000, no write.
+- offer price: PASS, deterministic:pulse-contract, exact device/quantity/800.00 EGP, no write.
+- overage price: PASS, deterministic:pulse-contract, exact device/unit price, no write.
+- counted overage: PASS, deterministic:pulse-contract, 1000 × 1.50 EGP = 1500.00 EGP, no write.
+- purchase without payment: PASS; Pulse pack write completed inside rollback transaction, payment count
+  unchanged, purchase_transaction_id null, and final reply made no payment/settlement claim.
+- financial-ledger question: PASS; no financial read/write, Reception handoff.
+- owned-pack remaining: material interpreter classification issue. The realistic phrase
+  الباقة اللي عندي على Candela Gentle فاضل فيها كام Pulse؟ was interpreted as balance, producing a
+  canonical aggregate balance read instead of owned_packs. The demo happened to have one active pack,
+  so the numeric answer was the same, but this is unsafe when multiple packs exist on one device.
+
+Follow-up:
+- strengthened only the V2 Pulse semantic contract/prompt discriminator:
+  aggregate device balance -> balance; a particular owned pack's purchased/used/remaining/status/expiry
+  -> owned_packs.
+- no keyword/regex routing or Python raw-text inspection was added.
+- focused prompt/schema + Pulse tests: 57 passed.
+- targeted live rerun of owned-pack remaining: 1/1 PASS, verified_reads=[pulse_packs],
+  deterministic Pulse contract response, zero write attempts.

@@ -9,6 +9,7 @@ from app.agents.v2 import responder
 from app.agents.v2.pulse_composer import deterministic_pulse_contract_reply
 from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import (
     _pulse_information_response_facts,
@@ -589,3 +590,21 @@ def test_purchase_fallback_pulse_information_is_not_claimed_by_read_only_shaper(
     assert "pulse_pack_offers" in outcome.facts
     assert "pulse_requested_details" not in outcome.facts
     assert build_customer_response_contract([outcome]).units[0].pulse_truth is None
+
+
+def test_interpreter_contract_keeps_owned_pack_remaining_distinct_from_aggregate_balance() -> None:
+    prompt = _interpreter_system_prompt(
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+    )
+    schema = TiaTurnUnderstanding.model_json_schema()
+    description = schema["$defs"]["TurnOperation"]["properties"]["requested_pulse_details"][
+        "description"
+    ]
+
+    normalized_prompt = " ".join(prompt.split())
+
+    assert "particular pack they own" in normalized_prompt
+    assert "الباقة اللي عندي على Candela فاضل فيها كام Pulse؟" in normalized_prompt
+    assert '"what is my Candela Pulse balance?" are balance' in normalized_prompt
+    assert "particular owned-pack remaining question is owned_packs, not balance" in description
