@@ -75,6 +75,16 @@ def dashboard_summary(
             Appointment.status.in_(("pending", "confirmed")),
         ),
     )
+    appointments_after_today = _count(
+        db,
+        select(func.count())
+        .select_from(Appointment)
+        .where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.start_at > end_utc,
+            Appointment.status.in_(("pending", "confirmed")),
+        ),
+    )
     handoffs = _count(
         db,
         select(func.count())
@@ -99,7 +109,7 @@ def dashboard_summary(
         .where(AutomationJob.workspace_id == workspace_id, AutomationJob.status == "failed"),
     )
 
-    rows = db.execute(
+    appointment_detail_stmt = (
         select(Appointment, Patient, Service, Branch, Staff)
         .join(
             Patient,
@@ -122,17 +132,11 @@ def dashboard_summary(
             & (Doctor.id == Appointment.doctor_id),
         )
         .join(Staff, (Staff.workspace_id == Doctor.workspace_id) & (Staff.id == Doctor.staff_id))
-        .where(
-            Appointment.workspace_id == workspace_id,
-            Appointment.start_at >= now,
-            Appointment.status.in_(("pending", "confirmed")),
-        )
-        .order_by(Appointment.start_at)
-        .limit(8)
-    ).all()
-    recent = []
-    for appointment, patient, service, branch, staff in rows:
-        recent.append(
+        .where(Appointment.workspace_id == workspace_id)
+    )
+
+    def appointment_reads(rows) -> list[DashboardAppointmentRead]:
+        return [
             DashboardAppointmentRead(
                 id=appointment.id,
                 patient_id=patient.id,
@@ -146,13 +150,44 @@ def dashboard_summary(
                 price_minor=appointment.price_minor,
                 currency=appointment.currency,
             )
+            for appointment, patient, service, branch, staff in rows
+        ]
+
+    recent_rows = db.execute(
+        appointment_detail_stmt.where(
+            Appointment.start_at >= now,
+            Appointment.status.in_(("pending", "confirmed")),
         )
+        .order_by(Appointment.start_at)
+        .limit(8)
+    ).all()
+    today_rows = db.execute(
+        appointment_detail_stmt.where(
+            Appointment.start_at >= start_utc,
+            Appointment.start_at <= end_utc,
+            Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress")),
+        )
+        .order_by(Appointment.start_at)
+        .limit(8)
+    ).all()
+    next_rows = db.execute(
+        appointment_detail_stmt.where(
+            Appointment.start_at > end_utc,
+            Appointment.status.in_(("pending", "confirmed")),
+        )
+        .order_by(Appointment.start_at)
+        .limit(6)
+    ).all()
+
     return DashboardSummaryRead(
         active_patients=active_patients,
         appointments_today=appointments_today,
         upcoming_appointments=upcoming,
+        appointments_after_today=appointments_after_today,
         open_handoffs=handoffs,
         active_channels=channels,
         failed_automation_jobs=failed_jobs,
-        recent_appointments=recent,
+        recent_appointments=appointment_reads(recent_rows),
+        today_appointments=appointment_reads(today_rows),
+        next_appointments=appointment_reads(next_rows),
     )

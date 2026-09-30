@@ -22,7 +22,10 @@ class DashboardSummaryRead(BaseModel):
     active_patients: int
     appointments_today: int
     upcoming_appointments: int
+    appointments_after_today: int
     open_handoffs: int
     active_channels: int
     failed_automation_jobs: int
     recent_appointments: list[DashboardAppointmentRead]
+    today_appointments: list[DashboardAppointmentRead]
+    next_appointments: list[DashboardAppointmentRead]
