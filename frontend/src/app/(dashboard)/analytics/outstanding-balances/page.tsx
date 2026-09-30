@@ -25,8 +25,8 @@ export default async function OutstandingBalancesReportPage() {
   return (
     <>
       <PageHeader
-        title="العملاء اللي عليهم مبالغ"
-        description="يعرض فقط العملاء الذين أكملوا جلسة فعلًا وما زال مبلغ مستحق مرتبط بهذه الزيارة."
+        title="المبالغ المستحقة على العملاء"
+        description="العملاء الذين أكملوا جلسة وما زال مبلغ مرتبط بالزيارة غير مسدد بالكامل."
         action={<Link href="/analytics" className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-white px-3 py-2 text-sm font-bold"><ArrowRight size={16} />الرجوع للتقارير</Link>}
       />
 
@@ -69,7 +69,7 @@ export default async function OutstandingBalancesReportPage() {
                       <td dir="ltr">{row.phone || "—"}</td>
                       <td>{row.appointment_count.toLocaleString("ar-EG")}</td>
                       <td className="font-black">{formatMoney(row.balance_minor, row.currency)}</td>
-                      <td><Link href={`/appointments?patient_id=${row.patient_id}&scope=all`} className="text-xs font-bold text-teal-700 hover:underline">عرض المواعيد</Link></td>
+                      <td><Link href={`/appointments?patient_id=${row.patient_id}&scope=all`} className="text-xs font-bold text-[var(--accent)] hover:underline">عرض المواعيد</Link></td>
                     </tr>
                   ))}
                 </tbody>

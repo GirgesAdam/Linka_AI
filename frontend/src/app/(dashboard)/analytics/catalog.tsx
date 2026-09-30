@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, BookmarkPlus, Download, Filter, Info, LoaderCircle, Play, Search, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, BarChart3, BookmarkPlus, Download, Filter, HandCoins, Info, LoaderCircle, Play, Search, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format";
@@ -201,7 +202,7 @@ function BarVisualization({ result, series }: { result: AnalyticsCatalogRun; ser
         return (
           <div key={`${label}-${index}`} className="grid grid-cols-[minmax(110px,190px)_1fr_auto] items-center gap-3 text-xs">
             <span className="truncate font-bold" title={label}>{label}</span>
-            <div className="h-3 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-teal-700" style={{ width: `${width}%` }} /></div>
+            <div className="h-3 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${width}%` }} /></div>
             <span className="min-w-20 text-left font-black">{seriesValue(series, series.values[index] ?? null)}</span>
           </div>
         );
@@ -227,10 +228,10 @@ function LineVisualization({ result, series }: { result: AnalyticsCatalogRun; se
     <div>
       <div className="mb-2 text-xs font-bold text-[var(--muted)]">{series.label}</div>
       <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${width} ${height}`} className="h-60 min-w-[620px] w-full" role="img" aria-label={`${result.title} chart`}>
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-52 w-full sm:h-60 sm:min-w-[620px]" role="img" aria-label={`${result.title} chart`}>
           <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="stroke-slate-200" />
-          <polyline points={coordinates.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" className="stroke-teal-700" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" />
-          {coordinates.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="4" className="fill-white stroke-teal-700" strokeWidth="3"><title>{`${result.chart_data.labels[index] || ""}: ${seriesValue(series, series.values[index] ?? null)}`}</title></circle>)}
+          <polyline points={coordinates.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" className="stroke-[var(--accent)]" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" />
+          {coordinates.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r="4" className="fill-white stroke-[var(--accent)]" strokeWidth="3"><title>{`${result.chart_data.labels[index] || ""}: ${seriesValue(series, series.values[index] ?? null)}`}</title></circle>)}
         </svg>
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-[var(--muted)]"><span>{result.chart_data.labels[0] || "—"}</span><span>{result.chart_data.labels.at(-1) || "—"}</span></div>
@@ -253,7 +254,7 @@ function HeatmapVisualization({ result }: { result: AnalyticsCatalogRun }) {
               {series.values.map((raw, index) => {
                 const value = raw ?? 0;
                 const intensity = Math.max(0.06, Math.abs(value) / max);
-                return <div key={`${series.key}-${index}`} className="rounded-lg border border-teal-100 px-1 py-3 text-center text-[10px] font-black text-teal-950" style={{ backgroundColor: `rgb(204 251 241 / ${intensity})` }} title={`${series.label} · ${result.chart_data.labels[index] || ""}: ${seriesValue(series, raw ?? null)}`}>{seriesValue(series, raw ?? null)}</div>;
+                return <div key={`${series.key}-${index}`} className="rounded-lg border border-[var(--accent-border)] px-1 py-3 text-center text-[10px] font-black text-[var(--brand-navy)]" style={{ backgroundColor: `rgb(139 92 246 / ${Math.max(0.05, intensity * 0.28)})` }} title={`${series.label} · ${result.chart_data.labels[index] || ""}: ${seriesValue(series, raw ?? null)}`}>{seriesValue(series, raw ?? null)}</div>;
               })}
             </div>
           ))}
@@ -281,7 +282,7 @@ function FunnelVisualization({ result }: { result: AnalyticsCatalogRun }) {
               <div><div className="text-xs text-[var(--muted)]">{label}</div><div className="mt-1 text-xl font-black">{seriesValue(series, series.values[index] ?? null)}</div></div>
               {index > 0 && <div className="text-left text-[11px] text-[var(--muted)]"><div><span className="font-black text-slate-800">{fromPrevious.toLocaleString("ar-EG", { maximumFractionDigits: 1 })}%</span> من المرحلة السابقة</div><div>{ratio.toLocaleString("ar-EG", { maximumFractionDigits: 1 })}% من البداية</div></div>}
             </div>
-            <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-teal-700" style={{ width: `${ratio}%` }} /></div>
+            <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${ratio}%` }} /></div>
           </div>
         );
       })}
@@ -335,7 +336,7 @@ function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
   const activeSeries = result.chart_data.series.find((series) => series.key === seriesKey) || result.chart_data.series[0];
   const guide = REPORT_GUIDES[result.analysis_key];
 
-  if (!result.rows.length) return <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><div className="font-black">مفيش بيانات مطابقة للفترة دي</div><p className="mt-2 text-sm text-[var(--muted)]">غيّر الفترة وشغّل التقرير مرة أخرى.</p>{result.definitions.length > 0 && <ul className="mx-auto mt-4 max-w-2xl list-disc space-y-1 pr-5 text-right text-xs leading-6 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>;
+  if (!result.rows.length) return <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><div className="font-black">لا توجد بيانات مطابقة للفترة</div><p className="mt-2 text-sm text-[var(--muted)]">غيّر الفترة وشغّل التقرير مرة أخرى.</p>{result.definitions.length > 0 && <ul className="mx-auto mt-4 max-w-2xl list-disc space-y-1 pr-5 text-right text-xs leading-6 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>;
 
   return (
     <div className="mt-6 space-y-4 border-t border-[var(--border)] pt-5">
@@ -353,7 +354,7 @@ function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
       <div className="rounded-2xl border border-[var(--border)] p-4">
         {(visualCharts.length > 1 || (result.chart_data.series.length > 1 && ["bar", "line"].includes(chartType))) && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
-            <div className="flex flex-wrap gap-2">{visualCharts.map((chart) => <button key={chart} type="button" onClick={() => setChartType(chart)} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${chartType === chart ? "bg-teal-50 text-teal-800" : "bg-slate-50 text-slate-600"}`}>{chartLabels[chart] || "الرسم"}</button>)}</div>
+            <div className="flex flex-wrap gap-2">{visualCharts.map((chart) => <button key={chart} type="button" onClick={() => setChartType(chart)} className={`rounded-lg px-3 py-1.5 text-xs font-bold ${chartType === chart ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "bg-slate-50 text-slate-600"}`}>{chartLabels[chart] || "الرسم"}</button>)}</div>
             {result.chart_data.series.length > 1 && ["bar", "line"].includes(chartType) && <select value={activeSeries?.key || ""} onChange={(event) => setSeriesKey(event.target.value)} className="rounded-lg border border-[var(--border)] bg-white px-3 py-1.5 text-xs font-bold">{result.chart_data.series.map((series) => <option key={series.key} value={series.key}>{series.label}</option>)}</select>}
           </div>
         )}
@@ -365,8 +366,8 @@ function ResultPanel({ result }: { result: AnalyticsCatalogRun }) {
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="rounded-2xl border border-teal-100 bg-teal-50/50 p-4"><div className="flex items-center gap-2 text-sm font-black text-teal-950"><Info size={16} /> تستفيد منه إزاي؟</div><p className="mt-2 text-xs leading-6 text-teal-950/80">{guide?.benefit || "استخدم اتجاه الرسم والمقارنات لتحديد التغيرات المهمة واتخاذ قرار تشغيلي بناءً على البيانات المسجلة."}</p></div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-black text-slate-900">بيتحسب إزاي؟</div><p className="mt-2 text-xs leading-6 text-slate-700">{guide?.calculation || "الحساب يتم من البيانات المسجلة في Linka وبنفس التعريف كل مرة."}</p>{result.definitions.length > 0 && <ul className="mt-2 list-disc space-y-1 pr-5 text-[11px] leading-5 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>
+        <div className="rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4"><div className="flex items-center gap-2 text-sm font-black text-[var(--brand-navy)]"><Info size={16} /> ماذا يوضح؟</div><p className="mt-2 text-xs leading-6 text-[var(--muted-strong)]">{guide?.benefit || "استخدم اتجاه الرسم والمقارنات لتحديد التغيرات المهمة واتخاذ قرار تشغيلي بناءً على البيانات المسجلة."}</p></div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-sm font-black text-slate-900">طريقة الحساب</div><p className="mt-2 text-xs leading-6 text-slate-700">{guide?.calculation || "الحساب يتم من البيانات المسجلة في Linka وبنفس التعريف كل مرة."}</p>{result.definitions.length > 0 && <ul className="mt-2 list-disc space-y-1 pr-5 text-[11px] leading-5 text-slate-600">{result.definitions.map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>
       </div>
     </div>
   );
@@ -384,6 +385,8 @@ export function AnalyticsCatalogPanel({ catalog, savedViews }: { catalog: Analyt
   const resultRef = useRef<HTMLDivElement>(null);
 
   const normalizedQuery = query.trim().toLocaleLowerCase("ar");
+  const outstandingSearchText = "مبالغ مستحقة على العملاء جلسات مكتملة غير مسددة رصيد متبقي".toLocaleLowerCase("ar");
+  const showOutstandingBalances = normalizedQuery ? outstandingSearchText.includes(normalizedQuery) : groupKey === "performance";
   const visibleAnalyses = useMemo(() => analyses.filter((item) => {
     if (normalizedQuery) return `${item.title} ${item.description} ${categoryLabels[item.category] || ""}`.toLocaleLowerCase("ar").includes(normalizedQuery);
     const active = groups.find((group) => group.key === groupKey) || groups[0];
@@ -405,34 +408,45 @@ export function AnalyticsCatalogPanel({ catalog, savedViews }: { catalog: Analyt
   return (
     <section className="mb-6 rounded-3xl border border-[var(--border)] bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3"><span className="grid size-11 place-items-center rounded-2xl bg-teal-700 text-white"><BarChart3 size={21} /></span><div><h2 className="text-lg font-black">التقارير</h2><p className="mt-1 text-sm leading-6 text-slate-600">التقارير هنا جرافات وبطاقات فقط. تقارير الفروع والخدمات والنتائج الجدولية تم إزالتها من هذه الصفحة.</p></div></div>
+        <div className="flex items-start gap-3"><span className="grid size-11 place-items-center rounded-2xl bg-[var(--accent)] text-white"><BarChart3 size={21} /></span><div><h2 className="text-lg font-black">التقارير</h2><p className="mt-1 text-sm leading-6 text-slate-600">اختر تقريرًا حسب السؤال الذي تريد متابعته، ثم خصص الفترة والفلاتر عند الحاجة.</p></div></div>
         <label className="relative w-full max-w-sm"><Search size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث عن تقرير" className="form-control pr-9" /></label>
       </div>
 
-      {quickAccess.length > 0 && <div className="mt-4 flex flex-wrap gap-2"><span className="py-2 text-xs font-black text-slate-500">وصول سريع:</span>{quickAccess.map((item) => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setPreset(null); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(item.category)); if (group) setGroupKey(group.key); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold hover:border-teal-300">{item.title}</button>)}</div>}
+      {quickAccess.length > 0 && <div className="mt-4 flex flex-wrap gap-2"><span className="py-2 text-xs font-black text-slate-500">وصول سريع:</span>{quickAccess.map((item) => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setPreset(null); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(item.category)); if (group) setGroupKey(group.key); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]">{item.title}</button>)}</div>}
 
       {savedViews.length > 0 && <div className="mt-3 flex flex-wrap gap-2"><span className="py-2 text-xs font-black text-slate-500">محفوظة:</span>{savedViews.map((view) => {
         const definition = analyses.find((item) => item.key === view.analysis_key);
         if (!definition) return null;
-        return <button key={view.id} type="button" onClick={() => { setSelectedKey(definition.key); setPreset(view); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(definition.category)); if (group) setGroupKey(group.key); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold hover:border-teal-300">{view.name}</button>;
+        return <button key={view.id} type="button" onClick={() => { setSelectedKey(definition.key); setPreset(view); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(definition.category)); if (group) setGroupKey(group.key); }} className="rounded-xl border border-[var(--border)] px-3 py-2 text-xs font-bold transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]">{view.name}</button>;
       })}</div>}
 
-      {!normalizedQuery && <div className="mt-5 grid gap-2 sm:grid-cols-3">{groups.map((group) => <button key={group.key} type="button" onClick={() => { setGroupKey(group.key); setQuery(""); setPreset(null); setDirty(true); const first = analyses.find((item) => group.categories.includes(item.category)); if (first) setSelectedKey(first.key); }} className={`rounded-2xl border p-3 text-right ${groupKey === group.key ? "border-teal-600 bg-teal-50" : "border-[var(--border)]"}`}><div className="text-sm font-black">{group.label}</div><div className="mt-1 text-[11px] text-[var(--muted)]">{group.description}</div></button>)}</div>}
+      {!normalizedQuery && <div className="mt-5 grid gap-2 sm:grid-cols-3">{groups.map((group) => <button key={group.key} type="button" onClick={() => { setGroupKey(group.key); setQuery(""); setPreset(null); setDirty(true); const first = analyses.find((item) => group.categories.includes(item.category)); if (first) setSelectedKey(first.key); }} className={`rounded-2xl border p-3 text-right transition ${groupKey === group.key ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:border-[var(--accent-border)]"}`}><div className="text-sm font-black">{group.label}</div><div className="mt-1 text-[11px] text-[var(--muted)]">{group.description}</div></button>)}</div>}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[.85fr_1.15fr]">
-        <div className="grid content-start gap-2">{visibleAnalyses.map((item) => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setPreset(null); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(item.category)); if (group) setGroupKey(group.key); }} className={`rounded-2xl border p-4 text-right transition ${selected?.key === item.key ? "border-teal-500 bg-teal-50/60" : "border-[var(--border)] hover:border-teal-200"}`}><div className="font-black">{item.title}</div><div className="mt-1 text-xs leading-5 text-[var(--muted)]">{guideFor(item).benefit}</div></button>)}</div>
+        <div className="grid content-start gap-2">
+          {showOutstandingBalances && (
+            <Link href="/analytics/outstanding-balances" className="group flex items-start justify-between gap-3 rounded-2xl border border-[var(--border)] p-4 text-right transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-2)]">
+              <div>
+                <div className="flex items-center gap-2 font-black"><HandCoins size={16} className="text-[var(--accent)]" /> مبالغ مستحقة على العملاء</div>
+                <div className="mt-1 text-xs leading-5 text-[var(--muted)]">العملاء الذين أكملوا جلسة وما زال مبلغ مرتبط بالزيارة غير مسدد بالكامل.</div>
+              </div>
+              <ArrowLeft size={17} className="mt-1 shrink-0 text-[var(--muted)] transition group-hover:text-[var(--accent)]" />
+            </Link>
+          )}
+          {visibleAnalyses.map((item) => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setPreset(null); setDirty(true); const group = groups.find((candidate) => candidate.categories.includes(item.category)); if (group) setGroupKey(group.key); }} className={`rounded-2xl border p-4 text-right transition ${selected?.key === item.key ? "border-[var(--accent)] bg-[var(--accent-soft)]" : "border-[var(--border)] hover:border-[var(--accent-border)] hover:bg-[var(--surface-2)]"}`}><div className="font-black">{item.title}</div><div className="mt-1 text-xs leading-5 text-[var(--muted)]">{guideFor(item).benefit}</div></button>)}
+        </div>
 
         {selected && <form key={`${selected.key}-${preset?.id || "fresh"}`} action={action} onSubmit={() => setDirty(false)} className="h-fit rounded-2xl border border-[var(--border)] bg-slate-50 p-4">
           <input type="hidden" name="analysis_key" value={selected.key} />
           <div className="flex items-start gap-2"><Filter size={17} className="mt-0.5" /><div><div className="font-black">{selected.title}</div><div className="mt-1 text-xs leading-5 text-[var(--muted)]">{selected.description}</div></div></div>
-          {guide && <div className="mt-4 grid gap-2"><div className="rounded-xl bg-teal-50 p-3 text-xs leading-5 text-teal-950"><strong>تستفيد منه إزاي؟</strong> {guide.benefit}</div><div className="rounded-xl bg-white p-3 text-xs leading-5 text-slate-700"><strong>بيتحسب إزاي؟</strong> {guide.calculation}</div></div>}
+          {guide && <div className="mt-4 grid gap-2"><div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-xs leading-5 text-[var(--muted-strong)]"><strong className="text-[var(--brand-navy)]">ماذا يوضح؟</strong> {guide.benefit}</div><div className="rounded-xl bg-white p-3 text-xs leading-5 text-slate-700"><strong>طريقة الحساب:</strong> {guide.calculation}</div></div>}
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             {hasFilter(selected, "period") && <label className="text-xs font-bold">الفترة<select name="period" defaultValue={periodDefault} className="form-control mt-1"><option value="7">آخر 7 أيام</option><option value="30">آخر 30 يوم</option><option value="90">آخر 90 يوم</option><option value="180">آخر 6 شهور</option><option value="365">آخر سنة</option><option value="730">آخر سنتين</option><option value="all">كل التاريخ</option></select></label>}
             {hasEntityFilters && <label className="text-xs font-bold">الدكتور (اختياري)<select name="doctor_id" defaultValue={presetRequest?.doctor_ids[0] || ""} className="form-control mt-1"><option value="">كل الدكاترة</option>{catalog.doctors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
           </div>
 
-          {(hasFilter(selected, "granularity") || hasFilter(selected, "limit") || hasFilter(selected, "comparison")) && <details className="mt-3 rounded-xl border border-[var(--border)] bg-white p-3"><summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-black"><SlidersHorizontal size={15} /> خيارات إضافية</summary><div className="mt-3 grid gap-3 md:grid-cols-2">{hasFilter(selected, "granularity") && <label className="text-xs font-bold">تجميع الفترة<select name="granularity" defaultValue={presetRequest?.granularity || selected.default_granularity || "month"} className="form-control mt-1"><option value="day">يومي</option><option value="week">أسبوعي</option><option value="month">شهري</option></select></label>}{hasFilter(selected, "limit") && <label className="text-xs font-bold">عدد العناصر<select name="limit" defaultValue={String(presetRequest?.limit ?? selected.default_limit)} className="form-control mt-1"><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="25">25</option></select></label>}</div>{hasFilter(selected, "comparison") && <label className="mt-3 flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="comparison" defaultChecked={presetRequest?.comparison || false} /> مقارنة بالفترة السابقة</label>}</details>}
+          {(hasFilter(selected, "granularity") || hasFilter(selected, "limit") || hasFilter(selected, "comparison")) && <details className="mt-3 rounded-xl border border-[var(--border)] bg-white p-3"><summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 text-xs font-black"><SlidersHorizontal size={15} /> خيارات إضافية</summary><div className="mt-3 grid gap-3 md:grid-cols-2">{hasFilter(selected, "granularity") && <label className="text-xs font-bold">تجميع الفترة<select name="granularity" defaultValue={presetRequest?.granularity || selected.default_granularity || "month"} className="form-control mt-1"><option value="day">يومي</option><option value="week">أسبوعي</option><option value="month">شهري</option></select></label>}{hasFilter(selected, "limit") && <label className="text-xs font-bold">عدد العناصر<select name="limit" defaultValue={String(presetRequest?.limit ?? selected.default_limit)} className="form-control mt-1"><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="25">25</option></select></label>}</div>{hasFilter(selected, "comparison") && <label className="mt-3 flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="comparison" defaultChecked={presetRequest?.comparison || false} /> مقارنة بالفترة السابقة</label>}</details>}
 
           <Button type="submit" disabled={pending} className="mt-4 w-full">{pending ? <LoaderCircle size={17} className="animate-spin" /> : <Play size={17} />} عرض التقرير</Button>
         </form>}
