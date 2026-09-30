@@ -32,7 +32,7 @@ def _latest_customer_is_arabic(history: list[BaseMessage]) -> bool:
 def _detail_reply(truth: ServiceTruth, service: ServiceInfo, *, arabic: bool) -> str:
     parts: list[str] = []
     if arabic:
-        parts.append(f"??????: {service.name}.")
+        parts.append(f"الخدمة: {service.name}.")
     else:
         parts.append(f"Service: {service.name}.")
 
@@ -42,26 +42,26 @@ def _detail_reply(truth: ServiceTruth, service: ServiceInfo, *, arabic: bool) ->
                 parts.append(service.description)
             else:
                 parts.append(
-                    "???? ??? ????? ????? ?????? ?? ?????? ??????? ???????."
+                    "لا يوجد وصف إضافي مقدم من العيادة لهذه الخدمة في البيانات الحالية."
                     if arabic
                     else "No additional clinic-provided description is stored for this service."
                 )
         elif detail == "duration":
             if service.customer_duration_text:
                 parts.append(
-                    f"????? ??????? ??????: {service.customer_duration_text}."
+                    f"مدة الموعد المعروضة للعميل: {service.customer_duration_text}."
                     if arabic
                     else f"Customer-facing scheduled duration: {service.customer_duration_text}."
                 )
             elif service.duration_minutes is not None:
                 parts.append(
-                    f"????? ???????? ??????: {service.duration_minutes} ?????."
+                    f"مدة الموعد المحددة في النظام: {service.duration_minutes} دقيقة."
                     if arabic
                     else f"Configured appointment duration: {service.duration_minutes} minutes."
                 )
             else:
                 parts.append(
-                    "??? ?????? ?? ?????? ?? ?????? ??????? ???????."
+                    "لا توجد مدة للموعد مسجلة في بيانات العيادة الحالية."
                     if arabic
                     else "No appointment duration is stored in the current clinic data."
                 )
@@ -69,15 +69,15 @@ def _detail_reply(truth: ServiceTruth, service: ServiceInfo, *, arabic: bool) ->
             if not service.devices_complete_set:
                 raise ServiceComposerValidationError("Device association set is not verified complete.")
             if service.device_names:
-                rendered = "? ".join(service.device_names) if arabic else ", ".join(service.device_names)
+                rendered = "، ".join(service.device_names) if arabic else ", ".join(service.device_names)
                 parts.append(
-                    f"??????? ???????? ???????: {rendered}."
+                    f"الأجهزة المرتبطة بالخدمة: {rendered}."
                     if arabic
                     else f"Devices associated with this service: {rendered}."
                 )
             else:
                 parts.append(
-                    "???? ????? ????? ?????? ??????? ?? ?????? ??????? ???????."
+                    "لا توجد أجهزة مرتبطة بهذه الخدمة في بيانات العيادة الحالية."
                     if arabic
                     else "No devices are associated with this service in the current clinic data."
                 )
@@ -90,14 +90,14 @@ def _render_truth(truth: ServiceTruth, *, arabic: bool) -> str:
             raise ServiceComposerValidationError("Service list must be a verified complete set.")
         if not truth.services:
             return (
-                "???? ????? ????? ?? ?????? ??????? ??????."
+                "لا توجد خدمات في كتالوج العيادة الحالي."
                 if arabic
                 else "No services are present in the current clinic catalog."
             )
         names = [item.name for item in truth.services]
-        rendered = "? ".join(names) if arabic else ", ".join(names)
+        rendered = "، ".join(names) if arabic else ", ".join(names)
         return (
-            f"??????? ???????? ?? ?????? ???????: {rendered}."
+            f"الخدمات الموجودة في كتالوج العيادة: {rendered}."
             if arabic
             else f"Services in the clinic catalog: {rendered}."
         )

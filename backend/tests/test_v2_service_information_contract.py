@@ -72,9 +72,9 @@ def test_missing_description_never_invokes_general_medical_knowledge() -> None:
 
 def test_duration_preserves_customer_text_or_configured_appointment_minutes() -> None:
     preferred = build_customer_response_contract([
-        _outcome({"name": "Laser", "customer_duration_text": "????? 20 ?????"}, requested=["duration"])
+        _outcome({"name": "Laser", "customer_duration_text": "حوالي 20 دقيقة"}, requested=["duration"])
     ])
-    assert "????? 20 ?????" in deterministic_service_contract_reply(preferred, arabic=True)
+    assert "مدة الموعد المعروضة للعميل: حوالي 20 دقيقة." in deterministic_service_contract_reply(preferred, arabic=True)
 
     fallback = build_customer_response_contract([
         _outcome({"name": "Laser", "duration_minutes": 30}, requested=["duration"])
@@ -181,11 +181,11 @@ def test_pure_service_path_bypasses_generic_responder(monkeypatch: pytest.Monkey
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
-        history=[HumanMessage(content="???? ?? ???????????")],
-        outcomes=[_outcome({"name": "Hydrafacial", "description": "??? ???????."}, requested=["description"])],
+        history=[HumanMessage(content="خدمة الهيدرافيشل بتعمل إيه؟")],
+        outcomes=[_outcome({"name": "Hydrafacial", "description": "وصف العيادة المعتمد."}, requested=["description"])],
     )
     assert label == "deterministic:service-information-contract"
-    assert "Hydrafacial" in text and "??? ???????" in text
+    assert "Hydrafacial" in text and "وصف العيادة المعتمد." in text
 
 
 def test_stale_assistant_service_fact_cannot_override_verified_truth() -> None:
@@ -194,8 +194,8 @@ def test_stale_assistant_service_fact_cannot_override_verified_truth() -> None:
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[
-            AIMessage(content="?????? ????? Old Service ?????? 90 ?????."),
-            HumanMessage(content="??? ?????? ?????? ????"),
+            AIMessage(content="الخدمة القديمة Old Service مدتها 90 دقيقة."),
+            HumanMessage(content="طب مدة الخدمة الحالية كام؟"),
         ],
         outcomes=[_outcome({"name": "Verified Service", "duration_minutes": 30}, requested=["duration"])],
     )
@@ -214,7 +214,7 @@ def test_mixed_legacy_path_receives_only_safe_service_facts() -> None:
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
-        history=[HumanMessage(content="?????? ???? ????? ????????")],
+        history=[HumanMessage(content="الخدمة دي بتشتغل على أنهي أجهزة؟")],
         outcomes=[service, other],
     )
     outcome_message = next(
@@ -245,3 +245,219 @@ def test_non_service_info_answer_service_is_not_claimed_by_service_contract() ->
     contract = build_customer_response_contract([outcome])
     assert contract.units[0].service_truth is None
     assert is_pure_supported_service_contract(contract) is False
+
+
+def test_arabic_service_name_only_is_readable() -> None:
+    contract = build_customer_response_contract([
+        _outcome({"name": "PRP للبشرة"}, requested=[])
+    ])
+
+    text = deterministic_service_contract_reply(contract, arabic=True)
+
+    assert text == "الخدمة: PRP للبشرة."
+    assert "????" not in text
+
+
+def test_arabic_service_description_and_missing_description_are_readable() -> None:
+    described = build_customer_response_contract([
+        _outcome(
+            {"name": "PRP للبشرة", "description": "وصف معتمد من العيادة."},
+            requested=["description"],
+        )
+    ])
+    missing = build_customer_response_contract([
+        _outcome({"name": "PRP للبشرة"}, requested=["description"])
+    ])
+
+    described_text = deterministic_service_contract_reply(described, arabic=True)
+    missing_text = deterministic_service_contract_reply(missing, arabic=True)
+
+    assert "الخدمة: PRP للبشرة." in described_text
+    assert "وصف معتمد من العيادة." in described_text
+    assert "لا يوجد وصف إضافي مقدم من العيادة" in missing_text
+    assert "????" not in described_text
+    assert "????" not in missing_text
+
+
+def test_arabic_configured_service_duration_is_readable_and_not_treatment_claim() -> None:
+    contract = build_customer_response_contract([
+        _outcome(
+            {"name": "PRP للبشرة", "duration_minutes": 45},
+            requested=["duration"],
+        )
+    ])
+
+    text = deterministic_service_contract_reply(contract, arabic=True)
+
+    assert "الخدمة: PRP للبشرة." in text
+    assert "مدة الموعد المحددة في النظام: 45 دقيقة." in text
+    assert "مدة العلاج" not in text
+    assert "????" not in text
+
+
+def test_arabic_service_devices_and_complete_list_are_readable() -> None:
+    devices_contract = build_customer_response_contract([
+        _outcome(
+            {
+                "name": "ليزر إزالة الشعر",
+                "laser_devices": [
+                    {"device_name": "Candela Gentle"},
+                    {"device_name": "Prime Lase"},
+                ],
+            },
+            requested=["devices"],
+        )
+    ])
+    list_contract = build_customer_response_contract([
+        _list_outcome(["Hydrafacial", "PRP", "Laser"])
+    ])
+
+    devices_text = deterministic_service_contract_reply(devices_contract, arabic=True)
+    list_text = deterministic_service_contract_reply(list_contract, arabic=True)
+
+    assert "الأجهزة المرتبطة بالخدمة: Candela Gentle، Prime Lase." in devices_text
+    assert "الخدمات الموجودة في كتالوج العيادة: Hydrafacial، PRP، Laser." in list_text
+    assert "????" not in devices_text
+    assert "????" not in list_text
+
+
+def test_arabic_service_mixed_with_price_preserves_readability_and_exact_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("generic responder must not run")),
+    )
+    service = _outcome(
+        {"name": "PRP للبشرة", "description": "وصف معتمد من العيادة."},
+        requested=["description"],
+    )
+    price = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "service_catalog": {
+                "service": {
+                    "name": "PRP للبشرة",
+                    "price": "2000.00 EGP",
+                    "currency": "EGP",
+                }
+            }
+        },
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="جلسة PRP للبشرة بتعمل إيه وسعرها كام؟")],
+        outcomes=[service, price],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "الخدمة: PRP للبشرة." in text
+    assert "وصف معتمد من العيادة." in text
+    assert "2000" in text
+    assert "????" not in text
+
+
+def test_arabic_service_mixed_with_availability_is_readable_and_grounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("generic responder must not run")),
+    )
+    service = _outcome(
+        {"name": "PRP للبشرة", "description": "وصف معتمد من العيادة."},
+        requested=["description"],
+    )
+    availability = TurnOutcome(
+        status="answered",
+        response_goal="present_availability",
+        facts={
+            "availability": {
+                "service_name": "PRP للبشرة",
+                "availability_windows": [
+                    {
+                        "doctor_name": "مها",
+                        "start_local": "2026-10-02T14:00:00+03:00",
+                        "end_local": "2026-10-02T15:00:00+03:00",
+                    }
+                ],
+                "available_option_count": 1,
+                "checked_dates": ["2026-10-02"],
+            }
+        },
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="جلسة PRP للبشرة بتعمل إيه وإمتى فيه ميعاد متاح؟")],
+        outcomes=[service, availability],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "الخدمة: PRP للبشرة." in text
+    assert "وصف معتمد من العيادة." in text
+    assert "مها" in text
+    assert "2 مساء" in text
+    assert "????" not in text
+
+
+def test_arabic_appointment_mixed_with_service_is_readable_and_preserves_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("generic responder must not run")),
+    )
+    appointment = TurnOutcome(
+        status="answered",
+        response_goal="answer_customer_history",
+        facts={
+            "appointments": {
+                "visits": [
+                    {
+                        "status": "confirmed",
+                        "start_local": "2026-10-01T13:30:00+03:00",
+                        "end_local": "2026-10-01T14:30:00+03:00",
+                        "doctor_name": "يوسف سمير",
+                        "services": [
+                            {
+                                "service_name": "ليزر إزالة الشعر - جسم كامل سيدات",
+                                "laser_device_name": "Candela Gentle",
+                            }
+                        ],
+                    }
+                ],
+                "visit_count": 1,
+                "presentation_unit": "visit",
+                "complete_set": True,
+            }
+        },
+    )
+    service = _outcome(
+        {"name": "PRP للبشرة", "duration_minutes": 45},
+        requested=["duration"],
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="ميعادي الجاي إمتى ومدة جلسة PRP للبشرة قد إيه؟")],
+        outcomes=[appointment, service],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert "يوسف سمير" in text
+    assert "Candela Gentle" in text
+    assert "الخدمة: PRP للبشرة." in text
+    assert "مدة الموعد المحددة في النظام: 45 دقيقة." in text
+    assert "????" not in text
