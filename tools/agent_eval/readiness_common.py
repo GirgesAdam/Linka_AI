@@ -154,7 +154,7 @@ def run_isolated_case(engine, workspace_slug: str, case_fn) -> ScenarioResult:
             raise RuntimeError("Workspace not found")
         assert_demo_only(workspace)
         return case_fn(db, workspace)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return ScenarioResult(
             id=case_fn.__name__.removeprefix("case_"),
             category="infrastructure",
