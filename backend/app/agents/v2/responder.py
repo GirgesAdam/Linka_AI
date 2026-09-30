@@ -909,13 +909,129 @@ def _deterministic_low_risk_mixed_companion(
     return None
 
 
+
+_REQUESTED_INFORMATION_GOALS = frozenset(
+    {
+        "answer_service",
+        "answer_price",
+        "answer_doctor",
+        "answer_clinic_info",
+        "answer_customer_profile",
+        "answer_customer_history",
+        "present_availability",
+        "requested_time_unavailable",
+        "no_availability",
+        "package_information",
+        "pulse_information",
+        "package_refund_quote",
+    }
+)
+
+
+def _fact_value(unit: CustomerResponseUnit, key: str) -> object | None:
+    for fact in unit.facts:
+        if fact.key == key:
+            return fact.value
+    return None
+
+
+def _deterministic_missing_requested_unit_fallback(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+) -> str | None:
+    """Cover a requested read unit without inventing or re-reading business truth."""
+    goal = unit.response_goal
+    if goal not in _REQUESTED_INFORMATION_GOALS:
+        return None
+
+    # Some answer_service / answer_clinic_info outcomes are supporting context for
+    # another requested unit. Only explicit detail markers make them requested
+    # response units for completeness purposes.
+    if (
+        goal == "answer_service"
+        and _fact_value(unit, "service_requested_details") is None
+    ):
+        return None
+    if (
+        goal == "answer_clinic_info"
+        and _fact_value(unit, "clinic_requested_details") is None
+    ):
+        return None
+
+    if goal == "pulse_information":
+        requested = _fact_value(unit, "pulse_requested_details")
+        requested_values = requested if isinstance(requested, list) else []
+        requested_details = {str(value) for value in requested_values}
+        chunks: list[str] = []
+        if "balance" in requested_details:
+            chunks.append(
+                "رصيد الـPulses الحالي مش ظاهر عندي في البيانات المؤكدة دلوقتي."
+                if arabic
+                else "Your current Pulse balance is not available in the verified data right now."
+            )
+        if "owned_packs" in requested_details:
+            chunks.append(
+                "معلومات باقات الـPulses المملوكة مش ظاهرة في البيانات المؤكدة دلوقتي."
+                if arabic
+                else "Your owned Pulse-pack information is not available in the verified data right now."
+            )
+        if "offers" in requested_details:
+            chunks.append(
+                "عروض باقات الـPulses المتاحة مش ظاهرة بشكل مؤكد في البيانات الحالية."
+                if arabic
+                else "Verified available Pulse-pack offers are not present in the current data."
+            )
+        if "overage_price" in requested_details:
+            chunks.append(
+                "سعر الـPulse الإضافية مش ظاهر بشكل مؤكد في البيانات الحالية."
+                if arabic
+                else "Verified extra-Pulse pricing is not present in the current data."
+            )
+        if chunks:
+            return "\n".join(chunks)
+        return (
+            "معلومات الـPulses المطلوبة مش ظاهرة في البيانات المؤكدة دلوقتي."
+            if arabic
+            else "The requested Pulse information is not available in the verified data right now."
+        )
+
+    if arabic:
+        return {
+            "answer_service": "تفاصيل الخدمة المطلوبة مش ظاهرة بشكل مؤكد في بيانات العيادة الحالية.",
+            "answer_price": "السعر المطلوب مش ظاهر بشكل مؤكد في بيانات العيادة الحالية.",
+            "answer_doctor": "معلومات الدكتور المطلوبة مش ظاهرة بشكل مؤكد في البيانات الحالية.",
+            "answer_clinic_info": "معلومة العيادة المطلوبة مش ظاهرة بشكل مؤكد في البيانات الحالية.",
+            "answer_customer_profile": "المعلومة المطلوبة من ملفك مش ظاهرة في البيانات المؤكدة الحالية.",
+            "answer_customer_history": "المعلومة المطلوبة من سجلك مش ظاهرة في البيانات المؤكدة الحالية.",
+            "present_availability": "مش قادر أعرض مواعيد متاحة مؤكدة من البيانات الحالية.",
+            "requested_time_unavailable": "مش قادر أأكد حالة الوقت المطلوب من البيانات الحالية.",
+            "no_availability": "مش قادر أأكد عدم وجود مواعيد من البيانات الحالية.",
+            "package_information": "معلومات الباكدج المطلوبة مش ظاهرة في البيانات المؤكدة الحالية.",
+            "package_refund_quote": "تفاصيل الاسترجاع دي محتاجة مراجعة فريق العيادة قبل ما أأكدها.",
+        }[goal]
+
+    return {
+        "answer_service": "The requested service details are not available in the current verified clinic data.",
+        "answer_price": "The requested price is not available in the current verified clinic data.",
+        "answer_doctor": "The requested doctor information is not available in the current verified data.",
+        "answer_clinic_info": "The requested clinic information is not available in the current verified data.",
+        "answer_customer_profile": "The requested profile information is not available in your current verified record.",
+        "answer_customer_history": "The requested history information is not available in your current verified record.",
+        "present_availability": "I cannot show verified appointment availability from the current data.",
+        "requested_time_unavailable": "I cannot verify the requested time status from the current data.",
+        "no_availability": "I cannot verify that there is no availability from the current data.",
+        "package_information": "The requested package information is not available in the current verified data.",
+        "package_refund_quote": "The clinic team needs to review the refund details before I can confirm them.",
+    }[goal]
+
 def _compose_mixed_typed_contract_reply(
     *,
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
     contract: CustomerResponseContract,
 ) -> tuple[str, str] | None:
-    """Compose mixed typed truth without any free-form model-authored factual text."""
+    """Compose multi-unit replies without dropping requested units or mutating typed truth."""
     if not outcomes or len(contract.units) != len(outcomes):
         return None
 
@@ -923,11 +1039,44 @@ def _compose_mixed_typed_contract_reply(
     typed_chunks: dict[int, str] = {}
     for index, unit in enumerate(contract.units):
         rendered = _deterministic_typed_unit_reply(history=history, unit=unit)
-        if rendered is not None:
+        if rendered is not None and rendered.strip():
             typed_chunks[index] = rendered.strip()
 
+    protected_commercial_indices = {
+        index
+        for index, unit in enumerate(contract.units)
+        if (
+            unit.commercial_truth is not None
+            and unit.commercial_truth.kind == "device_price_clarification"
+        )
+    }
+    missing_fallbacks = {
+        index: fallback
+        for index, unit in enumerate(contract.units)
+        if (
+            index not in typed_chunks
+            and index not in protected_commercial_indices
+            and (
+                fallback := _deterministic_missing_requested_unit_fallback(
+                    unit,
+                    arabic=arabic,
+                )
+            )
+            is not None
+        )
+    }
+
+    # Preserve established single-unit legacy composition, including the
+    # dedicated device-price guard. Deterministic completeness activates only
+    # for an actual multi-unit request or alongside an existing typed owner.
     if not typed_chunks:
-        return None
+        if protected_commercial_indices and not missing_fallbacks:
+            return None
+        if (
+            not protected_commercial_indices
+            and not (len(contract.units) > 1 and missing_fallbacks)
+        ):
+            return None
 
     chunks: list[str] = []
     for index, unit in enumerate(contract.units):
@@ -936,8 +1085,7 @@ def _compose_mixed_typed_contract_reply(
             chunks.append(typed)
             continue
 
-        truth = unit.commercial_truth
-        if truth is not None and truth.kind == "device_price_clarification":
+        if index in protected_commercial_indices:
             protected = deterministic_price_device_fallback(
                 CustomerResponseContract(units=(unit,)),
                 arabic=arabic,
@@ -947,12 +1095,27 @@ def _compose_mixed_typed_contract_reply(
 
         companion = _deterministic_low_risk_mixed_companion(unit, arabic=arabic)
         if companion:
-            chunks.append(companion)
+            chunks.append(companion.strip())
+            continue
 
-    text = "\n".join(chunk for chunk in chunks if chunk).strip()
-    if not text:
+        missing = missing_fallbacks.get(index)
+        if missing:
+            chunks.append(missing.strip())
+            continue
+
+        # Unrendered supporting outcomes are not customer-requested units. Keep
+        # their established behavior instead of manufacturing a new response.
+        continue
+
+    rendered = "\n".join(chunks).strip()
+    if not rendered:
         return None
-    return text, "deterministic:mixed-typed-contract"
+    source = (
+        "deterministic:mixed-typed-contract"
+        if typed_chunks or protected_commercial_indices
+        else "deterministic:mixed-unit-completeness"
+    )
+    return rendered, source
 
 
 def compose_v2_customer_reply(
