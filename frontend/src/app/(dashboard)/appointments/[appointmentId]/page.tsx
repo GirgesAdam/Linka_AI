@@ -417,6 +417,9 @@ export default async function AppointmentOperationsPage({
                   key={`${appointment.service_id}:${appointment.doctor_id}:${laserAppointment.laser_device_key || ""}:${appointment.start_at}`}
                   appointmentId={appointment.id}
                   patientId={appointment.patient_id}
+                  branchId={appointment.branch_id}
+                  currentStartAt={appointment.start_at}
+                  timezone={detail.timezone}
                   currentServiceId={appointment.service_id}
                   currentDoctorId={appointment.doctor_id}
                   currentDeviceKey={laserAppointment.laser_device_key || null}

@@ -32,6 +32,13 @@ def test_service_editor_handles_conflicts_inline() -> None:
     assert "catch (error)" in actions
     assert "useActionState" in editor
     assert "state.error" in editor
+    assert "exclude_appointment_id: appointmentId" in actions
+    assert "doctor_id: doctorId" in actions
+    assert 'allow_immediate: "true"' in actions
+    error_mapper = actions.split("function serviceChangeError", 1)[1].split(
+        "export async function changeAppointmentService", 1
+    )[0]
+    assert "Ø" not in error_mapper
 
 
 def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
