@@ -3,6 +3,10 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.agents.clinic_grounding import build_clinic_catalog
+from app.models.patient import Patient
+from app.models.patient_package import PatientPackage
+from app.models.pulse_billing import PatientPulsePack
+from sqlalchemy import select
 
 from tools.agent_eval.harness import local_slot, service_by_slug
 from tools.agent_eval.readiness_common import (
@@ -28,7 +32,7 @@ def case_01_clinic_hours_phone(db, ws):
         turns=lambda: _turns(db, ws, patient, "r01_clinic_hours_phone",
             ["مساء الخير، بتقفلوا كام النهارده ورقمكم ايه؟"]),
         expected="Answer current clinic hours/contact from clinic truth.",
-        required_reads={"clinic_information"},
+        required_reads={"clinic_info"},
     )
 
 
@@ -63,7 +67,7 @@ def case_04_service_description(db, ws):
         turns=lambda: _turns(db, ws, patient, "r04_service_description",
             ["الهيدرافيشل عندكم بيعمل ايه بالظبط؟"]),
         expected="Use only stored description truth; do not invent treatment claims.",
-        required_reads={"service_information"},
+        required_reads={"service_catalog"},
     )
 
 
@@ -86,7 +90,7 @@ def case_06_doctors_for_service(db, ws):
         turns=lambda: _turns(db, ws, patient, "r06_doctors_for_service",
             ["مين بيعمل PRP للبشرة عندكم؟"]),
         expected="List only doctors verified for PRP skin.",
-        required_reads={"doctor_information"},
+        required_reads={"doctors"},
     )
 
 
@@ -143,7 +147,7 @@ def case_10_next_appointment(db, ws):
         turns=lambda: _turns(db, ws, patient, "r10_next_appointment",
             ["معلش فكّريني ميعادي الجاي امتى ومع مين؟"]),
         expected="Return exact seeded upcoming appointment facts.",
-        required_reads={"appointment_information"},
+        required_reads={"appointments"},
     )
 
 
@@ -161,7 +165,7 @@ def case_11_multiple_appointments(db, ws):
         turns=lambda: _turns(db, ws, patient, "r11_multiple_appointments",
             ["أنا عندي كام حجز جاي؟ قولي المواعيد والخدمات"]),
         expected="Return both upcoming appointments without collapsing them.",
-        required_reads={"appointment_information"},
+        required_reads={"appointments"},
     )
 
 
@@ -173,19 +177,30 @@ def case_12_no_upcoming(db, ws):
         turns=lambda: _turns(db, ws, patient, "r12_no_upcoming",
             ["فيه حجز جاي ليا ولا لأ؟"]),
         expected="If no upcoming appointment exists, say so without fabricating one.",
-        required_reads={"appointment_information"},
+        required_reads={"appointments"},
     )
 
 
 def case_13_owned_package(db, ws):
-    patient = named_patient(db, ws, "Omar", "Ahmed")
+    package = db.scalar(
+        select(PatientPackage).where(
+            PatientPackage.workspace_id == ws.id,
+            PatientPackage.status == "active",
+            PatientPackage.name == "باكدج PRP للبشرة - 4 جلسات",
+        ).order_by(PatientPackage.purchased_at.desc()).limit(1)
+    )
+    if package is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: active PRP package owner missing")
+    patient = db.get(Patient, package.patient_id)
+    if patient is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: package patient missing")
     return read_result(
         db, ws, sid="r13_owned_package", category="packages",
         patient=patient,
         turns=lambda: _turns(db, ws, patient, "r13_owned_package",
             ["باكدج الـ PRP بتاعتي فاضل فيها كام جلسة ولسه شغالة؟"]),
         expected="Return actual package status and remaining sessions.",
-        required_reads={"patient_packages"},
+        required_reads={"customer_packages"},
     )
 
 
@@ -197,12 +212,23 @@ def case_14_exhausted_package(db, ws):
         turns=lambda: _turns(db, ws, patient, "r14_exhausted_package",
             ["أنا فاكرة إن باكدج الهيدرافيشل لسه فيها جلسة، صح؟"]),
         expected="Backend package truth overrides stale customer belief.",
-        required_reads={"patient_packages"},
+        required_reads={"customer_packages"},
     )
 
 
 def case_15_pulse_balance(db, ws):
-    patient = named_patient(db, ws, "gggg", "")
+    pack = db.scalar(
+        select(PatientPulsePack).where(
+            PatientPulsePack.workspace_id == ws.id,
+            PatientPulsePack.status == "active",
+            PatientPulsePack.device_key == "candela_gentle",
+        ).order_by(PatientPulsePack.purchased_at.desc()).limit(1)
+    )
+    if pack is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: Pulse owner missing")
+    patient = db.get(Patient, pack.patient_id)
+    if patient is None:
+        raise RuntimeError("EVAL_INFRA_ERROR: Pulse patient missing")
     return read_result(
         db, ws, sid="r15_pulse_balance", category="pulse",
         patient=patient,
