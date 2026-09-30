@@ -34,22 +34,6 @@ def _availability_outcome(*, count: int, windows: list[dict[str, object]]) -> Tu
 
 
 def _run_with_draft(monkeypatch, *, draft: ResponderDraft, outcomes: list[TurnOutcome]) -> tuple[str, str]:
-    # Phase 3A moves pure availability sets to the contract composer. Add one
-    # unsupported informational unit so these tests keep exercising the legacy
-    # mixed-response guard, which remains reachable by design.
-    if all(
-        outcome.response_goal
-        in {"present_availability", "requested_time_unavailable", "no_availability"}
-        for outcome in outcomes
-    ):
-        outcomes = [
-            *outcomes,
-            TurnOutcome(
-                status="answered",
-                response_goal="answer_service",
-                facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
-            ),
-        ]
     monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
     monkeypatch.setattr(responder, "model_label", lambda name: str(name))
     monkeypatch.setattr(
@@ -66,54 +50,61 @@ def _run_with_draft(monkeypatch, *, draft: ResponderDraft, outcomes: list[TurnOu
     )
 
 
-def test_bad_no_availability_claim_is_replaced_by_verified_window(monkeypatch) -> None:
-    outcome = _availability_outcome(count=5, windows=[_window("18:00", "20:00")])
+
+def test_legacy_untyped_availability_guard_stays_reachable(monkeypatch) -> None:
+    outcome = TurnOutcome(
+        status="blocked",
+        response_goal="requested_time_unavailable",
+        facts={"availability": {"available_option_count": 0}},
+    )
 
     text, source = _run_with_draft(
         monkeypatch,
         draft=ResponderDraft(
-            reply="للأسف مفيش مواعيد متاحة.",
+            reply="مفيش مواعيد متاحة.",
             availability_claim="no_availability",
         ),
         outcomes=[outcome],
     )
 
-    assert "من 6 م لـ8 م" in text
-    assert "للأسف مفيش مواعيد متاحة." not in text
+    assert "الوقت اللي طلبته مش متاح" in text
+    assert "مفيش مواعيد متاحة." not in text
     assert source.startswith("deterministic:availability-guard:")
 
 
-def test_matching_positive_claim_keeps_natural_responder_reply(monkeypatch) -> None:
-    outcome = _availability_outcome(count=5, windows=[_window("18:00", "20:00")])
-    natural = "متاح من 6 لـ8 مساءً، اختاري الوقت الأنسب ليكي."
-
-    text, source = _run_with_draft(
-        monkeypatch,
-        draft=ResponderDraft(reply=natural, availability_claim="options_available"),
-        outcomes=[outcome],
-    )
-
-    assert text == natural
-    assert source == "test-model"
-
-
-def test_genuine_zero_availability_claim_keeps_natural_reply(monkeypatch) -> None:
+def test_legacy_untyped_matching_availability_claim_keeps_natural_reply(monkeypatch) -> None:
     outcome = TurnOutcome(
         status="blocked",
-        response_goal="no_availability",
+        response_goal="requested_time_unavailable",
         facts={"availability": {"available_option_count": 0}},
     )
-    natural = "مفيش مواعيد متاحة في البحث الحالي."
+    natural = "الوقت المطلوب مش متاح، أقدر أشوف بديل."
 
     text, source = _run_with_draft(
         monkeypatch,
-        draft=ResponderDraft(reply=natural, availability_claim="no_availability"),
+        draft=ResponderDraft(
+            reply=natural,
+            availability_claim="requested_time_unavailable",
+        ),
         outcomes=[outcome],
     )
 
     assert text == natural
     assert source == "test-model"
 
+
+def test_typed_availability_is_not_forced_through_legacy_guard(monkeypatch) -> None:
+    outcome = _availability_outcome(count=5, windows=[_window("18:00", "20:00")])
+    monkeypatch.setattr(
+        responder,
+        "invoke_with_model_chain",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("responder legacy model must not own typed availability")
+        ),
+    )
+
+    contract = responder.build_customer_response_contract([outcome])
+    assert responder.is_pure_supported_availability_contract(contract) is True
 
 def test_positive_fallback_options_override_exact_time_miss_semantically() -> None:
     exact_miss = TurnOutcome(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -222,7 +221,8 @@ def test_doctor_compatibility_failure_stays_outside_doctor_contract() -> None:
     assert is_pure_supported_doctor_contract(contract) is False
 
 
-def test_mixed_doctor_and_service_response_stays_entirely_legacy(
+
+def test_mixed_doctor_and_service_preserves_verified_doctor_set_without_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes = [
@@ -238,22 +238,9 @@ def test_mixed_doctor_and_service_response_stays_entirely_legacy(
     ]
     monkeypatch.setattr(
         responder,
-        "compose_doctor_contract_reply",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("mixed set must not enter pure doctor composer")
-        ),
-    )
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
-    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="الدكاترة د. مريم ود. سارة، والخدمة تنظيف عميق.",
-                availability_claim="not_applicable",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("mixed typed doctor response must not invoke the generic model")
         ),
     )
 
@@ -265,10 +252,9 @@ def test_mixed_doctor_and_service_response_stays_entirely_legacy(
         outcomes=outcomes,
     )
 
-    assert source == "test-model"
-    assert "د. مريم" in text and "د. سارة" in text
-    assert "تنظيف عميق" in text
-
+    assert source == "deterministic:mixed-typed-contract"
+    assert text.count("د. مريم") == 1
+    assert text.count("د. سارة") == 1
 
 def test_doctor_working_hours_do_not_become_appointment_availability() -> None:
     contract = build_customer_response_contract(

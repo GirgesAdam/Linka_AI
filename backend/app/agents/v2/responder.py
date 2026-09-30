@@ -836,8 +836,8 @@ def _deterministic_typed_unit_reply(
     if is_pure_supported_price_device_contract(contract):
         truth = unit.commercial_truth
         if truth is not None and truth.kind == "device_price_clarification":
-            # Keep the existing mixed clarification guard reachable. Pure clarification
-            # remains owned by the normal Price/Device contract path above.
+            # Keep the established legacy mixed device-price guard reachable when
+            # this clarification is the only protected shape in the mixed set.
             return None
         return deterministic_price_device_fallback(contract, arabic=arabic)
     if is_pure_supported_doctor_contract(contract):
@@ -851,79 +851,75 @@ def _deterministic_typed_unit_reply(
     return None
 
 
-def _safe_legacy_mixed_unit(unit: CustomerResponseUnit) -> bool:
-    """Whether a non-typed unit may coexist without expanding this focused fix."""
-    if unit.response_goal in {"social_ack", "handoff", "active_task_cancelled"}:
-        return True
+def _deterministic_low_risk_mixed_companion(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+) -> str | None:
+    """Render non-factual companion prose without giving it a model-owned fact surface."""
+    if unit.response_goal == "social_ack":
+        return "تمام." if arabic else "Okay."
+    if unit.response_goal == "handoff":
+        return (
+            "حوّلت المحادثة لفريق العيادة عشان يساعدك."
+            if arabic
+            else "I’ve handed the conversation to the clinic team for help."
+        )
+    if unit.response_goal == "active_task_cancelled":
+        return "تمام، ألغيت الطلب الحالي." if arabic else "Okay, the current request is cancelled."
     if unit.response_goal == "clarification" and not unit.choices:
-        return True
-    if unit.response_goal == "answer_customer_history" and unit.appointment_truth is None:
-        return True
-    if unit.response_goal == "answer_clinic_info":
-        keys = {fact.key for fact in unit.facts}
-        return {"booking_requires_payment", "payment_execution_owner"}.issubset(keys)
-    return False
+        return (
+            "محتاج معلومة إضافية عشان أكمل."
+            if arabic
+            else "I need one more detail to continue."
+        )
+    return None
 
 
 def _compose_mixed_typed_contract_reply(
     *,
-    clinic_name: str,
-    timezone_name: str,
-    local_now: datetime,
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
     contract: CustomerResponseContract,
 ) -> tuple[str, str] | None:
-    """Keep typed unit contents immutable when a turn mixes response families."""
+    """Compose mixed typed truth without any free-form model-authored factual text."""
     if len(outcomes) < 2 or len(contract.units) != len(outcomes):
         return None
 
+    arabic = _latest_customer_is_arabic(history)
     typed_chunks: dict[int, str] = {}
-    unsupported_indexes: list[int] = []
     for index, unit in enumerate(contract.units):
         rendered = _deterministic_typed_unit_reply(history=history, unit=unit)
-        if rendered is None:
-            unsupported_indexes.append(index)
-            continue
-        typed_chunks[index] = rendered.strip()
+        if rendered is not None:
+            typed_chunks[index] = rendered.strip()
 
     if not typed_chunks:
         return None
-    if any(
-        not _safe_legacy_mixed_unit(contract.units[index])
-        for index in unsupported_indexes
-    ):
-        return None
-
-    legacy_text: str | None = None
-    legacy_source: str | None = None
-    if unsupported_indexes:
-        legacy_outcomes = [outcomes[index] for index in unsupported_indexes]
-        legacy_text, legacy_source = compose_v2_customer_reply(
-            clinic_name=clinic_name,
-            timezone_name=timezone_name,
-            local_now=local_now,
-            history=history,
-            outcomes=legacy_outcomes,
-        )
 
     chunks: list[str] = []
-    inserted_legacy = False
-    unsupported = set(unsupported_indexes)
-    for index in range(len(outcomes)):
+    for index, unit in enumerate(contract.units):
         typed = typed_chunks.get(index)
-        if typed:
+        if typed is not None:
             chunks.append(typed)
-        elif index in unsupported and not inserted_legacy and legacy_text:
-            chunks.append(legacy_text.strip())
-            inserted_legacy = True
+            continue
+
+        truth = unit.commercial_truth
+        if truth is not None and truth.kind == "device_price_clarification":
+            protected = deterministic_price_device_fallback(
+                CustomerResponseContract(units=(unit,)),
+                arabic=arabic,
+            )
+            chunks.append(protected.strip())
+            continue
+
+        companion = _deterministic_low_risk_mixed_companion(unit, arabic=arabic)
+        if companion:
+            chunks.append(companion)
 
     text = "\n".join(chunk for chunk in chunks if chunk).strip()
     if not text:
         return None
-    if legacy_source is None:
-        return text, "deterministic:mixed-typed-contract"
-    return text, f"mixed-typed-contract:{legacy_source}"
+    return text, "deterministic:mixed-typed-contract"
 
 
 def compose_v2_customer_reply(
@@ -943,17 +939,6 @@ def compose_v2_customer_reply(
     if pure_reply is not None:
         return pure_reply
 
-    mixed_reply = _compose_mixed_typed_contract_reply(
-        clinic_name=clinic_name,
-        timezone_name=timezone_name,
-        local_now=local_now,
-        history=history,
-        outcomes=outcomes,
-        contract=response_contract,
-    )
-    if mixed_reply is not None:
-        return mixed_reply
-
     deterministic_medical = _deterministic_medical_handoff_reply(history, outcomes)
     if deterministic_medical is not None:
         return deterministic_medical, "deterministic:medical-handoff"
@@ -961,6 +946,14 @@ def compose_v2_customer_reply(
     deterministic_compatibility = _deterministic_compatibility_reply(history, outcomes)
     if deterministic_compatibility is not None:
         return deterministic_compatibility, "deterministic:compatibility"
+
+    mixed_reply = _compose_mixed_typed_contract_reply(
+        history=history,
+        outcomes=outcomes,
+        contract=response_contract,
+    )
+    if mixed_reply is not None:
+        return mixed_reply
 
     deterministic_doctors = _deterministic_pure_doctor_list_reply(history, outcomes)
     if deterministic_doctors is not None:

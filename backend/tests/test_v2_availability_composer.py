@@ -558,7 +558,8 @@ def test_valid_availability_path_never_calls_legacy_responder_or_guard(
     assert "5 مساءً" in text
 
 
-def test_mixed_availability_and_unsupported_family_stays_legacy(
+
+def test_mixed_availability_and_unsupported_family_preserves_verified_availability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes = [
@@ -569,31 +570,15 @@ def test_mixed_availability_and_unsupported_family_stays_legacy(
             facts={"service_catalog": {"service": {"name": "Hydrafacial"}}},
         ),
     ]
-    called = {"legacy": False}
-
     monkeypatch.setattr(
         responder,
-        "_build_responder_messages",
-        lambda **_kwargs: (
-            called.__setitem__("legacy", True)
-            or [HumanMessage(content="legacy")]
-        ),
-    )
-    monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
-    monkeypatch.setattr(responder, "model_label", lambda name: str(name))
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="رد legacy",
-                availability_claim="options_available",
-            ),
-            model_name="test-model",
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("mixed typed availability must not invoke the generic model")
         ),
     )
 
-    text, _source = compose_v2_customer_reply(
+    text, source = compose_v2_customer_reply(
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
@@ -601,9 +586,9 @@ def test_mixed_availability_and_unsupported_family_stays_legacy(
         outcomes=outcomes,
     )
 
-    assert called["legacy"] is True
-    assert text == "رد legacy"
-
+    assert source == "deterministic:mixed-typed-contract"
+    assert "5 مساء" in text
+    assert "legacy" not in text
 
 def test_fallback_preserves_all_windows_and_no_gap_expansion() -> None:
     contract = build_customer_response_contract(

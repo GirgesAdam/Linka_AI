@@ -828,35 +828,15 @@ def test_pure_terminal_responder_routes_to_contract_composer(
     }
 
 
-def test_mixed_terminal_and_nonterminal_stays_on_legacy_responder(
+
+def test_mixed_terminal_and_nonterminal_preserves_terminal_truth_without_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         responder,
-        "compose_terminal_contract_reply",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("mixed turn must stay legacy")
-        ),
-    )
-    monkeypatch.setattr(
-        responder,
         "build_realtime_composer_model",
-        lambda: object(),
-    )
-    monkeypatch.setattr(
-        responder,
-        "model_label",
-        lambda name: str(name),
-    )
-    monkeypatch.setattr(
-        responder,
-        "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=responder.ResponderDraft(
-                reply="تم الحجز، ودي معلومة العيادة.",
-                availability_claim="not_applicable",
-            ),
-            model_name="legacy-model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("mixed typed terminal response must not invoke the generic model")
         ),
     )
 
@@ -875,9 +855,9 @@ def test_mixed_terminal_and_nonterminal_stays_on_legacy_responder(
         ],
     )
 
-    assert text == "تم الحجز، ودي معلومة العيادة."
-    assert source == "legacy-model"
-
+    assert source == "deterministic:mixed-typed-contract"
+    assert "حجزك اتأكد" in text
+    assert "123" not in text
 
 def test_active_task_cancelled_stays_on_legacy_responder(
     monkeypatch: pytest.MonkeyPatch,
