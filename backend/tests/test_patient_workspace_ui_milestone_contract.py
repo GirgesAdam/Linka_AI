@@ -43,8 +43,10 @@ def test_patient_workspace_preserves_crm_and_entitlement_actions() -> None:
     packages = (_root() / "frontend/src/app/(dashboard)/patients/[patientId]/package-panel.tsx").read_text(encoding="utf-8")
     pulses = (_root() / "frontend/src/app/(dashboard)/patients/[patientId]/pulse-panel.tsx").read_text(encoding="utf-8")
 
-    for capability in ("createPatientTask", "addPatientNote", "setPatientWhatsappOptIn", "PatientPackagePanel", "PatientPulsePanel"):
+    for capability in ("createPatientTask", "addPatientNote", "PatientPackagePanel", "PatientPulsePanel"):
         assert capability in page
+    assert "setPatientWhatsappOptIn" not in page
+    assert "موافقة تواصل واتساب" not in page
     for capability in ("purchasePatientPackage", "recordPatientPackagePayment"):
         assert capability in actions and capability in packages
     assert "cancelPatientPackage" in actions
@@ -85,3 +87,10 @@ def test_patient_contextual_booking_and_task_filter_use_existing_contracts() -> 
     assert 'patient_id?: string' in tasks
     assert 'query.set("patient_id", filters.patient_id)' in tasks
     assert "teal-" not in pulses
+
+
+def test_patient_list_does_not_explain_active_status_inline() -> None:
+    page = (_root() / "frontend/src/app/(dashboard)/patients/page.tsx").read_text(encoding="utf-8")
+
+    assert "«نشط» لا تعني تلقائيًا" not in page
+    assert "آخر تواصل ظاهر في عمود منفصل" not in page

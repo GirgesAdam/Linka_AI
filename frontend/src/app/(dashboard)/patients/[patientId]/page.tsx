@@ -14,7 +14,7 @@ import {
   StickyNote,
   Tag,
 } from "lucide-react";
-import { addPatientNote, createPatientTask, setPatientWhatsappOptIn } from "../actions";
+import { addPatientNote, createPatientTask } from "../actions";
 import { PatientPackagePanel } from "./package-panel";
 import { PatientPulsePanel } from "./pulse-panel";
 import { PageHeader } from "@/components/page-header";
@@ -200,9 +200,6 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
       <div className="mb-5 flex flex-wrap gap-2">
         <StatusBadge domain="patient" status={patient.status} showIcon={false} />
         <Badge>{labelForSource(patient.source)}</Badge>
-        <Badge tone={patient.whatsapp_opt_in ? "green" : "gray"}>
-          {patient.whatsapp_opt_in ? "موافق على تواصل واتساب" : "موافقة واتساب غير مسجلة"}
-        </Badge>
         {profile.tags.map((tag) => <Badge key={tag.id} tone="purple"><Tag size={11} className="ml-1" />{tag.name}</Badge>)}
       </div>
 
@@ -272,25 +269,6 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">رقم الهاتف</span><b className="text-left" dir="ltr">{patient.phone || "—"}</b></div>
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">مصدر العميل</span><b>{labelForSource(patient.source)}</b></div>
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">آخر تواصل</span><b className="text-left">{formatDateTime(patient.last_contact_at)}</b></div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-bold text-slate-700">موافقة تواصل واتساب</div>
-                    <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">
-                      {patient.whatsapp_opt_in
-                        ? `مسجلة${patient.whatsapp_opt_in_at ? ` · ${formatDateTime(patient.whatsapp_opt_in_at)}` : ""}`
-                        : "لا تبدأ Linka رسائل واتساب تلقائية لهذا العميل حتى تُسجل موافقته."}
-                    </div>
-                  </div>
-                  <form action={setPatientWhatsappOptIn}>
-                    <input type="hidden" name="patient_id" value={patient.id} />
-                    <input type="hidden" name="whatsapp_opt_in" value={String(!patient.whatsapp_opt_in)} />
-                    <Button type="submit" variant="outline">
-                      {patient.whatsapp_opt_in ? "سحب الموافقة" : "تسجيل الموافقة"}
-                    </Button>
-                  </form>
-                </div>
-              </div>
             </CardContent>
           </Card>
 

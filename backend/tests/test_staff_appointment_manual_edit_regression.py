@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.services import staff_appointment_edits as edits
 from app.services.booking import SlotCandidate
 
@@ -176,3 +178,59 @@ def test_manual_time_edit_is_validated_and_applied(monkeypatch) -> None:
     assert validated == [target_start]
     assert appointment.start_at == target_start
     assert appointment.end_at == target_slot.end_at
+
+
+def test_manual_time_edit_rejects_overlap_in_same_operational_category(monkeypatch) -> None:
+    appointment = _appointment()
+    workspace = SimpleNamespace(id=appointment.workspace_id)
+    branch = SimpleNamespace(
+        id=appointment.branch_id,
+        workspace_id=workspace.id,
+        is_active=True,
+        timezone="Africa/Cairo",
+    )
+    service = SimpleNamespace(
+        id=appointment.service_id,
+        workspace_id=workspace.id,
+        is_active=True,
+        operational_category="dermatology",
+        requires_laser_device=False,
+    )
+    target_start = appointment.start_at + timedelta(days=1, hours=1)
+    target_slot = SlotCandidate(
+        branch_id=appointment.branch_id,
+        doctor_id=appointment.doctor_id,
+        service_id=appointment.service_id,
+        start_at=target_start,
+        end_at=target_start + timedelta(minutes=60),
+        busy_start_at=target_start,
+        busy_end_at=target_start + timedelta(minutes=65),
+        duration_minutes=60,
+        price_minor=appointment.price_minor,
+        currency=appointment.currency,
+    )
+
+    class Db:
+        def __init__(self):
+            self.values = iter((branch, service, uuid4()))
+
+        def scalar(self, _stmt):
+            return next(self.values)
+
+    monkeypatch.setattr(edits, "resolve_timezone", lambda *_args, **_kwargs: UTC)
+    monkeypatch.setattr(
+        edits,
+        "calculate_availability",
+        lambda *args, **kwargs: ("UTC", [target_slot]),
+    )
+
+    with pytest.raises(edits.StaffAppointmentEditError, match="same service category"):
+        edits._validated_slot_for_existing_appointment(
+            Db(),
+            workspace=workspace,
+            appointment=appointment,
+            service_id=appointment.service_id,
+            doctor_id=appointment.doctor_id,
+            laser_device_key=None,
+            requested_start_at=target_start,
+        )

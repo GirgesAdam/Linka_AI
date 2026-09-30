@@ -93,8 +93,8 @@ def test_quick_popup_closes_after_success_and_allows_minute_precision() -> None:
     assert 'if (column === "quick")' in page
     assert "appointment.is_quick_booking === true" in page
     assert "appointment.is_quick_booking !== true" in page
-    assert 'return "other";' in page
-    assert '{ id: "other", label: "أخرى" }' in page
+    assert 'return "dermatology";' in page
+    assert '{ id: "other", label: "أخرى" }' not in page
     assert "لا توجد حجوزات سريعة" in page
     assert "حجز سريع" in page
     assert "scheduling override could not be applied" in actions

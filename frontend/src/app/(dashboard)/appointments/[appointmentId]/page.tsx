@@ -236,7 +236,7 @@ export default async function AppointmentOperationsPage({
   );
   const staffMap = new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()]));
   const doctorOptions = doctors
-    .filter((item) => item.is_active)
+    .filter((item) => item.is_active || item.id === appointment.doctor_id)
     .map((item) => ({ id: item.id, name: staffMap.get(item.staff_id) || "دكتور" }));
 
   return (
@@ -402,11 +402,6 @@ export default async function AppointmentOperationsPage({
                     </form>
                   )
                 )}
-                {allowed.has("reschedule") && (
-                  <Link href={`/appointments/${appointment.id}/reschedule`} className={buttonVariants({ variant: "outline" })}>
-                    <CalendarClock size={15} /> تغيير الموعد
-                  </Link>
-                )}
                 {allowed.has("no_show") && (
                   <form action={updateAppointmentStatus}>
                     <input type="hidden" name="appointment_id" value={appointment.id} />
@@ -419,6 +414,7 @@ export default async function AppointmentOperationsPage({
 
               {canEditService && services.length > 0 && (
                 <AppointmentServiceEditor
+                  key={`${appointment.service_id}:${appointment.doctor_id}:${laserAppointment.laser_device_key || ""}:${appointment.start_at}`}
                   appointmentId={appointment.id}
                   patientId={appointment.patient_id}
                   currentServiceId={appointment.service_id}

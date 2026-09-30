@@ -48,3 +48,24 @@ def test_appointment_workspace_preserves_visit_commerce_and_lifecycle_capabiliti
     )
     for capability in required:
         assert capability in page
+
+
+def test_appointment_detail_uses_single_edit_surface_and_preserves_current_defaults() -> None:
+    page = (_root() / "frontend/src/app/(dashboard)/appointments/[appointmentId]/page.tsx").read_text(encoding="utf-8")
+    editor = (_root() / "frontend/src/app/(dashboard)/appointments/[appointmentId]/service-editor.tsx").read_text(encoding="utf-8")
+
+    assert "/reschedule" not in page
+    assert "AppointmentServiceEditor" in page
+    assert 'key={`${appointment.service_id}:${appointment.doctor_id}:' in page
+    assert "useEffect" not in editor
+    assert "service.is_active || service.id === currentServiceId" in editor
+    assert "item.is_active || item.id === appointment.doctor_id" in page
+
+
+def test_appointment_schedule_has_no_other_column_or_working_hours_banner() -> None:
+    page = (_root() / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+
+    schedule_contract = page.split("type ScheduleColumnId", 1)[1].split("function requestedColumns", 1)[0]
+    assert '"other"' not in schedule_contract
+    assert 'label: "أخرى"' not in schedule_contract
+    assert "ساعات العمل:" not in page
