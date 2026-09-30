@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
+from app.agents.v2.appointment_info_composer import format_appointment_datetime
+from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.response_contract import (
     CustomerResponseContract,
     CustomerResponseUnit,
+    ResponseChoice,
 )
 
 _SUPPORTED_CHOICE_GOALS = frozenset(
@@ -128,12 +131,124 @@ def _normalized_label(label: str) -> str:
     return " ".join(label.split()).casefold()
 
 
-def _duplicate_visible_labels(unit: CustomerResponseUnit) -> bool:
-    labels = [_normalized_label(choice.label) for choice in unit.choices]
-    return (
-        any(not label for label in labels)
-        or len(labels) != len(set(labels))
-    )
+def _choice_fact_value(choice: ResponseChoice, key: str) -> object | None:
+    for fact in choice.facts:
+        if fact.key == key:
+            return fact.value
+    return None
+
+
+def _outcome_effective_choice_goal(outcome: TurnOutcome) -> str | None:
+    if outcome.response_goal in _SUPPORTED_CHOICE_GOALS:
+        return outcome.response_goal
+    if outcome.response_goal != "clarification":
+        return None
+    needed = str(outcome.facts.get("needed") or "")
+    return {
+        "service": "ask_service_choice",
+        "device": "ask_device_choice",
+        "time": "ask_time_choice",
+        "appointment": "ask_appointment_choice",
+        "package": "ask_package_choice",
+    }.get(needed)
+
+
+def _outcome_choice_identity(choice) -> tuple[str, ...]:
+    for key in ("service_id", "doctor_id", "device_key", "appointment_id", "package_id"):
+        value = choice.facts.get(key)
+        if value not in (None, ""):
+            return (key, str(value))
+    return ("ref", str(choice.ref), _normalized_label(choice.label))
+
+
+def deduplicate_equivalent_choice_outcomes(
+    outcomes: list[TurnOutcome],
+) -> list[TurnOutcome]:
+    """Deduplicate only repeated presentation of the same verified semantic choice."""
+    seen: set[tuple[object, ...]] = set()
+    deduped: list[TurnOutcome] = []
+    for outcome in outcomes:
+        goal = _outcome_effective_choice_goal(outcome)
+        if (
+            outcome.status != "needs_input"
+            or goal is None
+            or not outcome.choices
+            or (
+                goal == "ask_package_choice"
+                and (
+                    outcome.facts.get("available_quote_count") not in (None, 0, 1)
+                    or any(
+                        set(choice.facts)
+                        & {
+                            "refund_amount",
+                            "refund_amount_minor",
+                            "refundable_amount",
+                            "refundable_amount_minor",
+                        }
+                        for choice in outcome.choices
+                    )
+                )
+            )
+        ):
+            deduped.append(outcome)
+            continue
+        key = (
+            goal,
+            tuple(sorted(_outcome_choice_identity(choice) for choice in outcome.choices)),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(outcome)
+    return deduped
+
+
+def _appointment_choice_label(choice: ResponseChoice, *, arabic: bool) -> str | None:
+    start_local = _choice_fact_value(choice, "start_local")
+    if not isinstance(start_local, str) or not start_local.strip():
+        return None
+    service = str(_choice_fact_value(choice, "service_name") or "").strip()
+    doctor = str(_choice_fact_value(choice, "doctor_name") or "").strip()
+    when = format_appointment_datetime(start_local, arabic=arabic, compact=True)
+    if arabic:
+        parts = [part for part in (service, f"يوم {when}", f"مع {doctor}" if doctor else "") if part]
+    else:
+        parts = [part for part in (service, when, f"with {doctor}" if doctor else "") if part]
+    return " · ".join(parts)
+
+
+def _render_choice_label(
+    choice: ResponseChoice,
+    *,
+    effective_goal: str,
+    arabic: bool,
+) -> str:
+    if effective_goal == "ask_appointment_choice":
+        formatted = _appointment_choice_label(choice, arabic=arabic)
+        if formatted:
+            return formatted
+    return choice.label.strip()
+
+
+def _duplicate_visible_labels(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+) -> bool:
+    effective_goal = _effective_choice_goal(unit)
+    if effective_goal is None:
+        return True
+    labels = [
+        _normalized_label(
+            _render_choice_label(
+                choice,
+                effective_goal=effective_goal,
+                arabic=arabic,
+            )
+        )
+        for choice in unit.choices
+    ]
+    return any(not label for label in labels) or len(labels) != len(set(labels))
 
 
 def _duplicate_fail_safe(*, arabic: bool) -> str:
@@ -155,7 +270,7 @@ def deterministic_verified_choice_unit_reply(
 ) -> str | None:
     if not is_supported_verified_choice_unit(unit):
         return None
-    if _duplicate_visible_labels(unit):
+    if _duplicate_visible_labels(unit, arabic=arabic):
         return _duplicate_fail_safe(arabic=arabic)
 
     effective_goal = _effective_choice_goal(unit)
@@ -169,7 +284,14 @@ def deterministic_verified_choice_unit_reply(
             f"Unsupported verified choice goal: {unit.response_goal}"
         )
 
-    labels = [choice.label.strip() for choice in unit.choices]
+    labels = [
+        _render_choice_label(
+            choice,
+            effective_goal=effective_goal,
+            arabic=arabic,
+        )
+        for choice in unit.choices
+    ]
     return intro + "\n" + "\n".join(f"- {label}" for label in labels)
 
 

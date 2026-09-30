@@ -949,13 +949,17 @@ def _choices_from_appointments(bundle: ReadExecutionBundle | None) -> list[Outco
             label_parts = [
                 str(row.get("service_name") or "موعد"),
                 str(row.get("doctor_name") or ""),
-                str(row.get("start_local") or ""),
             ]
             choices.append(
                 OutcomeChoice(
                     ref=f"appointment-choice-{index}",
                     label=" · ".join(part for part in label_parts if part),
-                    facts={"appointment_id": row.get("appointment_id")},
+                    facts={
+                        "appointment_id": row.get("appointment_id"),
+                        "service_name": row.get("service_name"),
+                        "doctor_name": row.get("doctor_name"),
+                        "start_local": row.get("start_local"),
+                    },
                 )
             )
     return choices

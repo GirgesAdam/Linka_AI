@@ -77,23 +77,35 @@ def _latest_customer_is_arabic(history: list[BaseMessage]) -> bool:
     return False
 
 
-def _format_start(value: str, *, arabic: bool) -> str:
+def format_appointment_datetime(
+    value: str,
+    *,
+    arabic: bool,
+    compact: bool = False,
+) -> str:
+    """Render a verified local appointment datetime for customer-facing copy."""
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return value
     hour = parsed.hour % 12 or 12
-    minute = f"{parsed.minute:02d}"
+    minute = "" if compact and parsed.minute == 0 else f":{parsed.minute:02d}"
     if arabic:
-        period = "صباحًا" if parsed.hour < 12 else "مساءً"
+        period = (
+            "صباحًا"
+            if parsed.hour < 12
+            else "ظهرًا"
+            if compact and parsed.hour == 12
+            else "مساءً"
+        )
         return (
             f"{parsed.day} {_MONTHS_AR[parsed.month]} {parsed.year} "
-            f"الساعة {hour}:{minute} {period}"
+            f"الساعة {hour}{minute} {period}"
         )
     period = "AM" if parsed.hour < 12 else "PM"
     return (
         f"{_MONTHS_EN[parsed.month]} {parsed.day}, {parsed.year} "
-        f"at {hour}:{minute} {period}"
+        f"at {hour}{minute} {period}"
     )
 def _service_text(service: AppointmentServiceInfo, *, arabic: bool) -> str:
     if service.service_name and service.device_name:
@@ -117,7 +129,7 @@ def _visit_line(
     arabic: bool,
     index: int | None,
 ) -> str:
-    start = _format_start(visit.start_local, arabic=arabic)
+    start = format_appointment_datetime(visit.start_local, arabic=arabic)
     status = (_STATUS_AR if arabic else _STATUS_EN).get(visit.status, visit.status)
     services = [
         text

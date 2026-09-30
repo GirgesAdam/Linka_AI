@@ -11,6 +11,7 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
+from app.agents.v2.availability_composer import presented_availability_window_keys
 from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
 from app.agents.v2.semantic_state_view import (
@@ -62,6 +63,7 @@ from app.services.agent_v2.read_executor import (
     ReadExecutionContext,
     execute_step_reads,
 )
+from app.services.agent_v2.response_contract import build_customer_response_contract
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingTaskState,
@@ -120,6 +122,7 @@ class V2OrchestratedTurn:
     pending_write: PendingV2Write | None
     verified_action_context: dict[str, object] | None = None
     pending_choice: OptionSnapshot | None = None
+    availability_presented_window_keys: tuple[str, ...] = ()
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -972,6 +975,87 @@ def _persist_final_task(
     )
 
 
+def _availability_scope_from_plan(plan: TurnPlan) -> dict[str, object]:
+    for step in reversed(plan.steps):
+        if step.operation_type != "availability" or step.disposition != "read":
+            continue
+        return {
+            key: value
+            for key in (
+                "service_id",
+                "doctor_id",
+                "doctor_ids",
+                "device_key",
+                "date",
+                "time",
+                "package_usage",
+            )
+            if (value := step.facts.get(key)) not in (None, "", [], {})
+        }
+    return {}
+
+
+def _availability_presentation_context(
+    *,
+    understanding: TiaTurnUnderstanding,
+    plan: TurnPlan,
+    outcomes: list[TurnOutcome],
+    recent_read_context: dict[str, Any] | None,
+) -> tuple[frozenset[str], bool, tuple[str, ...]]:
+    semantic_continuation = any(
+        operation.type == "availability" and operation.continues_previous
+        for operation in understanding.operations
+    )
+    current_scope = _availability_scope_from_plan(plan)
+    previous_scope = (
+        {
+            key: recent_read_context[key]
+            for key in (
+                "service_id",
+                "doctor_id",
+                "doctor_ids",
+                "device_key",
+                "date",
+                "time",
+                "package_usage",
+            )
+            if recent_read_context.get(key) not in (None, "", [], {})
+        }
+        if isinstance(recent_read_context, dict)
+        else {}
+    )
+    same_verified_scope = bool(
+        semantic_continuation
+        and current_scope
+        and current_scope == previous_scope
+    )
+
+    previous_keys: tuple[str, ...] = ()
+    if same_verified_scope and isinstance(recent_read_context, dict):
+        raw_keys = recent_read_context.get("availability_presented_window_keys")
+        if isinstance(raw_keys, list):
+            previous_keys = tuple(
+                str(value)
+                for value in raw_keys
+                if isinstance(value, str) and value
+            )
+
+    excluded = frozenset(previous_keys)
+    contract = build_customer_response_contract(outcomes)
+    current_keys = presented_availability_window_keys(
+        contract,
+        excluded_window_keys=excluded,
+    )
+    if not current_keys and not previous_keys:
+        return frozenset(), False, ()
+    cumulative = (
+        tuple(dict.fromkeys((*previous_keys, *current_keys)))
+        if same_verified_scope
+        else current_keys
+    )
+    return excluded, same_verified_scope, cumulative
+
+
 def orchestrate_v2_turn(
     *,
     db: Session,
@@ -1522,12 +1606,24 @@ def orchestrate_v2_turn(
     if not outcomes:
         raise RuntimeError("V2 runtime produced neither a customer outcome nor a pending write.")
 
+    (
+        availability_excluded_window_keys,
+        availability_continuation,
+        availability_presented_window_keys,
+    ) = _availability_presentation_context(
+        understanding=understanding,
+        plan=plan,
+        outcomes=outcomes,
+        recent_read_context=recent_read_context,
+    )
     reply, model = compose_v2_customer_reply(
         clinic_name=clinic_name,
         timezone_name=timezone_name,
         local_now=local_now,
         history=history,
         outcomes=outcomes,
+        availability_excluded_window_keys=availability_excluded_window_keys,
+        availability_continuation=availability_continuation,
     )
     return V2OrchestratedTurn(
         understanding=understanding,
@@ -1541,4 +1637,5 @@ def orchestrate_v2_turn(
         pending_write=None,
         verified_action_context=completed_action_context,
         pending_choice=outgoing_pending_choice,
+        availability_presented_window_keys=availability_presented_window_keys,
     )

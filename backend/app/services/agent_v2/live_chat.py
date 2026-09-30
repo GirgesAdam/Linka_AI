@@ -214,6 +214,10 @@ def _verified_read_context_from_turn(
         )
         if option_count is not None:
             context["availability_option_count"] = option_count
+            if turn.availability_presented_window_keys:
+                context["availability_presented_window_keys"] = list(
+                    turn.availability_presented_window_keys
+                )
 
         # A doctor-list read establishes a verified set even though the customer did
         # not enumerate every doctor. Recreate that exact set from canonical catalog
