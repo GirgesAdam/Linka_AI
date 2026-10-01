@@ -14,6 +14,7 @@ from app.agents.structured_output import StructuredOutputError, invoke_typed_str
 from app.agents.v2.semantic_context import SemanticContext, ground_turn_references
 from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
 from app.agents.v2.turn_contract import (
+    AppointmentSelector,
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
@@ -79,8 +80,9 @@ SEMANTIC PRINCIPLES
   candidate_mode=set for the compared entity set. For an availability comparison with no explicit
   date, use date mode=next_available so Python can verify which requested candidate is available
   sooner. Never ask the customer to choose one candidate merely in order to compare them.
-- Set continues_previous=true only when the new operation clearly continues recent_verified_read.
-  When true, include only constraints the customer newly states or changes; deterministic Python
+- Set continues_previous=true only when the new operation clearly continues recent_verified_read,
+  except for the explicitly described recent_verified_action continuations below. When continuing a
+  verified read, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
   same dimension. Set continuation_condition=if_previous_no_availability only when the operation is
   explicitly conditional on the immediately previous verified availability having no options; use
@@ -128,13 +130,23 @@ SEMANTIC PRINCIPLES
   list, in order. Never reinterpret "the second" as "the other" or the last item. Ground the chosen
   entity back to the verified recent read when that scope is available.
 - recent_verified_action describes only the immediately previous completed action when Python exposes
-  one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
-  added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
-  verified device reference instead of asking for that device again. A Pulse pack is not a session
-  package: this continuity may inherit the verified device, but must not set package_usage or imply
-  session-package consumption unless the customer separately and explicitly refers to a session
-  package. Do not inherit the Pulse purchase when the customer starts an unrelated request or names
-  a different device.
+  one. If it is a completed book and the customer explicitly revokes, undoes, or rejects that
+  just-completed booking, emit cancel_appointment with execution_intent=execute, mark that cancellation
+  continues_previous=true, and identify that verified appointment in source_appointment using the
+  supplied appointment_ref. If the same customer turn also asks to inspect availability or other
+  information, preserve both operations in business-safe order: cancel_appointment first, then the
+  informational operation. Do not infer cancellation from general dissatisfaction, uncertainty, a
+  price question, a preference change that does not reject the completed booking, or unrelated
+  negative wording. If the customer refers to a different or ambiguous appointment, preserve that
+  current target semantics and let Python verify or clarify it instead of silently using the recent
+  booking.
+- If recent_verified_action is a completed buy_pulse_pack and the customer clearly refers to the
+  Pulses/pack just added or purchased, mark the relevant follow-up as continues_previous=true and
+  preserve or use its verified device reference instead of asking for that device again. A Pulse pack
+  is not a session package: this continuity may inherit the verified device, but must not set
+  package_usage or imply session-package consumption unless the customer separately and explicitly
+  refers to a session package. Do not inherit the Pulse purchase when the customer starts an unrelated
+  request or names a different device.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -549,32 +561,77 @@ def merge_same_turn_pulse_device_context(
     return turn.model_copy(update={"operations": operations}) if changed else turn
 
 
+def _appointment_selector_has_explicit_appointment_identity(
+    selector: AppointmentSelector | None,
+) -> bool:
+    if selector is None or selector.appointment is None:
+        return False
+    appointment = selector.appointment
+    return (
+        appointment.ref is not None
+        or appointment.text not in (None, "")
+        or bool(appointment.candidate_refs)
+    )
+
+
 def merge_verified_action_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
 ) -> TiaTurnUnderstanding:
     """Inherit only facts the model explicitly links to the previous verified action."""
     raw = semantic_context.model_input.get("recent_verified_action")
-    if not isinstance(raw, dict) or raw.get("operation_type") != "buy_pulse_pack":
+    if not isinstance(raw, dict):
         return turn
 
-    device = _reference_from_verified(raw, single_key="device_ref")
+    operation_type = raw.get("operation_type")
+    if operation_type == "buy_pulse_pack":
+        device = _reference_from_verified(raw, single_key="device_ref")
+        operations = []
+        for operation in turn.operations:
+            entities = operation.entities
+            if (
+                operation.continues_previous
+                and operation.type == "book"
+                and entities.device is None
+                and device is not None
+            ):
+                entities = entities.model_copy(update={"device": device})
+                operation = operation.model_copy(update={"entities": entities})
+            operations.append(operation)
+        if operations == turn.operations:
+            return turn
+        return turn.model_copy(update={"operations": operations})
+
+    if operation_type != "book":
+        return turn
+
+    appointment = _reference_from_verified(raw, single_key="appointment_ref")
+    if appointment is None:
+        return turn
+
     operations = []
+    changed = False
     for operation in turn.operations:
-        entities = operation.entities
         if (
-            operation.continues_previous
-            and operation.type == "book"
-            and entities.device is None
-            and device is not None
+            operation.type == "cancel_appointment"
+            and operation.execution_intent == "execute"
+            and operation.continues_previous
+            and not _appointment_selector_has_explicit_appointment_identity(
+                operation.source_appointment
+            )
         ):
-            entities = entities.model_copy(update={"device": device})
-            operation = operation.model_copy(update={"entities": entities})
+            source = operation.source_appointment or AppointmentSelector()
+            operation = operation.model_copy(
+                update={
+                    "source_appointment": source.model_copy(
+                        update={"appointment": appointment}
+                    ),
+                }
+            )
+            changed = True
         operations.append(operation)
 
-    if operations == turn.operations:
-        return turn
-    return turn.model_copy(update={"operations": operations})
+    return turn.model_copy(update={"operations": operations}) if changed else turn
 
 
 def interpret_customer_turn_v2(
