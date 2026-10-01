@@ -151,7 +151,8 @@ def test_reschedule_separates_source_date_from_replacement_date_and_time() -> No
     operation = TurnOperation(
         type="reschedule",
         source_appointment=AppointmentSelector(
-            date=DateConstraint(mode="exact", start_date="2026-09-28")
+            appointment=EntityReference(text=None, ref=None, candidate_refs=[]),
+            date=DateConstraint(mode="exact", start_date="2026-09-28"),
         ),
         entities=TurnEntities(
             date=DateConstraint(mode="exact", start_date="2026-09-30"),
@@ -260,7 +261,7 @@ def test_selected_appointment_reschedule_uses_target_and_new_replacement() -> No
     assert step.write_intent.parameters["service_id"] == "svc-bikini"
 
 
-def test_pending_appointment_target_beats_conflicting_catalog_scope() -> None:
+def test_explicit_current_source_selector_beats_stale_pending_appointment_target() -> None:
     target = _candidate_snapshot(purpose="appointment_target")
     target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
     operation = TurnOperation(
@@ -272,8 +273,176 @@ def test_pending_appointment_target_beats_conflicting_catalog_scope() -> None:
         TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
         _context(pending_choice=target),
     ).steps[0]
+    assert step.reads[0].parameters == {"service_id": "svc-bikini"}
+    assert "appointment_id" not in step.reads[0].parameters
+
+    blocked = advance_step_after_verification(
+        step,
+        VerificationFacts(appointment_match_count=0),
+    )
+    assert blocked.disposition == "blocked"
+    assert blocked.write_intent is not None
+    assert blocked.write_intent.parameters == {"service_id": "svc-bikini"}
+
+
+def test_current_appointment_ref_correction_cancels_corrected_target_not_stale_selection() -> None:
+    target = _candidate_snapshot(purpose="appointment_target")
+    target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
+    operation = TurnOperation(
+        type="cancel_appointment",
+        source_appointment=AppointmentSelector(appointment=EntityReference(ref="A1")),
+        entities=TurnEntities(),
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(pending_choice=target),
+    ).steps[0]
+
+    assert step.reads[0].parameters == {"appointment_id": "apt-1"}
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            verified_parameters={"appointment_id": "apt-1"},
+        ),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.parameters == {"appointment_id": "apt-1"}
+
+
+def test_current_date_correction_overrides_stale_pending_cancel_target() -> None:
+    target = _candidate_snapshot(purpose="appointment_target")
+    target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
+    operation = TurnOperation(
+        type="cancel_appointment",
+        source_appointment=AppointmentSelector(
+            date=DateConstraint(mode="exact", start_date="2026-09-28")
+        ),
+        entities=TurnEntities(),
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(pending_choice=target),
+    ).steps[0]
+
+    assert step.reads[0].parameters == {
+        "date": {"mode": "exact", "start_date": "2026-09-28", "end_date": None}
+    }
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            verified_parameters={"appointment_id": "apt-1"},
+        ),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.parameters["appointment_id"] == "apt-1"
+    assert ready.write_intent.parameters.get("appointment_id") != "apt-2"
+
+
+def test_current_service_doctor_date_identity_overrides_stale_pending_target() -> None:
+    target = _candidate_snapshot(purpose="appointment_target")
+    target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
+    operation = TurnOperation(
+        type="cancel_appointment",
+        source_appointment=AppointmentSelector(
+            service=EntityReference(ref="S1"),
+            doctor=EntityReference(ref="D1"),
+            date=DateConstraint(mode="exact", start_date="2026-09-28"),
+        ),
+        entities=TurnEntities(),
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(pending_choice=target),
+    ).steps[0]
+
+    assert step.reads[0].parameters == {
+        "service_id": "svc-underarm",
+        "doctor_id": "doc-1",
+        "date": {"mode": "exact", "start_date": "2026-09-28", "end_date": None},
+    }
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            verified_parameters={"appointment_id": "apt-1"},
+        ),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.parameters["appointment_id"] == "apt-1"
+
+
+def test_ambiguous_current_correction_never_reuses_stale_pending_target() -> None:
+    target = _candidate_snapshot(purpose="appointment_target")
+    target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
+    operation = TurnOperation(
+        type="cancel_appointment",
+        source_appointment=AppointmentSelector(service=EntityReference(ref="S1")),
+        entities=TurnEntities(),
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(pending_choice=target),
+    ).steps[0]
+
+    assert step.reads[0].parameters == {"service_id": "svc-underarm"}
+    assert "appointment_id" not in step.reads[0].parameters
+    ambiguous = advance_step_after_verification(
+        step,
+        VerificationFacts(appointment_match_count=2),
+    )
+    assert ambiguous.disposition == "clarify"
+    assert ambiguous.clarification_field == "appointment"
+
+
+def test_unresolved_current_correction_fails_closed_instead_of_reusing_stale_target() -> None:
+    target = _candidate_snapshot(purpose="appointment_target")
+    target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
+    operation = TurnOperation(
+        type="cancel_appointment",
+        source_appointment=AppointmentSelector(
+            doctor=EntityReference(text="دكتور مختلف", ref=None, candidate_refs=[])
+        ),
+        entities=TurnEntities(),
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(pending_choice=target),
+    ).steps[0]
+
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "appointment"
+    assert step.write_intent is None
+    assert step.reads == []
+
+
+def test_no_correction_baseline_keeps_selected_pending_cancel_target() -> None:
+    target = _candidate_snapshot(purpose="appointment_target")
+    target = target.model_copy(update={"lifecycle_action": "cancel_appointment"})
+    operation = TurnOperation(
+        type="cancel_appointment",
+        entities=TurnEntities(),
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(pending_choice=target),
+    ).steps[0]
+
     assert step.reads[0].parameters == {"appointment_id": "apt-2"}
-    assert "service_id" not in step.reads[0].parameters
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            verified_parameters={"appointment_id": "apt-2"},
+        ),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.parameters == {"appointment_id": "apt-2"}
 
 
 def test_pending_appointment_choice_exposes_only_ephemeral_appointment_refs() -> None:

@@ -196,9 +196,48 @@ def _source_appointment_parameters(
     context: PlannerContext,
     *,
     fallback: dict[str, object],
-) -> dict[str, object]:
-    """Resolve existing-appointment identity independently from replacement constraints."""
+) -> dict[str, object] | None:
+    """Resolve current lifecycle identity before falling back to an older selected target."""
+    selector = operation.source_appointment
+    selector_params: dict[str, object] = {}
+    selector_has_identity = False
+    selector_has_unresolved_identity = False
+
+    if selector is not None:
+        for field, kind, key in (
+            ("appointment", "appointment", "appointment_id"),
+            ("service", "service", "service_id"),
+            ("doctor", "doctor", "doctor_id"),
+            ("device", "device", "device_key"),
+        ):
+            entity = getattr(selector, field)
+            if entity is None:
+                continue
+            entity_has_identity = (
+                entity.ref is not None
+                or entity.text not in (None, "")
+                or bool(entity.candidate_refs)
+            )
+            if not entity_has_identity:
+                continue
+            selector_has_identity = True
+            if entity.ref is None:
+                selector_has_unresolved_identity = True
+                continue
+            value = context.semantic_context.resolve(entity.ref, expected_kind=kind)
+            if value is None:
+                selector_has_unresolved_identity = True
+                continue
+            selector_params[key] = value
+        if selector.date is not None:
+            selector_has_identity = True
+            selector_params["date"] = selector.date.model_dump(mode="json")
+        if selector.time is not None:
+            selector_has_identity = True
+            selector_params["time"] = selector.time.model_dump(mode="json")
+
     pending = context.pending_choice
+    pending_target_id: str | None = None
     if (
         pending is not None
         and pending.purpose == "appointment_target"
@@ -208,9 +247,20 @@ def _source_appointment_parameters(
     ):
         selected_id = pending.options[0].payload.get("appointment_id")
         if selected_id not in (None, ""):
-            return {"appointment_id": str(selected_id)}
+            pending_target_id = str(selected_id)
 
-    selector = operation.source_appointment
+    # A source_appointment belongs to the current turn. If it identifies a different
+    # lifecycle target, it must win over an older singleton selected on a previous turn.
+    # If that current identity is only partially/unresolvably grounded, fail closed rather
+    # than reusing the stale singleton for a destructive write.
+    if pending_target_id is not None and selector_has_identity:
+        if selector_has_unresolved_identity:
+            return None
+        return selector_params
+
+    if pending_target_id is not None:
+        return {"appointment_id": pending_target_id}
+
     if selector is None:
         if operation.type == "reschedule":
             appointment_id = fallback.get("appointment_id")
@@ -221,24 +271,7 @@ def _source_appointment_parameters(
             if key in {"appointment_id", "service_id", "doctor_id", "device_key", "date", "time"}
         }
 
-    params: dict[str, object] = {}
-    for field, kind, key in (
-        ("appointment", "appointment", "appointment_id"),
-        ("service", "service", "service_id"),
-        ("doctor", "doctor", "doctor_id"),
-        ("device", "device", "device_key"),
-    ):
-        entity = getattr(selector, field)
-        if entity is None or entity.ref is None:
-            continue
-        value = context.semantic_context.resolve(entity.ref, expected_kind=kind)
-        if value is not None:
-            params[key] = value
-    if selector.date is not None:
-        params["date"] = selector.date.model_dump(mode="json")
-    if selector.time is not None:
-        params["time"] = selector.time.model_dump(mode="json")
-    return params
+    return selector_params
 
 
 def _service_requires_laser_device(
@@ -741,6 +774,8 @@ def _plan_operation(
 
     if operation.type in {"confirm_appointment", "cancel_appointment"}:
         source_params = _source_appointment_parameters(operation, context, fallback=params)
+        if source_params is None:
+            return _clarify(index=index, operation=operation, field="appointment")
         kind: WriteKind = (
             "confirm_appointment" if operation.type == "confirm_appointment" else "cancel_appointment"
         )
@@ -761,6 +796,8 @@ def _plan_operation(
         if "doctor_ids" in params:
             return _clarify(index=index, operation=operation, field="doctor")
         source_params = _source_appointment_parameters(operation, context, fallback=params)
+        if source_params is None:
+            return _clarify(index=index, operation=operation, field="appointment")
         replacement_params = {
             key: value
             for key, value in params.items()
