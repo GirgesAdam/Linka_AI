@@ -240,3 +240,72 @@ def test_verified_cancellation_action_view_hides_canonical_appointment_id() -> N
         "appointment_ref": "A1",
     }
     assert APPOINTMENT_ID not in json.dumps(recent, ensure_ascii=False)
+
+
+def test_verified_booking_action_creates_ephemeral_appointment_ref_without_catalog_appointments() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": SERVICE_ID,
+                    "name": "هيدرافيشل",
+                    "requires_laser_device": False,
+                }
+            ],
+            "doctors": [
+                {
+                    "id": DOCTOR_ID,
+                    "name": "مريم",
+                    "service_ids": [SERVICE_ID],
+                }
+            ],
+            "appointments": [],
+            "packages": [],
+        }
+    )
+    safe = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "book",
+            "appointment_id": APPOINTMENT_ID,
+            "service_id": SERVICE_ID,
+            "doctor_id": DOCTOR_ID,
+            "start_at": "2026-09-17T16:00:00+00:00",
+            "status": "confirmed",
+            "package_usage": "unspecified",
+        },
+    )
+
+    recent = safe.model_input["recent_verified_action"]
+    appointment_ref = recent["appointment_ref"]
+    assert isinstance(appointment_ref, str)
+    assert safe.resolve(appointment_ref, expected_kind="appointment") == APPOINTMENT_ID
+
+    encoded = json.dumps(safe.model_input, ensure_ascii=False, default=str)
+    assert APPOINTMENT_ID not in encoded
+    assert SERVICE_ID not in encoded
+    assert DOCTOR_ID not in encoded
+
+
+def test_verified_booking_action_reuses_existing_appointment_ref() -> None:
+    context = _context()
+    safe = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "book",
+            "appointment_id": APPOINTMENT_ID,
+            "service_id": SERVICE_ID,
+            "doctor_id": DOCTOR_ID,
+            "start_at": "2026-09-17T16:00:00+00:00",
+            "status": "confirmed",
+            "package_usage": "unspecified",
+        },
+    )
+
+    assert safe.model_input["recent_verified_action"]["appointment_ref"] == "A1"
+    appointment_targets = [
+        target
+        for target in safe.reference_map.values()
+        if target.kind == "appointment"
+    ]
+    assert len(appointment_targets) == 1
