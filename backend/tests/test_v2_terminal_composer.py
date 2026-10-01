@@ -17,6 +17,7 @@ from app.agents.v2.terminal_composer import (
     _build_terminal_composer_messages,
     compose_terminal_contract_reply,
     deterministic_terminal_fallback,
+    format_customer_datetime,
     resolve_terminal_composer_draft,
     validate_terminal_composer_draft,
 )
@@ -31,6 +32,17 @@ from app.services.agent_v2.response_contract import (
 )
 
 NOW = datetime(2026, 9, 28, 16, 0, tzinfo=UTC)
+
+
+def test_customer_datetime_formatter_uses_workspace_timezone() -> None:
+    text = format_customer_datetime(
+        "2026-10-05T07:00:00+00:00",
+        arabic=True,
+        timezone_name="Africa/Cairo",
+    )
+
+    assert text == "5 أكتوبر 2026 الساعة 10 صباحًا"
+
 
 
 def _terminal(

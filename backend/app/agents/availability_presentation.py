@@ -135,9 +135,9 @@ def availability_windows_from_slots(slots: object) -> list[dict[str, Any]]:
 
     windows.sort(
         key=lambda row: (
-            str(row.get("laser_device_name") or ""),
-            str(row.get("doctor_name") or ""),
             str(row.get("start_local") or ""),
+            str(row.get("doctor_name") or ""),
+            str(row.get("laser_device_name") or ""),
         )
     )
     return windows

@@ -26,6 +26,7 @@ from app.agents.v2.availability_composer import (
 )
 from app.agents.v2.choice_composer import (
     compose_verified_choice_contract_reply,
+    deduplicate_equivalent_choice_outcomes,
     deterministic_verified_choice_unit_reply,
     is_pure_supported_verified_choice_contract,
 )
@@ -794,12 +795,19 @@ def _compose_pure_supported_contract_reply(
     *,
     history: list[BaseMessage],
     contract: CustomerResponseContract,
+    availability_shown_window_keys: set[str] | frozenset[str] | None = None,
+    availability_continuation: bool = False,
 ) -> tuple[str, str] | None:
     """Keep the established pure-domain response paths unchanged."""
     if is_pure_supported_terminal_contract(contract):
         return compose_terminal_contract_reply(history=history, contract=contract)
     if is_pure_supported_availability_contract(contract):
-        return compose_availability_contract_reply(history=history, contract=contract)
+        return compose_availability_contract_reply(
+            history=history,
+            contract=contract,
+            shown_window_keys=availability_shown_window_keys,
+            continuation=availability_continuation,
+        )
     if is_pure_supported_appointment_contract(contract):
         return compose_appointment_info_contract_reply(history=history, contract=contract)
     if is_pure_supported_service_contract(contract):
@@ -1122,12 +1130,17 @@ def compose_v2_customer_reply(
     local_now: datetime,
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
+    availability_shown_window_keys: set[str] | frozenset[str] | None = None,
+    availability_continuation: bool = False,
 ) -> tuple[str, str]:
     """Render one customer reply from verified V2 outcomes; never execute actions or tools."""
+    outcomes = deduplicate_equivalent_choice_outcomes(outcomes)
     response_contract = build_customer_response_contract(outcomes)
     pure_reply = _compose_pure_supported_contract_reply(
         history=history,
         contract=response_contract,
+        availability_shown_window_keys=availability_shown_window_keys,
+        availability_continuation=availability_continuation,
     )
     if pure_reply is not None:
         return pure_reply

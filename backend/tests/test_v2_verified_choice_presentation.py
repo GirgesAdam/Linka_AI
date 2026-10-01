@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from app.agents.v2 import responder
 from app.agents.v2.choice_composer import (
+    deduplicate_equivalent_choice_outcomes,
     deterministic_verified_choice_contract_reply,
     is_pure_supported_verified_choice_contract,
 )
@@ -118,6 +119,60 @@ def test_nonfinancial_choice_families_render_verified_labels_without_model(
     assert "secret-service" not in text
     assert "secret-appointment" not in text
     assert "internal-" not in text
+
+
+def test_same_semantic_ambiguity_from_two_units_renders_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+    outcomes = [
+        _choice_outcome("ask_service_choice", ["PRP للبشرة", "PRP للشعر"]),
+        _choice_outcome("ask_service_choice", ["PRP للبشرة", "PRP للشعر"]),
+    ]
+
+    text, source = _compose(outcomes, "سعر PRP والباكدج بتاعته؟")
+
+    assert text.count("تقصد أنهي خدمة من دول؟") == 1
+    assert text.count("PRP للبشرة") == 1
+    assert text.count("PRP للشعر") == 1
+    assert source == "deterministic:verified-choice-contract"
+
+
+def test_independent_service_and_doctor_ambiguities_are_not_collapsed() -> None:
+    service = _choice_outcome("ask_service_choice", ["A", "B"])
+    doctor = _choice_outcome("ask_doctor_choice", ["د. مريم", "د. سارة"])
+
+    deduped = deduplicate_equivalent_choice_outcomes([service, doctor])
+
+    assert deduped == [service, doctor]
+
+
+def test_appointment_choice_uses_human_datetime_not_iso(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_model(monkeypatch)
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="ask_appointment_choice",
+        facts={"needed": "appointment"},
+        choices=[
+            OutcomeChoice(
+                ref="appointment-1",
+                label="PRP للبشرة · 2026-10-05T10:00:00+03:00",
+                facts={
+                    "appointment_id": "internal-id",
+                    "service_name": "PRP للبشرة",
+                    "doctor_name": "د. مريم",
+                    "start_local": "2026-10-05T10:00:00+03:00",
+                },
+            )
+        ],
+    )
+
+    text, _source = _compose([outcome], "قصدي أنهي معاد؟")
+
+    assert "PRP للبشرة، يوم 5 أكتوبر 2026 الساعة 10 صباحًا، مع د. مريم" in text
+    assert "2026-10-05T10:00:00+03:00" not in text
 
 
 def test_duplicate_visible_labels_fail_safe_without_internal_identity() -> None:

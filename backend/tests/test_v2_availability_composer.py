@@ -12,6 +12,7 @@ from app.agents.v2.availability_composer import (
     AvailabilityComposerUnitDraft,
     AvailabilityComposerValidationError,
     _build_availability_composer_messages,
+    _paged_contract,
     deterministic_availability_fallback,
     resolve_availability_composer_draft,
     validate_availability_composer_draft,
@@ -275,7 +276,7 @@ def test_multiple_dates_are_backend_resolved() -> None:
 def test_continuous_verified_range_is_described_as_bookable_starts_not_duration() -> None:
     text = _render([_present([_window("17:00", "19:00")])])
 
-    assert "بدايات حجز من 5 مساءً لـ7 مساءً" in text
+    assert "من 5 مساءً لـ7 مساءً" in text
     assert "الجلسة من" not in text
 
 
@@ -306,6 +307,75 @@ def test_complete_set_cannot_be_silently_truncated() -> None:
         match="complete verified window set",
     ):
         validate_availability_composer_draft(contract, draft)
+
+
+def test_progressive_availability_pages_are_nearest_first_without_repetition() -> None:
+    windows = [
+        {**_window("17:00"), "start_local": "2026-10-01T17:00:00+03:00", "end_local": "2026-10-01T17:00:00+03:00"},
+        {**_window("19:00"), "start_local": "2026-10-01T19:00:00+03:00", "end_local": "2026-10-01T19:00:00+03:00"},
+        {**_window("17:00"), "start_local": "2026-10-02T17:00:00+03:00", "end_local": "2026-10-02T17:00:00+03:00"},
+        {**_window("17:00"), "start_local": "2026-10-03T17:00:00+03:00", "end_local": "2026-10-03T17:00:00+03:00"},
+        {**_window("17:00"), "start_local": "2026-10-04T17:00:00+03:00", "end_local": "2026-10-04T17:00:00+03:00"},
+        {**_window("17:00"), "start_local": "2026-10-05T17:00:00+03:00", "end_local": "2026-10-05T17:00:00+03:00"},
+    ]
+    contract = build_customer_response_contract(
+        [_present(windows, checked_dates=[f"2026-10-0{day}" for day in range(1, 6)])]
+    )
+
+    first, first_keys, first_more = _paged_contract(
+        contract,
+        shown_window_keys=None,
+    )
+    first_text = deterministic_availability_fallback(
+        first,
+        arabic=True,
+        has_more_by_unit=first_more,
+    )
+
+    second, second_keys, second_more = _paged_contract(
+        contract,
+        shown_window_keys=set(first_keys),
+    )
+    second_text = deterministic_availability_fallback(
+        second,
+        arabic=True,
+        has_more_by_unit=second_more,
+        continuation=True,
+    )
+
+    assert len(first_keys) == 4
+    assert len(second_keys) == 2
+    assert set(first_keys).isdisjoint(second_keys)
+    assert "أقرب المواعيد المتاحة" in first_text
+    assert "1 أكتوبر 2026" in first_text
+    assert "4 أكتوبر 2026" in second_text
+    assert "5 أكتوبر 2026" in second_text
+    assert "1 أكتوبر 2026" not in second_text
+    assert "كمان متاح عندنا" in second_text
+
+
+def test_presentation_page_order_is_time_first_not_doctor_or_device_name() -> None:
+    near = {
+        **_window("18:00", doctor="د. زينب", device="Zulu"),
+        "start_local": "2026-10-01T18:00:00+03:00",
+        "end_local": "2026-10-01T18:00:00+03:00",
+    }
+    later = {
+        **_window("17:00", doctor="د. أحمد", device="Alpha"),
+        "start_local": "2026-10-02T17:00:00+03:00",
+        "end_local": "2026-10-02T17:00:00+03:00",
+    }
+    contract = build_customer_response_contract([_present([later, near])])
+
+    page, _keys, _more = _paged_contract(contract, shown_window_keys=None)
+    fact = next(
+        fact
+        for fact in page.units[0].facts
+        if fact.key == "availability_windows"
+    )
+
+    assert fact.value[0]["doctor_name"] == "د. زينب"
+    assert fact.value[0]["laser_device_name"] == "Zulu"
 
 
 def test_compound_availability_units_preserve_order_and_namespaces() -> None:

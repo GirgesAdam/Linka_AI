@@ -4,6 +4,7 @@ from typing import Any
 
 from app.agents.availability_presentation import availability_windows_from_slots
 from app.agents.v2.semantic_context import SemanticContext
+from app.agents.v2.terminal_composer import format_customer_datetime
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from app.services.agent_v2.outcome import OutcomeChoice, ResponseGoal, TurnOutcome
 from app.services.agent_v2.planner import PlanStep, TurnPlan
@@ -922,15 +923,25 @@ def _semantic_choices(
     entity = getattr(operation.entities, step.clarification_field)
     if entity is None:
         return []
-    return [
-        OutcomeChoice(
-            ref=ref,
-            label=_label_for_ref(semantic_context, ref),
-            facts={},
+    choices: list[OutcomeChoice] = []
+    for ref in entity.candidate_refs:
+        if semantic_context.resolve(ref) is None:
+            continue
+        row = _row_by_ref(semantic_context, ref)
+        facts: dict[str, object] = {}
+        if step.clarification_field == "appointment" and isinstance(row, dict):
+            for key in ("appointment_id", "service_name", "doctor_name", "start_local"):
+                value = row.get(key)
+                if value not in (None, ""):
+                    facts[key] = value
+        choices.append(
+            OutcomeChoice(
+                ref=ref,
+                label=_label_for_ref(semantic_context, ref),
+                facts=facts,
+            )
         )
-        for ref in entity.candidate_refs
-        if semantic_context.resolve(ref) is not None
-    ]
+    return choices
 
 
 def _choices_from_appointments(bundle: ReadExecutionBundle | None) -> list[OutcomeChoice]:
@@ -946,16 +957,27 @@ def _choices_from_appointments(bundle: ReadExecutionBundle | None) -> list[Outco
         for index, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
                 continue
+            start_local = row.get("start_local")
+            visible_start = (
+                format_customer_datetime(start_local, arabic=True)
+                if start_local not in (None, "")
+                else ""
+            )
             label_parts = [
                 str(row.get("service_name") or "موعد"),
                 str(row.get("doctor_name") or ""),
-                str(row.get("start_local") or ""),
+                visible_start,
             ]
+            facts = {
+                key: row.get(key)
+                for key in ("appointment_id", "service_name", "doctor_name", "start_local")
+                if row.get(key) not in (None, "")
+            }
             choices.append(
                 OutcomeChoice(
                     ref=f"appointment-choice-{index}",
                     label=" · ".join(part for part in label_parts if part),
-                    facts={"appointment_id": row.get("appointment_id")},
+                    facts=facts,
                 )
             )
     return choices
