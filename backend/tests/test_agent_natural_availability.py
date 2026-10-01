@@ -130,6 +130,24 @@ def test_windows_never_merge_different_doctors() -> None:
     assert {row["doctor_id"] for row in windows} == {"d1", "d2"}
 
 
+def test_windows_never_merge_different_devices() -> None:
+    base = _slot(
+        doctor_id="d1",
+        doctor_name="د. مريم",
+        start="15:00",
+        end="18:00",
+    )
+    slots = [
+        {**base, "laser_device_key": "device-a", "laser_device_name": "Candela"},
+        {**base, "laser_device_key": "device-b", "laser_device_name": "Prime Lase"},
+    ]
+
+    windows = availability_windows_from_slots(slots)
+
+    assert len(windows) == 2
+    assert {row["laser_device_key"] for row in windows} == {"device-a", "device-b"}
+
+
 def test_customer_reply_uses_start_ranges_not_grid_or_branch() -> None:
     slots = [
         _slot(doctor_id="d1", doctor_name="د. مريم", start="15:00", end="15:15"),

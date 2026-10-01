@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import date, datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict
@@ -473,13 +474,21 @@ def _format_clock(value: object, *, arabic: bool) -> str:
     return f"{display_hour}{minute_text} {period}"
 
 
-def _format_datetime(value: object, *, arabic: bool) -> str:
+def format_customer_datetime(
+    value: object,
+    *,
+    arabic: bool,
+    timezone_name: str | None = None,
+) -> str:
+    """Format a verified datetime for customer presentation without changing its identity."""
     if isinstance(value, str):
         try:
             parsed = datetime.fromisoformat(value.strip())
         except ValueError:
             parsed = None
         if parsed is not None:
+            if timezone_name and parsed.tzinfo is not None:
+                parsed = parsed.astimezone(ZoneInfo(timezone_name))
             if arabic:
                 day = f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
                 clock = _format_clock(
@@ -494,6 +503,10 @@ def _format_datetime(value: object, *, arabic: bool) -> str:
             )
             return f"{day} at {clock}"
     return str(value)
+
+
+def _format_datetime(value: object, *, arabic: bool) -> str:
+    return format_customer_datetime(value, arabic=arabic)
 
 
 def _clean_scalar(value: object) -> str:

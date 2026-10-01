@@ -27,6 +27,8 @@ def test_safe_read_context_exposes_only_verified_availability_summary() -> None:
             "operation_type": "availability",
             "service_id": "service-1",
             "availability_option_count": 4,
+            "availability_presented_window_keys": ["internal-cursor"],
+            "availability_presentation_has_more": True,
             "internal_note": "never expose",
         },
     )
@@ -35,6 +37,8 @@ def test_safe_read_context_exposes_only_verified_availability_summary() -> None:
     assert recent["service_ref"] == "S1"
     assert recent["availability_option_count"] == 4
     assert recent["availability_found"] is True
+    assert "availability_presented_window_keys" not in recent
+    assert "availability_presentation_has_more" not in recent
     assert "internal_note" not in recent
 
 

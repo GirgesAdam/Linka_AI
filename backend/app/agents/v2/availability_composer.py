@@ -16,6 +16,7 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.availability_pagination import select_availability_window_page
 from app.core.config import settings
 from app.services.agent_v2.response_contract import (
     AVAILABILITY_STATE_BY_GOAL,
@@ -365,6 +366,46 @@ def _window_values(unit: CustomerResponseUnit) -> list[dict[str, object]]:
     return [dict(value) for value in fact.value if isinstance(value, dict)]
 
 
+def _paged_contract(
+    contract: CustomerResponseContract,
+    *,
+    shown_window_keys: set[str] | frozenset[str] | None,
+) -> tuple[CustomerResponseContract, list[str], dict[int, bool]]:
+    """Project full verified availability into one deterministic presentation page."""
+    units: list[CustomerResponseUnit] = []
+    selected_keys: list[str] = []
+    has_more_by_unit: dict[int, bool] = {}
+    for index, unit in enumerate(contract.units):
+        truth = unit.availability_truth
+        if truth is None or truth.state != "options_available":
+            units.append(unit)
+            continue
+
+        windows = _window_values(unit)
+        service_fact = _fact_map(unit).get("service_name")
+        service_name = service_fact.value if service_fact is not None else None
+        selected, keys, has_more = select_availability_window_page(
+            windows,
+            service_name=service_name,
+            shown_keys=shown_window_keys,
+        )
+        facts = tuple(
+            fact.model_copy(update={"value": selected})
+            if fact.key == "availability_windows"
+            else fact
+            for fact in unit.facts
+        )
+        units.append(unit.model_copy(update={"facts": facts}))
+        selected_keys.extend(keys)
+        has_more_by_unit[index] = has_more
+
+    return (
+        contract.model_copy(update={"units": tuple(units)}),
+        selected_keys,
+        has_more_by_unit,
+    )
+
+
 def _window_time_text(window: dict[str, object], *, arabic: bool) -> tuple[str, str]:
     start = _parse_datetime(window.get("start_local"))
     end = _parse_datetime(window.get("end_local"))
@@ -390,9 +431,9 @@ def _window_time_text(window: dict[str, object], *, arabic: bool) -> tuple[str, 
         )
     else:
         time_text = (
-            f"بدايات حجز من {start_label} لـ{end_label}"
+            f"من {start_label} لـ{end_label}"
             if arabic
-            else f"bookable starts from {start_label} to {end_label}"
+            else f"from {start_label} to {end_label}"
         )
     return date_label, time_text
 
@@ -477,6 +518,8 @@ def _render_present(
     draft: AvailabilityComposerUnitDraft,
     *,
     arabic: bool,
+    has_more: bool = False,
+    continuation: bool = False,
 ) -> str:
     intro_by_style = (
         {
@@ -491,7 +534,15 @@ def _render_present(
             "friendly": "I found these times for you",
         }
     )
-    intro = intro_by_style[draft.style]
+    intro = (
+        ("كمان متاح عندنا" if arabic else "More available times")
+        if continuation
+        else (
+            ("أقرب المواعيد المتاحة" if arabic else "Nearest available times")
+            if has_more
+            else intro_by_style[draft.style]
+        )
+    )
     context = _optional_context(
         unit,
         draft.optional_fact_keys,
@@ -505,6 +556,12 @@ def _render_present(
         mode=draft.presentation_mode,
     )
     if not rows:
+        if continuation:
+            return (
+                "مفيش فترات إضافية في نطاق البحث الحالي."
+                if arabic
+                else "There are no additional verified ranges in the current search scope."
+            )
         raise AvailabilityComposerValidationError(
             "options_available requires renderable verified windows."
         )
@@ -580,6 +637,8 @@ def _render_unit(
     draft: AvailabilityComposerUnitDraft,
     *,
     arabic: bool,
+    has_more: bool = False,
+    continuation: bool = False,
 ) -> str:
     truth = unit.availability_truth
     if truth is None:
@@ -587,7 +646,13 @@ def _render_unit(
             "Availability unit is missing backend truth."
         )
     if truth.state == "options_available":
-        return _render_present(unit, draft, arabic=arabic)
+        return _render_present(
+            unit,
+            draft,
+            arabic=arabic,
+            has_more=has_more,
+            continuation=continuation,
+        )
     if truth.state == "requested_time_unavailable":
         return _render_requested_miss(unit, draft, arabic=arabic)
     if truth.state == "no_availability":
@@ -600,6 +665,8 @@ def resolve_availability_composer_draft(
     draft: AvailabilityComposerDraft,
     *,
     arabic: bool,
+    has_more_by_unit: dict[int, bool] | None = None,
+    continuation: bool = False,
 ) -> str:
     validate_availability_composer_draft(contract, draft)
     chunks: list[str] = []
@@ -622,7 +689,13 @@ def resolve_availability_composer_draft(
             effective_draft = draft_unit.model_copy(
                 update={"closing_action": "none"}
             )
-        rendered = _render_unit(unit, effective_draft, arabic=arabic)
+        rendered = _render_unit(
+            unit,
+            effective_draft,
+            arabic=arabic,
+            has_more=bool((has_more_by_unit or {}).get(index)),
+            continuation=continuation,
+        )
         if index == 0:
             chunks.append(rendered)
             continue
@@ -648,6 +721,8 @@ def deterministic_availability_fallback(
     contract: CustomerResponseContract,
     *,
     arabic: bool,
+    has_more_by_unit: dict[int, bool] | None = None,
+    continuation: bool = False,
 ) -> str:
     units: list[AvailabilityComposerUnitDraft] = []
     for index, unit in enumerate(contract.units):
@@ -677,6 +752,8 @@ def deterministic_availability_fallback(
         contract,
         AvailabilityComposerDraft(units=units),
         arabic=arabic,
+        has_more_by_unit=has_more_by_unit,
+        continuation=continuation,
     )
 
 
@@ -684,12 +761,20 @@ def compose_availability_contract_reply(
     *,
     history: list[BaseMessage],
     contract: CustomerResponseContract,
+    shown_window_keys: set[str] | frozenset[str] | None = None,
+    continuation: bool = False,
 ) -> tuple[str, str]:
-    """Compose pure availability outcomes without model-authored availability facts."""
+    """Compose one deterministic page from the full verified availability truth."""
     arabic = _latest_customer_is_arabic(history)
+    contract, _selected_keys, has_more_by_unit = _paged_contract(
+        contract,
+        shown_window_keys=shown_window_keys if continuation else None,
+    )
     fallback_text = deterministic_availability_fallback(
         contract,
         arabic=arabic,
+        has_more_by_unit=has_more_by_unit,
+        continuation=continuation,
     )
 
     try:
@@ -737,6 +822,8 @@ def compose_availability_contract_reply(
             contract,
             invocation.value,
             arabic=arabic,
+            has_more_by_unit=has_more_by_unit,
+            continuation=continuation,
         )
         return text, f"availability-contract:{model_label(invocation.model_name)}"
     except (

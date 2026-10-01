@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
+from app.agents.v2.terminal_composer import format_customer_datetime
+from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.response_contract import (
     CustomerResponseContract,
     CustomerResponseUnit,
@@ -106,6 +108,51 @@ def _effective_choice_goal(unit: CustomerResponseUnit) -> str | None:
     }.get(needed)
 
 
+def _outcome_choice_goal(outcome: TurnOutcome) -> str | None:
+    if outcome.response_goal in _SUPPORTED_CHOICE_GOALS:
+        return outcome.response_goal
+    if outcome.response_goal != "clarification":
+        return None
+    needed = str(outcome.facts.get("needed") or "")
+    return {
+        "service": "ask_service_choice",
+        "device": "ask_device_choice",
+        "time": "ask_time_choice",
+        "appointment": "ask_appointment_choice",
+        "package": "ask_package_choice",
+    }.get(needed)
+
+
+def deduplicate_equivalent_choice_outcomes(
+    outcomes: list[TurnOutcome],
+) -> list[TurnOutcome]:
+    """Drop only repeated presentations of the same canonical verified choice set."""
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    deduped: list[TurnOutcome] = []
+    for outcome in outcomes:
+        goal = _outcome_choice_goal(outcome)
+        if outcome.status != "needs_input" or goal is None or not outcome.choices:
+            deduped.append(outcome)
+            continue
+        signature = (
+            goal,
+            tuple(
+                sorted(
+                    (
+                        str(choice.ref),
+                        _normalized_label(choice.label),
+                    )
+                    for choice in outcome.choices
+                )
+            ),
+        )
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(outcome)
+    return deduped
+
+
 def is_supported_verified_choice_unit(unit: CustomerResponseUnit) -> bool:
     return (
         unit.status == "needs_input"
@@ -134,6 +181,37 @@ def _duplicate_visible_labels(unit: CustomerResponseUnit) -> bool:
         any(not label for label in labels)
         or len(labels) != len(set(labels))
     )
+
+
+def _choice_fact(choice, key: str) -> object | None:
+    for fact in choice.facts:
+        if fact.key == key:
+            return fact.value
+    return None
+
+
+def _appointment_choice_label(choice, *, arabic: bool) -> str:
+    start_local = _choice_fact(choice, "start_local")
+    if start_local in (None, ""):
+        return choice.label.strip()
+
+    service_name = str(_choice_fact(choice, "service_name") or "").strip()
+    doctor_name = str(_choice_fact(choice, "doctor_name") or "").strip()
+    start = format_customer_datetime(start_local, arabic=arabic)
+
+    parts: list[str] = []
+    if service_name:
+        parts.append(service_name)
+    if arabic:
+        parts.append(f"يوم {start}")
+        if doctor_name:
+            parts.append(f"مع {doctor_name}")
+        return "، ".join(parts)
+
+    parts.append(start)
+    if doctor_name:
+        parts.append(f"with {doctor_name}")
+    return ", ".join(parts)
 
 
 def _duplicate_fail_safe(*, arabic: bool) -> str:
@@ -169,7 +247,14 @@ def deterministic_verified_choice_unit_reply(
             f"Unsupported verified choice goal: {unit.response_goal}"
         )
 
-    labels = [choice.label.strip() for choice in unit.choices]
+    labels = [
+        (
+            _appointment_choice_label(choice, arabic=arabic)
+            if effective_goal == "ask_appointment_choice"
+            else choice.label.strip()
+        )
+        for choice in unit.choices
+    ]
     return intro + "\n" + "\n".join(f"- {label}" for label in labels)
 
 

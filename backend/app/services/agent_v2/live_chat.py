@@ -8,6 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
+from app.agents.v2.availability_pagination import (
+    availability_windows_from_outcome_facts,
+    select_availability_window_page,
+)
 from app.core.config import settings
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.conversation import Conversation
@@ -189,6 +193,7 @@ def _verified_read_context_from_turn(
     *,
     workspace: Workspace,
     turn: V2OrchestratedTurn,
+    previous_read_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Keep only the last read-only canonical scope plus a minimal verified result summary."""
     for step in reversed(turn.plan.steps):
@@ -214,6 +219,51 @@ def _verified_read_context_from_turn(
         )
         if option_count is not None:
             context["availability_option_count"] = option_count
+
+        if step.operation_type in {"availability", "book", "reschedule"}:
+            outcome = next(
+                (
+                    trace.outcome
+                    for trace in reversed(turn.traces)
+                    if trace.operation_index == step.operation_index
+                    and trace.outcome is not None
+                ),
+                None,
+            )
+            if outcome is not None:
+                service_name, windows = availability_windows_from_outcome_facts(
+                    outcome.facts
+                )
+                if windows:
+                    operation = (
+                        turn.understanding.operations[step.operation_index]
+                        if step.operation_index < len(turn.understanding.operations)
+                        else None
+                    )
+                    continuation = bool(
+                        operation is not None
+                        and getattr(operation, "continues_previous", False)
+                    )
+                    previous_keys = set()
+                    if continuation and isinstance(previous_read_context, dict):
+                        raw_keys = previous_read_context.get(
+                            "availability_presented_window_keys"
+                        )
+                        if isinstance(raw_keys, list):
+                            previous_keys = {
+                                str(value)
+                                for value in raw_keys
+                                if isinstance(value, str) and value
+                            }
+                    _selected, selected_keys, has_more = select_availability_window_page(
+                        windows,
+                        service_name=service_name,
+                        shown_keys=previous_keys,
+                    )
+                    cumulative = sorted(previous_keys | set(selected_keys))
+                    if cumulative:
+                        context["availability_presented_window_keys"] = cumulative
+                    context["availability_presentation_has_more"] = has_more
 
         # A doctor-list read establishes a verified set even though the customer did
         # not enumerate every doctor. Recreate that exact set from canonical catalog
@@ -440,6 +490,7 @@ def _run_v2_after_inbound(
         db,
         workspace=workspace,
         turn=turn,
+        previous_read_context=recent_read_context,
     )
     verified_action_context = _outbound_verified_action_context(
         turn,

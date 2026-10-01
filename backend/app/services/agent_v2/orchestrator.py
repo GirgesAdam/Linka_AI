@@ -286,6 +286,27 @@ def _verified_no_availability(reads: ReadExecutionBundle | None) -> bool:
     return True
 
 
+def _availability_presentation_continuation(
+    understanding: TiaTurnUnderstanding,
+) -> bool:
+    return any(
+        bool(getattr(operation, "continues_previous", False))
+        and operation.type in {"availability", "book", "reschedule"}
+        for operation in understanding.operations
+    )
+
+
+def _availability_shown_window_keys(
+    recent_read_context: dict[str, Any] | None,
+) -> set[str]:
+    if not isinstance(recent_read_context, dict):
+        return set()
+    raw = recent_read_context.get("availability_presented_window_keys")
+    if not isinstance(raw, list):
+        return set()
+    return {str(value) for value in raw if isinstance(value, str) and value}
+
+
 def _continuation_condition_satisfied(
     operation: TurnOperation,
     *,
@@ -1522,12 +1543,21 @@ def orchestrate_v2_turn(
     if not outcomes:
         raise RuntimeError("V2 runtime produced neither a customer outcome nor a pending write.")
 
+    availability_continuation = _availability_presentation_continuation(
+        understanding
+    )
     reply, model = compose_v2_customer_reply(
         clinic_name=clinic_name,
         timezone_name=timezone_name,
         local_now=local_now,
         history=history,
         outcomes=outcomes,
+        availability_shown_window_keys=(
+            _availability_shown_window_keys(recent_read_context)
+            if availability_continuation
+            else None
+        ),
+        availability_continuation=availability_continuation,
     )
     return V2OrchestratedTurn(
         understanding=understanding,
