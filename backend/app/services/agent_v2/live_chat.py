@@ -241,7 +241,8 @@ def _verified_read_context_from_turn(
                         else None
                     )
                     continuation = bool(
-                        operation is not None and operation.continues_previous
+                        operation is not None
+                        and getattr(operation, "continues_previous", False)
                     )
                     previous_keys = set()
                     if continuation and isinstance(previous_read_context, dict):

@@ -290,7 +290,7 @@ def _availability_presentation_continuation(
     understanding: TiaTurnUnderstanding,
 ) -> bool:
     return any(
-        operation.continues_previous
+        bool(getattr(operation, "continues_previous", False))
         and operation.type in {"availability", "book", "reschedule"}
         for operation in understanding.operations
     )
