@@ -7,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.patient_package import PatientPackage
-from app.services.patient_packages import _package_financial_rows, _usage_totals
+from app.services.patient_packages import (
+    _default_cancellation_charge_minor,
+    _package_financial_rows,
+    _usage_totals,
+)
 
 
 class PackageRefundQuoteError(ValueError):
@@ -73,11 +77,15 @@ def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRea
         )
 
     consumed = ledger_consumed + historical_consumed
-    unit_price = package.standalone_session_price_minor_at_purchase
-    if unit_price is None and consumed > 0:
+    consumed_value_minor = _default_cancellation_charge_minor(
+        package,
+        consumed_sessions=consumed,
+    )
+    if consumed_value_minor is None:
         raise PackageRefundQuoteError(
-            "Standalone session price at package purchase is required for a safe refund quote."
+            "Package pricing data is not sufficient for a safe refund quote."
         )
+    unit_price = package.standalone_session_price_minor_at_purchase
 
     payments, refunds = _package_financial_rows(
         db,
@@ -87,7 +95,6 @@ def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRea
     )
     collected_minor = sum(int(row.amount_minor) for row in payments)
     previously_refunded_minor = sum(int(row.amount_minor) for row in refunds)
-    consumed_value_minor = consumed * int(unit_price or 0)
     refundable_minor = max(
         collected_minor - consumed_value_minor - previously_refunded_minor,
         0,
