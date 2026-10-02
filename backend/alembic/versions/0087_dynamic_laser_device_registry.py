@@ -18,7 +18,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def _stable_uuid_sql(suffix: str) -> str:
-    digest = f"md5(w.id::text || ':{suffix}')"
+    digest = f"md5(w.id::text || '|{suffix}')"
     return (
         f"(substr({digest},1,8) || '-' || substr({digest},9,4) || '-' || "
         f"substr({digest},13,4) || '-' || substr({digest},17,4) || '-' || "
