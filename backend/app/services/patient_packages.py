@@ -52,6 +52,58 @@ def _usage_totals(db: Session, *, workspace_id: UUID, package_id: UUID) -> tuple
     return values.get("reserved", 0), values.get("consumed", 0)
 
 
+def _settlement_standalone_price_minor(
+    db: Session,
+    package: PatientPackage,
+    *,
+    persist_fallback: bool = False,
+) -> int | None:
+    """Resolve the standalone session price used by package cancellation.
+
+    Normal packages keep the immutable purchase-time snapshot. Migrated packages
+    created before that snapshot was populated fall back to the service price already
+    configured in Linka. The fallback is only allowed when the imported opening
+    balance and original total session count are known.
+    """
+    snapshot = package.standalone_session_price_minor_at_purchase
+    if snapshot is not None:
+        return int(snapshot)
+
+    if package.opening_sessions_remaining is None or not package.sessions_total_known:
+        return None
+
+    service_price = db.scalar(
+        select(Service.price_minor).where(
+            Service.workspace_id == package.workspace_id,
+            Service.id == package.service_id,
+        )
+    )
+    if service_price is None:
+        return None
+
+    resolved = int(service_price)
+    if persist_fallback:
+        package.standalone_session_price_minor_at_purchase = resolved
+    return resolved
+
+
+def _default_cancellation_charge_minor(
+    db: Session,
+    package: PatientPackage,
+    *,
+    consumed_sessions: int,
+) -> int | None:
+    consumed_sessions = max(0, int(consumed_sessions))
+    if package.opening_sessions_remaining is not None and not package.sessions_total_known:
+        return None
+    if consumed_sessions == 0:
+        return 0
+    unit_price = _settlement_standalone_price_minor(db, package)
+    if unit_price is None:
+        return None
+    return consumed_sessions * unit_price
+
+
 def package_read(
     db: Session,
     package: PatientPackage,
@@ -78,15 +130,11 @@ def package_read(
             )
         else:
             cancellation_default_charge = None
-    unit_price = package.standalone_session_price_minor_at_purchase
-    if package.opening_sessions_remaining is not None and not package.sessions_total_known:
-        cancellation_default_charge = None
-    elif cancellation_consumed == 0:
-        cancellation_default_charge = 0
-    elif unit_price is None:
-        cancellation_default_charge = None
-    else:
-        cancellation_default_charge = cancellation_consumed * int(unit_price)
+    cancellation_default_charge = _default_cancellation_charge_minor(
+        db,
+        package,
+        consumed_sessions=cancellation_consumed,
+    )
     effective = _effective_status(package, on_date=on_date)
     if effective == "active" and remaining == 0:
         effective = "exhausted"
@@ -479,12 +527,13 @@ def cancel_patient_package_with_refund(
     payment_method: str = "cash",
     idempotency_key: str | None = None,
 ) -> tuple[PatientPackage, int, int, int, int, int, int, list[PaymentTransaction]]:
-    """Cancel a package and refund unused value at the non-package session price.
+    """Cancel a package and settle the consumed value before refunding unused value.
 
-    Reserved sessions are released (no-show is already handled as a release), while
-    consumed sessions are repriced using the standalone service price snapshot from
-    the purchase date. Refunds are created against the original package payments and
-    never against appointment sessions.
+    Reserved sessions are released. New packages use the standalone service price
+    snapshot captured at purchase. Historical migrated packages created before that
+    snapshot existed use the service price configured in Linka, and that fallback is
+    persisted when cancellation is executed. Refunds are created against the original
+    package payments.
     """
     reason = reason.strip()
     if not reason:
@@ -511,10 +560,6 @@ def cancel_patient_package_with_refund(
             package.standalone_session_price_minor_at_purchase = (
                 standalone_session_price_minor_at_purchase
             )
-        elif consumed > 0:
-            raise PackageOperationError(
-                "Standalone session price at package purchase is required before refunding a legacy package with consumed sessions."
-            )
     elif (
         standalone_session_price_minor_at_purchase is not None
         and standalone_session_price_minor_at_purchase
@@ -524,13 +569,35 @@ def cancel_patient_package_with_refund(
             "Standalone session price at purchase is already fixed for this package."
         )
 
+    if package.standalone_session_price_minor_at_purchase is None:
+        if standalone_session_price_minor_at_purchase is None and (
+            package.opening_sessions_remaining is None
+        ) and consumed > 0:
+            raise PackageOperationError(
+                "Standalone session price at package purchase is required before refunding a legacy package with consumed sessions."
+            )
+        _settlement_standalone_price_minor(
+            db,
+            package,
+            persist_fallback=True,
+        )
+
+    consumed_value_minor = _default_cancellation_charge_minor(
+        db,
+        package,
+        consumed_sessions=consumed,
+    )
+    if consumed_value_minor is None:
+        raise PackageOperationError(
+            "The package does not include enough pricing or original-session data "
+            "to calculate a safe cancellation settlement automatically."
+        )
+
     payments, refunds = _package_financial_rows(
         db, workspace_id=workspace_id, package=package, for_update=True
     )
     collected_minor = sum(int(row.amount_minor) for row in payments)
     previously_refunded_minor = sum(int(row.amount_minor) for row in refunds)
-    unit_price = int(package.standalone_session_price_minor_at_purchase or 0)
-    consumed_value_minor = consumed * unit_price
     settlement_target = (
         consumed_value_minor
         if settlement_target_minor is None

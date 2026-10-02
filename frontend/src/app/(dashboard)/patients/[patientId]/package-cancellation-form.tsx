@@ -49,7 +49,7 @@ export function PackageCancellationForm({
         <input type="hidden" name="package_id" value={packageId} />
 
         <div className="rounded-lg bg-white p-3 text-xs leading-5 text-slate-700">
-          استخدم العميل <b>{consumedSessions}</b> جلسة. قيمة التسوية المقترحة محسوبة بسعر الجلسات الفردية وقت شراء الباكيدج.
+          استخدم العميل <b>{consumedSessions}</b> جلسة. قيمة التسوية المقترحة محسوبة تلقائيًا من بيانات الباكيدج المسجلة.
         </div>
 
         <label className="block text-xs font-bold text-slate-700">

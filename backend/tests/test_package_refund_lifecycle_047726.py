@@ -380,6 +380,49 @@ def test_package_cancellation_accepts_admin_settlement_override(monkeypatch) -> 
         assert result[5] == 0
         assert result[6] == 300_000
 
+def test_migrated_package_uses_service_price_for_settlement_and_persists_snapshot(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(
+            db, service_price_minor=250_000
+        )
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="Migrated package",
+            sessions_purchased=6,
+            sale_price_minor=1_200_000,
+            amount_paid_minor=1_200_000,
+            payment_method="card",
+            created_by_user_id=None,
+        )
+        package.source = "integration"
+        package.opening_sessions_remaining = 4
+        package.sessions_total_known = True
+        package.standalone_session_price_minor_at_purchase = None
+        db.flush()
+
+        read = package_service.package_read(db, package, include_financials=True)
+        assert read.cancellation_consumed_sessions == 2
+        assert read.cancellation_default_charge_minor == 500_000
+
+        result = package_service.cancel_patient_package_with_refund(
+            db,
+            workspace_id=workspace_id,
+            package_id=package.id,
+            reason="Historical package settlement",
+            created_by_user_id=uuid4(),
+        )
+
+        assert package.standalone_session_price_minor_at_purchase == 250_000
+        assert result[2] == 500_000
+        assert result[3] == 500_000
+        assert result[6] == 700_000
+
+
 def test_legacy_consumed_package_requires_admin_price_confirmation_before_refund(monkeypatch) -> None:
     _allow_package_writes(monkeypatch)
     engine = _engine()

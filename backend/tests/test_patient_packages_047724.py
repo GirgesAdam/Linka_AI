@@ -49,6 +49,7 @@ def _package(*, workspace_id, patient_id, service_id, sessions=6) -> PatientPack
         name="6 sessions - Laser Bikini",
         sessions_purchased=sessions,
         sale_price_minor=480_000,
+        standalone_session_price_minor_at_purchase=100_000,
         currency="EGP",
         purchased_at=datetime.now(UTC) - timedelta(days=30),
         expires_at=date.today() + timedelta(days=300),
