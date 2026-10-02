@@ -173,6 +173,38 @@ def _active_package_document(
     )
 
 
+def _arabic_active_package_document(
+    rows: list[list[object]],
+) -> HistoricalImportDocument:
+    wb = Workbook()
+    readme = wb.active
+    readme.title = "README"
+    readme.append(["اختبار"])
+    sheet = wb.create_sheet("active_packages")
+    sheet.append(
+        [
+            "اسم العميل",
+            "رقم الموبايل",
+            "اسم الخدمة",
+            "عدد الجلسات الكلي",
+            "عدد الجلسات المتبقي",
+            "المبلغ المدفوع",
+            "تاريخ الشراء",
+            "سعر الباقة",
+        ]
+    )
+    for row in rows:
+        sheet.append(row)
+    stream = io.BytesIO()
+    wb.save(stream)
+    wb.close()
+    return HistoricalImportDocument(
+        name="active_packages_ar.xlsx",
+        format="xlsx",
+        content_base64=base64.b64encode(stream.getvalue()).decode("ascii"),
+    )
+
+
 def _legacy_document() -> HistoricalImportDocument:
     wb = Workbook()
     patients = wb.active
@@ -296,7 +328,7 @@ def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(va
     assert history._parse_active_package_purchase_date(value) is None
 
 
-def test_active_package_template_is_arabic_guided_and_uses_exact_active_services() -> None:
+def test_active_package_template_is_plain_arabic_and_uses_exact_active_services() -> None:
     payload = history.build_historical_import_template(
         service_names=["Hydrafacial", "ليزر إزالة الشعر - جسم كامل سيدات"]
     )
@@ -306,19 +338,21 @@ def test_active_package_template_is_arabic_guided_and_uses_exact_active_services
         readme = workbook["README"]
         sheet = workbook["active_packages"]
 
-        assert readme.sheet_view.rightToLeft is True
-        assert readme["A1"].value == "دليل استيراد الباقات النشطة إلى Linka"
-        assert readme["A13"].value == "مثال صف صحيح — امشِ على نفس الشكل"
-        assert [readme.cell(14, column).value for column in range(1, 9)] == [
-            "full_name",
-            "phone",
-            "service_name",
-            "sessions_total",
-            "sessions_remaining",
-            "amount_paid",
-            "purchased_at",
-            "package_price",
+        expected_headers = [
+            "اسم العميل",
+            "رقم الموبايل",
+            "اسم الخدمة",
+            "عدد الجلسات الكلي",
+            "عدد الجلسات المتبقي",
+            "المبلغ المدفوع",
+            "تاريخ الشراء",
+            "سعر الباقة",
         ]
+
+        assert readme.sheet_view.rightToLeft is True
+        assert readme["A1"].value == "دليل استيراد الباقات النشطة"
+        assert readme["A13"].value == "مثال صحيح"
+        assert [readme.cell(14, column).value for column in range(1, 9)] == expected_headers
         assert readme["A15"].value == "سارة أحمد"
         assert readme["B15"].value == "01012345678"
         assert readme["B15"].number_format == "@"
@@ -330,22 +364,67 @@ def test_active_package_template_is_arabic_guided_and_uses_exact_active_services
             for cell in row
             if cell.value is not None
         )
-        assert "لو Excel حذف الصفر الأول Linka تصلحه تلقائيًا" in readme_text
-        assert "الخدمات بالأسفل هي نفس الخدمات النشطة المسجلة حاليًا داخل Linka لهذه العيادة" in readme_text
-        assert "Linka تربط الباقة بنفس الخدمة الفعلية داخل النظام" in readme_text
-        assert "Hydrafacial" in readme_text
-        assert "ليزر إزالة الشعر - جسم كامل سيدات" in readme_text
+        assert "إذا حذف Excel الصفر الأول، Linka تعيده تلقائيًا." in readme_text
+        assert "هي نفسها الخدمات التي يمكن اختيارها للباقة." in readme_text
+        assert "استخدم نفس الاسم في service_name" not in readme_text
+        assert readme["A19"].value == "اسم الخدمة"
+        assert readme["A20"].value in {
+            "Hydrafacial",
+            "ليزر إزالة الشعر - جسم كامل سيدات",
+        }
+        assert readme["B20"].value is None
+        assert readme["C20"].value is None
 
+        assert [sheet.cell(1, column).value for column in range(1, 9)] == expected_headers
+        assert sheet["A1"].fill.fill_type is None
+        assert readme["A1"].fill.fill_type is None
         assert sheet["B2"].number_format == "@"
         assert sheet["G2"].number_format == "dd/mm/yyyy"
+
         validations = list(sheet.data_validations.dataValidation)
         assert len(validations) == 1
         validation = validations[0]
         assert "README" in validation.formula1
+        assert "$A$" in validation.formula1
         assert str(validation.sqref) == "C2:C5000"
-        assert validation.error == "اختر خدمة من قائمة الخدمات النشطة الموجودة في README."
+        assert validation.error == "اختر خدمة من قائمة الخدمات الموجودة في ورقة التعليمات."
     finally:
         workbook.close()
+
+
+def test_active_package_arabic_headers_preview_and_apply() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        document = _arabic_active_package_document(
+            [[
+                "سارة أحمد",
+                "01012345678",
+                "Hydrafacial",
+                6,
+                3,
+                3000,
+                "15/02/2026",
+                3000,
+            ]]
+        )
+
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=document,
+        )
+        assert preview.ready_counts == {"package": 1}
+        package = db.scalar(
+            select(PatientPackage).where(PatientPackage.workspace_id == workspace.id)
+        )
+        assert package is not None
+        assert package.service_id == services["Hydrafacial"].id
+        assert package.sessions_purchased == 6
+        assert package.opening_sessions_remaining == 3
+        assert package.sale_price_minor == 300_000
+
+
 
 
 def test_active_package_all_invalid_rows_return_actionable_preview() -> None:
