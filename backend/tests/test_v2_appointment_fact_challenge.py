@@ -178,6 +178,49 @@ def test_verified_appointment_identity_is_exposed_only_as_opaque_ref() -> None:
     ]
 
 
+def test_verified_appointment_identity_gets_ephemeral_ref_without_catalog_appointments() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": SERVICE_ID,
+                    "name": "Hydrafacial",
+                    "category": "facial",
+                    "requires_laser_device": False,
+                }
+            ],
+            "doctors": [
+                {
+                    "id": DOCTOR_ID,
+                    "name": "دكتورة مريم",
+                    "service_ids": [SERVICE_ID],
+                }
+            ],
+            "branches": [{"id": "branch-1", "name": "Linka Clinic"}],
+        }
+    )
+
+    safe = with_safe_read_context(
+        context,
+        read_context={
+            "operation_type": "appointment_list",
+            "appointment_id": APPOINTMENT_ID,
+        },
+    )
+
+    recent = safe.model_input["recent_verified_read"]
+    assert recent == {
+        "operation_type": "appointment_list",
+        "appointment_ref": "A1",
+    }
+    assert safe.resolve("A1", expected_kind="appointment") == APPOINTMENT_ID
+    assert "appointment_id" not in recent
+    assert safe.server_metadata.get("semantic_focus_blocked") is False
+    assert safe.model_input.get("focused_context") == {
+        "appointments": [{"ref": "A1"}]
+    }
+
+
 def test_time_challenge_binds_verified_target_and_rereads_by_id_only() -> None:
     context = with_safe_read_context(
         _semantic_context(),
