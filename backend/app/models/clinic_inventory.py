@@ -68,9 +68,11 @@ class ServiceDevicePrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "device_key",
             name="uq_service_device_prices_workspace_service_device",
         ),
-        CheckConstraint(
-            "device_key IN ('prime_lase', 'candela_gentle')",
-            name="service_device_price_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_service_device_prices_clinic_device",
         ),
         CheckConstraint(
             "price_minor IS NULL OR price_minor >= 0",

@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
 from app.models.clinic_inventory import (
-    LASER_DEVICE_KEYS,
     LASER_DEVICE_NAMES,
     AppointmentProductLine,
     ClinicLaserDevice,
@@ -182,6 +181,21 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
     )
     if not services:
         return []
+
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    devices = list(
+        db.scalars(
+            select(ClinicLaserDevice)
+            .where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+                ClinicLaserDevice.is_active.is_(True),
+            )
+            .order_by(ClinicLaserDevice.name, ClinicLaserDevice.id)
+        )
+    )
+    if not devices:
+        return []
+
     rows = list(
         db.scalars(
             select(ServiceDevicePrice).where(
@@ -194,14 +208,14 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
     by_key = {(row.service_id, row.device_key): row for row in rows}
     result: list[LaserDevicePriceRead] = []
     for service in services:
-        for device_key in LASER_DEVICE_KEYS:
-            row = by_key.get((service.id, device_key))
+        for device in devices:
+            row = by_key.get((service.id, device.device_key))
             result.append(
                 LaserDevicePriceRead(
                     service_id=service.id,
                     service_name=service.name,
-                    device_key=device_key,
-                    device_name=LASER_DEVICE_NAMES[device_key],
+                    device_key=device.device_key,
+                    device_name=device.name,
                     price_minor=(int(row.price_minor) if row and row.price_minor is not None else None),
                     duration_minutes=(int(row.duration_minutes) if row else None),
                     currency=(row.currency if row else service.currency or "EGP"),
@@ -225,8 +239,6 @@ def upsert_laser_device_price(
     duration_minutes: int | None,
     currency: str,
 ) -> ServiceDevicePrice:
-    if device_key not in LASER_DEVICE_NAMES:
-        raise InventoryOperationError("Unsupported laser device.")
     if duration_minutes is not None and (
         duration_minutes <= 0 or duration_minutes > 1440
     ):
@@ -243,7 +255,23 @@ def upsert_laser_device_price(
     if service is None:
         raise InventoryNotFound("Service not found.")
     if not is_laser_service(service):
-        raise InventoryOperationError("Device pricing is only available for services that require a laser device.")
+        raise InventoryOperationError(
+            "Device pricing is only available for services that require a laser device."
+        )
+
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    device = db.scalar(
+        select(ClinicLaserDevice).where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.device_key == device_key,
+            ClinicLaserDevice.is_active.is_(True),
+        )
+    )
+    if device is None:
+        raise InventoryOperationError(
+            "Laser device is not active for this clinic."
+        )
+
     row = db.scalar(
         select(ServiceDevicePrice).where(
             ServiceDevicePrice.workspace_id == workspace_id,
@@ -264,8 +292,8 @@ def upsert_laser_device_price(
         row = ServiceDevicePrice(
             workspace_id=workspace_id,
             service_id=service_id,
-            device_key=device_key,
-            device_name=LASER_DEVICE_NAMES[device_key],
+            device_key=device.device_key,
+            device_name=device.name,
             price_minor=price_minor,
             duration_minutes=resolved_duration_minutes,
             currency=currency.upper(),
@@ -273,7 +301,7 @@ def upsert_laser_device_price(
         )
         db.add(row)
     else:
-        row.device_name = LASER_DEVICE_NAMES[device_key]
+        row.device_name = device.name
         row.price_minor = price_minor
         row.duration_minutes = resolved_duration_minutes
         row.currency = currency.upper()
@@ -302,8 +330,20 @@ def configured_device_price(
         return None
     if not device_key:
         raise InventoryOperationError("Laser device choice is required.")
-    if device_key not in LASER_DEVICE_NAMES:
-        raise InventoryOperationError("Unsupported laser device.")
+
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    device = db.scalar(
+        select(ClinicLaserDevice).where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.device_key == device_key,
+            ClinicLaserDevice.is_active.is_(True),
+        )
+    )
+    if device is None:
+        raise InventoryOperationError(
+            "Laser device is not active for this clinic."
+        )
+
     row = db.scalar(
         select(ServiceDevicePrice).where(
             ServiceDevicePrice.workspace_id == workspace_id,
@@ -314,7 +354,7 @@ def configured_device_price(
     )
     if row is None or row.price_minor is None or row.duration_minutes is None:
         raise DeviceServiceCompatibilityError(
-            f"Price and duration for {LASER_DEVICE_NAMES[device_key]} are not configured "
+            f"Price and duration for {device.name} are not configured "
             "for this laser service."
         )
     return row

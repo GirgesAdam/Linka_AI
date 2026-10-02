@@ -131,16 +131,17 @@ class ClinicLaserDeviceRead(BaseModel):
 
 class LaserDevicePriceUpsert(BaseModel):
     service_id: UUID
-    device_key: str
+    device_key: str = Field(min_length=1, max_length=40)
     price_minor: int = Field(ge=0)
     duration_minutes: int | None = Field(default=None, gt=0, le=1440)
     currency: str = Field(default="EGP", min_length=3, max_length=3)
 
     @field_validator("device_key")
     @classmethod
-    def validate_device_key(cls, value: str) -> str:
-        if value not in {"prime_lase", "candela_gentle"}:
-            raise ValueError("Unsupported laser device.")
+    def normalize_device_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Laser device is required.")
         return value
 
 
