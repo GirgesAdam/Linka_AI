@@ -94,6 +94,8 @@ def _default_cancellation_charge_minor(
     consumed_sessions: int,
 ) -> int | None:
     consumed_sessions = max(0, int(consumed_sessions))
+    if package.opening_sessions_remaining is not None and not package.sessions_total_known:
+        return None
     if consumed_sessions == 0:
         return 0
     unit_price = _settlement_standalone_price_minor(db, package)
