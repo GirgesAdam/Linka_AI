@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from alembic import command
+from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.branch import Branch
@@ -57,12 +57,7 @@ def _upgrade(url: str, revision: str, monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def migration_database(monkeypatch: pytest.MonkeyPatch):
-    base = make_url(
-        os.environ.get(
-            "MIGRATION_DATABASE_URL",
-            "postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db",
-        )
-    )
+    base = make_url(settings.database_url)
     database_name = f"tia_dynamic_upgrade_{uuid4().hex[:12]}"
     admin_url = base.set(database="postgres")
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
