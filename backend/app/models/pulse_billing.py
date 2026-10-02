@@ -31,9 +31,11 @@ class PulseBillingSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "device_key",
             name="uq_pulse_billing_settings_workspace_device",
         ),
-        CheckConstraint(
-            "device_key IN ('prime_lase', 'candela_gentle')",
-            name="pulse_billing_settings_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_pulse_billing_settings_clinic_device",
         ),
         CheckConstraint(
             "overage_price_minor > 0",
@@ -63,9 +65,11 @@ class PulsePackOffer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "pulses_count",
             name="uq_pulse_pack_offers_workspace_device_count",
         ),
-        CheckConstraint(
-            "device_key IN ('prime_lase', 'candela_gentle')",
-            name="pulse_pack_offer_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_pulse_pack_offers_clinic_device",
         ),
         CheckConstraint("pulses_count > 0", name="pulse_pack_offer_count_positive"),
         CheckConstraint("price_minor >= 0", name="pulse_pack_offer_price_non_negative"),
@@ -101,9 +105,11 @@ class PatientPulsePack(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "OR standalone_pulse_price_minor_at_purchase > 0",
             name="patient_pulse_pack_standalone_price_positive",
         ),
-        CheckConstraint(
-            "device_key IN ('prime_lase', 'candela_gentle')",
-            name="patient_pulse_pack_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_patient_pulse_packs_clinic_device",
         ),
         CheckConstraint(
             "status IN ('active', 'cancelled')",

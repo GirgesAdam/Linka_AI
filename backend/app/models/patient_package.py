@@ -50,9 +50,11 @@ class PatientPackage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "standalone_session_price_minor_at_purchase IS NULL OR standalone_session_price_minor_at_purchase >= 0",
             name="patient_package_standalone_price_non_negative",
         ),
-        CheckConstraint(
-            "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
-            name="patient_package_laser_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "laser_device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_patient_packages_laser_device",
         ),
         CheckConstraint(
             "status IN ('active', 'expired', 'cancelled')",

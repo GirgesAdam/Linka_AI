@@ -35,9 +35,11 @@ class ServicePackageOffer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "sessions_count",
             name="uq_service_package_offers_workspace_service_device_sessions",
         ),
-        CheckConstraint(
-            "device_key IS NULL OR device_key IN ('prime_lase', 'candela_gentle')",
-            name="service_package_offer_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_service_package_offers_clinic_device",
         ),
         CheckConstraint(
             "(device_key IS NULL AND device_name IS NULL) OR "

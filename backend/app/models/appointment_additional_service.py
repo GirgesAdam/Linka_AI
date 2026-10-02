@@ -29,9 +29,11 @@ class AppointmentAdditionalService(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="uq_appointment_additional_services_appointment_service",
         ),
         CheckConstraint("unit_price_minor >= 0", name="appointment_additional_service_price_non_negative"),
-        CheckConstraint(
-            "laser_device_key IS NULL OR laser_device_key IN ('prime_lase', 'candela_gentle')",
-            name="appointment_additional_service_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "laser_device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_appointment_additional_services_laser_device",
         ),
         CheckConstraint(
             "billing_context IN ('standard', 'package_prepaid', 'pulse_prepaid')",

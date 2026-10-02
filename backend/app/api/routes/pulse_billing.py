@@ -59,11 +59,19 @@ def read_pulse_settings(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PulseBillingSettingsRead:
-    """Backward-compatible default price; new clients use /pulse-device-prices."""
-    return get_pulse_billing_settings(
+    """Backward-compatible single-device view; new clients use /pulse-device-prices."""
+    settings = list_pulse_billing_settings(
         db,
         workspace_id=access.workspace.id,
-        device_key="candela_gentle",
+    )
+    if not settings:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active laser devices are configured for this clinic.",
+        )
+    return next(
+        (item for item in settings if item.device_key == "candela_gentle"),
+        settings[0],
     )
 
 

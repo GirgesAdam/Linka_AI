@@ -12,7 +12,7 @@ from app.integrations.clinic.authority import (
 )
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
-from app.models.clinic_inventory import LASER_DEVICE_NAMES
+from app.models.clinic_inventory import ClinicLaserDevice
 from app.models.patient import Patient
 from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
 from app.models.pulse_billing import (
@@ -30,6 +30,7 @@ from app.schemas.pulse_billing import (
     PulsePackOfferRead,
 )
 from app.services.activity import ActivityActorType, record_activity_event
+from app.services.inventory import ensure_legacy_laser_devices
 from app.services.payments import refresh_appointment_payment_snapshots
 
 
@@ -39,14 +40,36 @@ class PulseBillingError(ValueError):
 
 class PulseBillingNotFound(PulseBillingError):
     pass
+
+
+def _active_clinic_laser_device(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    device_key: str,
+) -> ClinicLaserDevice:
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    row = db.scalar(
+        select(ClinicLaserDevice).where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.device_key == device_key,
+            ClinicLaserDevice.is_active.is_(True),
+        )
+    )
+    if row is None:
+        raise PulseBillingError("Laser device is not active for this clinic.")
+    return row
 def get_pulse_billing_settings(
     db: Session,
     *,
     workspace_id: UUID,
     device_key: str,
 ) -> PulseBillingSettingsRead:
-    if device_key not in LASER_DEVICE_NAMES:
-        raise PulseBillingError("Unsupported laser device.")
+    device = _active_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_key=device_key,
+    )
     row = db.scalar(
         select(PulseBillingSettings).where(
             PulseBillingSettings.workspace_id == workspace_id,
@@ -55,7 +78,7 @@ def get_pulse_billing_settings(
     )
     return PulseBillingSettingsRead(
         device_key=device_key,
-        device_name=LASER_DEVICE_NAMES[device_key],
+        device_name=device.name,
         overage_price_minor=(int(row.overage_price_minor) if row is not None else None),
         currency=row.currency if row is not None else "EGP",
     )
@@ -66,13 +89,41 @@ def list_pulse_billing_settings(
     *,
     workspace_id: UUID,
 ) -> list[PulseBillingSettingsRead]:
-    return [
-        get_pulse_billing_settings(
-            db,
-            workspace_id=workspace_id,
-            device_key=device_key,
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    devices = list(
+        db.scalars(
+            select(ClinicLaserDevice)
+            .where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+                ClinicLaserDevice.is_active.is_(True),
+            )
+            .order_by(ClinicLaserDevice.name, ClinicLaserDevice.id)
         )
-        for device_key in LASER_DEVICE_NAMES
+    )
+    rows = list(
+        db.scalars(
+            select(PulseBillingSettings).where(
+                PulseBillingSettings.workspace_id == workspace_id,
+            )
+        )
+    )
+    settings_by_key = {row.device_key: row for row in rows}
+    return [
+        PulseBillingSettingsRead(
+            device_key=device.device_key,
+            device_name=device.name,
+            overage_price_minor=(
+                int(settings_by_key[device.device_key].overage_price_minor)
+                if device.device_key in settings_by_key
+                else None
+            ),
+            currency=(
+                settings_by_key[device.device_key].currency
+                if device.device_key in settings_by_key
+                else "EGP"
+            ),
+        )
+        for device in devices
     ]
 
 
@@ -84,8 +135,11 @@ def upsert_pulse_billing_settings(
     overage_price_minor: int,
     currency: str,
 ) -> PulseBillingSettings:
-    if device_key not in LASER_DEVICE_NAMES:
-        raise PulseBillingError("Unsupported laser device.")
+    _active_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_key=device_key,
+    )
     if overage_price_minor <= 0:
         raise PulseBillingError("Pulse overage price must be greater than zero.")
     row = db.scalar(
@@ -138,8 +192,11 @@ def upsert_pulse_pack_offer(
     currency: str,
     is_active: bool,
 ) -> PulsePackOffer:
-    if device_key not in LASER_DEVICE_NAMES:
-        raise PulseBillingError("Unsupported laser device.")
+    device = _active_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_key=device_key,
+    )
     if pulses_count <= 0:
         raise PulseBillingError("Pulse pack size must be positive.")
     if price_minor < 0:
@@ -154,8 +211,8 @@ def upsert_pulse_pack_offer(
     if row is None:
         row = PulsePackOffer(
             workspace_id=workspace_id,
-            device_key=device_key,
-            device_name=LASER_DEVICE_NAMES[device_key],
+            device_key=device.device_key,
+            device_name=device.name,
             pulses_count=pulses_count,
             price_minor=price_minor,
             currency=currency.upper(),
@@ -163,7 +220,7 @@ def upsert_pulse_pack_offer(
         )
         db.add(row)
     else:
-        row.device_name = LASER_DEVICE_NAMES[device_key]
+        row.device_name = device.name
         row.price_minor = price_minor
         row.currency = currency.upper()
         row.is_active = is_active
@@ -334,7 +391,8 @@ def list_patient_pulse_balances(
         include_financials=False,
     )
     result: list[PulseBalanceRead] = []
-    for device_key, device_name in LASER_DEVICE_NAMES.items():
+    device_keys = sorted({item.device_key for item in reads})
+    for device_key in device_keys:
         active = [
             item
             for item in reads
@@ -347,7 +405,7 @@ def list_patient_pulse_balances(
         result.append(
             PulseBalanceRead(
                 device_key=device_key,
-                device_name=device_name,
+                device_name=active[0].device_name,
                 pulses_purchased=sum(item.pulses_purchased for item in active),
                 pulses_consumed=sum(item.pulses_consumed for item in active),
                 pulses_remaining=sum(item.pulses_remaining for item in active),

@@ -31,7 +31,7 @@ router = APIRouter()
 
 class AdditionalServiceCreate(BaseModel):
     service_id: UUID
-    laser_device_key: Literal["prime_lase", "candela_gentle"] | None = None
+    laser_device_key: str | None = None
     pulse_mode: Literal["none", "use_balance", "purchase_pack", "overage"] = "none"
     pulses_used: int | None = Field(default=None, gt=0, le=10_000_000)
     pulse_pack_offer_id: UUID | None = None

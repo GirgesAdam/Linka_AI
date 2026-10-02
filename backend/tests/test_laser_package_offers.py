@@ -73,7 +73,10 @@ def test_upsert_package_offer_accepts_custom_session_count(monkeypatch) -> None:
     monkeypatch.setattr(
         offers_module,
         "configured_device_price",
-        lambda *args, **kwargs: SimpleNamespace(price_minor=25_000),
+        lambda *args, **kwargs: SimpleNamespace(
+            price_minor=25_000,
+            device_name="Candela Gentle",
+        ),
     )
 
     row = offers_module.upsert_package_offer(

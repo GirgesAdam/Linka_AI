@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models.clinic_inventory import LASER_DEVICE_NAMES, ServiceDevicePrice
+from app.models.clinic_inventory import ClinicLaserDevice
 from app.models.clinic_knowledge_entry import ClinicKnowledgeEntry
 from app.models.service import Service
 from app.schemas.clinic_knowledge_base import ClinicKnowledgeEntryRead, ClinicKnowledgeEntryWrite
@@ -25,24 +25,28 @@ def _validate_target(db: Session, *, workspace_id: UUID, payload: ClinicKnowledg
             raise ClinicKnowledgeError("Service not found in this clinic.")
     if payload.scope_type == "laser_device":
         exists = db.scalar(
-            select(ServiceDevicePrice.id).where(
-                ServiceDevicePrice.workspace_id == workspace_id,
-                ServiceDevicePrice.device_key == payload.device_key,
-                ServiceDevicePrice.is_active.is_(True),
+            select(ClinicLaserDevice.id).where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+                ClinicLaserDevice.device_key == payload.device_key,
+                ClinicLaserDevice.is_active.is_(True),
             ).limit(1)
         )
         if exists is None:
             raise ClinicKnowledgeError("Laser device is not configured for this clinic.")
 
 
-def _read(entry: ClinicKnowledgeEntry, service_name: str | None = None) -> ClinicKnowledgeEntryRead:
+def _read(
+    entry: ClinicKnowledgeEntry,
+    service_name: str | None = None,
+    device_name: str | None = None,
+) -> ClinicKnowledgeEntryRead:
     return ClinicKnowledgeEntryRead(
         id=entry.id,
         scope_type=entry.scope_type,
         service_id=entry.service_id,
         service_name=service_name,
         device_key=entry.device_key,
-        device_name=LASER_DEVICE_NAMES.get(entry.device_key or ""),
+        device_name=device_name,
         title=entry.title,
         content=entry.content,
         sort_order=entry.sort_order,
@@ -53,15 +57,27 @@ def _read(entry: ClinicKnowledgeEntry, service_name: str | None = None) -> Clini
 
 
 def list_knowledge_entries(db: Session, *, workspace_id: UUID, active_only: bool = False) -> list[ClinicKnowledgeEntryRead]:
-    stmt = select(ClinicKnowledgeEntry, Service.name).outerjoin(
-        Service,
-        (Service.workspace_id == ClinicKnowledgeEntry.workspace_id)
-        & (Service.id == ClinicKnowledgeEntry.service_id),
-    ).where(ClinicKnowledgeEntry.workspace_id == workspace_id)
+    stmt = (
+        select(ClinicKnowledgeEntry, Service.name, ClinicLaserDevice.name)
+        .outerjoin(
+            Service,
+            (Service.workspace_id == ClinicKnowledgeEntry.workspace_id)
+            & (Service.id == ClinicKnowledgeEntry.service_id),
+        )
+        .outerjoin(
+            ClinicLaserDevice,
+            (ClinicLaserDevice.workspace_id == ClinicKnowledgeEntry.workspace_id)
+            & (ClinicLaserDevice.device_key == ClinicKnowledgeEntry.device_key),
+        )
+        .where(ClinicKnowledgeEntry.workspace_id == workspace_id)
+    )
     if active_only:
         stmt = stmt.where(ClinicKnowledgeEntry.is_active.is_(True))
     rows = db.execute(stmt.order_by(ClinicKnowledgeEntry.scope_type, ClinicKnowledgeEntry.sort_order, ClinicKnowledgeEntry.created_at)).all()
-    return [_read(entry, service_name) for entry, service_name in rows]
+    return [
+        _read(entry, service_name, device_name)
+        for entry, service_name, device_name in rows
+    ]
 
 
 def read_runtime_knowledge_text(db: Session, *, workspace_id: UUID) -> str:
