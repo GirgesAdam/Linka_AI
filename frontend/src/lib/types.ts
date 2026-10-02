@@ -182,22 +182,25 @@ export interface PatientPackage {
   sale_price_minor:number; standalone_session_price_minor_at_purchase:number|null; currency:string; purchased_at:string; expires_at:string|null; status:string; effective_status:string; source:string;
   created_at:string; updated_at:string;
 }
+export interface ClinicLaserDevice {
+  id:string; workspace_id:string; device_key:string; name:string; is_active:boolean; created_at:string; updated_at:string;
+}
 export interface PulseBillingSettings {
-  device_key:"prime_lase"|"candela_gentle"; device_name:string; overage_price_minor:number|null; currency:string;
+  device_key:string; device_name:string; overage_price_minor:number|null; currency:string;
 }
 export interface PulsePackOffer {
-  id:string; workspace_id:string; device_key:"prime_lase"|"candela_gentle"; device_name:string;
+  id:string; workspace_id:string; device_key:string; device_name:string;
   pulses_count:number; price_minor:number; currency:string; is_active:boolean; created_at:string; updated_at:string;
 }
 export interface PatientPulsePack {
   id:string; workspace_id:string; patient_id:string; pulse_pack_offer_id:string|null; origin_appointment_id:string|null; purchase_transaction_id:string|null;
-  device_key:"prime_lase"|"candela_gentle"; device_name:string; pulses_purchased:number; pulses_consumed:number; pulses_remaining:number;
+  device_key:string; device_name:string; pulses_purchased:number; pulses_consumed:number; pulses_remaining:number;
   sale_price_minor:number; amount_paid_minor:number; amount_refunded_minor:number; balance_due_minor:number;
   standalone_pulse_price_minor_at_purchase:number|null; currency:string; purchased_at:string; expires_at:string|null; status:string; effective_status:string;
   created_at:string; updated_at:string;
 }
 export interface PulseBalance {
-  device_key:"prime_lase"|"candela_gentle"; device_name:string; pulses_purchased:number; pulses_consumed:number; pulses_remaining:number; active_pack_count:number;
+  device_key:string; device_name:string; pulses_purchased:number; pulses_consumed:number; pulses_remaining:number; active_pack_count:number;
 }
 export interface AppointmentPulseSettlement {
   appointment_id:string; pulses_used:number; pulses_from_balance:number; deficit_pulses:number;

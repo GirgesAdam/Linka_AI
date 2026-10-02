@@ -5,7 +5,6 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.clinic_inventory import LASER_DEVICE_NAMES
 from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.package_offers import ServicePackageOfferRead
@@ -119,8 +118,10 @@ def upsert_package_offer(
         raise PackageOfferNotFound("Service not found.")
 
     if service.requires_laser_device:
-        if device_key not in LASER_DEVICE_NAMES:
-            raise PackageOfferError("A supported laser device is required for this service package.")
+        if not device_key:
+            raise PackageOfferError(
+                "A configured laser device is required for this service package."
+            )
         try:
             device_price = configured_device_price(
                 db,
@@ -131,8 +132,10 @@ def upsert_package_offer(
         except InventoryOperationError as exc:
             raise PackageOfferError(str(exc)) from exc
         if device_price is None:
-            raise PackageOfferError("Laser device price is required before configuring its packages.")
-        device_name = LASER_DEVICE_NAMES[device_key]
+            raise PackageOfferError(
+                "Laser device price is required before configuring its packages."
+            )
+        device_name = device_price.device_name
         device_predicate = ServicePackageOffer.device_key == device_key
     else:
         if device_key is not None:
@@ -225,8 +228,10 @@ def purchase_package_offer(
         raise PackageOfferNotFound("Package service not found or inactive.")
 
     if service.requires_laser_device:
-        if offer.device_key not in LASER_DEVICE_NAMES:
-            raise PackageOfferError("A supported laser device is required for this package offer.")
+        if not offer.device_key:
+            raise PackageOfferError(
+                "A configured laser device is required for this package offer."
+            )
         try:
             device_price = configured_device_price(
                 db,

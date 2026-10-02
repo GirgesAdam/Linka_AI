@@ -24,7 +24,7 @@ export type AppointmentServiceOption = {
 
 export type AppointmentDevicePrice = {
   service_id: string;
-  device_key: "prime_lase" | "candela_gentle";
+  device_key: string;
   device_name: string;
   price_minor: number | null;
   currency: string;

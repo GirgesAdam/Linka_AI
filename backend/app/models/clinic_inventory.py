@@ -19,11 +19,37 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
-LASER_DEVICE_KEYS = ("prime_lase", "candela_gentle")
-LASER_DEVICE_NAMES = {
-    "prime_lase": "Prime Lase",
-    "candela_gentle": "Candela Gentle",
-}
+
+class ClinicLaserDevice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "clinic_laser_devices"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "id",
+            name="uq_clinic_laser_devices_workspace_id_id",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "device_key",
+            name="uq_clinic_laser_devices_workspace_device_key",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            ondelete="CASCADE",
+            name="fk_clinic_laser_devices_workspace",
+        ),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    device_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
 
 
 class ServiceDevicePrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -36,9 +62,11 @@ class ServiceDevicePrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "device_key",
             name="uq_service_device_prices_workspace_service_device",
         ),
-        CheckConstraint(
-            "device_key IN ('prime_lase', 'candela_gentle')",
-            name="service_device_price_device_valid",
+        ForeignKeyConstraint(
+            ["workspace_id", "device_key"],
+            ["clinic_laser_devices.workspace_id", "clinic_laser_devices.device_key"],
+            ondelete="RESTRICT",
+            name="fk_service_device_prices_clinic_device",
         ),
         CheckConstraint(
             "price_minor IS NULL OR price_minor >= 0",

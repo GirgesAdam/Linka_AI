@@ -17,7 +17,7 @@ from app.integrations.clinic.base import (
 from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.models.appointment import Appointment
 from app.models.branch import Branch
-from app.models.clinic_inventory import ServiceDevicePrice
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.service import Service
 from app.models.staff import Staff
@@ -47,13 +47,20 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
 
     def catalog_revision(self):
         base = super().catalog_revision()
-        row = self.db.execute(
+        price_revision = self.db.execute(
             select(
                 func.count(ServiceDevicePrice.id),
                 func.max(ServiceDevicePrice.updated_at),
             ).where(ServiceDevicePrice.workspace_id == self.workspace.id)
         ).one()
-        return (*base, *tuple(row)) if isinstance(base, tuple) else (base, *tuple(row))
+        device_revision = self.db.execute(
+            select(
+                func.count(ClinicLaserDevice.id),
+                func.max(ClinicLaserDevice.updated_at),
+            ).where(ClinicLaserDevice.workspace_id == self.workspace.id)
+        ).one()
+        suffix = (*tuple(price_revision), *tuple(device_revision))
+        return (*base, *suffix) if isinstance(base, tuple) else (base, *suffix)
 
     def build_catalog(self):
         catalog = super().build_catalog()
@@ -99,14 +106,20 @@ class TiaDatabaseLaserClinicAdapter(TiaDatabaseClinicAdapter):
         return list(
             self.db.scalars(
                 select(ServiceDevicePrice)
+                .join(
+                    ClinicLaserDevice,
+                    (ClinicLaserDevice.workspace_id == ServiceDevicePrice.workspace_id)
+                    & (ClinicLaserDevice.device_key == ServiceDevicePrice.device_key),
+                )
                 .where(
                     ServiceDevicePrice.workspace_id == self.workspace.id,
                     ServiceDevicePrice.service_id == service_id,
                     ServiceDevicePrice.is_active.is_(True),
                     ServiceDevicePrice.price_minor.is_not(None),
                     ServiceDevicePrice.duration_minutes.is_not(None),
+                    ClinicLaserDevice.is_active.is_(True),
                 )
-                .order_by(ServiceDevicePrice.device_key)
+                .order_by(ClinicLaserDevice.name, ServiceDevicePrice.device_key)
             )
         )
 

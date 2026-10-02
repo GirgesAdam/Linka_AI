@@ -11,6 +11,7 @@ import { appointmentLabels } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type {
   Appointment,
+  ClinicLaserDevice,
   Doctor,
   Patient,
   PatientPackage,
@@ -155,27 +156,63 @@ function appointmentTime(value: string, timezone: string) {
   }).format(new Date(value));
 }
 
-type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick";
+type ScheduleColumnId = string;
 
-const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
-  { id: "prime", label: "Prime" },
-  { id: "candela", label: "Candela" },
-  { id: "dermatology", label: "جلدية" },
-  { id: "slimming", label: "تخسيس" },
-  { id: "quick", label: "حجوزات سريعة" },
-];
+type ScheduleColumn = {
+  id: ScheduleColumnId;
+  label: string;
+  deviceKey?: string;
+  operationalCategory?: "laser" | "dermatology" | "slimming";
+};
 
-function requestedColumns(value: SearchParams["column"]) {
-  const raw = Array.isArray(value) ? value : value ? [value] : scheduleColumns.map((item) => item.id);
+type AppointmentDevicePrice = {
+  service_id: string;
+  device_key: string;
+  device_name: string;
+  price_minor: number | null;
+  duration_minutes: number | null;
+  currency: string;
+  configured: boolean;
+};
+
+function buildScheduleColumns(devices: ClinicLaserDevice[]): ScheduleColumn[] {
+  return [
+    ...devices
+      .filter((device) => device.is_active)
+      .map((device) => ({
+        id: `device:${device.device_key}`,
+        label: device.name,
+        deviceKey: device.device_key,
+        operationalCategory: "laser" as const,
+      })),
+    { id: "dermatology", label: "جلدية", operationalCategory: "dermatology" },
+    { id: "slimming", label: "تخسيس", operationalCategory: "slimming" },
+    { id: "quick", label: "حجوزات سريعة" },
+  ];
+}
+
+function requestedColumns(
+  value: SearchParams["column"],
+  scheduleColumns: ScheduleColumn[],
+) {
+  const raw = Array.isArray(value)
+    ? value
+    : value
+      ? [value]
+      : scheduleColumns.map((item) => item.id);
   const allowed = new Set(scheduleColumns.map((item) => item.id));
-  const selected = raw.filter((item): item is ScheduleColumnId => allowed.has(item as ScheduleColumnId));
+  const selected = raw.filter((item) => allowed.has(item));
   return selected.length ? selected : scheduleColumns.map((item) => item.id);
 }
 
-function appointmentColumn(appointment: Appointment, serviceById: Map<string, Service>): ScheduleColumnId {
+function appointmentColumn(
+  appointment: Appointment,
+  serviceById: Map<string, Service>,
+): ScheduleColumnId {
   if (appointment.is_quick_booking) return "quick";
-  if (appointment.laser_device_key === "prime_lase") return "prime";
-  if (appointment.laser_device_key === "candela_gentle") return "candela";
+  if (appointment.laser_device_key) {
+    return `device:${appointment.laser_device_key}`;
+  }
   const category = serviceById.get(appointment.service_id)?.operational_category;
   if (category === "slimming") return "slimming";
   return "dermatology";
@@ -291,12 +328,13 @@ function buildSchedulePeriods(
   return periods;
 }
 
-function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking }: {
+function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking }: {
   appointments: Appointment[];
   hours: KnowledgeHour[];
   timezone: string;
   patientNames: Map<string, string>;
   serviceById: Map<string, Service>;
+  scheduleColumns: ScheduleColumn[];
   visibleColumns: ScheduleColumnId[];
   selectedDate: string;
   branchId: string;
@@ -351,6 +389,7 @@ function DailySchedule({
   timezone,
   patientNames,
   serviceById,
+  scheduleColumns,
   visibleColumns,
   selectedDate,
   branchId,
@@ -362,6 +401,7 @@ function DailySchedule({
   timezone: string;
   patientNames: Map<string, string>;
   serviceById: Map<string, Service>;
+  scheduleColumns: ScheduleColumn[];
   visibleColumns: ScheduleColumnId[];
   selectedDate: string;
   branchId: string;
@@ -383,7 +423,7 @@ function DailySchedule({
 
   return (
     <>
-      <MobileAgenda appointments={appointments} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} />
+      <MobileAgenda appointments={appointments} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} />
       <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
@@ -525,10 +565,18 @@ export default async function AppointmentsPage({
   const patientId = raw.patient_id;
   const manualPhone = (raw.manual_phone || "").trim();
   const quickPhone = (raw.quick_phone || "").trim();
-  const visibleColumns = requestedColumns(raw.column);
-  const quickColumn = scheduleColumns.some((item) => item.id === raw.quick_column)
-    ? (raw.quick_column as ScheduleColumnId)
-    : null;
+
+  const [knowledge, services, doctors, staff, laserDevices, devicePrices] = await Promise.all([
+    tiaRequest<BookingKnowledge>("/clinic/knowledge"),
+    tiaRequest<Service[]>("/clinic/services"),
+    tiaRequest<Doctor[]>("/clinic/doctors"),
+    tiaRequest<Staff[]>("/clinic/staff"),
+    tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => []),
+    tiaRequest<AppointmentDevicePrice[]>("/inventory/laser-prices").catch(() => []),
+  ]);
+  const scheduleColumns = buildScheduleColumns(laserDevices);
+  const visibleColumns = requestedColumns(raw.column, scheduleColumns);
+  const quickColumn = scheduleColumns.find((item) => item.id === raw.quick_column) || null;
   const quickStart = Number(raw.quick_start);
   const quickEnd = Number(raw.quick_end);
   const quickWindow =
@@ -538,15 +586,8 @@ export default async function AppointmentsPage({
     quickStart >= 0 &&
     quickEnd > quickStart &&
     quickEnd <= 24 * 60
-      ? { column: quickColumn, start: quickStart, end: quickEnd }
+      ? { column: quickColumn.id, start: quickStart, end: quickEnd }
       : null;
-
-  const [knowledge, services, doctors, staff] = await Promise.all([
-    tiaRequest<BookingKnowledge>("/clinic/knowledge"),
-    tiaRequest<Service[]>("/clinic/services"),
-    tiaRequest<Doctor[]>("/clinic/doctors"),
-    tiaRequest<Staff[]>("/clinic/staff"),
-  ]);
 
   const activeBranches = knowledge.branches.filter((branch) => branch.is_active);
   const selectedBranch =
@@ -655,6 +696,7 @@ export default async function AppointmentsPage({
               staff={staff}
               packages={selectedPackages}
               pulseBalances={selectedPulseBalances}
+              devicePrices={devicePrices}
               timezone={timezone}
             />
           </div>
@@ -714,6 +756,7 @@ export default async function AppointmentsPage({
                   staff={staff}
                   packages={manualPackages}
                   pulseBalances={manualPulseBalances}
+                  devicePrices={devicePrices}
                   timezone={timezone}
                 />
               </div>
@@ -798,6 +841,7 @@ export default async function AppointmentsPage({
               timezone={timezone}
               patientNames={patientNames}
               serviceById={serviceById}
+              scheduleColumns={scheduleColumns}
               visibleColumns={visibleColumns}
               selectedDate={selectedDate}
               branchId={selectedBranch.id}
@@ -822,6 +866,9 @@ export default async function AppointmentsPage({
           history={quickHistory}
           packages={quickPackages}
           pulseBalances={quickPulseBalances}
+          devicePrices={devicePrices}
+          fixedLaserDeviceKey={scheduleColumns.find((item) => item.id === quickWindow.column)?.deviceKey}
+          allowedOperationalCategory={scheduleColumns.find((item) => item.id === quickWindow.column)?.operationalCategory}
           services={services}
           doctors={doctors}
           staff={staff}

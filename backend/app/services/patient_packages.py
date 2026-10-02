@@ -79,7 +79,6 @@ def _settlement_standalone_price_minor(
                 ServiceDevicePrice.workspace_id == package.workspace_id,
                 ServiceDevicePrice.service_id == package.service_id,
                 ServiceDevicePrice.device_key == package.laser_device_key,
-                ServiceDevicePrice.is_active.is_(True),
                 ServiceDevicePrice.price_minor.is_not(None),
             )
         )

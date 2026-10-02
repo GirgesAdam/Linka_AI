@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,7 +27,7 @@ router = APIRouter()
 class AppointmentServiceUpdate(BaseModel):
     service_id: UUID
     doctor_id: UUID | None = None
-    laser_device_key: Literal["prime_lase", "candela_gentle"] | None = None
+    laser_device_key: str | None = None
     start_at: datetime | None = None
 
 

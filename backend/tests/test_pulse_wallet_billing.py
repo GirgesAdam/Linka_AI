@@ -8,6 +8,7 @@ import pytest
 
 import app.services.pulse_billing as pulse_service
 from app.schemas.booking import AppointmentCreate
+from app.schemas.pulse_billing import PulseBillingSettingsUpsert, PulsePackOfferUpsert
 from app.services.pulse_billing import PulseBillingError
 
 
@@ -305,3 +306,20 @@ def test_pulse_prepaid_visit_charges_only_pack_sales_and_overage() -> None:
         appointment=appointment,
     )
     assert breakdown == (100_000, 0, 0, 0, 250_000, 45_000, 295_000)
+
+
+def test_pulse_schemas_accept_arbitrary_clinic_device_keys() -> None:
+    settings = PulseBillingSettingsUpsert(
+        device_key="device_deka_again",
+        overage_price_minor=150,
+        currency="EGP",
+    )
+    offer = PulsePackOfferUpsert(
+        device_key="device_deka_again",
+        pulses_count=1000,
+        price_minor=120_000,
+        currency="EGP",
+    )
+
+    assert settings.device_key == "device_deka_again"
+    assert offer.device_key == "device_deka_again"

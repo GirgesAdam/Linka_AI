@@ -79,3 +79,30 @@ def test_semantic_catalog_keeps_business_constraints_server_side() -> None:
     assert "requires_laser_device" not in service
     assert "service_refs" not in doctor
     assert context.reference_map["S1"].metadata["requires_laser_device"] is True
+
+
+def test_semantic_catalog_supports_arbitrary_clinic_device_keys() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "service-laser",
+                    "name": "ليزر جسم كامل",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "device_deka_again",
+                            "device_name": "DEKA Again",
+                        }
+                    ],
+                }
+            ],
+            "doctors": [],
+            "appointments": [],
+            "packages": [],
+        }
+    )
+
+    assert context.model_input["devices"] == [{"ref": "V1", "name": "DEKA Again"}]
+    assert context.model_input["service_device_refs"] == {"S1": ["V1"]}
+    assert context.resolve("V1", expected_kind="device") == "device_deka_again"

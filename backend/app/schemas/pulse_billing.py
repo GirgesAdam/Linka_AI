@@ -6,24 +6,22 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
-
 
 class PulseBillingSettingsUpsert(BaseModel):
-    device_key: LaserDeviceKey = "candela_gentle"
+    device_key: str = Field(min_length=1, max_length=40)
     overage_price_minor: int = Field(gt=0)
     currency: str = Field(default="EGP", min_length=3, max_length=3)
 
 
 class PulseBillingSettingsRead(BaseModel):
-    device_key: LaserDeviceKey
+    device_key: str
     device_name: str
     overage_price_minor: int | None = None
     currency: str = "EGP"
 
 
 class PulsePackOfferUpsert(BaseModel):
-    device_key: LaserDeviceKey
+    device_key: str
     pulses_count: int = Field(gt=0, le=10_000_000)
     price_minor: int = Field(ge=0)
     currency: str = Field(default="EGP", min_length=3, max_length=3)
@@ -31,7 +29,7 @@ class PulsePackOfferUpsert(BaseModel):
 class PulsePackOfferRead(BaseModel):
     id: UUID
     workspace_id: UUID
-    device_key: LaserDeviceKey
+    device_key: str
     device_name: str
     pulses_count: int
     price_minor: int
@@ -63,7 +61,7 @@ class PatientPulsePackRead(BaseModel):
     pulse_pack_offer_id: UUID | None
     origin_appointment_id: UUID | None
     purchase_transaction_id: UUID | None
-    device_key: LaserDeviceKey
+    device_key: str
     device_name: str
     pulses_purchased: int
     pulses_consumed: int
@@ -83,7 +81,7 @@ class PatientPulsePackRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 class PulseBalanceRead(BaseModel):
-    device_key: LaserDeviceKey
+    device_key: str
     device_name: str
     pulses_purchased: int
     pulses_consumed: int

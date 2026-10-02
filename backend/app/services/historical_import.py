@@ -18,13 +18,14 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.table import Table
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
-from app.models.clinic_inventory import ServiceDevicePrice
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.crm_campaign_conversion import CRMCampaignConversion
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
@@ -379,19 +380,29 @@ def _service_catalog(db: Session, workspace_id: UUID) -> tuple[dict[UUID, Servic
 def _active_device_price_catalog(
     db: Session,
     workspace_id: UUID,
-) -> dict[UUID, dict[str, ServiceDevicePrice]]:
+) -> dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]]:
     rows = list(
-        db.scalars(
-            select(ServiceDevicePrice).where(
+        db.execute(
+            select(ServiceDevicePrice, ClinicLaserDevice.name)
+            .join(
+                ClinicLaserDevice,
+                (ClinicLaserDevice.workspace_id == ServiceDevicePrice.workspace_id)
+                & (ClinicLaserDevice.device_key == ServiceDevicePrice.device_key),
+            )
+            .where(
                 ServiceDevicePrice.workspace_id == workspace_id,
                 ServiceDevicePrice.is_active.is_(True),
                 ServiceDevicePrice.price_minor.is_not(None),
+                ClinicLaserDevice.is_active.is_(True),
             )
-        )
+        ).all()
     )
-    result: dict[UUID, dict[str, ServiceDevicePrice]] = defaultdict(dict)
-    for row in rows:
-        result[row.service_id][row.device_name.strip().casefold()] = row
+    result: dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]] = defaultdict(dict)
+    for row, current_device_name in rows:
+        result[row.service_id][current_device_name.strip().casefold()] = (
+            row,
+            current_device_name,
+        )
     return result
 
 
@@ -744,15 +755,16 @@ def _normalize_active_package(
                 "active_package_laser_device_missing",
                 "اختر اسم الجهاز لخدمة الليزر من القائمة الموجودة في ملف Excel.",
             )
-        device_price = configured_devices.get(device_name.casefold())
-        if device_price is None:
+        device_match = configured_devices.get(device_name.casefold())
+        if device_match is None:
             return (
                 None,
                 "active_package_laser_device_invalid",
                 "الجهاز المختار غير متاح للخدمة دي. اختر جهازًا من القائمة الخاصة بالخدمة.",
             )
+        device_price, current_device_name = device_match
         laser_device_key = device_price.device_key
-        laser_device_name = device_price.device_name
+        laser_device_name = current_device_name
         standalone_session_price_minor = int(device_price.price_minor or 0)
     elif device_name:
         return (
@@ -2011,7 +2023,7 @@ def apply_historical_import(
 def build_historical_import_template(
     *,
     service_names: Iterable[str] | None = None,
-    service_device_names: dict[str, Iterable[str]] | None = None,
+    device_names: Iterable[str] | None = None,
 ) -> bytes:
     """Return the clinic-facing active-package migration workbook."""
     valid_services = sorted(
@@ -2022,23 +2034,16 @@ def build_historical_import_template(
         },
         key=str.casefold,
     )
-    device_names_by_service = {
-        str(service_name).strip(): tuple(
-            sorted(
-                {
-                    str(device_name).strip()
-                    for device_name in device_names
-                    if str(device_name).strip()
-                },
-                key=str.casefold,
-            )
-        )[:2]
-        for service_name, device_names in (service_device_names or {}).items()
-        if str(service_name).strip()
-    }
+    valid_devices = sorted(
+        {
+            str(name).strip()
+            for name in (device_names or [])
+            if str(name).strip()
+        },
+        key=str.casefold,
+    )
     example_service = valid_services[0] if valid_services else "اختر خدمة من القائمة"
-    example_devices = device_names_by_service.get(example_service, ())
-    example_device = example_devices[0] if example_devices else None
+    example_device = valid_devices[0] if valid_devices else None
 
     workbook = Workbook()
     instructions = workbook.active
@@ -2109,13 +2114,10 @@ def build_historical_import_template(
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     instructions["B7"].number_format = "@"
 
-    instructions.merge_cells("A9:I9")
-    instructions["A9"] = (
-        "الخدمات التالية هي الخدمات النشطة المسجلة حاليًا داخل Linka، "
-        "وهي نفسها الخدمات التي يمكن اختيارها للباقة."
-    )
-    instructions["A9"].font = header_font
-    instructions["A9"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    instructions["A9"] = "الخدمات"
+    instructions["A9"].font = section_font
+    instructions["D9"] = "الأجهزة"
+    instructions["D9"].font = section_font
 
     instructions["A11"] = "اسم الخدمة"
     instructions["A11"].font = header_font
@@ -2131,10 +2133,58 @@ def build_historical_import_template(
             cell.border = table_border
             cell.alignment = Alignment(horizontal="right", vertical="center")
         service_end_row = service_start_row + len(valid_services) - 1
+        instructions.add_table(
+            Table(
+                displayName="ServicesTable",
+                ref=f"A11:A{service_end_row}",
+            )
+        )
     else:
         instructions["A12"] = "لا توجد خدمات نشطة حاليًا."
         instructions["A12"].border = table_border
         instructions["A12"].alignment = Alignment(horizontal="right")
+
+    instructions["D11"] = "اسم الجهاز"
+    instructions["D11"].font = header_font
+    instructions["D11"].border = table_border
+    instructions["D11"].alignment = Alignment(horizontal="center")
+
+    device_start_row: int | None = None
+    device_end_row: int | None = None
+    if valid_devices:
+        device_start_row = 12
+        for index, name in enumerate(valid_devices, start=device_start_row):
+            cell = instructions.cell(row=index, column=4, value=name)
+            cell.border = table_border
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+        device_end_row = device_start_row + len(valid_devices) - 1
+        instructions.add_table(
+            Table(
+                displayName="DevicesTable",
+                ref=f"D11:D{device_end_row}",
+            )
+        )
+    else:
+        instructions["D12"] = "لا توجد أجهزة ليزر مفعلة حاليًا."
+        instructions["D12"].border = table_border
+        instructions["D12"].alignment = Alignment(horizontal="right")
+
+    note_row = max(service_end_row or 12, device_end_row or 12) + 2
+    instructions.merge_cells(
+        start_row=note_row,
+        start_column=4,
+        end_row=note_row + 1,
+        end_column=9,
+    )
+    instructions.cell(row=note_row, column=4).value = (
+        "لو الخدمة لا تستخدم جهاز ليزر، اترك خانة «اسم الجهاز» فارغة "
+        "في جدول الباقات النشطة."
+    )
+    instructions.cell(row=note_row, column=4).alignment = Alignment(
+        horizontal="right",
+        vertical="top",
+        wrap_text=True,
+    )
 
     readme_widths = {
         "A": 28,
@@ -2150,25 +2200,6 @@ def build_historical_import_template(
     for column_letter, width in readme_widths.items():
         instructions.column_dimensions[column_letter].width = width
     instructions.freeze_panes = "A3"
-
-    device_lists = workbook.create_sheet("_lists")
-    device_lists.sheet_state = "hidden"
-    device_lists["A2"] = None
-    device_lists["B2"] = None
-    device_lists["C2"] = None
-    for row_number, service_name in enumerate(valid_services, start=3):
-        devices = device_names_by_service.get(service_name, ())
-        device_lists.cell(row=row_number, column=1, value=service_name)
-        device_lists.cell(
-            row=row_number,
-            column=2,
-            value=devices[0] if len(devices) >= 1 else None,
-        )
-        device_lists.cell(
-            row=row_number,
-            column=3,
-            value=devices[1] if len(devices) >= 2 else None,
-        )
 
     sheet = workbook.create_sheet("active_packages")
     sheet.sheet_view.rightToLeft = True
@@ -2209,26 +2240,22 @@ def build_historical_import_template(
         sheet.add_data_validation(validation)
         validation.add("C2:C5000")
 
-        device_list_end_row = len(valid_services) + 2
-        device_formula = (
-            "OFFSET(INDIRECT(\"'_lists'!$B$2\"),"
-            "IFERROR(MATCH($C2,INDIRECT(\"'_lists'!$A$3:$A$"
-            + str(device_list_end_row)
-            + "\"),0),0),0,1,2)"
-        )
-        device_validation = DataValidation(
-            type="list",
-            formula1=device_formula,
-            allow_blank=True,
-        )
-        device_validation.error = (
-            "اختر جهازًا من القائمة الخاصة بالخدمة، أو اترك الخانة فارغة للخدمات غير الليزر."
-        )
-        device_validation.errorTitle = "جهاز غير صحيح"
-        device_validation.prompt = "اختر الجهاز إذا كانت الخدمة ليزر."
-        device_validation.promptTitle = "اسم الجهاز"
-        sheet.add_data_validation(device_validation)
-        device_validation.add("D2:D5000")
+        if device_start_row is not None and device_end_row is not None:
+            device_validation = DataValidation(
+                type="list",
+                formula1='INDIRECT("DevicesTable[اسم الجهاز]")',
+                allow_blank=True,
+            )
+            device_validation.error = (
+                "اختر جهازًا من قائمة الأجهزة، أو اترك الخانة فارغة للخدمات غير الليزر."
+            )
+            device_validation.errorTitle = "جهاز غير صحيح"
+            device_validation.prompt = (
+                "اختَر الجهاز لو الخدمة ليزر. لو الخدمة لا تستخدم جهاز ليزر اترك الخانة فارغة."
+            )
+            device_validation.promptTitle = "اسم الجهاز"
+            sheet.add_data_validation(device_validation)
+            device_validation.add("D2:D5000")
 
     stream = io.BytesIO()
     workbook.save(stream)

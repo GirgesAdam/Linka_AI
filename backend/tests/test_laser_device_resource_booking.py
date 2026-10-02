@@ -221,3 +221,33 @@ def test_database_migration_guards_concurrent_same_device_overlap() -> None:
     assert "laser_device_key WITH =" in migration
     assert "tstzrange(busy_start_at, busy_end_at, '[)')" in migration
     assert "('pending', 'confirmed', 'checked_in', 'in_progress')" in migration
+
+
+def test_arbitrary_clinic_device_key_drives_availability(monkeypatch) -> None:
+    db, workspace, branch, service, doctor_id, booking_day = _fixture()
+    _configure(
+        monkeypatch,
+        device_key="device_deka_again",
+        device_name="DEKA Again",
+        price_minor=155_000,
+        duration_minutes=50,
+    )
+
+    _, slots = booking.calculate_availability(
+        db=db,
+        workspace=workspace,
+        branch_id=branch.id,
+        service_id=service.id,
+        booking_date=booking_day,
+        doctor_id=doctor_id,
+        now=datetime(2026, 9, 10, 12, 0, tzinfo=UTC),
+        preloaded_branch=branch,
+        preloaded_service=service,
+        laser_device_key="device_deka_again",
+    )
+
+    assert slots
+    assert all(slot.laser_device_key == "device_deka_again" for slot in slots)
+    assert all(slot.laser_device_name == "DEKA Again" for slot in slots)
+    assert all(slot.price_minor == 155_000 for slot in slots)
+    assert all(slot.duration_minutes == 50 for slot in slots)

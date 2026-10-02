@@ -8,7 +8,17 @@ import { appointmentLabels } from "@/lib/status";
 import type { Appointment, Doctor, Patient, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 
-type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick" | "other";
+type ScheduleColumnId = string;
+
+type DevicePrice = {
+  service_id: string;
+  device_key: string;
+  device_name: string;
+  price_minor: number | null;
+  duration_minutes: number | null;
+  currency: string;
+  configured: boolean;
+};
 
 function minuteLabel(total: number) {
   const hour = Math.floor(total / 60);
@@ -32,6 +42,9 @@ export function QuickAppointmentDialog({
   history,
   packages,
   pulseBalances,
+  devicePrices,
+  fixedLaserDeviceKey,
+  allowedOperationalCategory,
   services,
   doctors,
   staff,
@@ -49,6 +62,9 @@ export function QuickAppointmentDialog({
   history: Appointment[];
   packages: PatientPackage[];
   pulseBalances: PulseBalance[];
+  devicePrices: DevicePrice[];
+  fixedLaserDeviceKey?: string;
+  allowedOperationalCategory?: "laser" | "dermatology" | "slimming";
   services: Service[];
   doctors: Doctor[];
   staff: Staff[];
@@ -56,14 +72,6 @@ export function QuickAppointmentDialog({
   closeHref: string;
   timezone: string;
 }) {
-  const fixedLaserDeviceKey =
-    column === "prime" ? "prime_lase" : column === "candela" ? "candela_gentle" : undefined;
-  const allowedOperationalCategory =
-    column === "dermatology" || column === "slimming"
-      ? column
-      : column === "prime" || column === "candela"
-        ? "laser"
-        : undefined;
   const serviceNames = new Map(services.map((service) => [service.id, service.name]));
 
   return (
@@ -139,6 +147,7 @@ export function QuickAppointmentDialog({
                 staff={staff}
                 packages={packages}
                 pulseBalances={pulseBalances}
+                devicePrices={devicePrices}
                 fixedLaserDeviceKey={column === "quick" ? undefined : fixedLaserDeviceKey}
                 allowedOperationalCategory={column === "quick" ? undefined : allowedOperationalCategory}
                 windowStartMinutes={windowStartMinutes}

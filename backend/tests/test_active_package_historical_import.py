@@ -13,22 +13,29 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
+from app.agents.v2.semantic_context import build_semantic_context
 from app.core.config import settings
+from app.integrations.clinic.tia_database_laser import TiaDatabaseLaserClinicAdapter
 from app.models.appointment import Appointment
 from app.models.branch import Branch
-from app.models.clinic_inventory import ServiceDevicePrice
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
 from app.models.payment_transaction import PaymentTransaction
+from app.models.pulse_billing import PatientPulsePack, PulsePackOffer
 from app.models.service import Service
+from app.models.service_package_offer import ServicePackageOffer
 from app.models.staff import Staff
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.schemas.crm import normalize_patient_identity_phone
 from app.schemas.historical_import import HistoricalImportDocument
 from app.services import historical_import as history
+from app.services import inventory as inventory_service
+from app.services import package_offers as package_offer_service
 from app.services import patient_packages as package_service
+from app.services import pulse_billing as pulse_service
 from app.services.agent_v2.package_booking_policy import resolve_booking_package
 from app.services.agent_v2.planner import PlanStep, ReadRequest
 from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
@@ -148,6 +155,23 @@ def _configure_laser_service(
 ) -> dict[str, ServiceDevicePrice]:
     service.operational_category = "laser"
     service.requires_laser_device = True
+    db.add_all(
+        [
+            ClinicLaserDevice(
+                workspace_id=workspace.id,
+                device_key="prime_lase",
+                name="Prime Lase",
+                is_active=True,
+            ),
+            ClinicLaserDevice(
+                workspace_id=workspace.id,
+                device_key="candela_gentle",
+                name="Candela Gentle",
+                is_active=True,
+            ),
+        ]
+    )
+    db.flush()
     rows = {
         "Prime Lase": ServiceDevicePrice(
             workspace_id=workspace.id,
@@ -365,20 +389,16 @@ def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(va
     assert history._parse_active_package_purchase_date(value) is None
 
 
-def test_active_package_template_is_plain_arabic_and_uses_exact_active_services() -> None:
+def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() -> None:
     laser_service = "ليزر إزالة الشعر - جسم كامل سيدات"
     payload = history.build_historical_import_template(
         service_names=["Hydrafacial", laser_service],
-        service_device_names={
-            laser_service: ["Prime Lase", "Candela Gentle"],
-        },
+        device_names=["Prime Lase", "Candela Gentle", "DEKA Again"],
     )
     workbook = load_workbook(io.BytesIO(payload))
     try:
-        assert workbook.sheetnames == ["README", "_lists", "active_packages"]
-        assert workbook["_lists"].sheet_state == "hidden"
+        assert workbook.sheetnames == ["README", "active_packages"]
         readme = workbook["README"]
-        lists = workbook["_lists"]
         sheet = workbook["active_packages"]
 
         expected_headers = [
@@ -413,19 +433,19 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
             if cell.value is not None
         )
         assert "طريقة الاستخدام" not in readme_text
-        assert "إذا حذف Excel الصفر الأول" not in readme_text
-        assert "هي نفسها الخدمات التي يمكن اختيارها للباقة." in readme_text
+        assert readme["A9"].value == "الخدمات"
+        assert readme["D9"].value == "الأجهزة"
         assert readme["A11"].value == "اسم الخدمة"
+        assert readme["D11"].value == "اسم الجهاز"
 
-        list_rows = {
-            lists.cell(row=row_number, column=1).value: (
-                lists.cell(row=row_number, column=2).value,
-                lists.cell(row=row_number, column=3).value,
-            )
-            for row_number in range(3, lists.max_row + 1)
+        assert "ServicesTable" in readme.tables
+        assert "DevicesTable" in readme.tables
+        device_values = {
+            readme.cell(row=row_number, column=4).value
+            for row_number in range(12, 15)
         }
-        assert list_rows["Hydrafacial"] == (None, None)
-        assert set(list_rows[laser_service]) == {"Prime Lase", "Candela Gentle"}
+        assert device_values == {"Prime Lase", "Candela Gentle", "DEKA Again"}
+        assert "لو الخدمة لا تستخدم جهاز ليزر" in readme_text
 
         assert [sheet.cell(1, column).value for column in range(1, 10)] == expected_headers
         assert sheet["A1"].fill.fill_type is None
@@ -439,8 +459,7 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
         }
         assert set(validations) == {"C2:C5000", "D2:D5000"}
         assert "README" in validations["C2:C5000"].formula1
-        assert "MATCH($C2" in validations["D2:D5000"].formula1
-        assert "_lists" in validations["D2:D5000"].formula1
+        assert "DevicesTable" in validations["D2:D5000"].formula1
         assert validations["D2:D5000"].allow_blank is True
     finally:
         workbook.close()
@@ -1040,3 +1059,282 @@ def test_legacy_multisheet_workbook_remains_previewable_and_importable(monkeypat
         assert package is not None
         assert package.opening_sessions_remaining == 2
         assert package.source == "integration"
+
+
+def test_device_rename_updates_current_config_but_preserves_historical_snapshots() -> None:
+    with _db_session() as db:
+        workspace, user, branch, services, doctor = _seed_workspace(
+            db,
+            services=("Laser Full Body",),
+        )
+        service = services["Laser Full Body"]
+        service.operational_category = "laser"
+        service.requires_laser_device = True
+
+        device = ClinicLaserDevice(
+            workspace_id=workspace.id,
+            device_key="device_deka_again",
+            name="DEKA Again",
+            is_active=True,
+        )
+        db.add(device)
+        db.flush()
+
+        price = ServiceDevicePrice(
+            workspace_id=workspace.id,
+            service_id=service.id,
+            device_key=device.device_key,
+            device_name="DEKA Again",
+            price_minor=155_000,
+            duration_minutes=50,
+            currency="EGP",
+            is_active=True,
+        )
+        package_offer = ServicePackageOffer(
+            workspace_id=workspace.id,
+            service_id=service.id,
+            device_key=device.device_key,
+            device_name="DEKA Again",
+            sessions_count=6,
+            price_minor=800_000,
+            currency="EGP",
+            is_active=True,
+        )
+        pulse_offer = PulsePackOffer(
+            workspace_id=workspace.id,
+            device_key=device.device_key,
+            device_name="DEKA Again",
+            pulses_count=1000,
+            price_minor=120_000,
+            currency="EGP",
+            is_active=True,
+        )
+        db.add_all([price, package_offer, pulse_offer])
+
+        display, normalized = normalize_patient_identity_phone("01022222222")
+        patient = Patient(
+            workspace_id=workspace.id,
+            first_name="Historical",
+            last_name="Patient",
+            phone=display,
+            phone_normalized=normalized,
+            gender="female",
+            preferred_language="ar",
+            preferred_branch_id=branch.id,
+            source="referral",
+            status="active",
+            marketing_consent=False,
+        )
+        db.add(patient)
+        db.flush()
+
+        purchased_at = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
+        historical_package = PatientPackage(
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+            service_id=service.id,
+            purchase_transaction_id=None,
+            package_offer_id=package_offer.id,
+            origin_appointment_id=None,
+            created_by_user_id=user.id,
+            external_id=None,
+            name="Historical DEKA package",
+            sessions_purchased=6,
+            opening_sessions_remaining=4,
+            sessions_total_known=True,
+            sale_price_minor=800_000,
+            standalone_session_price_minor_at_purchase=155_000,
+            laser_device_key=device.device_key,
+            laser_device_name="DEKA Again",
+            currency="EGP",
+            purchased_at=purchased_at,
+            expires_at=None,
+            status="active",
+            source="staff",
+            idempotency_key=None,
+        )
+        historical_pulse_pack = PatientPulsePack(
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+            pulse_pack_offer_id=pulse_offer.id,
+            origin_appointment_id=None,
+            purchase_transaction_id=None,
+            created_by_user_id=user.id,
+            device_key=device.device_key,
+            device_name="DEKA Again",
+            pulses_purchased=1000,
+            sale_price_minor=120_000,
+            standalone_pulse_price_minor_at_purchase=150,
+            currency="EGP",
+            purchased_at=purchased_at,
+            expires_at=None,
+            status="active",
+            idempotency_key=None,
+        )
+        appointment_start = datetime(2026, 1, 10, 10, 0, tzinfo=UTC)
+        historical_appointment = Appointment(
+            workspace_id=workspace.id,
+            patient_id=patient.id,
+            branch_id=branch.id,
+            doctor_id=doctor.id,
+            doctor_assignment_known=True,
+            is_quick_booking=False,
+            service_id=service.id,
+            patient_package_id=None,
+            visit_group_id=None,
+            lead_id=None,
+            created_by_user_id=user.id,
+            rescheduled_from_appointment_id=None,
+            status="completed",
+            source="staff",
+            start_at=appointment_start,
+            end_at=appointment_start + timedelta(minutes=50),
+            busy_start_at=appointment_start,
+            busy_end_at=appointment_start + timedelta(minutes=50),
+            duration_minutes=50,
+            price_minor=155_000,
+            discount_minor=0,
+            currency="EGP",
+            laser_device_key=device.device_key,
+            laser_device_name="DEKA Again",
+            laser_pulses_used=500,
+            payment_status="paid",
+            amount_paid_minor=155_000,
+            payment_method="cash",
+            billing_context="standard",
+            package_external_id=None,
+            customer_note=None,
+            cancellation_reason=None,
+            idempotency_key=None,
+        )
+        db.add_all(
+            [historical_package, historical_pulse_pack, historical_appointment]
+        )
+        db.flush()
+
+        device_id = device.id
+        package_id = historical_package.id
+        pulse_pack_id = historical_pulse_pack.id
+        appointment_id = historical_appointment.id
+        device_key = device.device_key
+
+        renamed = inventory_service.update_clinic_laser_device(
+            db,
+            workspace_id=workspace.id,
+            device_id=device_id,
+            name="DEKA Again Pro",
+            is_active=None,
+        )
+        assert renamed.device_key == device_key
+        assert renamed.name == "DEKA Again Pro"
+
+        db.expire_all()
+
+        current_prices = inventory_service.list_laser_device_prices(
+            db,
+            workspace_id=workspace.id,
+        )
+        current_price = next(
+            row for row in current_prices if row.device_key == device_key
+        )
+        assert current_price.device_name == "DEKA Again Pro"
+
+        current_package_offer = next(
+            row
+            for row in package_offer_service.list_package_offers(
+                db,
+                workspace_id=workspace.id,
+                active_only=True,
+            )
+            if row.device_key == device_key
+        )
+        assert current_package_offer.device_name == "DEKA Again Pro"
+
+        current_pulse_offer = next(
+            row
+            for row in pulse_service.list_pulse_pack_offers(
+                db,
+                workspace_id=workspace.id,
+                active_only=True,
+            )
+            if row.device_key == device_key
+        )
+        assert current_pulse_offer.device_name == "DEKA Again Pro"
+
+        catalog = TiaDatabaseLaserClinicAdapter(
+            db=db,
+            workspace=workspace,
+        ).build_catalog()
+        semantic = build_semantic_context(catalog)
+        assert {"ref": "V1", "name": "DEKA Again Pro"} in semantic.model_input[
+            "devices"
+        ]
+
+        current_device_names = list(
+            db.scalars(
+                select(ClinicLaserDevice.name).where(
+                    ClinicLaserDevice.workspace_id == workspace.id,
+                    ClinicLaserDevice.is_active.is_(True),
+                )
+            )
+        )
+        template_bytes = history.build_historical_import_template(
+            service_names=[service.name],
+            device_names=current_device_names,
+        )
+        workbook = load_workbook(io.BytesIO(template_bytes), data_only=False)
+        try:
+            workbook_values = {
+                str(cell.value)
+                for sheet in workbook.worksheets
+                for row in sheet.iter_rows()
+                for cell in row
+                if cell.value is not None
+            }
+        finally:
+            workbook.close()
+        assert "DEKA Again Pro" in workbook_values
+
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document(
+                [[
+                    "Rename Import",
+                    "01033333333",
+                    service.name,
+                    "DEKA Again Pro",
+                    6,
+                    3,
+                    3000,
+                    "15/02/2026",
+                    3000,
+                ]]
+            ),
+        )
+        assert preview.ready_counts == {"package": 1}
+        assert "active_package_laser_device_invalid" not in {
+            issue.code for issue in preview.issue_groups
+        }
+        imported = db.scalar(
+            select(PatientPackage)
+            .where(
+                PatientPackage.workspace_id == workspace.id,
+                PatientPackage.source == "integration",
+                PatientPackage.laser_device_key == device_key,
+            )
+            .order_by(PatientPackage.created_at.desc())
+        )
+        assert imported is not None
+        assert imported.laser_device_name == "DEKA Again Pro"
+
+        old_appointment = db.get(Appointment, appointment_id)
+        old_package = db.get(PatientPackage, package_id)
+        old_pulse_pack = db.get(PatientPulsePack, pulse_pack_id)
+        assert old_appointment is not None
+        assert old_package is not None
+        assert old_pulse_pack is not None
+        assert old_appointment.laser_device_name == "DEKA Again"
+        assert old_package.laser_device_name == "DEKA Again"
+        assert old_pulse_pack.device_name == "DEKA Again"

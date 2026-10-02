@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
 from app.models.clinic_inventory import (
-    LASER_DEVICE_KEYS,
-    LASER_DEVICE_NAMES,
     AppointmentProductLine,
+    ClinicLaserDevice,
     ClinicProduct,
     InventoryItem,
     InventoryUsage,
     ServiceDevicePrice,
 )
+from app.models.pulse_billing import PulsePackOffer
 from app.models.service import Service
+from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.inventory import (
     AppointmentProductLineRead,
+    ClinicLaserDeviceRead,
     InventoryItemRead,
     LaserDevicePriceRead,
 )
@@ -41,6 +43,151 @@ def is_laser_service(service: Service) -> bool:
     return bool(getattr(service, "requires_laser_device", False))
 
 
+def _device_read(row: ClinicLaserDevice) -> ClinicLaserDeviceRead:
+    return ClinicLaserDeviceRead.model_validate(row)
+
+
+def list_clinic_laser_devices(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    active_only: bool = False,
+) -> list[ClinicLaserDeviceRead]:
+    stmt = select(ClinicLaserDevice).where(
+        ClinicLaserDevice.workspace_id == workspace_id,
+    )
+    if active_only:
+        stmt = stmt.where(ClinicLaserDevice.is_active.is_(True))
+    rows = list(db.scalars(stmt.order_by(ClinicLaserDevice.name, ClinicLaserDevice.id)))
+    return [_device_read(row) for row in rows]
+
+
+def create_clinic_laser_device(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    name: str,
+) -> ClinicLaserDeviceRead:
+    normalized_name = " ".join(name.split())
+    rows = list(
+        db.scalars(
+            select(ClinicLaserDevice).where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+            )
+        )
+    )
+    same_name = next(
+        (row for row in rows if row.name.strip().casefold() == normalized_name.casefold()),
+        None,
+    )
+    if same_name is not None:
+        same_name.is_active = True
+        same_name.name = normalized_name
+        db.flush()
+        return _device_read(same_name)
+
+    row = ClinicLaserDevice(
+        workspace_id=workspace_id,
+        device_key=f"device_{uuid4().hex[:16]}",
+        name=normalized_name,
+        is_active=True,
+    )
+    db.add(row)
+    db.flush()
+    return _device_read(row)
+
+
+def update_clinic_laser_device(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    device_id: UUID,
+    name: str | None,
+    is_active: bool | None,
+) -> ClinicLaserDeviceRead:
+    row = db.scalar(
+        select(ClinicLaserDevice)
+        .where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.id == device_id,
+        )
+        .with_for_update()
+    )
+    if row is None:
+        raise InventoryNotFound("Laser device not found.")
+
+    if name is not None:
+        normalized_name = " ".join(name.split())
+        siblings = list(
+            db.scalars(
+                select(ClinicLaserDevice).where(
+                    ClinicLaserDevice.workspace_id == workspace_id,
+                    ClinicLaserDevice.id != row.id,
+                )
+            )
+        )
+        if any(
+            sibling.name.strip().casefold() == normalized_name.casefold()
+            for sibling in siblings
+        ):
+            raise InventoryOperationError("A laser device with this name already exists.")
+        row.name = normalized_name
+        db.execute(
+            update(ServiceDevicePrice)
+            .where(
+                ServiceDevicePrice.workspace_id == workspace_id,
+                ServiceDevicePrice.device_key == row.device_key,
+            )
+            .values(device_name=normalized_name)
+        )
+        db.execute(
+            update(ServicePackageOffer)
+            .where(
+                ServicePackageOffer.workspace_id == workspace_id,
+                ServicePackageOffer.device_key == row.device_key,
+            )
+            .values(device_name=normalized_name)
+        )
+        db.execute(
+            update(PulsePackOffer)
+            .where(
+                PulsePackOffer.workspace_id == workspace_id,
+                PulsePackOffer.device_key == row.device_key,
+            )
+            .values(device_name=normalized_name)
+        )
+    if is_active is not None:
+        row.is_active = is_active
+        if not is_active:
+            db.execute(
+                update(ServiceDevicePrice)
+                .where(
+                    ServiceDevicePrice.workspace_id == workspace_id,
+                    ServiceDevicePrice.device_key == row.device_key,
+                )
+                .values(is_active=False)
+            )
+            db.execute(
+                update(ServicePackageOffer)
+                .where(
+                    ServicePackageOffer.workspace_id == workspace_id,
+                    ServicePackageOffer.device_key == row.device_key,
+                )
+                .values(is_active=False)
+            )
+            db.execute(
+                update(PulsePackOffer)
+                .where(
+                    PulsePackOffer.workspace_id == workspace_id,
+                    PulsePackOffer.device_key == row.device_key,
+                )
+                .values(is_active=False)
+            )
+
+    db.flush()
+    return _device_read(row)
+
+
 def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDevicePriceRead]:
     services = list(
         db.scalars(
@@ -53,6 +200,20 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
     )
     if not services:
         return []
+
+    devices = list(
+        db.scalars(
+            select(ClinicLaserDevice)
+            .where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+                ClinicLaserDevice.is_active.is_(True),
+            )
+            .order_by(ClinicLaserDevice.name, ClinicLaserDevice.id)
+        )
+    )
+    if not devices:
+        return []
+
     rows = list(
         db.scalars(
             select(ServiceDevicePrice).where(
@@ -65,14 +226,14 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
     by_key = {(row.service_id, row.device_key): row for row in rows}
     result: list[LaserDevicePriceRead] = []
     for service in services:
-        for device_key in LASER_DEVICE_KEYS:
-            row = by_key.get((service.id, device_key))
+        for device in devices:
+            row = by_key.get((service.id, device.device_key))
             result.append(
                 LaserDevicePriceRead(
                     service_id=service.id,
                     service_name=service.name,
-                    device_key=device_key,
-                    device_name=LASER_DEVICE_NAMES[device_key],
+                    device_key=device.device_key,
+                    device_name=device.name,
                     price_minor=(int(row.price_minor) if row and row.price_minor is not None else None),
                     duration_minutes=(int(row.duration_minutes) if row else None),
                     currency=(row.currency if row else service.currency or "EGP"),
@@ -96,8 +257,6 @@ def upsert_laser_device_price(
     duration_minutes: int | None,
     currency: str,
 ) -> ServiceDevicePrice:
-    if device_key not in LASER_DEVICE_NAMES:
-        raise InventoryOperationError("Unsupported laser device.")
     if duration_minutes is not None and (
         duration_minutes <= 0 or duration_minutes > 1440
     ):
@@ -114,7 +273,22 @@ def upsert_laser_device_price(
     if service is None:
         raise InventoryNotFound("Service not found.")
     if not is_laser_service(service):
-        raise InventoryOperationError("Device pricing is only available for services that require a laser device.")
+        raise InventoryOperationError(
+            "Device pricing is only available for services that require a laser device."
+        )
+
+    device = db.scalar(
+        select(ClinicLaserDevice).where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.device_key == device_key,
+            ClinicLaserDevice.is_active.is_(True),
+        )
+    )
+    if device is None:
+        raise InventoryOperationError(
+            "Laser device is not active for this clinic."
+        )
+
     row = db.scalar(
         select(ServiceDevicePrice).where(
             ServiceDevicePrice.workspace_id == workspace_id,
@@ -135,8 +309,8 @@ def upsert_laser_device_price(
         row = ServiceDevicePrice(
             workspace_id=workspace_id,
             service_id=service_id,
-            device_key=device_key,
-            device_name=LASER_DEVICE_NAMES[device_key],
+            device_key=device.device_key,
+            device_name=device.name,
             price_minor=price_minor,
             duration_minutes=resolved_duration_minutes,
             currency=currency.upper(),
@@ -144,13 +318,33 @@ def upsert_laser_device_price(
         )
         db.add(row)
     else:
-        row.device_name = LASER_DEVICE_NAMES[device_key]
+        row.device_name = device.name
         row.price_minor = price_minor
         row.duration_minutes = resolved_duration_minutes
         row.currency = currency.upper()
         row.is_active = True
     db.flush()
     return row
+
+
+def deactivate_laser_device_price(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    service_id: UUID,
+    device_key: str,
+) -> None:
+    row = db.scalar(
+        select(ServiceDevicePrice).where(
+            ServiceDevicePrice.workspace_id == workspace_id,
+            ServiceDevicePrice.service_id == service_id,
+            ServiceDevicePrice.device_key == device_key,
+        )
+    )
+    if row is None:
+        return
+    row.is_active = False
+    db.flush()
 
 
 def configured_device_price(
@@ -173,8 +367,19 @@ def configured_device_price(
         return None
     if not device_key:
         raise InventoryOperationError("Laser device choice is required.")
-    if device_key not in LASER_DEVICE_NAMES:
-        raise InventoryOperationError("Unsupported laser device.")
+
+    device = db.scalar(
+        select(ClinicLaserDevice).where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.device_key == device_key,
+            ClinicLaserDevice.is_active.is_(True),
+        )
+    )
+    if device is None:
+        raise InventoryOperationError(
+            "Laser device is not active for this clinic."
+        )
+
     row = db.scalar(
         select(ServiceDevicePrice).where(
             ServiceDevicePrice.workspace_id == workspace_id,
@@ -185,7 +390,7 @@ def configured_device_price(
     )
     if row is None or row.price_minor is None or row.duration_minutes is None:
         raise DeviceServiceCompatibilityError(
-            f"Price and duration for {LASER_DEVICE_NAMES[device_key]} are not configured "
+            f"Price and duration for {device.name} are not configured "
             "for this laser service."
         )
     return row

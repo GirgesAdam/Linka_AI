@@ -28,7 +28,7 @@ AppointmentSource = Literal[
     "email",
     "other",
 ]
-LaserDeviceKey = Literal["prime_lase", "candela_gentle"]
+LaserDeviceKey = str
 OperationalAppointmentStatus = Literal["completed", "no_show"]
 AppointmentListScope = Literal["all", "today", "upcoming", "past"]
 AppointmentOperationAction = Literal[

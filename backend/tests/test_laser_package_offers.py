@@ -73,7 +73,10 @@ def test_upsert_package_offer_accepts_custom_session_count(monkeypatch) -> None:
     monkeypatch.setattr(
         offers_module,
         "configured_device_price",
-        lambda *args, **kwargs: SimpleNamespace(price_minor=25_000),
+        lambda *args, **kwargs: SimpleNamespace(
+            price_minor=25_000,
+            device_name="Candela Gentle",
+        ),
     )
 
     row = offers_module.upsert_package_offer(
@@ -400,3 +403,53 @@ def test_package_read_exposes_payment_balance_without_affecting_sessions(monkeyp
     assert result.amount_paid_minor == 50000
     assert result.amount_refunded_minor == 0
     assert result.balance_due_minor == 70000
+
+
+def test_upsert_package_offer_accepts_arbitrary_configured_clinic_device(monkeypatch) -> None:
+    workspace_id = uuid4()
+    service_id = uuid4()
+    scalars = iter([
+        SimpleNamespace(
+            id=service_id,
+            name="Full Body Laser",
+            is_active=True,
+            requires_laser_device=True,
+        ),
+        None,
+    ])
+
+    class FakeDb:
+        def __init__(self) -> None:
+            self.added = []
+
+        def scalar(self, *_args, **_kwargs):
+            return next(scalars)
+
+        def add(self, row) -> None:
+            self.added.append(row)
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        offers_module,
+        "configured_device_price",
+        lambda *args, **kwargs: SimpleNamespace(
+            price_minor=155_000,
+            device_name="DEKA Again",
+        ),
+    )
+
+    row = offers_module.upsert_package_offer(
+        FakeDb(),
+        workspace_id=workspace_id,
+        service_id=service_id,
+        device_key="device_deka_again",
+        sessions_count=6,
+        price_minor=800_000,
+        currency="EGP",
+        is_active=True,
+    )
+
+    assert row.device_key == "device_deka_again"
+    assert row.device_name == "DEKA Again"

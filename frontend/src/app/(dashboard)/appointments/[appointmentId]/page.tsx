@@ -211,7 +211,7 @@ export default async function AppointmentOperationsPage({
     )
   ) {
     visiblePulseBalances.unshift({
-      device_key: laserAppointment.laser_device_key as "prime_lase" | "candela_gentle",
+      device_key: laserAppointment.laser_device_key,
       device_name: laserAppointment.laser_device_name || laserAppointment.laser_device_key,
       pulses_purchased: 0,
       pulses_consumed: 0,

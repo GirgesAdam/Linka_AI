@@ -7,12 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.schemas.inventory import (
     AppointmentProductCreate,
     AppointmentProductLineRead,
+    ClinicLaserDeviceCreate,
+    ClinicLaserDeviceRead,
+    ClinicLaserDeviceUpdate,
     ClinicProductCreate,
     ClinicProductQuantityUpdate,
     ClinicProductRead,
@@ -29,15 +32,19 @@ from app.services.inventory import (
     InventoryOperationError,
     add_appointment_product,
     add_inventory_stock,
+    create_clinic_laser_device,
     create_inventory_item,
     create_product,
+    deactivate_laser_device_price,
     delete_appointment_product,
     list_appointment_products,
+    list_clinic_laser_devices,
     list_inventory_items,
     list_laser_device_prices,
     list_products,
     record_inventory_usage,
     set_product_quantity,
+    update_clinic_laser_device,
     upsert_laser_device_price,
 )
 from app.services.payments import refresh_appointment_payment_snapshots
@@ -271,6 +278,80 @@ def use_inventory_item(
     except (InventoryNotFound, InventoryOperationError) as exc:
         db.rollback()
         _raise(exc)
+
+
+@router.get("/laser-devices", response_model=list[ClinicLaserDeviceRead])
+def laser_devices(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ClinicLaserDeviceRead]:
+    return list_clinic_laser_devices(
+        db,
+        workspace_id=access.workspace.id,
+        active_only=False,
+    )
+
+
+@router.post(
+    "/laser-devices",
+    response_model=ClinicLaserDeviceRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_laser_device(
+    payload: ClinicLaserDeviceCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicLaserDeviceRead:
+    try:
+        result = create_clinic_laser_device(
+            db,
+            workspace_id=access.workspace.id,
+            name=payload.name,
+        )
+        db.commit()
+        return result
+    except InventoryOperationError as exc:
+        db.rollback()
+        _raise(exc)
+
+
+@router.patch("/laser-devices/{device_id}", response_model=ClinicLaserDeviceRead)
+def edit_laser_device(
+    device_id: UUID,
+    payload: ClinicLaserDeviceUpdate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicLaserDeviceRead:
+    try:
+        result = update_clinic_laser_device(
+            db,
+            workspace_id=access.workspace.id,
+            device_id=device_id,
+            name=payload.name,
+            is_active=payload.is_active,
+        )
+        db.commit()
+        return result
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+
+
+@router.delete("/laser-prices/{service_id}/{device_key}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_laser_price(
+    service_id: UUID,
+    device_key: str,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    deactivate_laser_device_price(
+        db,
+        workspace_id=access.workspace.id,
+        service_id=service_id,
+        device_key=device_key,
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/laser-prices", response_model=list[LaserDevicePriceRead])

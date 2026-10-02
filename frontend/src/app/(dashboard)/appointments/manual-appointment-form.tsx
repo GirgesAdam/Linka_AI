@@ -20,6 +20,15 @@ type DevicePackage = PatientPackage & {
   laser_device_key?: string | null;
   laser_device_name?: string | null;
 };
+type DevicePrice = {
+  service_id: string;
+  device_key: string;
+  device_name: string;
+  price_minor: number | null;
+  duration_minutes: number | null;
+  currency: string;
+  configured: boolean;
+};
 
 function timeLabel(value: string, timezone: string) {
   return new Intl.DateTimeFormat("ar-EG", {
@@ -42,6 +51,7 @@ export function ManualAppointmentForm({
   staff,
   packages = [],
   pulseBalances = [],
+  devicePrices = [],
   fixedLaserDeviceKey,
   allowedOperationalCategory,
   windowStartMinutes,
@@ -61,6 +71,7 @@ export function ManualAppointmentForm({
   staff: Staff[];
   packages?: DevicePackage[];
   pulseBalances?: PulseBalance[];
+  devicePrices?: DevicePrice[];
   fixedLaserDeviceKey?: string;
   allowedOperationalCategory?: "laser" | "dermatology" | "slimming";
   windowStartMinutes?: number;
@@ -95,6 +106,23 @@ export function ManualAppointmentForm({
   );
   const selectedService = services.find((item) => item.id === serviceId);
   const requiresLaserDevice = Boolean(selectedService?.requires_laser_device);
+  const availableDevices = useMemo(
+    () =>
+      devicePrices.filter(
+        (item) =>
+          item.service_id === serviceId &&
+          item.configured &&
+          item.price_minor != null &&
+          item.duration_minutes != null,
+      ),
+    [devicePrices, serviceId],
+  );
+  const fixedDeviceName =
+    devicePrices.find(
+      (item) =>
+        item.service_id === serviceId &&
+        item.device_key === fixedLaserDeviceKey,
+    )?.device_name || fixedLaserDeviceKey;
   const visibleServices = useMemo(
     () =>
       services.filter((item) => {
@@ -235,7 +263,7 @@ export function ManualAppointmentForm({
               <>
                 <input type="hidden" name="laser_device_key" value={fixedLaserDeviceKey} />
                 <div className="form-control flex h-10 min-h-10 items-center bg-slate-50 text-sm font-bold text-slate-700">
-                  {fixedLaserDeviceKey === "prime_lase" ? "Prime Lase" : "Candela Gentle"}
+                  {fixedDeviceName || "جهاز الليزر"}
                 </div>
               </>
             ) : (
@@ -252,8 +280,11 @@ export function ManualAppointmentForm({
                 }}
               >
                 <option value="" disabled>اختار الجهاز</option>
-                <option value="prime_lase">Prime Lase</option>
-                <option value="candela_gentle">Candela Gentle</option>
+                {availableDevices.map((device) => (
+                  <option key={device.device_key} value={device.device_key}>
+                    {device.device_name}
+                  </option>
+                ))}
               </Select>
             )}
           </label>
