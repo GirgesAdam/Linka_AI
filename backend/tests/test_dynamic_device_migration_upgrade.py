@@ -70,7 +70,7 @@ def migration_database(monkeypatch: pytest.MonkeyPatch):
 
     target_url = base.set(database=database_name)
     try:
-        yield str(target_url)
+        yield target_url.render_as_string(hide_password=False)
     finally:
         admin_engine.dispose()
         cleanup_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
