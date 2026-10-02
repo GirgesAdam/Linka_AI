@@ -570,6 +570,12 @@ def cancel_patient_package_with_refund(
         )
 
     if package.standalone_session_price_minor_at_purchase is None:
+        if standalone_session_price_minor_at_purchase is None and (
+            package.opening_sessions_remaining is None
+        ) and consumed > 0:
+            raise PackageOperationError(
+                "Standalone session price at package purchase is required before refunding a legacy package with consumed sessions."
+            )
         _settlement_standalone_price_minor(
             db,
             package,
