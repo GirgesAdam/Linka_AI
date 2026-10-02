@@ -296,21 +296,54 @@ def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(va
     assert history._parse_active_package_purchase_date(value) is None
 
 
-def test_active_package_template_formats_phone_as_text_and_date_consistently() -> None:
-    payload = history.build_historical_import_template(service_names=["Hydrafacial"])
+def test_active_package_template_is_arabic_guided_and_uses_exact_active_services() -> None:
+    payload = history.build_historical_import_template(
+        service_names=["Hydrafacial", "ليزر إزالة الشعر - جسم كامل سيدات"]
+    )
     workbook = load_workbook(io.BytesIO(payload))
     try:
+        assert workbook.sheetnames == ["README", "active_packages"]
+        readme = workbook["README"]
         sheet = workbook["active_packages"]
-        assert sheet["B2"].number_format == "@"
-        assert sheet["G2"].number_format == "dd/mm/yyyy"
+
+        assert readme.sheet_view.rightToLeft is True
+        assert readme["A1"].value == "دليل استيراد الباقات النشطة إلى Linka"
+        assert readme["A13"].value == "مثال صف صحيح — امشِ على نفس الشكل"
+        assert [readme.cell(14, column).value for column in range(1, 9)] == [
+            "full_name",
+            "phone",
+            "service_name",
+            "sessions_total",
+            "sessions_remaining",
+            "amount_paid",
+            "purchased_at",
+            "package_price",
+        ]
+        assert readme["A15"].value == "سارة أحمد"
+        assert readme["B15"].value == "01012345678"
+        assert readme["B15"].number_format == "@"
+        assert readme["G15"].value == "15/02/2026"
+
         readme_text = "\n".join(
             str(cell.value)
-            for row in workbook["README"].iter_rows()
+            for row in readme.iter_rows()
             for cell in row
             if cell.value is not None
         )
-        assert "Egyptian mobile number" in readme_text
-        assert "15/02/2026" in readme_text
+        assert "لو Excel حذف الصفر الأول Linka تصلحه تلقائيًا" in readme_text
+        assert "الخدمات بالأسفل هي نفس الخدمات النشطة المسجلة حاليًا داخل Linka لهذه العيادة" in readme_text
+        assert "Linka تربط الباقة بنفس الخدمة الفعلية داخل النظام" in readme_text
+        assert "Hydrafacial" in readme_text
+        assert "ليزر إزالة الشعر - جسم كامل سيدات" in readme_text
+
+        assert sheet["B2"].number_format == "@"
+        assert sheet["G2"].number_format == "dd/mm/yyyy"
+        validations = list(sheet.data_validations.dataValidation)
+        assert len(validations) == 1
+        validation = validations[0]
+        assert "README" in validation.formula1
+        assert str(validation.sqref) == "C2:C5000"
+        assert validation.error == "اختر خدمة من قائمة الخدمات النشطة الموجودة في README."
     finally:
         workbook.close()
 
