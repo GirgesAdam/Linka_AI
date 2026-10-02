@@ -7,6 +7,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { ClinicKnowledgeText } from "@/lib/clinic-knowledge-base-types";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
+import type { ClinicLaserDevice } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
@@ -14,10 +15,11 @@ import { getAppContext } from "@/lib/tia/workspace";
 import { ClinicSettingsPanel } from "./clinic-settings-panel";
 
 export default async function SetupPage() {
-  const [setup, knowledge, history, ctx] = await Promise.all([
+  const [setup, knowledge, history, laserDevices, ctx] = await Promise.all([
     tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
     tiaRequest<ClinicKnowledgeText>("/clinic/knowledge-text"),
     tiaRequest<{ batches: HistoricalBatch[] }>("/clinic/history/batches"),
+    tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices"),
     getAppContext(),
   ]);
   const admin = ctx.workspace.role === "admin";
@@ -66,6 +68,7 @@ export default async function SetupPage() {
           knowledgeText={knowledge.content}
           historicalBatches={history.batches}
           activeBatch={activeBatch}
+          laserDevices={laserDevices}
         />
       ) : (
         <Card><CardContent className="p-5 text-sm text-[var(--muted)]">إعدادات العيادة متاحة للأدمن فقط.</CardContent></Card>

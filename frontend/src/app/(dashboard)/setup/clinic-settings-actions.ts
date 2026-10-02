@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import type { ClinicKnowledgeText } from "@/lib/clinic-knowledge-base-types";
 import type { ClinicHour, ClinicSetupV2Snapshot } from "@/lib/clinic-setup-v2-types";
+import type { ClinicLaserDevice } from "@/lib/types";
 import { tiaRequest } from "@/lib/tia/api";
 
 function refresh() {
@@ -45,6 +46,34 @@ export async function saveClinicHoursFormAction(formData: FormData) {
     body: JSON.stringify({ intervals }),
   });
   refresh();
+}
+
+export async function addLaserDeviceFormAction(formData: FormData) {
+  const name = text(formData, "name");
+  if (!name) throw new Error("اكتب اسم الجهاز.");
+  await tiaRequest<ClinicLaserDevice>("/inventory/laser-devices", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  revalidatePath("/setup");
+  revalidatePath("/services");
+  revalidatePath("/appointments");
+}
+
+export async function updateLaserDeviceFormAction(formData: FormData) {
+  const deviceId = String(formData.get("device_id") || "").trim();
+  if (!deviceId) return;
+  const name = text(formData, "name");
+  await tiaRequest<ClinicLaserDevice>(`/inventory/laser-devices/${deviceId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name,
+      is_active: formData.get("is_active") === "on",
+    }),
+  });
+  revalidatePath("/setup");
+  revalidatePath("/services");
+  revalidatePath("/appointments");
 }
 
 export async function saveKnowledgeTextFormAction(formData: FormData) {

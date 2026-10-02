@@ -411,11 +411,12 @@ def test_official_template_is_minimal_active_package_contract() -> None:
         io.BytesIO(
             build_historical_import_template(
                 service_names=["Hydrafacial", "PRP Face"],
+                device_names=["Prime Lase", "Candela Gentle", "DEKA Again"],
             )
         )
     )
     try:
-        assert wb.sheetnames == ["README", "_lists", "active_packages"]
+        assert wb.sheetnames == ["README", "active_packages"]
         headers = [
             cell.value
             for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))

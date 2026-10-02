@@ -4,12 +4,14 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { ClinicLaserDevice } from "@/lib/types";
 
 import { createService } from "./actions";
 
-export function ServiceCreateForm() {
+export function ServiceCreateForm({ devices }: { devices: ClinicLaserDevice[] }) {
   const [requiresLaserDevice, setRequiresLaserDevice] = useState(false);
   const [category, setCategory] = useState<"laser" | "dermatology" | "slimming">("dermatology");
+  const activeDevices = devices.filter((device) => device.is_active);
 
   return (
     <form action={createService} className="grid gap-3 md:grid-cols-2 xl:grid-cols-6 xl:items-end">
@@ -52,29 +54,49 @@ export function ServiceCreateForm() {
       </div>
 
       {requiresLaserDevice ? (
-        <div className="grid gap-3 md:col-span-2 md:grid-cols-2 xl:col-span-6">
-          <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-            <div className="sm:col-span-2 text-sm font-black text-slate-900">Prime Lase</div>
-            <label>
-              <span className="mb-1.5 block text-xs font-bold">سعر الجلسة</span>
-              <Input name="prime_lase_price" type="number" min="0" step="0.01" required placeholder="السعر" />
-            </label>
-            <label>
-              <span className="mb-1.5 block text-xs font-bold">مدة الجلسة بالدقائق</span>
-              <Input name="prime_lase_duration_minutes" type="number" min="1" max="1440" defaultValue="60" required />
-            </label>
-          </div>
-          <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-            <div className="sm:col-span-2 text-sm font-black text-slate-900">Candela Gentle</div>
-            <label>
-              <span className="mb-1.5 block text-xs font-bold">سعر الجلسة</span>
-              <Input name="candela_gentle_price" type="number" min="0" step="0.01" required placeholder="السعر" />
-            </label>
-            <label>
-              <span className="mb-1.5 block text-xs font-bold">مدة الجلسة بالدقائق</span>
-              <Input name="candela_gentle_duration_minutes" type="number" min="1" max="1440" defaultValue="60" required />
-            </label>
-          </div>
+        <div className="grid gap-3 md:col-span-2 xl:col-span-6">
+          {activeDevices.length ? (
+            <>
+              <p className="text-xs text-[var(--muted)]">
+                اختار الأجهزة التي تُستخدم فعليًا لهذه الخدمة وحدد سعر ومدة الجلسة على كل جهاز.
+              </p>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {activeDevices.map((device) => (
+                  <div key={device.id} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+                    <input type="hidden" name="device_key" value={device.device_key} />
+                    <label className="sm:col-span-2 flex items-center gap-2 text-sm font-black text-slate-900">
+                      <input type="checkbox" name={`device_enabled_${device.device_key}`} value="1" />
+                      {device.name}
+                    </label>
+                    <label>
+                      <span className="mb-1.5 block text-xs font-bold">سعر الجلسة</span>
+                      <Input
+                        name={`device_price_${device.device_key}`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="السعر"
+                      />
+                    </label>
+                    <label>
+                      <span className="mb-1.5 block text-xs font-bold">مدة الجلسة بالدقائق</span>
+                      <Input
+                        name={`device_duration_${device.device_key}`}
+                        type="number"
+                        min="1"
+                        max="1440"
+                        defaultValue="60"
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+              أضف جهاز ليزر من إعدادات العيادة أولًا قبل إنشاء خدمة تعتمد على جهاز.
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid gap-3 md:col-span-2 md:grid-cols-2 xl:col-span-6">

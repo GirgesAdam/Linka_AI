@@ -69,10 +69,7 @@ def read_pulse_settings(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active laser devices are configured for this clinic.",
         )
-    return next(
-        (item for item in settings if item.device_key == "candela_gentle"),
-        settings[0],
-    )
+    return settings[0]
 
 
 @router.put("/pulse-settings", response_model=PulseBillingSettingsRead)

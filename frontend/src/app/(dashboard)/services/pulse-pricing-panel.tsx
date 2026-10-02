@@ -123,9 +123,18 @@ export function PulsePricingPanel({
         <form action={savePulsePackOfferFormAction} className="grid gap-3 rounded-xl border border-dashed border-slate-300 p-4 md:grid-cols-4 md:items-end">
           <label className="grid gap-1.5 text-sm font-medium">
             <span>الجهاز</span>
-            <select name="device_key" className="form-control h-10 min-h-10" defaultValue="candela_gentle">
-              <option value="candela_gentle">Candela Gentle</option>
-              <option value="prime_lase">Prime Lase</option>
+            <select
+              name="device_key"
+              className="form-control h-10 min-h-10"
+              defaultValue={settings[0]?.device_key ?? ""}
+              disabled={!settings.length}
+            >
+              {!settings.length ? <option value="">لا توجد أجهزة مفعلة</option> : null}
+              {settings.map((setting) => (
+                <option key={setting.device_key} value={setting.device_key}>
+                  {setting.device_name}
+                </option>
+              ))}
             </select>
           </label>
           <NumberField label="عدد الـPulses" name="pulses_count" defaultValue={1000} />

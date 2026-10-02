@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
-import type { PulseBillingSettings, PulsePackOffer } from "@/lib/types";
+import type { ClinicLaserDevice, PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
@@ -27,7 +27,7 @@ type Service = {
 };
 type DevicePrice = {
   service_id: string;
-  device_key: "prime_lase" | "candela_gentle";
+  device_key: string;
   device_name: string;
   price_minor: number | null;
   duration_minutes: number | null;
@@ -38,7 +38,7 @@ type PackageOffer = {
   id: string;
   service_id: string;
   service_name: string;
-  device_key: "prime_lase" | "candela_gentle" | null;
+  device_key: string | null;
   device_name: string | null;
   sessions_count: number;
   price_minor: number;
@@ -65,7 +65,7 @@ function PackageOffersEditor({
   disabledMessage,
 }: {
   serviceId: string;
-  deviceKey: "prime_lase" | "candela_gentle" | null;
+  deviceKey: string | null;
   offers: PackageOffer[];
   isAdmin: boolean;
   enabled?: boolean;
@@ -169,9 +169,10 @@ function PackageOffersEditor({
 }
 
 export default async function ServicesPage() {
-  const [{ workspace }, services, devicePrices, packageOffers, pulseSettings, pulseOffers] = await Promise.all([
+  const [{ workspace }, services, devices, devicePrices, packageOffers, pulseSettings, pulseOffers] = await Promise.all([
     getAppContext(),
     tiaRequest<Service[]>("/clinic/services"),
+    tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices"),
     tiaRequest<DevicePrice[]>("/inventory/laser-prices").catch(() => []),
     tiaRequest<PackageOffer[]>("/booking/package-offers").catch(() => []),
     tiaRequest<PulseBillingSettings[]>("/booking/pulse-device-prices"),
@@ -190,7 +191,7 @@ export default async function ServicesPage() {
         <Card className="mb-5">
           <CardHeader><CardTitle className="flex items-center gap-2"><PackagePlus size={18} /> إضافة خدمة</CardTitle></CardHeader>
           <CardContent>
-            <ServiceCreateForm />
+            <ServiceCreateForm devices={devices} />
             <p className="mt-3 text-xs text-[var(--muted)]">لو الخدمة تحتاج جهاز ليزر، السعر والمدة بيتحددوا لكل جهاز بدل السعر والمدة الأساسيين.</p>
           </CardContent>
         </Card>
@@ -219,22 +220,25 @@ export default async function ServicesPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {isAdmin ? (
-                  <ServicePricingForm service={service} devicePrices={prices} />
+                  <ServicePricingForm service={service} devicePrices={prices} devices={devices} />
                 ) : null}
 
                 {service.requires_laser_device && (
                   <div className="grid gap-3 lg:grid-cols-2">
-                    {(["prime_lase", "candela_gentle"] as const).map((deviceKey) => {
-                      const row = prices.find((item) => item.device_key === deviceKey);
-                      const name = deviceKey === "prime_lase" ? "Prime Lase" : "Candela Gentle";
+                    {devices.filter((device) => device.is_active).map((device) => {
+                      const row = prices.find((item) => item.device_key === device.device_key);
                       const configured = Boolean(row?.configured && row.price_minor != null);
                       const deviceOffers = packageOffers
-                        .filter((offer) => offer.service_id === service.id && offer.device_key === deviceKey)
+                        .filter(
+                          (offer) =>
+                            offer.service_id === service.id &&
+                            offer.device_key === device.device_key,
+                        )
                         .sort((left, right) => left.sessions_count - right.sessions_count);
                       return (
-                        <div key={deviceKey} className="rounded-2xl border border-slate-200 p-4">
+                        <div key={device.id} className="rounded-2xl border border-slate-200 p-4">
                           <div className="mb-3 flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2 font-black text-slate-900"><Cpu size={16} /> {name}</div>
+                            <div className="flex items-center gap-2 font-black text-slate-900"><Cpu size={16} /> {device.name}</div>
                             {configured && row?.price_minor != null && <span className="text-xs font-black text-teal-800">{formatMoney(row.price_minor, row.currency)}</span>}
                           </div>
                           {configured && row?.duration_minutes ? (
@@ -243,18 +247,18 @@ export default async function ServicesPage() {
                               <div className="rounded-lg bg-slate-50 p-2"><span className="text-slate-500">المدة</span><b className="mt-1 block">{row.duration_minutes} دقيقة</b></div>
                             </div>
                           ) : (
-                            <div className="rounded-xl bg-amber-50 p-3 text-xs font-semibold text-amber-900">حدد السعر والمدة لهذا الجهاز من إعدادات الخدمة أعلاه.</div>
+                            <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-600">الجهاز غير مفعّل على الخدمة دي.</div>
                           )}
 
                           <div className="mt-4 border-t border-slate-100 pt-4">
                             <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><PackageCheck size={16} /> الباكيدجات</div>
                             <PackageOffersEditor
                               serviceId={service.id}
-                              deviceKey={deviceKey}
+                              deviceKey={device.device_key}
                               offers={deviceOffers}
                               isAdmin={isAdmin}
                               enabled={configured}
-                              disabledMessage="حدد سعر الجلسة على الجهاز أولًا قبل تفعيل باكيدجاته."
+                              disabledMessage="فعّل الجهاز وحدد سعر الجلسة والمدة أولًا قبل تفعيل باكيدجاته."
                             />
                           </div>
                         </div>

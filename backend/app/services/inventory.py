@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
@@ -16,7 +16,9 @@ from app.models.clinic_inventory import (
     InventoryUsage,
     ServiceDevicePrice,
 )
+from app.models.pulse_billing import PulsePackOffer
 from app.models.service import Service
+from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.inventory import (
     AppointmentProductLineRead,
     ClinicLaserDeviceRead,
@@ -164,6 +166,31 @@ def update_clinic_laser_device(
         row.name = normalized_name
     if is_active is not None:
         row.is_active = is_active
+        if not is_active:
+            db.execute(
+                update(ServiceDevicePrice)
+                .where(
+                    ServiceDevicePrice.workspace_id == workspace_id,
+                    ServiceDevicePrice.device_key == row.device_key,
+                )
+                .values(is_active=False)
+            )
+            db.execute(
+                update(ServicePackageOffer)
+                .where(
+                    ServicePackageOffer.workspace_id == workspace_id,
+                    ServicePackageOffer.device_key == row.device_key,
+                )
+                .values(is_active=False)
+            )
+            db.execute(
+                update(PulsePackOffer)
+                .where(
+                    PulsePackOffer.workspace_id == workspace_id,
+                    PulsePackOffer.device_key == row.device_key,
+                )
+                .values(is_active=False)
+            )
 
     db.flush()
     return _device_read(row)
@@ -308,6 +335,26 @@ def upsert_laser_device_price(
         row.is_active = True
     db.flush()
     return row
+
+
+def deactivate_laser_device_price(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    service_id: UUID,
+    device_key: str,
+) -> None:
+    row = db.scalar(
+        select(ServiceDevicePrice).where(
+            ServiceDevicePrice.workspace_id == workspace_id,
+            ServiceDevicePrice.service_id == service_id,
+            ServiceDevicePrice.device_key == device_key,
+        )
+    )
+    if row is None:
+        return
+    row.is_active = False
+    db.flush()
 
 
 def configured_device_price(

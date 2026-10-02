@@ -1,15 +1,18 @@
-import { Download, History } from "lucide-react";
+import { Cpu, Download, History } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
+import type { ClinicLaserDevice } from "@/lib/types";
 
 import {
+  addLaserDeviceFormAction,
   saveClinicHoursFormAction,
   saveClinicProfileFormAction,
   saveKnowledgeTextFormAction,
+  updateLaserDeviceFormAction,
 } from "./clinic-settings-actions";
 import { HistoricalImportUploader } from "./integration/history-uploader";
 
@@ -54,11 +57,13 @@ export function ClinicSettingsPanel({
   knowledgeText,
   historicalBatches,
   activeBatch,
+  laserDevices,
 }: {
   setup: ClinicSetupV2Snapshot;
   knowledgeText: string;
   historicalBatches: HistoricalBatch[];
   activeBatch: HistoricalBatch | null;
+  laserDevices: ClinicLaserDevice[];
 }) {
   const byDay = new Map(setup.clinic_hours.map((row) => [row.weekday, row]));
 
@@ -77,6 +82,46 @@ export function ClinicSettingsPanel({
             <Field label="العنوان" name="address" defaultValue={setup.clinic.address} />
             <div className="md:col-span-2"><Button type="submit">حفظ بيانات العيادة</Button></div>
           </form>
+        </CardContent>
+      </Card>
+
+      <Card id="laser-devices">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Cpu size={18} /> أجهزة الليزر</CardTitle>
+          <CardDescription>
+            أضف الأجهزة الموجودة فعليًا في العيادة. الخدمات والحجز والباقات والـPulses ستعتمد على الأجهزة المفعلة هنا.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            {laserDevices.map((device) => (
+              <form
+                key={device.id}
+                action={updateLaserDeviceFormAction}
+                className="grid gap-3 rounded-xl border border-[var(--border)] p-3 sm:grid-cols-[minmax(180px,1fr)_auto_auto] sm:items-end"
+              >
+                <input type="hidden" name="device_id" value={device.id} />
+                <Field label="اسم الجهاز" name="name" defaultValue={device.name} />
+                <label className="flex h-10 items-center gap-2 text-sm font-bold">
+                  <input type="checkbox" name="is_active" defaultChecked={device.is_active} />
+                  مفعّل
+                </label>
+                <Button type="submit" size="sm" variant="outline">حفظ</Button>
+              </form>
+            ))}
+          </div>
+
+          <form
+            action={addLaserDeviceFormAction}
+            className="grid gap-3 rounded-xl border border-dashed border-slate-300 p-3 sm:grid-cols-[minmax(180px,1fr)_auto] sm:items-end"
+          >
+            <Field label="إضافة جهاز" name="name" />
+            <Button type="submit">إضافة الجهاز</Button>
+          </form>
+
+          <p className="text-xs leading-5 text-[var(--muted)]">
+            تعطيل جهاز يمنعه من الاستخدام في إعدادات وحجوزات جديدة، لكنه لا يمس المواعيد أو الباقات أو السجلات التاريخية القديمة.
+          </p>
         </CardContent>
       </Card>
 

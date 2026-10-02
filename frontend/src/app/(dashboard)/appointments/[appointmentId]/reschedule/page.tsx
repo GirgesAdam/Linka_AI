@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { tiaRequest } from "@/lib/tia/api";
-import type { Appointment, AppointmentOperationsDetail, AvailabilityResponse, Service } from "@/lib/types";
+import type { Appointment, AppointmentOperationsDetail, AvailabilityResponse, ClinicLaserDevice, Service } from "@/lib/types";
 
 import { rescheduleAppointment } from "../actions";
 
@@ -16,25 +16,32 @@ type BookingKnowledge = {
 };
 
 type Period = { start: number; end: number; appointments: Appointment[] };
-type ScheduleColumnId = "prime" | "candela" | "dermatology" | "slimming" | "quick";
+type ScheduleColumnId = string;
+type ScheduleColumn = { id: ScheduleColumnId; label: string };
 
 const activeStatuses = new Set(["pending", "confirmed", "checked_in", "in_progress"]);
 const scheduleStatuses = new Set(["pending", "confirmed", "checked_in", "in_progress", "completed"]);
-const scheduleColumns: Array<{ id: ScheduleColumnId; label: string }> = [
-  { id: "prime", label: "Prime" },
-  { id: "candela", label: "Candela" },
-  { id: "dermatology", label: "جلدية" },
-  { id: "slimming", label: "تخسيس" },
-  { id: "quick", label: "حجوزات سريعة" },
-];
+
+function buildScheduleColumns(devices: ClinicLaserDevice[]): ScheduleColumn[] {
+  return [
+    ...devices
+      .filter((device) => device.is_active)
+      .map((device) => ({
+        id: `device:${device.device_key}`,
+        label: device.name,
+      })),
+    { id: "dermatology", label: "جلدية" },
+    { id: "slimming", label: "تخسيس" },
+    { id: "quick", label: "حجوزات سريعة" },
+  ];
+}
 
 function appointmentColumn(
   appointment: Appointment,
   serviceById: Map<string, Service>,
 ): ScheduleColumnId {
   if (appointment.doctor_assignment_known === false) return "quick";
-  if (appointment.laser_device_key === "prime_lase") return "prime";
-  if (appointment.laser_device_key === "candela_gentle") return "candela";
+  if (appointment.laser_device_key) return `device:${appointment.laser_device_key}`;
   const category = serviceById.get(appointment.service_id)?.operational_category;
   if (category === "dermatology") return "dermatology";
   if (category === "slimming") return "slimming";
@@ -167,14 +174,16 @@ export default async function RescheduleAppointmentPage({
     limit: "200",
   });
 
-  const [availability, dayAppointments, knowledge, services] = await Promise.all([
+  const [availability, dayAppointments, knowledge, services, laserDevices] = await Promise.all([
     detail.allowed_actions.includes("reschedule")
       ? tiaRequest<AvailabilityResponse>(`/booking/availability?${availabilityQuery.toString()}`)
       : Promise.resolve({ date: selectedDate, timezone: detail.timezone, slots: [] }),
     tiaRequest<Appointment[]>(`/booking/appointments?${appointmentsQuery.toString()}`),
     tiaRequest<BookingKnowledge>("/clinic/knowledge"),
     tiaRequest<Service[]>("/clinic/services"),
+    tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => []),
   ]);
+  const scheduleColumns = buildScheduleColumns(laserDevices);
 
   const branch = knowledge.branches.find((item) => item.id === detail.appointment.branch_id);
   const hours = (branch?.working_hours || [])

@@ -35,6 +35,7 @@ from app.services.inventory import (
     create_clinic_laser_device,
     create_inventory_item,
     create_product,
+    deactivate_laser_device_price,
     delete_appointment_product,
     list_appointment_products,
     list_clinic_laser_devices,
@@ -334,6 +335,23 @@ def edit_laser_device(
     except (InventoryNotFound, InventoryOperationError) as exc:
         db.rollback()
         _raise(exc)
+
+
+@router.delete("/laser-prices/{service_id}/{device_key}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_laser_price(
+    service_id: UUID,
+    device_key: str,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    deactivate_laser_device_price(
+        db,
+        workspace_id=access.workspace.id,
+        service_id=service_id,
+        device_key=device_key,
+    )
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/laser-prices", response_model=list[LaserDevicePriceRead])

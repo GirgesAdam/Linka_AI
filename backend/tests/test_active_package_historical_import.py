@@ -365,20 +365,16 @@ def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(va
     assert history._parse_active_package_purchase_date(value) is None
 
 
-def test_active_package_template_is_plain_arabic_and_uses_exact_active_services() -> None:
+def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() -> None:
     laser_service = "ليزر إزالة الشعر - جسم كامل سيدات"
     payload = history.build_historical_import_template(
         service_names=["Hydrafacial", laser_service],
-        service_device_names={
-            laser_service: ["Prime Lase", "Candela Gentle"],
-        },
+        device_names=["Prime Lase", "Candela Gentle", "DEKA Again"],
     )
     workbook = load_workbook(io.BytesIO(payload))
     try:
-        assert workbook.sheetnames == ["README", "_lists", "active_packages"]
-        assert workbook["_lists"].sheet_state == "hidden"
+        assert workbook.sheetnames == ["README", "active_packages"]
         readme = workbook["README"]
-        lists = workbook["_lists"]
         sheet = workbook["active_packages"]
 
         expected_headers = [
@@ -413,19 +409,19 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
             if cell.value is not None
         )
         assert "طريقة الاستخدام" not in readme_text
-        assert "إذا حذف Excel الصفر الأول" not in readme_text
-        assert "هي نفسها الخدمات التي يمكن اختيارها للباقة." in readme_text
+        assert readme["A9"].value == "الخدمات"
+        assert readme["D9"].value == "الأجهزة"
         assert readme["A11"].value == "اسم الخدمة"
+        assert readme["D11"].value == "اسم الجهاز"
 
-        list_rows = {
-            lists.cell(row=row_number, column=1).value: (
-                lists.cell(row=row_number, column=2).value,
-                lists.cell(row=row_number, column=3).value,
-            )
-            for row_number in range(3, lists.max_row + 1)
+        assert "ServicesTable" in readme.tables
+        assert "DevicesTable" in readme.tables
+        device_values = {
+            readme.cell(row=row_number, column=4).value
+            for row_number in range(12, 15)
         }
-        assert list_rows["Hydrafacial"] == (None, None)
-        assert set(list_rows[laser_service]) == {"Prime Lase", "Candela Gentle"}
+        assert device_values == {"Prime Lase", "Candela Gentle", "DEKA Again"}
+        assert "لو الخدمة لا تستخدم جهاز ليزر" in readme_text
 
         assert [sheet.cell(1, column).value for column in range(1, 10)] == expected_headers
         assert sheet["A1"].fill.fill_type is None
@@ -439,8 +435,7 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
         }
         assert set(validations) == {"C2:C5000", "D2:D5000"}
         assert "README" in validations["C2:C5000"].formula1
-        assert "MATCH($C2" in validations["D2:D5000"].formula1
-        assert "_lists" in validations["D2:D5000"].formula1
+        assert "DevicesTable" in validations["D2:D5000"].formula1
         assert validations["D2:D5000"].allow_blank is True
     finally:
         workbook.close()
