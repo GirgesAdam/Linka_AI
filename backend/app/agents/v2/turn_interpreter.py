@@ -83,7 +83,15 @@ SEMANTIC PRINCIPLES
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
   When true, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
-  same dimension. For an appointment_list continuation that explicitly removes a previous date/time
+  same dimension. For availability, a request for additional results from the immediately previous
+  verified availability result is a continuation even when the customer switches language or uses
+  an elliptical follow-up with no repeated service/date/doctor/device wording. Emit availability
+  with continues_previous=true and do not invent replacement constraints. If the customer changes
+  a search constraint, represent that change normally; Python compares the canonical verified scope
+  and decides whether the presentation cursor is preserved or reset. Without a recent verified
+  availability result, do not infer an availability-page continuation from an otherwise contextless
+  request for additional results.
+  For an appointment_list continuation that explicitly removes a previous date/time
   restriction while keeping the same read, list only that removed dimension in
   cleared_verified_read_fields so Python does not inherit it. Treat making a constrained dimension
   unrestricted (such as asking for any time after a prior before/after/exact-time filter) as an
