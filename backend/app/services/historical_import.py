@@ -550,6 +550,78 @@ def _active_package_payment_payload(
     }
 
 
+_EGYPTIAN_MOBILE_LOCAL_RE = re.compile(r"^01[0125]\\d{8}$")
+_EGYPTIAN_MOBILE_WITHOUT_ZERO_RE = re.compile(r"^1[0125]\\d{8}$")
+
+
+def _normalize_active_package_egypt_phone(value: Any) -> tuple[str, str]:
+    """Normalize clinic-facing active-package phones to one Egyptian mobile identity.
+
+    Excel commonly converts a value such as 01012345678 into the numeric
+    1012345678. That representation is repaired deterministically here.
+    """
+    if isinstance(value, bool) or value is None:
+        raise ValueError("Invalid Egyptian mobile number.")
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError("Invalid Egyptian mobile number.")
+        raw = str(int(value))
+    else:
+        raw = _clean(value) or ""
+
+    compact = re.sub(r"[\\s().-]", "", raw)
+    if compact.startswith("+"):
+        compact = compact[1:]
+    if compact.startswith("0020"):
+        compact = compact[4:]
+    elif compact.startswith("20"):
+        compact = compact[2:]
+
+    if _EGYPTIAN_MOBILE_WITHOUT_ZERO_RE.fullmatch(compact):
+        compact = f"0{compact}"
+
+    if not _EGYPTIAN_MOBILE_LOCAL_RE.fullmatch(compact):
+        raise ValueError("Invalid Egyptian mobile number.")
+
+    return compact, f"+20{compact[1:]}"
+
+
+def _parse_active_package_purchase_date(value: Any) -> date | None:
+    """Parse an Egypt-facing package purchase date without US month/day ambiguity."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float, bool)):
+        # Proper Excel date cells are returned by openpyxl as datetime/date.
+        # A raw number is ambiguous and should not silently become a date.
+        return None
+
+    text = (_clean(value) or "").strip()
+    if not text:
+        return None
+
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d.%m.%Y",
+    ):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
+
 def _normalize_active_package(
     row: dict[str, Any],
     *,
@@ -560,15 +632,14 @@ def _normalize_active_package(
     if not full_name:
         return None, "active_package_name_missing", "full_name is required."
 
-    raw_phone = _clean(row.get("phone"))
-    if not raw_phone:
-        return None, "active_package_phone_invalid", "Invalid phone."
     try:
-        phone_display, phone_normalized = normalize_patient_identity_phone(raw_phone)
+        phone_display, phone_normalized = _normalize_active_package_egypt_phone(row.get("phone"))
     except ValueError:
-        return None, "active_package_phone_invalid", "Invalid phone."
-    if not phone_normalized:
-        return None, "active_package_phone_invalid", "Invalid phone."
+        return (
+            None,
+            "active_package_phone_invalid",
+            "رقم الهاتف يجب أن يكون موبايل مصري صحيح (010/011/012/015). لو Excel حذف الصفر الأول، Linka تصلحه تلقائيًا.",
+        )
     identity = f"phone:{_digest(phone_normalized)[:24]}"
 
     service_name = _clean(row.get("service_name"))
@@ -625,9 +696,13 @@ def _normalize_active_package(
             "package_price cannot be less than amount_paid.",
         )
 
-    purchased_date = _parse_date(row.get("purchased_at"))
+    purchased_date = _parse_active_package_purchase_date(row.get("purchased_at"))
     if purchased_date is None:
-        return None, "active_package_purchase_date_invalid", "purchase date invalid."
+        return (
+            None,
+            "active_package_purchase_date_invalid",
+            "تاريخ الشراء غير صالح. استخدم تاريخ Excel أو DD/MM/YYYY أو YYYY-MM-DD.",
+        )
     purchased_at = datetime.combine(purchased_date, time.min, tzinfo=EGYPT_TZ).astimezone(UTC)
 
     identity_facts = "|".join(
@@ -818,11 +893,6 @@ def preview_historical_import(
                 issue_message=issue_message,
             )
         )
-
-    total_ready = sum(ready_counts.values())
-    if total_ready == 0:
-        db.rollback()
-        raise HistoricalImportError("The uploaded files contain no usable historical records.")
 
     # Allocation references must point to explicit transaction/appointment IDs in the same
     # upload or to a previously imported source record. The contract does not guess joins.
@@ -1863,6 +1933,12 @@ def build_historical_import_template(
         "Expiry is left blank in Linka. The supplied purchased_at date is preserved."
     ])
     instructions.append([
+        "phone must be an Egyptian mobile number (010/011/012/015). The phone column is formatted as text so Excel keeps the leading zero; if Excel already removed it, Linka repairs the common 10-digit form automatically."
+    ])
+    instructions.append([
+        "purchased_at accepts real Excel date cells and clear Egyptian/ISO text dates such as 15/02/2026 or 2026-02-15. Ambiguous US month/day dates are not assumed."
+    ])
+    instructions.append([
         "Phone is the patient identity for this flow. An existing patient with the same normalized phone is reused without overwriting existing CRM name data."
     ])
     instructions.append([
@@ -1912,6 +1988,11 @@ def build_historical_import_template(
     }
     for index, header in enumerate(headers, start=1):
         sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = widths[header]
+
+    # Keep Egyptian mobile leading zeroes and present dates consistently.
+    for row_number in range(2, 5001):
+        sheet.cell(row=row_number, column=2).number_format = "@"
+        sheet.cell(row=row_number, column=7).number_format = "dd/mm/yyyy"
 
     if service_start_row is not None and service_end_row is not None:
         formula = (
