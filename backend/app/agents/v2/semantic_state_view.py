@@ -202,6 +202,14 @@ def verified_read_semantic_view(
         return {}
     safe: dict[str, object] = {"operation_type": operation_type}
     safe.update(_safe_constraints(read_context, context))
+    if operation_type == "appointment_list":
+        appointment_ref = _entity_ref(
+            read_context.get("appointment_id"),
+            kind="appointment",
+            context=context,
+        )
+        if appointment_ref is not None:
+            safe["appointment_ref"] = appointment_ref
     option_count = read_context.get("availability_option_count")
     if isinstance(option_count, int) and option_count >= 0:
         safe["availability_option_count"] = option_count

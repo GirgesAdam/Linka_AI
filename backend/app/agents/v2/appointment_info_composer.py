@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
@@ -95,6 +95,20 @@ def _format_start(value: str, *, arabic: bool) -> str:
         f"{_MONTHS_EN[parsed.month]} {parsed.day}, {parsed.year} "
         f"at {hour}:{minute} {period}"
     )
+def _format_clock(value: str, *, arabic: bool) -> str:
+    try:
+        parsed = time.fromisoformat(value)
+    except ValueError:
+        return value
+    hour = parsed.hour % 12 or 12
+    minute = f"{parsed.minute:02d}"
+    if arabic:
+        period = "صباحًا" if parsed.hour < 12 else "مساءً"
+        return f"{hour}:{minute} {period}"
+    period = "AM" if parsed.hour < 12 else "PM"
+    return f"{hour}:{minute} {period}"
+
+
 def _service_text(service: AppointmentServiceInfo, *, arabic: bool) -> str:
     if service.service_name and service.device_name:
         if arabic:
@@ -145,6 +159,40 @@ def _visit_line(
 
 
 def _render_truth(truth: AppointmentInfoTruth, *, arabic: bool) -> str:
+    challenge = truth.fact_challenge
+    if challenge is not None and challenge.field == "time":
+        if not truth.visits:
+            return (
+                "الموعد اللي راجعناه مش ظاهر حاليًا ضمن المواعيد القادمة المؤكدة."
+                if arabic
+                else "The appointment we were checking is not currently present in the verified upcoming schedule."
+            )
+        if len(truth.visits) == 1:
+            visit = truth.visits[0]
+            try:
+                actual_time = datetime.fromisoformat(visit.start_local).strftime("%H:%M")
+            except ValueError:
+                actual_time = ""
+            claimed = _format_clock(challenge.claimed_time, arabic=arabic)
+            try:
+                claimed_canonical = time.fromisoformat(challenge.claimed_time).strftime("%H:%M")
+            except ValueError:
+                claimed_canonical = challenge.claimed_time
+            line = _visit_line(visit, arabic=arabic, index=None)
+            if actual_time == claimed_canonical:
+                header = (
+                    "أيوه، ده الوقت المؤكد للموعد:"
+                    if arabic
+                    else "Yes. That is the verified appointment time:"
+                )
+            else:
+                header = (
+                    f"الموعد المؤكد عندي مش الساعة {claimed}؛ هو:"
+                    if arabic
+                    else f"The verified appointment is not at {claimed}; it is:"
+                )
+            return header + "\n" + line
+
     if not truth.visits:
         if truth.complete_set:
             return (

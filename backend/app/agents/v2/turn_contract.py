@@ -55,6 +55,7 @@ ExecutionIntent = Literal["informational", "execute"]
 FinancialOwnership = Literal["none", "reception"]
 ContinuationCondition = Literal["always", "if_previous_no_availability"]
 VerifiedReadClearField = Literal["date", "time"]
+AppointmentFactChallenge = Literal["none", "time"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 
 
@@ -324,6 +325,17 @@ class TurnOperation(StrictContractModel):
             "when an omitted verified dimension is unchanged, and leave empty for unrelated/new reads."
         ),
     )
+    appointment_fact_challenge: AppointmentFactChallenge = Field(
+        default="none",
+        description=(
+            "For appointment_list only, set time when the customer is questioning or correcting "
+            "the time of the same appointment identified by recent_verified_read.appointment_ref. "
+            "Put the customer's claimed time in entities.time as an exact constraint and set "
+            "continues_previous=true. This marker is semantic only: Python re-verifies the prior "
+            "appointment identity and never treats the claimed time as read truth or write authority. "
+            "Leave none for new filtered appointment lookups and all lifecycle changes."
+        ),
+    )
     # True only when this operation semantically continues supplied verified
     # one-turn read/action context. Python, not the model, owns the actual merge.
     continues_previous: bool = Field(
@@ -344,6 +356,27 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_appointment_fact_challenge(self) -> TurnOperation:
+        if self.appointment_fact_challenge == "none":
+            return self
+        if self.type != "appointment_list":
+            raise ValueError("appointment_fact_challenge is only valid for appointment_list.")
+        if not self.continues_previous:
+            raise ValueError("appointment_fact_challenge requires continues_previous=true.")
+        if self.execution_intent != "informational":
+            raise ValueError("appointment_fact_challenge must remain informational/read-only.")
+        if (
+            self.appointment_fact_challenge == "time"
+            and (
+                self.entities.time is None
+                or self.entities.time.mode != "exact"
+                or self.entities.time.start_time is None
+            )
+        ):
+            raise ValueError("time challenge requires an exact claimed time.")
+        return self
 
 
 class TiaTurnUnderstanding(StrictContractModel):

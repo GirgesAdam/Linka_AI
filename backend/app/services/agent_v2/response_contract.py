@@ -230,9 +230,15 @@ class AppointmentVisitInfo(StrictResponseContractModel):
     services: tuple[AppointmentServiceInfo, ...] = ()
 
 
+class AppointmentFactChallengeInfo(StrictResponseContractModel):
+    field: Literal["time"]
+    claimed_time: str
+
+
 class AppointmentInfoTruth(StrictResponseContractModel):
     visits: tuple[AppointmentVisitInfo, ...] = ()
     complete_set: bool = True
+    fact_challenge: AppointmentFactChallengeInfo | None = None
 
 
 class CustomerResponseUnit(StrictResponseContractModel):
@@ -1078,9 +1084,21 @@ def _appointment_truth(outcome: TurnOutcome) -> AppointmentInfoTruth | None:
             )
         )
 
+    fact_challenge = None
+    raw_challenge = outcome.facts.get("appointment_fact_challenge")
+    if isinstance(raw_challenge, dict):
+        field = raw_challenge.get("field")
+        claimed_time = raw_challenge.get("claimed_time")
+        if field == "time" and isinstance(claimed_time, str) and claimed_time:
+            fact_challenge = AppointmentFactChallengeInfo(
+                field="time",
+                claimed_time=claimed_time,
+            )
+
     return AppointmentInfoTruth(
         visits=tuple(visits),
         complete_set=wrapper.get("complete_set") is True,
+        fact_challenge=fact_challenge,
     )
 
 
@@ -1450,6 +1468,12 @@ def _generic_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Respons
     safe = _safe_value(facts)
     if not isinstance(safe, dict):
         return []
+    if goal == "answer_customer_history" and "appointment_fact_challenge" in safe:
+        safe = {
+            key: value
+            for key, value in safe.items()
+            if key != "appointment_fact_challenge"
+        }
     if (
         goal == "answer_clinic_info"
         and "payment_execution_owner" in safe
