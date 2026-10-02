@@ -372,7 +372,7 @@ def test_active_package_all_invalid_rows_return_actionable_preview() -> None:
             mode="append",
         )
         assert preview.can_import is False
-        assert preview.ready_counts["package"] == 0
+        assert preview.ready_counts.get("package", 0) == 0
         assert preview.rejected_counts["package"] == 1
         assert len(preview.issue_groups) == 1
         issue = preview.issue_groups[0]
