@@ -311,14 +311,15 @@ class TurnOperation(StrictContractModel):
             "merely because the customer mentions or edits one component."
         ),
     )
-    # True only when this operation semantically continues the supplied verified
-    # one-turn read context. Python, not the model, owns the actual merge.
+    # True only when this operation semantically continues supplied verified
+    # one-turn read/action context. Python, not the model, owns the actual merge.
     continues_previous: bool = Field(
         default=False,
         description=(
-            "True only when this operation continues recent_verified_read. Respect its verified "
-            "result summary: a conditional fallback must not replace a successful prior read when "
-            "availability_found=true. Python owns inheritance of omitted scope fields."
+            "True only when this operation continues recent_verified_read or clearly refers to "
+            "recent_verified_action. Respect verified read summaries and use verified action "
+            "references instead of reconstructing completed-action identity from prose. Python "
+            "owns inheritance and grounding of omitted verified scope fields."
         ),
     )
     continuation_condition: ContinuationCondition = Field(

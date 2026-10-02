@@ -14,6 +14,7 @@ from app.agents.structured_output import StructuredOutputError, invoke_typed_str
 from app.agents.v2.semantic_context import SemanticContext, ground_turn_references
 from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
 from app.agents.v2.turn_contract import (
+    AppointmentSelector,
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
@@ -135,6 +136,15 @@ SEMANTIC PRINCIPLES
   session-package consumption unless the customer separately and explicitly refers to a session
   package. Do not inherit the Pulse purchase when the customer starts an unrelated request or names
   a different device.
+- If recent_verified_action is a completed book and the customer clearly revokes or undoes that
+  just-completed booking, emit cancel_appointment with execution_intent=execute and
+  continues_previous=true. Target that exact recent booking through its verified appointment_ref;
+  do not reconstruct the target from assistant prose. If the same customer turn also asks to inspect
+  availability, preserve both independently meaningful actions in customer order: cancel_appointment
+  first, then availability. Do not treat hesitation, dissatisfaction, a price/info question, or
+  generic negative sentiment as cancellation. If it is unclear whether the customer actually wants
+  to undo the recent booking, do not emit a destructive cancellation; keep the turn non-destructive
+  or clarify instead.
 - Package usage controls whether an appointment consumes an existing entitlement; it does not erase
   the service identity established by that package or by the immediately relevant dialogue. A
   request to avoid using an existing package can still book the same established service as a
@@ -553,13 +563,55 @@ def merge_verified_action_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
 ) -> TiaTurnUnderstanding:
-    """Inherit only facts the model explicitly links to the previous verified action."""
+    """Ground only facts the model explicitly links to the previous verified action."""
     raw = semantic_context.model_input.get("recent_verified_action")
-    if not isinstance(raw, dict) or raw.get("operation_type") != "buy_pulse_pack":
+    if not isinstance(raw, dict):
+        return turn
+
+    operation_type = raw.get("operation_type")
+    operations = []
+    changed = False
+
+    if operation_type == "book":
+        recent_appointment = _reference_from_verified(
+            raw,
+            single_key="appointment_ref",
+        )
+        for operation in turn.operations:
+            if (
+                operation.continues_previous
+                and operation.type == "cancel_appointment"
+                and recent_appointment is not None
+            ):
+                selector = operation.source_appointment or AppointmentSelector()
+                current_appointment = selector.appointment
+                has_current_appointment_identity = (
+                    current_appointment is not None
+                    and (
+                        current_appointment.ref is not None
+                        or current_appointment.text not in (None, "")
+                        or bool(current_appointment.candidate_refs)
+                    )
+                )
+                if not has_current_appointment_identity:
+                    selector = selector.model_copy(
+                        update={"appointment": recent_appointment}
+                    )
+                    operation = operation.model_copy(
+                        update={"source_appointment": selector}
+                    )
+                    changed = True
+            operations.append(operation)
+        return (
+            turn.model_copy(update={"operations": operations})
+            if changed
+            else turn
+        )
+
+    if operation_type != "buy_pulse_pack":
         return turn
 
     device = _reference_from_verified(raw, single_key="device_ref")
-    operations = []
     for operation in turn.operations:
         entities = operation.entities
         if (
@@ -570,9 +622,10 @@ def merge_verified_action_context(
         ):
             entities = entities.model_copy(update={"device": device})
             operation = operation.model_copy(update={"entities": entities})
+            changed = True
         operations.append(operation)
 
-    if operations == turn.operations:
+    if not changed:
         return turn
     return turn.model_copy(update={"operations": operations})
 

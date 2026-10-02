@@ -12,7 +12,9 @@ from app.agents.v2.semantic_context import (
     build_semantic_context,
     ground_turn_references,
 )
+from app.agents.v2.semantic_state_view import with_safe_action_context
 from app.agents.v2.turn_contract import (
+    AppointmentSelector,
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
@@ -22,6 +24,7 @@ from app.agents.v2.turn_contract import (
 from app.agents.v2.turn_interpreter import (
     _build_interpreter_messages,
     interpret_customer_turn_v2,
+    merge_verified_action_context,
     merge_verified_read_context,
 )
 from app.services.agent_v2.planner import PlannerContext, plan_turn
@@ -137,6 +140,9 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     assert "availability means open/bookable" in str(messages[0].content)
     assert "requested_patient_details controls" in str(messages[0].content)
     assert "requested_package_details controls the exact read scope" in str(messages[0].content)
+    assert "recent_verified_action is a completed book" in str(messages[0].content)
+    assert "customer order: cancel_appointment" in str(messages[0].content)
+    assert "then availability" in str(messages[0].content)
     assert isinstance(messages[1], SystemMessage)
     assert isinstance(messages[2], HumanMessage)
     assert isinstance(messages[3], AIMessage)
@@ -410,3 +416,214 @@ def test_device_followup_uses_canonical_ref_and_inherits_verified_service(monkey
     ).steps[0]
     assert step.facts["service_id"] == "11111111-1111-4111-8111-111111111111"
     assert step.facts["device_key"] == "candela_gentle"
+
+
+def _context_with_recent_verified_booking() -> SemanticContext:
+    context = build_semantic_context(_catalog())
+    return with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "book",
+            "appointment_id": "33333333-3333-4333-8333-333333333333",
+            "service_id": "11111111-1111-4111-8111-111111111111",
+            "doctor_id": "22222222-2222-4222-8222-222222222222",
+            "start_at": "2026-09-17T16:00:00+00:00",
+            "status": "confirmed",
+            "date": {"mode": "exact", "start_date": "2026-09-17"},
+            "time": {"mode": "exact", "start_time": "19:00"},
+            "package_usage": "unspecified",
+        },
+    )
+
+
+def test_recent_completed_booking_revocation_binds_verified_appointment_target() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="cancel_appointment",
+                entities=TurnEntities(),
+                source_appointment=AppointmentSelector(
+                    appointment=EntityReference(
+                        text=None,
+                        ref=None,
+                        candidate_refs=[],
+                    )
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    selector = merged.operations[0].source_appointment
+    assert selector is not None
+    assert selector.appointment is not None
+    assert selector.appointment.ref == "A1"
+
+
+def test_recent_booking_context_does_not_create_cancellation_for_informational_followup() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                entities=TurnEntities(
+                    service=EntityReference(text="ليزر إبط", ref="S1")
+                ),
+                requested_service_details=["price"],
+                execution_intent="informational",
+                continues_previous=False,
+            )
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    assert [operation.type for operation in merged.operations] == ["pricing"]
+
+
+def test_recent_booking_context_requires_semantic_continuation_before_binding_cancel_target() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="cancel_appointment",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=False,
+            )
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    assert merged.operations[0].source_appointment is None
+
+
+def test_recent_booking_context_never_overrides_an_explicit_cancel_target() -> None:
+    catalog = _catalog()
+    catalog["appointments"].append(
+        {
+            "appointment_id": "44444444-4444-4444-8444-444444444444",
+            "service_id": "11111111-1111-4111-8111-111111111111",
+            "doctor_id": "22222222-2222-4222-8222-222222222222",
+            "status": "confirmed",
+            "start_local": "2026-09-18T19:00:00+03:00",
+        }
+    )
+    context = build_semantic_context(catalog)
+    context = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "book",
+            "appointment_id": "33333333-3333-4333-8333-333333333333",
+            "service_id": "11111111-1111-4111-8111-111111111111",
+            "doctor_id": "22222222-2222-4222-8222-222222222222",
+            "start_at": "2026-09-17T16:00:00+00:00",
+            "status": "confirmed",
+            "package_usage": "unspecified",
+        },
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="cancel_appointment",
+                entities=TurnEntities(),
+                source_appointment=AppointmentSelector(
+                    appointment=EntityReference(ref="A2")
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    selector = merged.operations[0].source_appointment
+    assert selector is not None
+    assert selector.appointment is not None
+    assert selector.appointment.ref == "A2"
+
+
+def test_recent_booking_revocation_targets_new_booking_when_older_appointment_exists() -> None:
+    context = build_semantic_context(_catalog())
+    context = with_safe_action_context(
+        context,
+        action_context={
+            "operation_type": "book",
+            "appointment_id": "44444444-4444-4444-8444-444444444444",
+            "service_id": "11111111-1111-4111-8111-111111111111",
+            "doctor_id": "22222222-2222-4222-8222-222222222222",
+            "start_at": "2026-09-18T16:00:00+00:00",
+            "status": "confirmed",
+            "package_usage": "unspecified",
+        },
+    )
+    recent_ref = context.model_input["recent_verified_action"]["appointment_ref"]
+    assert recent_ref == "A2"
+    assert context.resolve("A1", expected_kind="appointment") == (
+        "33333333-3333-4333-8333-333333333333"
+    )
+    assert context.resolve("A2", expected_kind="appointment") == (
+        "44444444-4444-4444-8444-444444444444"
+    )
+
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="cancel_appointment",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ],
+        safety_signals=[],
+    )
+    merged = merge_verified_action_context(turn, context)
+
+    selector = merged.operations[0].source_appointment
+    assert selector is not None
+    assert selector.appointment is not None
+    assert selector.appointment.ref == "A2"
+
+
+def test_recent_booking_revocation_preserves_compound_cancel_then_availability_order() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="cancel_appointment",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+            ),
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(
+                    service=EntityReference(text="ليزر إبط", ref="S1")
+                ),
+                execution_intent="informational",
+            ),
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    assert [operation.type for operation in merged.operations] == [
+        "cancel_appointment",
+        "availability",
+    ]
+    cancel_selector = merged.operations[0].source_appointment
+    assert cancel_selector is not None
+    assert cancel_selector.appointment is not None
+    assert cancel_selector.appointment.ref == "A1"
+    assert merged.operations[1].source_appointment is None

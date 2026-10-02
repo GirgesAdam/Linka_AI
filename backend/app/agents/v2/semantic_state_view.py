@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.v2.semantic_context import ReferenceKind, SemanticContext
+from app.agents.v2.semantic_context import (
+    ReferenceKind,
+    SemanticContext,
+    SemanticReferenceTarget,
+)
 
 
 def _reverse_refs(context: SemanticContext, kind: ReferenceKind) -> dict[str, str]:
@@ -411,6 +415,41 @@ def with_safe_read_context(
     return _apply_verified_focus(context, model_input, block_focus=stale)
 
 
+def _with_recent_booking_appointment_reference(
+    context: SemanticContext,
+    action_context: dict[str, Any],
+) -> SemanticContext:
+    """Add one server-owned ephemeral ref for a just-completed booking target."""
+    if action_context.get("operation_type") != "book":
+        return context
+    appointment_id = action_context.get("appointment_id")
+    if appointment_id in (None, ""):
+        return context
+    if _entity_ref(appointment_id, kind="appointment", context=context) is not None:
+        return context
+
+    reference_map = dict(context.reference_map)
+    index = 1
+    while f"A{index}" in reference_map:
+        index += 1
+    appointment_ref = f"A{index}"
+    reference_map[appointment_ref] = SemanticReferenceTarget(
+        kind="appointment",
+        canonical_id=str(appointment_id),
+    )
+
+    metadata = dict(context.server_metadata)
+    raw_details = metadata.get("focus_details")
+    focus_details = dict(raw_details) if isinstance(raw_details, dict) else {}
+    focus_details[appointment_ref] = {"ref": appointment_ref}
+    metadata["focus_details"] = focus_details
+    return SemanticContext(
+        model_input=dict(context.model_input),
+        reference_map=reference_map,
+        server_metadata=metadata,
+    )
+
+
 def with_safe_action_context(
     context: SemanticContext,
     *,
@@ -418,6 +457,7 @@ def with_safe_action_context(
 ) -> SemanticContext:
     if action_context is None:
         return context
+    context = _with_recent_booking_appointment_reference(context, action_context)
     model_input = dict(context.model_input)
     model_input["recent_verified_action"] = verified_action_semantic_view(
         action_context,
