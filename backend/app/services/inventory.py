@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
 from app.models.clinic_inventory import (
-    LASER_DEVICE_NAMES,
     AppointmentProductLine,
     ClinicLaserDevice,
     ClinicProduct,
@@ -48,42 +47,12 @@ def _device_read(row: ClinicLaserDevice) -> ClinicLaserDeviceRead:
     return ClinicLaserDeviceRead.model_validate(row)
 
 
-def ensure_legacy_laser_devices(
-    db: Session,
-    *,
-    workspace_id: UUID,
-) -> list[ClinicLaserDevice]:
-    rows = list(
-        db.scalars(
-            select(ClinicLaserDevice).where(
-                ClinicLaserDevice.workspace_id == workspace_id,
-            )
-        )
-    )
-    if rows:
-        return rows
-
-    rows = [
-        ClinicLaserDevice(
-            workspace_id=workspace_id,
-            device_key=device_key,
-            name=device_name,
-            is_active=True,
-        )
-        for device_key, device_name in LASER_DEVICE_NAMES.items()
-    ]
-    db.add_all(rows)
-    db.flush()
-    return rows
-
-
 def list_clinic_laser_devices(
     db: Session,
     *,
     workspace_id: UUID,
     active_only: bool = False,
 ) -> list[ClinicLaserDeviceRead]:
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     stmt = select(ClinicLaserDevice).where(
         ClinicLaserDevice.workspace_id == workspace_id,
     )
@@ -100,7 +69,6 @@ def create_clinic_laser_device(
     name: str,
 ) -> ClinicLaserDeviceRead:
     normalized_name = " ".join(name.split())
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     rows = list(
         db.scalars(
             select(ClinicLaserDevice).where(
@@ -209,7 +177,6 @@ def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDe
     if not services:
         return []
 
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     devices = list(
         db.scalars(
             select(ClinicLaserDevice)
@@ -286,7 +253,6 @@ def upsert_laser_device_price(
             "Device pricing is only available for services that require a laser device."
         )
 
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     device = db.scalar(
         select(ClinicLaserDevice).where(
             ClinicLaserDevice.workspace_id == workspace_id,
@@ -378,7 +344,6 @@ def configured_device_price(
     if not device_key:
         raise InventoryOperationError("Laser device choice is required.")
 
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     device = db.scalar(
         select(ClinicLaserDevice).where(
             ClinicLaserDevice.workspace_id == workspace_id,

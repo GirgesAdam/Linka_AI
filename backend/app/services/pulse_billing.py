@@ -30,7 +30,6 @@ from app.schemas.pulse_billing import (
     PulsePackOfferRead,
 )
 from app.services.activity import ActivityActorType, record_activity_event
-from app.services.inventory import ensure_legacy_laser_devices
 from app.services.payments import refresh_appointment_payment_snapshots
 
 
@@ -48,7 +47,6 @@ def _active_clinic_laser_device(
     workspace_id: UUID,
     device_key: str,
 ) -> ClinicLaserDevice:
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     row = db.scalar(
         select(ClinicLaserDevice).where(
             ClinicLaserDevice.workspace_id == workspace_id,
@@ -89,7 +87,6 @@ def list_pulse_billing_settings(
     *,
     workspace_id: UUID,
 ) -> list[PulseBillingSettingsRead]:
-    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
     devices = list(
         db.scalars(
             select(ClinicLaserDevice)

@@ -19,12 +19,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
-LASER_DEVICE_KEYS = ("prime_lase", "candela_gentle")
-LASER_DEVICE_NAMES = {
-    "prime_lase": "Prime Lase",
-    "candela_gentle": "Candela Gentle",
-}
-
 
 class ClinicLaserDevice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "clinic_laser_devices"

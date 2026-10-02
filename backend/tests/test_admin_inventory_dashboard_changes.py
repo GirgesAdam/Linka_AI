@@ -55,15 +55,12 @@ class _LaserDeviceDb:
                 row.updated_at = now
 
 
-def test_dynamic_laser_device_registry_backfills_legacy_devices_and_adds_custom_device() -> None:
+def test_dynamic_laser_device_registry_starts_empty_and_adds_custom_device() -> None:
     workspace_id = uuid4()
     db = _LaserDeviceDb()
 
     initial = list_clinic_laser_devices(db, workspace_id=workspace_id)
-    assert {(item.device_key, item.name) for item in initial} == {
-        ("prime_lase", "Prime Lase"),
-        ("candela_gentle", "Candela Gentle"),
-    }
+    assert initial == []
 
     added = create_clinic_laser_device(
         db,
@@ -72,8 +69,12 @@ def test_dynamic_laser_device_registry_backfills_legacy_devices_and_adds_custom_
     )
     assert added.name == "DEKA Again"
     assert added.device_key.startswith("device_")
-    assert added.device_key not in {"prime_lase", "candela_gentle"}
     assert added.is_active is True
+
+    listed = list_clinic_laser_devices(db, workspace_id=workspace_id)
+    assert [(item.device_key, item.name) for item in listed] == [
+        (added.device_key, "DEKA Again")
+    ]
 
 
 def test_dynamic_laser_device_registry_can_disable_and_reactivate_without_changing_key() -> None:
