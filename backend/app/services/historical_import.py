@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
-from app.models.clinic_inventory import ServiceDevicePrice
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.crm_campaign_conversion import CRMCampaignConversion
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
@@ -380,19 +380,29 @@ def _service_catalog(db: Session, workspace_id: UUID) -> tuple[dict[UUID, Servic
 def _active_device_price_catalog(
     db: Session,
     workspace_id: UUID,
-) -> dict[UUID, dict[str, ServiceDevicePrice]]:
+) -> dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]]:
     rows = list(
-        db.scalars(
-            select(ServiceDevicePrice).where(
+        db.execute(
+            select(ServiceDevicePrice, ClinicLaserDevice.name)
+            .join(
+                ClinicLaserDevice,
+                (ClinicLaserDevice.workspace_id == ServiceDevicePrice.workspace_id)
+                & (ClinicLaserDevice.device_key == ServiceDevicePrice.device_key),
+            )
+            .where(
                 ServiceDevicePrice.workspace_id == workspace_id,
                 ServiceDevicePrice.is_active.is_(True),
                 ServiceDevicePrice.price_minor.is_not(None),
+                ClinicLaserDevice.is_active.is_(True),
             )
-        )
+        ).all()
     )
-    result: dict[UUID, dict[str, ServiceDevicePrice]] = defaultdict(dict)
-    for row in rows:
-        result[row.service_id][row.device_name.strip().casefold()] = row
+    result: dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]] = defaultdict(dict)
+    for row, current_device_name in rows:
+        result[row.service_id][current_device_name.strip().casefold()] = (
+            row,
+            current_device_name,
+        )
     return result
 
 
@@ -745,15 +755,16 @@ def _normalize_active_package(
                 "active_package_laser_device_missing",
                 "اختر اسم الجهاز لخدمة الليزر من القائمة الموجودة في ملف Excel.",
             )
-        device_price = configured_devices.get(device_name.casefold())
-        if device_price is None:
+        device_match = configured_devices.get(device_name.casefold())
+        if device_match is None:
             return (
                 None,
                 "active_package_laser_device_invalid",
                 "الجهاز المختار غير متاح للخدمة دي. اختر جهازًا من القائمة الخاصة بالخدمة.",
             )
+        device_price, current_device_name = device_match
         laser_device_key = device_price.device_key
-        laser_device_name = device_price.device_name
+        laser_device_name = current_device_name
         standalone_session_price_minor = int(device_price.price_minor or 0)
     elif device_name:
         return (

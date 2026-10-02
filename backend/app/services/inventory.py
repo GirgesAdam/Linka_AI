@@ -132,6 +132,30 @@ def update_clinic_laser_device(
         ):
             raise InventoryOperationError("A laser device with this name already exists.")
         row.name = normalized_name
+        db.execute(
+            update(ServiceDevicePrice)
+            .where(
+                ServiceDevicePrice.workspace_id == workspace_id,
+                ServiceDevicePrice.device_key == row.device_key,
+            )
+            .values(device_name=normalized_name)
+        )
+        db.execute(
+            update(ServicePackageOffer)
+            .where(
+                ServicePackageOffer.workspace_id == workspace_id,
+                ServicePackageOffer.device_key == row.device_key,
+            )
+            .values(device_name=normalized_name)
+        )
+        db.execute(
+            update(PulsePackOffer)
+            .where(
+                PulsePackOffer.workspace_id == workspace_id,
+                PulsePackOffer.device_key == row.device_key,
+            )
+            .values(device_name=normalized_name)
+        )
     if is_active is not None:
         row.is_active = is_active
         if not is_active:
