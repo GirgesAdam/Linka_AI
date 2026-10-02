@@ -11,6 +11,10 @@ from langchain_core.messages import BaseMessage
 from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
+from app.agents.v2.availability_scope import (
+    availability_scope_key_from_reads,
+    availability_scope_matches,
+)
 from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
 from app.agents.v2.semantic_state_view import (
@@ -288,12 +292,24 @@ def _verified_no_availability(reads: ReadExecutionBundle | None) -> bool:
 
 def _availability_presentation_continuation(
     understanding: TiaTurnUnderstanding,
+    plan: TurnPlan,
+    recent_read_context: dict[str, Any] | None,
 ) -> bool:
-    return any(
-        bool(getattr(operation, "continues_previous", False))
-        and operation.type in {"availability", "book", "reschedule"}
-        for operation in understanding.operations
-    )
+    for step in reversed(plan.steps):
+        if step.operation_index >= len(understanding.operations):
+            continue
+        operation = understanding.operations[step.operation_index]
+        if (
+            not bool(getattr(operation, "continues_previous", False))
+            or operation.type not in {"availability", "book", "reschedule"}
+        ):
+            continue
+        current_scope_key = availability_scope_key_from_reads(step.reads)
+        return availability_scope_matches(
+            recent_read_context,
+            current_scope_key=current_scope_key,
+        )
+    return False
 
 
 def _availability_shown_window_keys(
@@ -1544,7 +1560,7 @@ def orchestrate_v2_turn(
         raise RuntimeError("V2 runtime produced neither a customer outcome nor a pending write.")
 
     availability_continuation = _availability_presentation_continuation(
-        understanding
+        understanding, plan, recent_read_context
     )
     reply, model = compose_v2_customer_reply(
         clinic_name=clinic_name,
