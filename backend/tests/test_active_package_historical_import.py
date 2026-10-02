@@ -351,12 +351,16 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
 
         assert readme.sheet_view.rightToLeft is True
         assert readme["A1"].value == "دليل استيراد الباقات النشطة"
-        assert readme["A13"].value == "مثال صحيح"
-        assert [readme.cell(14, column).value for column in range(1, 9)] == expected_headers
-        assert readme["A15"].value == "سارة أحمد"
-        assert readme["B15"].value == "01012345678"
-        assert readme["B15"].number_format == "@"
-        assert readme["G15"].value == "15/02/2026"
+        assert readme["A3"].value == (
+            "سعر الباقة اختياري. إذا تركته فارغًا، سيتعامل النظام مع المبلغ المدفوع "
+            "على أنه سعر الباقة بالكامل."
+        )
+        assert readme["A5"].value == "مثال صحيح"
+        assert [readme.cell(6, column).value for column in range(1, 9)] == expected_headers
+        assert readme["A7"].value == "سارة أحمد"
+        assert readme["B7"].value == "01012345678"
+        assert readme["B7"].number_format == "@"
+        assert readme["G7"].value == "15/02/2026"
 
         readme_text = "\n".join(
             str(cell.value)
@@ -364,16 +368,17 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
             for cell in row
             if cell.value is not None
         )
-        assert "إذا حذف Excel الصفر الأول، Linka تعيده تلقائيًا." in readme_text
+        assert "طريقة الاستخدام" not in readme_text
+        assert "إذا حذف Excel الصفر الأول" not in readme_text
         assert "هي نفسها الخدمات التي يمكن اختيارها للباقة." in readme_text
         assert "استخدم نفس الاسم في service_name" not in readme_text
-        assert readme["A19"].value == "اسم الخدمة"
-        assert readme["A20"].value in {
+        assert readme["A11"].value == "اسم الخدمة"
+        assert readme["A12"].value in {
             "Hydrafacial",
             "ليزر إزالة الشعر - جسم كامل سيدات",
         }
-        assert readme["B20"].value is None
-        assert readme["C20"].value is None
+        assert readme["B12"].value is None
+        assert readme["C12"].value is None
 
         assert [sheet.cell(1, column).value for column in range(1, 9)] == expected_headers
         assert sheet["A1"].fill.fill_type is None
@@ -423,6 +428,10 @@ def test_active_package_arabic_headers_preview_and_apply() -> None:
         assert package.sessions_purchased == 6
         assert package.opening_sessions_remaining == 3
         assert package.sale_price_minor == 300_000
+        assert package.standalone_session_price_minor_at_purchase == 180_000
+        read = package_service.package_read(db, package, include_financials=True)
+        assert read.cancellation_consumed_sessions == 3
+        assert read.cancellation_default_charge_minor == 540_000
 
 
 
