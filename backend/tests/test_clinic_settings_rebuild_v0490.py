@@ -421,14 +421,14 @@ def test_official_template_is_minimal_active_package_contract() -> None:
             for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))
         ]
         assert headers == [
-            "full_name",
-            "phone",
-            "service_name",
-            "sessions_total",
-            "sessions_remaining",
-            "amount_paid",
-            "purchased_at",
-            "package_price",
+            "اسم العميل",
+            "رقم الموبايل",
+            "اسم الخدمة",
+            "عدد الجلسات الكلي",
+            "عدد الجلسات المتبقي",
+            "المبلغ المدفوع",
+            "تاريخ الشراء",
+            "سعر الباقة",
         ]
         forbidden = {
             "patient_id",
