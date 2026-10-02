@@ -342,9 +342,13 @@ class TurnOperation(StrictContractModel):
         default=False,
         description=(
             "True only when this operation continues recent_verified_read or clearly refers to "
-            "recent_verified_action. Respect verified read summaries and use verified action "
-            "references instead of reconstructing completed-action identity from prose. Python "
-            "owns inheritance and grounding of omitted verified scope fields."
+            "recent_verified_action. For availability, requesting additional results from the "
+            "immediately previous verified availability result is continuation even if the customer "
+            "switches language or omits the unchanged search constraints. A fresh/contextless request "
+            "for additional results is not continuation. Respect verified read summaries and use "
+            "verified action references instead of reconstructing completed-action identity from prose. "
+            "Python owns inheritance, canonical scope comparison, pagination cursor safety, and grounding "
+            "of omitted verified scope fields."
         ),
     )
     continuation_condition: ContinuationCondition = Field(
