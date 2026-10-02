@@ -17,6 +17,7 @@ from app.services.clinic_setup_import import (
 from app.services.historical_import import (
     _assign_patient_phone_if_available,
     _fill_missing_patient_facts,
+    _normalize_active_package,
     _normalize_allocation,
     _normalize_appointment,
     _normalize_package,
@@ -255,6 +256,146 @@ def test_package_supports_opening_remaining_without_total() -> None:
     assert payload["price_minor"] == 1_000_000  # internal implementation detail only
 
 
+
+
+def test_active_package_minimal_row_defaults_price_to_amount_paid() -> None:
+    service = _service()
+    payload, code, message = _normalize_active_package(
+        {
+            "full_name": "سارة أحمد",
+            "phone": "01012345678",
+            "service_name": service.name,
+            "sessions_total": 10,
+            "sessions_remaining": 4,
+            "amount_paid": 6000,
+            "purchased_at": "2026-07-15",
+        },
+        services_by_id={service.id: service},
+        services_by_name={service.name.casefold(): service},
+    )
+    assert code is None and message is None and payload is not None
+    assert payload["sessions_total"] == 10
+    assert payload["sessions_remaining"] == 4
+    assert payload["price_minor"] == 600_000
+    assert payload["historical_payment_amount_minor"] == 600_000
+    assert payload["expires_at"] is None
+    assert payload["status"] == "active"
+    assert payload["import_contract"] == "active_packages_v2"
+
+
+def test_active_package_partial_payment_preserves_package_price() -> None:
+    service = _service()
+    payload, code, _ = _normalize_active_package(
+        {
+            "full_name": "سارة أحمد",
+            "phone": "01012345678",
+            "service_name": service.name,
+            "sessions_total": 10,
+            "sessions_remaining": 4,
+            "amount_paid": 5000,
+            "package_price": 8000,
+            "purchased_at": "2026-07-15",
+        },
+        services_by_id={service.id: service},
+        services_by_name={service.name.casefold(): service},
+    )
+    assert code is None and payload
+    assert payload["price_minor"] == 800_000
+    assert payload["historical_payment_amount_minor"] == 500_000
+
+
+
+
+def test_active_package_rejects_ambiguous_exact_service_name() -> None:
+    first = _service()
+    second = SimpleNamespace(
+        id=uuid4(),
+        name=first.name,
+        duration_minutes=45,
+        price_minor=300000,
+    )
+    payload, code, message = _normalize_active_package(
+        {
+            "full_name": "سارة أحمد",
+            "phone": "01012345678",
+            "service_name": first.name,
+            "sessions_total": 10,
+            "sessions_remaining": 4,
+            "amount_paid": 6000,
+            "purchased_at": "2026-07-15",
+        },
+        services_by_id={first.id: first, second.id: second},
+        services_by_name={first.name.casefold(): second},
+    )
+    assert payload is None
+    assert code == "active_package_service_ambiguous"
+    assert "more than one active" in str(message)
+
+
+def test_active_package_source_identity_is_row_order_independent() -> None:
+    service = _service()
+    row = {
+        "full_name": "سارة أحمد",
+        "phone": "01012345678",
+        "service_name": service.name,
+        "sessions_total": 10,
+        "sessions_remaining": 4,
+        "amount_paid": 6000,
+        "purchased_at": "2026-07-15",
+    }
+    first, _, _ = _normalize_active_package(
+        row,
+        services_by_id={service.id: service},
+        services_by_name={service.name.casefold(): service},
+    )
+    second, _, _ = _normalize_active_package(
+        dict(reversed(list(row.items()))),
+        services_by_id={service.id: service},
+        services_by_name={service.name.casefold(): service},
+    )
+    assert first and second
+    assert first["source_record_id"] == second["source_record_id"]
+
+
+def test_active_package_validation_rejects_unknown_service_sessions_and_finances() -> None:
+    service = _service()
+    base = {
+        "full_name": "سارة أحمد",
+        "phone": "01012345678",
+        "service_name": service.name,
+        "sessions_total": 10,
+        "sessions_remaining": 4,
+        "amount_paid": 6000,
+        "purchased_at": "2026-07-15",
+    }
+    cases = [
+        ({**base, "service_name": "Unknown"}, "active_package_service_unknown"),
+        ({**base, "sessions_total": 0}, "active_package_total_invalid"),
+        ({**base, "sessions_total": -1}, "active_package_total_invalid"),
+        ({**base, "sessions_remaining": -1}, "active_package_remaining_invalid"),
+        (
+            {**base, "sessions_remaining": 11},
+            "active_package_remaining_exceeds_total",
+        ),
+        ({**base, "amount_paid": 0}, "active_package_amount_paid_invalid"),
+        ({**base, "amount_paid": -1}, "active_package_amount_paid_invalid"),
+        (
+            {**base, "package_price": 5000},
+            "active_package_price_below_paid",
+        ),
+        ({**base, "purchased_at": "not-a-date"}, "active_package_purchase_date_invalid"),
+        ({**base, "phone": "abc"}, "active_package_phone_invalid"),
+    ]
+    for row, expected_code in cases:
+        payload, code, _ = _normalize_active_package(
+            row,
+            services_by_id={service.id: service},
+            services_by_name={service.name.casefold(): service},
+        )
+        assert payload is None
+        assert code == expected_code
+
+
 def test_package_negative_remaining_is_rejected() -> None:
     service = _service()
     payload, code, _ = _normalize_package(
@@ -265,24 +406,52 @@ def test_package_negative_remaining_is_rejected() -> None:
     assert payload is None and code == "package_remaining_invalid"
 
 
-def test_official_template_is_fixed_contract() -> None:
-    wb = load_workbook(io.BytesIO(build_historical_import_template()), read_only=True)
+def test_official_template_is_minimal_active_package_contract() -> None:
+    wb = load_workbook(
+        io.BytesIO(
+            build_historical_import_template(
+                service_names=["Hydrafacial", "PRP Face"],
+            )
+        )
+    )
     try:
-        assert wb.sheetnames == ["README", "patients", "appointments", "payments", "payment_allocations", "packages"]
-        headers = {}
-        for name in wb.sheetnames[1:]:
-            headers[name] = [cell.value for cell in next(wb[name].iter_rows(min_row=1, max_row=1))]
-        flattened = {str(value) for values in headers.values() for value in values}
-        assert "email" not in flattened
-        assert "gender" not in flattened
-        assert "currency" not in flattened
-        assert "end_at" not in flattened
-        assert "transaction_type" not in flattened
-        assert "price_minor" not in flattened
-        assert "active" not in flattened
-        assert "price" in headers["packages"]
-        assert "doctor_id" in headers["appointments"]
-        assert "sessions_remaining" in headers["packages"]
+        assert wb.sheetnames == ["README", "active_packages"]
+        headers = [
+            cell.value
+            for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))
+        ]
+        assert headers == [
+            "full_name",
+            "phone",
+            "service_name",
+            "sessions_total",
+            "sessions_remaining",
+            "amount_paid",
+            "purchased_at",
+            "package_price",
+        ]
+        forbidden = {
+            "patient_id",
+            "package_id",
+            "transaction_id",
+            "payment_method",
+            "package_name",
+            "service_id",
+            "expires_at",
+            "status",
+            "currency",
+            "standalone_session_price",
+        }
+        assert forbidden.isdisjoint(headers)
+        assert wb["active_packages"].data_validations.count == 1
+        readme_values = {
+            str(cell.value)
+            for row in wb["README"].iter_rows()
+            for cell in row
+            if cell.value is not None
+        }
+        assert "Hydrafacial" in readme_values
+        assert "PRP Face" in readme_values
     finally:
         wb.close()
 

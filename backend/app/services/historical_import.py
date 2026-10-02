@@ -16,6 +16,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -56,7 +57,9 @@ RECOGNIZED_SHEETS = {
     "payments": "payment",
     "payment_allocations": "payment_allocation",
     "packages": "package",
+    "active_packages": "package",
 }
+ACTIVE_PACKAGE_CONTRACT = "active_packages_v2"
 EGYPT_TZ = ZoneInfo("Africa/Cairo")
 VALID_APPOINTMENT_STATUSES = {
     "pending",
@@ -202,7 +205,7 @@ def _iter_rows(documents: list[HistoricalImportDocument]) -> Iterable[tuple[str,
             yield document.name, sheet, row_number, row
     if not recognized:
         raise HistoricalImportError(
-            "No recognized historical-data sheet was found. Use the Linka Import Template v1."
+            "No recognized historical-data sheet was found. Use the Linka Active Packages Import template or a supported legacy historical sheet."
         )
 
 
@@ -518,6 +521,152 @@ def _normalize_package(
     return payload, None, None
 
 
+
+
+def _active_package_payment_source_id(package_source_record_id: str) -> str:
+    return f"payment:active_package:{_digest(package_source_record_id)[:32]}"
+
+
+def _active_package_fact_hash(payload: dict[str, Any]) -> str:
+    """Hash package facts without treating CRM presentation name as package identity."""
+    stable_payload = dict(payload)
+    stable_payload.pop("full_name", None)
+    stable_payload.pop("patient_name", None)
+    return _payload_hash(stable_payload)
+
+
+def _active_package_payment_payload(
+    payload: dict[str, Any],
+    *,
+    package_source_record_id: str,
+) -> dict[str, Any]:
+    return {
+        "identity": payload["identity"],
+        "amount_minor": int(payload["historical_payment_amount_minor"]),
+        "paid_at": payload["purchased_at"],
+        "payment_method": "unknown",
+        "package_source_record_id": package_source_record_id,
+        "import_contract": ACTIVE_PACKAGE_CONTRACT,
+    }
+
+
+def _normalize_active_package(
+    row: dict[str, Any],
+    *,
+    services_by_id: dict[UUID, Service],
+    services_by_name: dict[str, Service],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    full_name = _clean(row.get("full_name"))
+    if not full_name:
+        return None, "active_package_name_missing", "full_name is required."
+
+    raw_phone = _clean(row.get("phone"))
+    if not raw_phone:
+        return None, "active_package_phone_invalid", "Invalid phone."
+    try:
+        phone_display, phone_normalized = normalize_patient_identity_phone(raw_phone)
+    except ValueError:
+        return None, "active_package_phone_invalid", "Invalid phone."
+    if not phone_normalized:
+        return None, "active_package_phone_invalid", "Invalid phone."
+    identity = f"phone:{_digest(phone_normalized)[:24]}"
+
+    service_name = _clean(row.get("service_name"))
+    matching_services = [
+        service
+        for service in services_by_id.values()
+        if service_name
+        and _clean(service.name)
+        and _clean(service.name).casefold() == service_name.casefold()
+    ]
+    if not matching_services:
+        return (
+            None,
+            "active_package_service_unknown",
+            "Unknown service. Use one of the active Linka service names.",
+        )
+    if len(matching_services) > 1:
+        return (
+            None,
+            "active_package_service_ambiguous",
+            "service_name matches more than one active Linka service. Rename the services before importing.",
+        )
+    service = matching_services[0]
+
+    total = _int_value(row.get("sessions_total"))
+    if total is None or total <= 0:
+        return None, "active_package_total_invalid", "sessions_total must be a positive whole number."
+    remaining = _int_value(row.get("sessions_remaining"))
+    if remaining is None or remaining < 0:
+        return None, "active_package_remaining_invalid", "sessions_remaining must be zero or greater."
+    if remaining > total:
+        return (
+            None,
+            "active_package_remaining_exceeds_total",
+            "sessions_remaining cannot exceed sessions_total.",
+        )
+
+    amount_paid_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
+    if amount_paid_minor is None or amount_paid_minor <= 0:
+        return None, "active_package_amount_paid_invalid", "amount_paid must be positive."
+
+    package_price_raw = _clean(row.get("package_price"))
+    package_price_minor = (
+        amount_paid_minor
+        if package_price_raw is None
+        else _money_minor(row.get("package_price"), allow_negative=False)
+    )
+    if package_price_minor is None:
+        return None, "active_package_price_invalid", "package_price must be a valid non-negative amount."
+    if package_price_minor < amount_paid_minor:
+        return (
+            None,
+            "active_package_price_below_paid",
+            "package_price cannot be less than amount_paid.",
+        )
+
+    purchased_date = _parse_date(row.get("purchased_at"))
+    if purchased_date is None:
+        return None, "active_package_purchase_date_invalid", "purchase date invalid."
+    purchased_at = datetime.combine(purchased_date, time.min, tzinfo=EGYPT_TZ).astimezone(UTC)
+
+    identity_facts = "|".join(
+        [
+            identity,
+            str(service.id),
+            purchased_date.isoformat(),
+            str(total),
+            str(remaining),
+            str(package_price_minor),
+            str(amount_paid_minor),
+        ]
+    )
+    source_record_id = _source_id("package", None, f"active_package|{identity_facts}")
+    payload = {
+        "identity": identity,
+        "patient_id": None,
+        "patient_phone": phone_display,
+        "patient_phone_normalized": phone_normalized,
+        "full_name": full_name,
+        "patient_name": full_name,
+        "package_id": None,
+        "package_name": f"{service.name} Package",
+        "service_id": str(service.id),
+        "service_name": service.name,
+        "sessions_total": total,
+        "sessions_remaining": remaining,
+        "price_minor": package_price_minor,
+        "standalone_session_price_minor": None,
+        "purchased_at": purchased_at.isoformat(),
+        "expires_at": None,
+        "status": "active",
+        "historical_payment_amount_minor": amount_paid_minor,
+        "import_contract": ACTIVE_PACKAGE_CONTRACT,
+        "source_record_id": source_record_id,
+    }
+    return payload, None, None
+
+
 def _normalize_row(
     entity_type: str,
     row: dict[str, Any],
@@ -540,6 +689,12 @@ def _normalize_row(
     if entity_type == "payment_allocation":
         return _normalize_allocation(row)
     if entity_type == "package":
+        if sheet == "active_packages":
+            return _normalize_active_package(
+                row,
+                services_by_id=services_by_id,
+                services_by_name=services_by_name,
+            )
         return _normalize_package(row, services_by_id=services_by_id, services_by_name=services_by_name)
     raise HistoricalImportError(f"Unsupported entity type: {entity_type}")
 
@@ -613,17 +768,32 @@ def preview_historical_import(
             row_status = "rejected"
         else:
             source_record_id = str(payload.pop("source_record_id"))
-            content_hash = _payload_hash(payload)
+            content_hash = (
+                _active_package_fact_hash(payload)
+                if payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT
+                else _payload_hash(payload)
+            )
             key = (entity_type, source_record_id)
             if key in seen:
-                issue_code = f"duplicate_{entity_type}_record"
-                issue_message = f"Duplicate {entity_type} identity in the same import file."
-                source_record_id = f"{source_record_id}:duplicate:{row_number}"
+                if payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT:
+                    issue_code = "duplicate_historical_package_row"
+                    issue_message = "Duplicate historical package row."
+                else:
+                    issue_code = f"duplicate_{entity_type}_record"
+                    issue_message = f"Duplicate {entity_type} identity in the same import file."
+                duplicate_source = _digest(source_file.casefold())[:10]
+                source_record_id = (
+                    f"{source_record_id}:duplicate:{duplicate_source}:{row_number}"
+                )
                 row_status = "rejected"
             else:
                 seen[key] = content_hash
                 row_status = "ready"
-        payload_hash = _payload_hash(payload)
+        payload_hash = (
+            _active_package_fact_hash(payload)
+            if payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT
+            else _payload_hash(payload)
+        )
         if row_status == "ready":
             ready_counts[entity_type] += 1
         else:
@@ -702,6 +872,55 @@ def preview_historical_import(
         if len(group["rows"]) < 5:
             group["rows"].append(staged.row_number)
 
+    active_ready_rows = [
+        staged
+        for staged in rows_to_add
+        if staged.entity_type == "package"
+        and staged.row_status == "ready"
+        and staged.normalized_json.get("import_contract") == ACTIVE_PACKAGE_CONTRACT
+    ]
+    projected_counts: dict[str, int] = {}
+    total_amount_imported_minor = 0
+    if active_ready_rows:
+        patient_phones = {
+            str(staged.normalized_json["patient_phone_normalized"])
+            for staged in active_ready_rows
+            if staged.normalized_json.get("patient_phone_normalized")
+        }
+        existing_patient_phones = set(
+            db.scalars(
+                select(Patient.phone_normalized).where(
+                    Patient.workspace_id == workspace.id,
+                    Patient.phone_normalized.in_(patient_phones),
+                )
+            ).all()
+        )
+        package_source_ids = {staged.source_record_id for staged in active_ready_rows}
+        existing_package_sources = set(
+            db.scalars(
+                select(ClinicHistoricalImportLink.source_record_id).where(
+                    ClinicHistoricalImportLink.workspace_id == workspace.id,
+                    ClinicHistoricalImportLink.entity_type == "package",
+                    ClinicHistoricalImportLink.source_record_id.in_(package_source_ids),
+                )
+            ).all()
+        )
+        new_active_rows = [
+            staged
+            for staged in active_ready_rows
+            if staged.source_record_id not in existing_package_sources
+        ]
+        projected_counts = {
+            "patients_to_create": len(patient_phones - existing_patient_phones),
+            "existing_patients_reused": len(patient_phones & existing_patient_phones),
+            "packages_to_create": len(new_active_rows),
+            "historical_payments_to_create": len(new_active_rows),
+        }
+        total_amount_imported_minor = sum(
+            int(staged.normalized_json.get("historical_payment_amount_minor") or 0)
+            for staged in new_active_rows
+        )
+
     db.add_all(rows_to_add)
     issue_groups = [
         HistoricalImportIssueGroup(
@@ -718,6 +937,8 @@ def preview_historical_import(
         "rejected_counts": dict(rejected_counts),
         "issues": [group.model_dump() for group in issue_groups],
         "source_fingerprint": fingerprint,
+        "projected_counts": projected_counts,
+        "total_amount_imported_minor": total_amount_imported_minor,
     }
     db.commit()
     db.refresh(batch)
@@ -727,6 +948,8 @@ def preview_historical_import(
         rejected_counts=dict(rejected_counts),
         issue_groups=issue_groups,
         can_import=sum(ready_counts.values()) > 0,
+        projected_counts=projected_counts,
+        total_amount_imported_minor=total_amount_imported_minor,
     )
 
 
@@ -1181,6 +1404,19 @@ def apply_historical_import(
         (row.entity_type, row.source_record_id): row.payload_hash
         for row in rows if row.entity_type != "payment_allocation"
     }
+    for row in rows:
+        payload = row.normalized_json
+        if (
+            row.entity_type == "package"
+            and payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT
+        ):
+            payment_source_id = _active_package_payment_source_id(row.source_record_id)
+            incoming_hashes[("payment", payment_source_id)] = _payload_hash(
+                _active_package_payment_payload(
+                    payload,
+                    package_source_record_id=row.source_record_id,
+                )
+            )
     if batch.mode == "append":
         for row in rows:
             if row.entity_type in {"payment_allocation", "patient"}:
@@ -1194,6 +1430,19 @@ def apply_historical_import(
                 raise HistoricalImportConflictError(
                     f"{row.entity_type} {row.source_record_id} was imported before with different data. Choose Replace previous imports."
                 )
+            payload = row.normalized_json
+            if (
+                row.entity_type == "package"
+                and payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT
+            ):
+                payment_source_id = _active_package_payment_source_id(row.source_record_id)
+                payment_link = existing_links.get(("payment", payment_source_id))
+                payment_hash = incoming_hashes[("payment", payment_source_id)]
+                if payment_link and payment_link.payload_hash != payment_hash:
+                    raise HistoricalImportConflictError(
+                        "Historical package payment was imported before with different data. "
+                        "Choose Replace previous imports."
+                    )
     else:
         _safe_remove_previous_imports(db, workspace_id=workspace.id, incoming_hashes=incoming_hashes)
         existing_links = _existing_link_map(db, workspace.id)
@@ -1273,6 +1522,36 @@ def apply_historical_import(
             package = db.get(PatientPackage, link.canonical_id) if hasattr(link, "canonical_id") else None
             if package and row.normalized_json.get("package_id"):
                 package_by_external[row.normalized_json["package_id"]] = package
+            if row.normalized_json.get("import_contract") == ACTIVE_PACKAGE_CONTRACT:
+                if package is None:
+                    raise HistoricalImportConflictError(
+                        "Historical package link points to a missing package. "
+                        "Review previous imports before retrying."
+                    )
+                payment_source_id = _active_package_payment_source_id(row.source_record_id)
+                payment_link = existing_links.get(("payment", payment_source_id))
+                transaction = (
+                    db.get(PaymentTransaction, payment_link.canonical_id)
+                    if payment_link is not None
+                    else None
+                )
+                if (
+                    transaction is None
+                    or transaction.patient_package_id != package.id
+                    or transaction.patient_id != package.patient_id
+                    or transaction.transaction_type != "payment"
+                ):
+                    raise HistoricalImportConflictError(
+                        "Historical package exists without its correctly linked payment. "
+                        "Review previous imports before retrying."
+                    )
+                if package.purchase_transaction_id is None:
+                    package.purchase_transaction_id = transaction.id
+                elif package.purchase_transaction_id != transaction.id:
+                    raise HistoricalImportConflictError(
+                        "Historical package purchase link conflicts with its imported payment."
+                    )
+                skipped["payment"] += 1
             continue
         payload = row.normalized_json
         patient = patient_cache[payload["identity"]]
@@ -1311,6 +1590,55 @@ def apply_historical_import(
         ))
         if payload.get("package_id"):
             package_by_external[payload["package_id"]] = package
+
+        if payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT:
+            payment_source_id = _active_package_payment_source_id(row.source_record_id)
+            payment_payload = _active_package_payment_payload(
+                payload,
+                package_source_record_id=row.source_record_id,
+            )
+            payment_link = existing_links.get(("payment", payment_source_id))
+            if payment_link is not None:
+                raise HistoricalImportConflictError(
+                    "Historical package payment exists without its package link. "
+                    "Review previous imports before retrying."
+                )
+            purchased_at = _parse_datetime(payload.get("purchased_at")) or datetime.now(UTC)
+            transaction = PaymentTransaction(
+                workspace_id=workspace.id,
+                appointment_id=None,
+                origin_appointment_id=None,
+                patient_id=patient.id,
+                created_by_user_id=batch.created_by_user_id,
+                reference_transaction_id=None,
+                patient_package_id=package.id,
+                transaction_type="payment",
+                amount_minor=int(payload["historical_payment_amount_minor"]),
+                currency="EGP",
+                payment_method="unknown",
+                source="integration",
+                external_reference=None,
+                reason=None,
+                idempotency_key=f"historical:{payment_source_id}"[:128],
+                created_at=purchased_at,
+            )
+            db.add(transaction)
+            db.flush()
+            package.purchase_transaction_id = transaction.id
+            payment_hash = _payload_hash(payment_payload)
+            payment_link = ClinicHistoricalImportLink(
+                workspace_id=workspace.id,
+                batch_id=batch.id,
+                entity_type="payment",
+                canonical_id=transaction.id,
+                source_record_id=payment_source_id,
+                payload_hash=payment_hash,
+            )
+            db.add(payment_link)
+            db.flush()
+            existing_links[("payment", payment_source_id)] = payment_link
+            imported["payment"] += 1
+
         imported["package"] += 1
 
     appointment_by_external: dict[str, Appointment] = {}
@@ -1500,55 +1828,110 @@ def apply_historical_import(
     return summary
 
 
-def build_historical_import_template() -> bytes:
-    """Return the stable Linka History v1 workbook contract.
+def build_historical_import_template(
+    *,
+    service_names: Iterable[str] | None = None,
+) -> bytes:
+    """Return the clinic-facing active-package migration workbook.
 
-    The workbook intentionally mirrors clinic-facing facts rather than Linka's
-    internal database schema. Currency is always EGP, patient email is not part
-    of the contract, appointment end time is derived from the configured service
-    duration, every patient is treated as female without a gender import column,
-    and refunds are represented by a negative payment amount.
+    Legacy multi-sheet workbooks remain accepted by the importer. The downloaded
+    workbook is intentionally minimal: README + active_packages only.
     """
     workbook = Workbook()
     instructions = workbook.active
     instructions.title = "README"
-    instructions.append(["Linka Historical Import v1"])
-    instructions.append(["All sheets are optional. Keep only the sheets you have data for."])
-    instructions.append(["Patients are identified by patient_id or phone. If patient_id is missing, Linka creates a stable identity from the normalized phone number."])
-    instructions.append(["Appointments need patient identity, service identity, date and start_time. end_at is calculated from the service duration configured in Linka."])
-    instructions.append(["Payments use EGP. Positive amount = payment; negative amount = refund. transaction_id is optional."])
-    instructions.append(["payment_allocations is optional and only used when both transaction_id and appointment_id exist explicitly."])
-    instructions.append(["Active packages can be migrated using sessions_remaining. sessions_total may be left blank if the old system does not know it."])
-    instructions.append(["Before import, Linka shows a preview and asks whether to append or replace previous historical-import records. Linka-created runtime data is never deleted by this flow."])
+    instructions.append(["Linka Active Package Import v2"])
+    instructions.append([
+        "Use active_packages to migrate customers who still have sessions remaining in packages purchased before Linka."
+    ])
+    instructions.append([
+        "Required columns: full_name, phone, service_name, sessions_total, sessions_remaining, amount_paid, purchased_at."
+    ])
+    instructions.append([
+        "package_price is optional. If blank, Linka treats package_price as amount_paid so a fully paid historical package does not show a false balance."
+    ])
+    instructions.append([
+        "If package_price is greater than amount_paid, Linka keeps the difference as the package balance due. package_price cannot be less than amount_paid."
+    ])
+    instructions.append([
+        "Do not add patient IDs, package IDs, payment IDs, payment method, expiry, status, currency, or standalone session price."
+    ])
+    instructions.append([
+        "Imported active packages use the supplied remaining balance directly. Linka does not create fake historical session-usage rows."
+    ])
+    instructions.append([
+        "Expiry is left blank in Linka. The supplied purchased_at date is preserved."
+    ])
+    instructions.append([
+        "Phone is the patient identity for this flow. An existing patient with the same normalized phone is reused without overwriting existing CRM name data."
+    ])
+    instructions.append([
+        "service_name must exactly match an active service configured in Linka. Unknown services are rejected in Preview."
+    ])
 
-    sheets: dict[str, list[str]] = {
-        "patients": [
-            "patient_id", "full_name", "phone", "date_of_birth", "source"
-        ],
-        "appointments": [
-            "appointment_id", "patient_id", "patient_phone", "patient_name",
-            "service_id", "service_name", "doctor_id", "doctor_name", "date", "start_time",
-            "status", "package_id",
-        ],
-        "payments": [
-            "transaction_id", "patient_id", "patient_phone", "amount", "paid_at",
-            "payment_method", "appointment_id", "package_id", "reference_transaction_id",
-        ],
-        "payment_allocations": [
-            "transaction_id", "appointment_id", "amount",
-        ],
-        "packages": [
-            "package_id", "patient_id", "patient_phone", "package_name",
-            "service_id", "service_name", "sessions_total", "sessions_remaining",
-            "price", "standalone_session_price", "purchased_at", "expires_at", "status",
-        ],
+    valid_services = sorted(
+        {
+            str(name).strip()
+            for name in (service_names or [])
+            if str(name).strip()
+        },
+        key=str.casefold,
+    )
+    service_start_row: int | None = None
+    service_end_row: int | None = None
+    if valid_services:
+        instructions.append([])
+        instructions.append(["Valid active service names", "Copy/use one of these exact names"])
+        service_start_row = instructions.max_row + 1
+        for name in valid_services:
+            instructions.append([None, name])
+        service_end_row = instructions.max_row
+
+    headers = [
+        "full_name",
+        "phone",
+        "service_name",
+        "sessions_total",
+        "sessions_remaining",
+        "amount_paid",
+        "purchased_at",
+        "package_price",
+    ]
+    sheet = workbook.create_sheet("active_packages")
+    sheet.append(headers)
+    sheet.freeze_panes = "A2"
+    widths = {
+        "full_name": 24,
+        "phone": 18,
+        "service_name": 28,
+        "sessions_total": 18,
+        "sessions_remaining": 20,
+        "amount_paid": 16,
+        "purchased_at": 16,
+        "package_price": 18,
     }
-    for name, headers in sheets.items():
-        sheet = workbook.create_sheet(name)
-        sheet.append(headers)
-        sheet.freeze_panes = "A2"
-        for index, header in enumerate(headers, start=1):
-            sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = max(14, min(28, len(header) + 4))
+    for index, header in enumerate(headers, start=1):
+        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = widths[header]
+
+    if service_start_row is not None and service_end_row is not None:
+        formula = (
+            'INDIRECT("\'README\'!$B$'
+            + str(service_start_row)
+            + ':$B$'
+            + str(service_end_row)
+            + '")'
+        )
+        validation = DataValidation(
+            type="list",
+            formula1=formula,
+            allow_blank=False,
+        )
+        validation.error = "Choose an active Linka service from the list."
+        validation.errorTitle = "Unknown service"
+        validation.prompt = "Select an active Linka service."
+        validation.promptTitle = "service_name"
+        sheet.add_data_validation(validation)
+        validation.add("C2:C5000")
 
     stream = io.BytesIO()
     workbook.save(stream)

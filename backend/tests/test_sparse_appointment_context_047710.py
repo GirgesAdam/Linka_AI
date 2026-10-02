@@ -28,11 +28,18 @@ def test_history_contract_does_not_require_branch_or_doctor_for_appointments() -
     history = (root / "backend/app/services/historical_import.py").read_text(encoding="utf-8")
     frontend = (root / "frontend/src/app/(dashboard)/setup/integration/history-uploader.tsx").read_text(encoding="utf-8")
 
-    assert '"patient_phone", "patient_name"' in history
-    assert '"service_id", "service_name"' in history
-    assert '"doctor_id", "doctor_name"' in history
-    assert '"branch_id"' not in history.split('build_historical_import_template', 1)[1]
-    assert "كل الجداول التاريخية اختيارية" in frontend
+    appointment_block = history[
+        history.index("def _normalize_appointment") : history.index("def _normalize_payment")
+    ]
+    assert '"appointments": "appointment"' in history
+    assert '"patient_phone"' in appointment_block
+    assert '"patient_name"' in appointment_block
+    assert '"service_id"' in appointment_block
+    assert '"service_name"' in appointment_block
+    assert '"doctor_id"' in appointment_block
+    assert '"doctor_name"' in appointment_block
+    assert '"branch_id"' not in appointment_block
+    assert "ملفات Linka التاريخية القديمة متعددة الشيتات ما زالت مدعومة" in frontend
 
 
 def test_sparse_appointment_migration_uses_postgresql_ddl_for_exclusion_constraint() -> None:

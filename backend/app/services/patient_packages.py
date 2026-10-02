@@ -810,7 +810,13 @@ def validate_package_for_booking(
     if appointment_start_at.astimezone(UTC) < package.purchased_at.astimezone(UTC):
         raise PackageOperationError("Appointment cannot use a package before its purchase time.")
     reserved, consumed = _usage_totals(db, workspace_id=workspace_id, package_id=package.id)
-    remaining = package.sessions_purchased - reserved - consumed
+    opening_sessions_remaining = getattr(package, "opening_sessions_remaining", None)
+    opening_balance = (
+        int(opening_sessions_remaining)
+        if opening_sessions_remaining is not None
+        else int(package.sessions_purchased)
+    )
+    remaining = opening_balance - reserved - consumed
     if remaining < sessions:
         raise PackageOperationError(
             f"Selected package has only {max(0, remaining)} session(s) remaining."
