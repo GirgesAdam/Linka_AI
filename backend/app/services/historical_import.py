@@ -551,8 +551,8 @@ def _active_package_payment_payload(
     }
 
 
-_EGYPTIAN_MOBILE_LOCAL_RE = re.compile(r"^01[0125]\\d{8}$")
-_EGYPTIAN_MOBILE_WITHOUT_ZERO_RE = re.compile(r"^1[0125]\\d{8}$")
+_EGYPTIAN_MOBILE_LOCAL_RE = re.compile(r"^01[0125]\d{8}$")
+_EGYPTIAN_MOBILE_WITHOUT_ZERO_RE = re.compile(r"^1[0125]\d{8}$")
 
 
 def _normalize_active_package_egypt_phone(value: Any) -> tuple[str, str]:
@@ -570,7 +570,7 @@ def _normalize_active_package_egypt_phone(value: Any) -> tuple[str, str]:
     else:
         raw = _clean(value) or ""
 
-    compact = re.sub(r"[\\s().-]", "", raw)
+    compact = re.sub(r"[\s().-]", "", raw)
     if compact.startswith("+"):
         compact = compact[1:]
     if compact.startswith("0020"):
