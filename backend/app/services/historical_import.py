@@ -1970,26 +1970,12 @@ def build_historical_import_template(
     instructions.row_dimensions[1].height = 26
 
     instructions.merge_cells("A3:H3")
-    instructions["A3"] = "طريقة الاستخدام"
-    instructions["A3"].font = section_font
-    instructions["A3"].alignment = Alignment(horizontal="right")
-
-    instruction_rows = [
-        "افتح ورقة الباقات النشطة وأدخل صفًا لكل باقة نشطة عند العميل.",
-        "اختر اسم الخدمة من القائمة المنسدلة. القائمة تحتوي على الخدمات النشطة الموجودة حاليًا داخل Linka لهذه العيادة.",
-        "رقم الموبايل يجب أن يكون رقمًا مصريًا يبدأ بـ 010 أو 011 أو 012 أو 015. إذا حذف Excel الصفر الأول، Linka تعيده تلقائيًا.",
-        "اكتب عدد الجلسات الكلي وعدد الجلسات المتبقي فعليًا للعميل.",
-        "اكتب المبلغ الذي دفعه العميل بالفعل.",
-        "تاريخ الشراء يمكن كتابته مثل 15/02/2026 أو 2026-02-15، كما يمكن استخدام خلية تاريخ عادية في Excel.",
-        "سعر الباقة اختياري. إذا تركته فارغًا، سيعتبر Linka أن سعر الباقة يساوي المبلغ المدفوع.",
-        "إذا كان سعر الباقة أكبر من المبلغ المدفوع، سيظهر الفرق كمبلغ متبقي على الباقة.",
-    ]
-    for row_number, text_value in enumerate(instruction_rows, start=4):
-        instructions.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=8)
-        cell = instructions.cell(row=row_number, column=1)
-        cell.value = f"• {text_value}"
-        cell.alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
-        instructions.row_dimensions[row_number].height = 24
+    instructions["A3"] = (
+        "سعر الباقة اختياري. إذا تركته فارغًا، سيتعامل النظام مع المبلغ المدفوع "
+        "على أنه سعر الباقة بالكامل."
+    )
+    instructions["A3"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    instructions.row_dimensions[3].height = 28
 
     arabic_headers = [
         "اسم العميل",
@@ -2002,10 +1988,10 @@ def build_historical_import_template(
         "سعر الباقة",
     ]
 
-    instructions.merge_cells("A13:H13")
-    instructions["A13"] = "مثال صحيح"
-    instructions["A13"].font = section_font
-    instructions["A13"].alignment = Alignment(horizontal="right")
+    instructions.merge_cells("A5:H5")
+    instructions["A5"] = "مثال صحيح"
+    instructions["A5"].font = section_font
+    instructions["A5"].alignment = Alignment(horizontal="right")
 
     example_values = [
         "سارة أحمد",
@@ -2018,41 +2004,41 @@ def build_historical_import_template(
         3000,
     ]
     for column, header in enumerate(arabic_headers, start=1):
-        header_cell = instructions.cell(row=14, column=column, value=header)
+        header_cell = instructions.cell(row=6, column=column, value=header)
         header_cell.font = header_font
         header_cell.border = table_border
         header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        value_cell = instructions.cell(row=15, column=column, value=example_values[column - 1])
+        value_cell = instructions.cell(row=7, column=column, value=example_values[column - 1])
         value_cell.border = table_border
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    instructions["B15"].number_format = "@"
+    instructions["B7"].number_format = "@"
 
-    instructions.merge_cells("A17:H17")
-    instructions["A17"] = (
+    instructions.merge_cells("A9:H9")
+    instructions["A9"] = (
         "الخدمات التالية هي الخدمات النشطة المسجلة حاليًا داخل Linka، "
         "وهي نفسها الخدمات التي يمكن اختيارها للباقة."
     )
-    instructions["A17"].font = header_font
-    instructions["A17"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    instructions["A9"].font = header_font
+    instructions["A9"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
 
-    instructions["A19"] = "اسم الخدمة"
-    instructions["A19"].font = header_font
-    instructions["A19"].border = table_border
-    instructions["A19"].alignment = Alignment(horizontal="center")
+    instructions["A11"] = "اسم الخدمة"
+    instructions["A11"].font = header_font
+    instructions["A11"].border = table_border
+    instructions["A11"].alignment = Alignment(horizontal="center")
 
     service_start_row: int | None = None
     service_end_row: int | None = None
     if valid_services:
-        service_start_row = 20
+        service_start_row = 12
         for index, name in enumerate(valid_services, start=service_start_row):
             cell = instructions.cell(row=index, column=1, value=name)
             cell.border = table_border
             cell.alignment = Alignment(horizontal="right", vertical="center")
         service_end_row = service_start_row + len(valid_services) - 1
     else:
-        instructions["A20"] = "لا توجد خدمات نشطة حاليًا."
-        instructions["A20"].border = table_border
-        instructions["A20"].alignment = Alignment(horizontal="right")
+        instructions["A12"] = "لا توجد خدمات نشطة حاليًا."
+        instructions["A12"].border = table_border
+        instructions["A12"].alignment = Alignment(horizontal="right")
 
     readme_widths = {
         "A": 28,
