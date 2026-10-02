@@ -341,6 +341,14 @@ def _verified_read_context_from_turn(
         if step.disposition != "read" or step.write_intent is not None or not step.reads:
             continue
         context: dict[str, Any] = {"operation_type": step.operation_type}
+        scope_source = step.facts
+        if step.operation_type == "appointment_list":
+            appointment_read = next(
+                (request for request in step.reads if request.kind == "appointments"),
+                None,
+            )
+            if appointment_read is not None:
+                scope_source = appointment_read.parameters
         for key in (
             "service_id",
             "doctor_id",
@@ -350,7 +358,7 @@ def _verified_read_context_from_turn(
             "time",
             "package_usage",
         ):
-            value = step.facts.get(key)
+            value = scope_source.get(key)
             if value not in (None, "", [], {}):
                 context[key] = value
 

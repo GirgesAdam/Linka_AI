@@ -83,7 +83,16 @@ SEMANTIC PRINCIPLES
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
   When true, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
-  same dimension. Set continuation_condition=if_previous_no_availability only when the operation is
+  same dimension. For an appointment_list continuation that explicitly removes a previous date/time
+  restriction while keeping the same read, list only that removed dimension in
+  cleared_verified_read_fields so Python does not inherit it. Treat making a constrained dimension
+  unrestricted (such as asking for any time after a prior before/after/exact-time filter) as an
+  explicit clear of that dimension. Do not use that field for a new or unrelated appointment query,
+  and do not mark unchanged omitted constraints as cleared. Sharing the same operation type or having
+  a recent verified scope is not enough to establish continuation: a broad/new appointment-list
+  request (including asking for the next/upcoming appointment as a fresh question) must use
+  continues_previous=false unless it actually refines or refers to the previous filtered read.
+  Set continuation_condition=if_previous_no_availability only when the operation is
   explicitly conditional on the immediately previous verified availability having no options; use
   continuation_condition=always for ordinary continuations and unconditional nearest requests.
 - execution_intent describes whether the customer authorizes an action now. Use execute only when
@@ -459,6 +468,11 @@ def merge_verified_read_context(
 
         entities = operation.entities
         updates: dict[str, object] = {}
+        cleared_temporal = (
+            set(operation.cleared_verified_read_fields)
+            if operation.type == "appointment_list"
+            else set()
+        )
         inherited = (
             ("service", _reference_from_verified(raw, single_key="service_ref")),
             (
@@ -481,12 +495,20 @@ def merge_verified_read_context(
         )
         if fallback_disproved and previous_date is not None:
             updates["date"] = previous_date
-        elif entities.date is None and previous_date is not None:
+        elif (
+            entities.date is None
+            and previous_date is not None
+            and "date" not in cleared_temporal
+        ):
             updates["date"] = previous_date
 
         if fallback_disproved and previous_time is not None:
             updates["time"] = previous_time
-        elif entities.time is None and previous_time is not None:
+        elif (
+            entities.time is None
+            and previous_time is not None
+            and "time" not in cleared_temporal
+        ):
             updates["time"] = previous_time
         elif (
             entities.time is not None

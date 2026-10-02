@@ -54,6 +54,7 @@ EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
 FinancialOwnership = Literal["none", "reception"]
 ContinuationCondition = Literal["always", "if_previous_no_availability"]
+VerifiedReadClearField = Literal["date", "time"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 
 
@@ -309,6 +310,18 @@ class TurnOperation(StrictContractModel):
             "asks to drop the other pending service components and continue with only this operation's "
             "service. Use remove_other_components only for that explicit narrowing; never infer it "
             "merely because the customer mentions or edits one component."
+        ),
+    )
+    cleared_verified_read_fields: list[VerifiedReadClearField] = Field(
+        default_factory=list,
+        description=(
+            "For appointment_list continuations only, list a prior verified temporal scope "
+            "dimension (date and/or time) that the customer explicitly removes while keeping "
+            "the same read context. A request that makes a previously constrained dimension "
+            "unrestricted (for example, any time after a prior before/after/exact-time filter) "
+            "is an explicit clear, not an omission. Use this only with continues_previous=true "
+            "and only when that dimension has no replacement constraint in entities. Leave empty "
+            "when an omitted verified dimension is unchanged, and leave empty for unrelated/new reads."
         ),
     )
     # True only when this operation semantically continues supplied verified
