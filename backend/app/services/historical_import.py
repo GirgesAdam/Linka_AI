@@ -1673,7 +1673,11 @@ def apply_historical_import(
             opening_sessions_remaining=int(payload["sessions_remaining"]),
             sessions_total_known=total_known,
             sale_price_minor=int(payload.get("price_minor") or 0),
-            standalone_session_price_minor_at_purchase=payload.get("standalone_session_price_minor"),
+            standalone_session_price_minor_at_purchase=(
+                payload.get("standalone_session_price_minor")
+                if payload.get("standalone_session_price_minor") is not None
+                else int(service.price_minor)
+            ),
             currency="EGP",
             purchased_at=_parse_datetime(payload["purchased_at"]) or datetime.now(UTC),
             expires_at=_parse_date(payload.get("expires_at")),
