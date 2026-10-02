@@ -730,7 +730,7 @@ def _normalize_active_package(
     laser_device_key: str | None = None
     laser_device_name: str | None = None
     standalone_session_price_minor = int(service.price_minor)
-    if service.requires_laser_device:
+    if bool(getattr(service, "requires_laser_device", False)):
         configured_devices = device_prices_by_service_id.get(service.id, {})
         if not configured_devices:
             return (
