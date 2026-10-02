@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import SessionLocal, get_db
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.schemas.clinic_setup_v2 import (
@@ -378,9 +379,9 @@ def download_history_template(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
-    service_names = list(
+    services = list(
         db.scalars(
-            select(Service.name)
+            select(Service)
             .where(
                 Service.workspace_id == access.workspace.id,
                 Service.is_active.is_(True),
@@ -388,7 +389,36 @@ def download_history_template(
             .order_by(Service.name)
         ).all()
     )
-    content = build_historical_import_template(service_names=service_names)
+    service_names = [service.name for service in services]
+    service_ids = [service.id for service in services if service.requires_laser_device]
+    device_rows = (
+        list(
+            db.scalars(
+                select(ServiceDevicePrice)
+                .where(
+                    ServiceDevicePrice.workspace_id == access.workspace.id,
+                    ServiceDevicePrice.service_id.in_(service_ids),
+                    ServiceDevicePrice.is_active.is_(True),
+                    ServiceDevicePrice.price_minor.is_not(None),
+                )
+                .order_by(ServiceDevicePrice.device_name)
+            ).all()
+        )
+        if service_ids
+        else []
+    )
+    service_names_by_id = {service.id: service.name for service in services}
+    service_device_names: dict[str, list[str]] = {}
+    for device in device_rows:
+        service_name = service_names_by_id.get(device.service_id)
+        if service_name is None:
+            continue
+        service_device_names.setdefault(service_name, []).append(device.device_name)
+
+    content = build_historical_import_template(
+        service_names=service_names,
+        service_device_names=service_device_names,
+    )
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

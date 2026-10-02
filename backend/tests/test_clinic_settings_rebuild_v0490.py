@@ -415,7 +415,7 @@ def test_official_template_is_minimal_active_package_contract() -> None:
         )
     )
     try:
-        assert wb.sheetnames == ["README", "active_packages"]
+        assert wb.sheetnames == ["README", "_lists", "active_packages"]
         headers = [
             cell.value
             for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))
@@ -424,6 +424,7 @@ def test_official_template_is_minimal_active_package_contract() -> None:
             "اسم العميل",
             "رقم الموبايل",
             "اسم الخدمة",
+            "اسم الجهاز",
             "عدد الجلسات الكلي",
             "عدد الجلسات المتبقي",
             "المبلغ المدفوع",
@@ -443,7 +444,7 @@ def test_official_template_is_minimal_active_package_contract() -> None:
             "standalone_session_price",
         }
         assert forbidden.isdisjoint(headers)
-        assert wb["active_packages"].data_validations.count == 1
+        assert wb["active_packages"].data_validations.count == 2
         readme_values = {
             str(cell.value)
             for row in wb["README"].iter_rows()
