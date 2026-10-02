@@ -26,6 +26,38 @@ LASER_DEVICE_NAMES = {
 }
 
 
+class ClinicLaserDevice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "clinic_laser_devices"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "id",
+            name="uq_clinic_laser_devices_workspace_id_id",
+        ),
+        UniqueConstraint(
+            "workspace_id",
+            "device_key",
+            name="uq_clinic_laser_devices_workspace_device_key",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            ondelete="CASCADE",
+            name="fk_clinic_laser_devices_workspace",
+        ),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    device_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+
+
 class ServiceDevicePrice(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "service_device_prices"
     __table_args__ = (

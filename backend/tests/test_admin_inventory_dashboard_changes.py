@@ -4,18 +4,126 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.schemas.inventory import ClinicProductCreate, InventoryItemCreate, InventoryUsageCreate
 from app.services.finance_dashboard import _financial_period_buckets, financial_dashboard_trend
 from app.services.inventory import (
+    InventoryOperationError,
     add_appointment_product,
+    create_clinic_laser_device,
     delete_appointment_product,
     is_laser_service,
+    list_clinic_laser_devices,
+    update_clinic_laser_device,
 )
 
 
 def test_laser_device_pricing_uses_explicit_service_flag_not_name() -> None:
     assert is_laser_service(SimpleNamespace(name="Full Body", category="Other", requires_laser_device=True))
     assert not is_laser_service(SimpleNamespace(name="Laser sounding name", category="Laser", requires_laser_device=False))
+
+
+class _LaserDeviceDb:
+    def __init__(self, rows=None):
+        self.rows = list(rows or [])
+        self.scalar_value = None
+
+    def scalars(self, _stmt):
+        return iter(self.rows)
+
+    def scalar(self, _stmt):
+        return self.scalar_value
+
+    def add_all(self, rows):
+        self.rows.extend(rows)
+
+    def add(self, row):
+        self.rows.append(row)
+
+    def flush(self):
+        now = datetime(2026, 10, 2, tzinfo=UTC)
+        for row in self.rows:
+            if getattr(row, "id", None) is None:
+                row.id = uuid4()
+            if getattr(row, "created_at", None) is None:
+                row.created_at = now
+            if getattr(row, "updated_at", None) is None:
+                row.updated_at = now
+
+
+def test_dynamic_laser_device_registry_backfills_legacy_devices_and_adds_custom_device() -> None:
+    workspace_id = uuid4()
+    db = _LaserDeviceDb()
+
+    initial = list_clinic_laser_devices(db, workspace_id=workspace_id)
+    assert {(item.device_key, item.name) for item in initial} == {
+        ("prime_lase", "Prime Lase"),
+        ("candela_gentle", "Candela Gentle"),
+    }
+
+    added = create_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        name="  DEKA   Again  ",
+    )
+    assert added.name == "DEKA Again"
+    assert added.device_key.startswith("device_")
+    assert added.device_key not in {"prime_lase", "candela_gentle"}
+    assert added.is_active is True
+
+
+def test_dynamic_laser_device_registry_can_disable_and_reactivate_without_changing_key() -> None:
+    workspace_id = uuid4()
+    db = _LaserDeviceDb()
+    device = create_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        name="DEKA Again",
+    )
+    row = next(item for item in db.rows if item.device_key == device.device_key)
+
+    db.scalar_value = row
+    disabled = update_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_id=row.id,
+        name=None,
+        is_active=False,
+    )
+    assert disabled.is_active is False
+    original_key = disabled.device_key
+
+    db.scalar_value = row
+    reactivated = update_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_id=row.id,
+        name="DEKA Again Pro",
+        is_active=True,
+    )
+    assert reactivated.is_active is True
+    assert reactivated.name == "DEKA Again Pro"
+    assert reactivated.device_key == original_key
+
+
+def test_dynamic_laser_device_registry_rejects_duplicate_name_on_rename() -> None:
+    workspace_id = uuid4()
+    db = _LaserDeviceDb()
+    first = create_clinic_laser_device(db, workspace_id=workspace_id, name="DEKA Again")
+    second = create_clinic_laser_device(db, workspace_id=workspace_id, name="Soprano Titanium")
+    first_row = next(item for item in db.rows if item.device_key == first.device_key)
+    second_row = next(item for item in db.rows if item.device_key == second.device_key)
+    db.scalar_value = second_row
+
+    with pytest.raises(InventoryOperationError, match="already exists"):
+        update_clinic_laser_device(
+            db,
+            workspace_id=workspace_id,
+            device_id=second_row.id,
+            name=first_row.name.lower(),
+            is_active=None,
+        )
 
 
 def test_new_inventory_contract_is_ml_only_and_products_have_stock_quantity() -> None:

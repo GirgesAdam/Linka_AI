@@ -24,6 +24,7 @@ from app.models.clinic_integration_sync import (
 )
 from app.models.clinic_inventory import (
     AppointmentProductLine,
+    ClinicLaserDevice,
     ClinicProduct,
     InventoryItem,
     InventoryUsage,
@@ -101,6 +102,7 @@ __all__ = [
     "ClinicIntegrationSyncRun",
     "ClinicIntegrationSyncSchedule",
     "ClinicKnowledgeEntry",
+    "ClinicLaserDevice",
     "ClinicProduct",
     "Conversation",
     "ConversationFlowEvent",

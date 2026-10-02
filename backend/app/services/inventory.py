@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app.models.clinic_inventory import (
     LASER_DEVICE_KEYS,
     LASER_DEVICE_NAMES,
     AppointmentProductLine,
+    ClinicLaserDevice,
     ClinicProduct,
     InventoryItem,
     InventoryUsage,
@@ -19,6 +20,7 @@ from app.models.clinic_inventory import (
 from app.models.service import Service
 from app.schemas.inventory import (
     AppointmentProductLineRead,
+    ClinicLaserDeviceRead,
     InventoryItemRead,
     LaserDevicePriceRead,
 )
@@ -39,6 +41,133 @@ class DeviceServiceCompatibilityError(InventoryOperationError):
 def is_laser_service(service: Service) -> bool:
     """Use the explicit service capability flag, never the display name, as truth."""
     return bool(getattr(service, "requires_laser_device", False))
+
+
+def _device_read(row: ClinicLaserDevice) -> ClinicLaserDeviceRead:
+    return ClinicLaserDeviceRead.model_validate(row)
+
+
+def ensure_legacy_laser_devices(
+    db: Session,
+    *,
+    workspace_id: UUID,
+) -> list[ClinicLaserDevice]:
+    rows = list(
+        db.scalars(
+            select(ClinicLaserDevice).where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+            )
+        )
+    )
+    if rows:
+        return rows
+
+    rows = [
+        ClinicLaserDevice(
+            workspace_id=workspace_id,
+            device_key=device_key,
+            name=device_name,
+            is_active=True,
+        )
+        for device_key, device_name in LASER_DEVICE_NAMES.items()
+    ]
+    db.add_all(rows)
+    db.flush()
+    return rows
+
+
+def list_clinic_laser_devices(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    active_only: bool = False,
+) -> list[ClinicLaserDeviceRead]:
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    stmt = select(ClinicLaserDevice).where(
+        ClinicLaserDevice.workspace_id == workspace_id,
+    )
+    if active_only:
+        stmt = stmt.where(ClinicLaserDevice.is_active.is_(True))
+    rows = list(db.scalars(stmt.order_by(ClinicLaserDevice.name, ClinicLaserDevice.id)))
+    return [_device_read(row) for row in rows]
+
+
+def create_clinic_laser_device(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    name: str,
+) -> ClinicLaserDeviceRead:
+    normalized_name = " ".join(name.split())
+    ensure_legacy_laser_devices(db, workspace_id=workspace_id)
+    rows = list(
+        db.scalars(
+            select(ClinicLaserDevice).where(
+                ClinicLaserDevice.workspace_id == workspace_id,
+            )
+        )
+    )
+    same_name = next(
+        (row for row in rows if row.name.strip().casefold() == normalized_name.casefold()),
+        None,
+    )
+    if same_name is not None:
+        same_name.is_active = True
+        same_name.name = normalized_name
+        db.flush()
+        return _device_read(same_name)
+
+    row = ClinicLaserDevice(
+        workspace_id=workspace_id,
+        device_key=f"device_{uuid4().hex[:16]}",
+        name=normalized_name,
+        is_active=True,
+    )
+    db.add(row)
+    db.flush()
+    return _device_read(row)
+
+
+def update_clinic_laser_device(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    device_id: UUID,
+    name: str | None,
+    is_active: bool | None,
+) -> ClinicLaserDeviceRead:
+    row = db.scalar(
+        select(ClinicLaserDevice)
+        .where(
+            ClinicLaserDevice.workspace_id == workspace_id,
+            ClinicLaserDevice.id == device_id,
+        )
+        .with_for_update()
+    )
+    if row is None:
+        raise InventoryNotFound("Laser device not found.")
+
+    if name is not None:
+        normalized_name = " ".join(name.split())
+        siblings = list(
+            db.scalars(
+                select(ClinicLaserDevice).where(
+                    ClinicLaserDevice.workspace_id == workspace_id,
+                    ClinicLaserDevice.id != row.id,
+                )
+            )
+        )
+        if any(
+            sibling.name.strip().casefold() == normalized_name.casefold()
+            for sibling in siblings
+        ):
+            raise InventoryOperationError("A laser device with this name already exists.")
+        row.name = normalized_name
+    if is_active is not None:
+        row.is_active = is_active
+
+    db.flush()
+    return _device_read(row)
 
 
 def list_laser_device_prices(db: Session, *, workspace_id: UUID) -> list[LaserDevicePriceRead]:

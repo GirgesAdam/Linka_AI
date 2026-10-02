@@ -91,6 +91,44 @@ class InventoryUsageRead(BaseModel):
     created_at: datetime
 
 
+class ClinicLaserDeviceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Device name is required.")
+        return value
+
+
+class ClinicLaserDeviceUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Device name is required.")
+        return value
+
+
+class ClinicLaserDeviceRead(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    device_key: str
+    name: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LaserDevicePriceUpsert(BaseModel):
     service_id: UUID
     device_key: str
