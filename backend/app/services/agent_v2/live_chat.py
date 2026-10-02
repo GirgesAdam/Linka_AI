@@ -12,6 +12,11 @@ from app.agents.v2.availability_pagination import (
     availability_windows_from_outcome_facts,
     select_availability_window_page,
 )
+from app.agents.v2.availability_scope import (
+    AVAILABILITY_PRESENTATION_SCOPE_KEY,
+    availability_scope_key_from_reads,
+    availability_scope_matches,
+)
 from app.core.config import settings
 from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.conversation import Conversation
@@ -240,10 +245,17 @@ def _verified_read_context_from_turn(
                         if step.operation_index < len(turn.understanding.operations)
                         else None
                     )
+                    current_scope_key = availability_scope_key_from_reads(step.reads)
                     continuation = bool(
                         operation is not None
                         and getattr(operation, "continues_previous", False)
+                        and availability_scope_matches(
+                            previous_read_context,
+                            current_scope_key=current_scope_key,
+                        )
                     )
+                    if current_scope_key:
+                        context[AVAILABILITY_PRESENTATION_SCOPE_KEY] = current_scope_key
                     previous_keys = set()
                     if continuation and isinstance(previous_read_context, dict):
                         raw_keys = previous_read_context.get(
