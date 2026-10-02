@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.crm_campaign_conversion import CRMCampaignConversion
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
@@ -70,6 +71,8 @@ ACTIVE_PACKAGE_HEADER_ALIASES = {
     "amount_paid": "amount_paid",
     "purchased_at": "purchased_at",
     "package_price": "package_price",
+    "laser_device_name": "laser_device_name",
+    "device_name": "laser_device_name",
     "اسم_العميل": "full_name",
     "رقم_الموبايل": "phone",
     "رقم_الهاتف": "phone",
@@ -81,6 +84,7 @@ ACTIVE_PACKAGE_HEADER_ALIASES = {
     "المبلغ_المدفوع": "amount_paid",
     "تاريخ_الشراء": "purchased_at",
     "سعر_الباقة": "package_price",
+    "اسم_الجهاز": "laser_device_name",
 }
 EGYPT_TZ = ZoneInfo("Africa/Cairo")
 VALID_APPOINTMENT_STATUSES = {
@@ -372,6 +376,25 @@ def _service_catalog(db: Session, workspace_id: UUID) -> tuple[dict[UUID, Servic
     return {row.id: row for row in rows}, {row.name.strip().casefold(): row for row in rows}
 
 
+def _active_device_price_catalog(
+    db: Session,
+    workspace_id: UUID,
+) -> dict[UUID, dict[str, ServiceDevicePrice]]:
+    rows = list(
+        db.scalars(
+            select(ServiceDevicePrice).where(
+                ServiceDevicePrice.workspace_id == workspace_id,
+                ServiceDevicePrice.is_active.is_(True),
+                ServiceDevicePrice.price_minor.is_not(None),
+            )
+        )
+    )
+    result: dict[UUID, dict[str, ServiceDevicePrice]] = defaultdict(dict)
+    for row in rows:
+        result[row.service_id][row.device_name.strip().casefold()] = row
+    return result
+
+
 def _resolve_service(row: dict[str, Any], by_id: dict[UUID, Service], by_name: dict[str, Service]) -> Service | None:
     service_uuid = _parse_uuid(row.get("service_id"))
     if service_uuid and service_uuid in by_id:
@@ -565,6 +588,10 @@ def _active_package_fact_hash(payload: dict[str, Any]) -> str:
     stable_payload = dict(payload)
     stable_payload.pop("full_name", None)
     stable_payload.pop("patient_name", None)
+    # This snapshot is derived from Linka pricing configuration, not from the
+    # clinic's historical workbook. Price changes must not make the same import
+    # row look like a different historical fact.
+    stable_payload.pop("standalone_session_price_minor", None)
     return _payload_hash(stable_payload)
 
 
@@ -660,7 +687,9 @@ def _normalize_active_package(
     *,
     services_by_id: dict[UUID, Service],
     services_by_name: dict[str, Service],
+    device_prices_by_service_id: dict[UUID, dict[str, ServiceDevicePrice]] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    device_prices_by_service_id = device_prices_by_service_id or {}
     full_name = _clean(row.get("full_name"))
     if not full_name:
         return None, "active_package_name_missing", "full_name is required."
@@ -696,6 +725,41 @@ def _normalize_active_package(
             "service_name matches more than one active Linka service. Rename the services before importing.",
         )
     service = matching_services[0]
+
+    device_name = _clean(row.get("laser_device_name"))
+    laser_device_key: str | None = None
+    laser_device_name: str | None = None
+    standalone_session_price_minor = int(service.price_minor)
+    if bool(getattr(service, "requires_laser_device", False)):
+        configured_devices = device_prices_by_service_id.get(service.id, {})
+        if not configured_devices:
+            return (
+                None,
+                "active_package_laser_device_unconfigured",
+                "خدمة الليزر دي محتاجة جهاز، لكن مفيش جهاز متسعر ومفعل عليها في Linka.",
+            )
+        if not device_name:
+            return (
+                None,
+                "active_package_laser_device_missing",
+                "اختر اسم الجهاز لخدمة الليزر من القائمة الموجودة في ملف Excel.",
+            )
+        device_price = configured_devices.get(device_name.casefold())
+        if device_price is None:
+            return (
+                None,
+                "active_package_laser_device_invalid",
+                "الجهاز المختار غير متاح للخدمة دي. اختر جهازًا من القائمة الخاصة بالخدمة.",
+            )
+        laser_device_key = device_price.device_key
+        laser_device_name = device_price.device_name
+        standalone_session_price_minor = int(device_price.price_minor or 0)
+    elif device_name:
+        return (
+            None,
+            "active_package_device_not_allowed",
+            "اترك اسم الجهاز فارغًا لأن الخدمة المختارة ليست خدمة ليزر.",
+        )
 
     total = _int_value(row.get("sessions_total"))
     if total is None or total <= 0:
@@ -742,6 +806,7 @@ def _normalize_active_package(
         [
             identity,
             str(service.id),
+            laser_device_key or "",
             purchased_date.isoformat(),
             str(total),
             str(remaining),
@@ -761,10 +826,12 @@ def _normalize_active_package(
         "package_name": f"{service.name} Package",
         "service_id": str(service.id),
         "service_name": service.name,
+        "laser_device_key": laser_device_key,
+        "laser_device_name": laser_device_name,
         "sessions_total": total,
         "sessions_remaining": remaining,
         "price_minor": package_price_minor,
-        "standalone_session_price_minor": None,
+        "standalone_session_price_minor": standalone_session_price_minor,
         "purchased_at": purchased_at.isoformat(),
         "expires_at": None,
         "status": "active",
@@ -784,6 +851,7 @@ def _normalize_row(
     row_number: int,
     services_by_id: dict[UUID, Service],
     services_by_name: dict[str, Service],
+    device_prices_by_service_id: dict[UUID, dict[str, ServiceDevicePrice]],
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     if entity_type == "patient":
         payload, code, message = _normalize_patient(row)
@@ -802,6 +870,7 @@ def _normalize_row(
                 row,
                 services_by_id=services_by_id,
                 services_by_name=services_by_name,
+                device_prices_by_service_id=device_prices_by_service_id,
             )
         return _normalize_package(row, services_by_id=services_by_id, services_by_name=services_by_name)
     raise HistoricalImportError(f"Unsupported entity type: {entity_type}")
@@ -832,6 +901,7 @@ def preview_historical_import(
     services_by_id, services_by_name = _service_catalog(db, workspace.id)
     if not services_by_id:
         raise HistoricalImportError("Add at least one service before importing historical data.")
+    device_prices_by_service_id = _active_device_price_catalog(db, workspace.id)
 
     _validate_documents(documents)
     fingerprint = _source_fingerprint(documents)
@@ -869,6 +939,7 @@ def preview_historical_import(
             row_number=row_number,
             services_by_id=services_by_id,
             services_by_name=services_by_name,
+            device_prices_by_service_id=device_prices_by_service_id,
         )
         if payload is None:
             source_record_id = f"{entity_type}:rejected:{_digest(f'{source_file}|{sheet}|{row_number}')[:32]}"
@@ -1678,6 +1749,8 @@ def apply_historical_import(
                 if payload.get("standalone_session_price_minor") is not None
                 else int(service.price_minor)
             ),
+            laser_device_key=payload.get("laser_device_key"),
+            laser_device_name=payload.get("laser_device_name"),
             currency="EGP",
             purchased_at=_parse_datetime(payload["purchased_at"]) or datetime.now(UTC),
             expires_at=_parse_date(payload.get("expires_at")),
@@ -1938,6 +2011,7 @@ def apply_historical_import(
 def build_historical_import_template(
     *,
     service_names: Iterable[str] | None = None,
+    service_device_names: dict[str, Iterable[str]] | None = None,
 ) -> bytes:
     """Return the clinic-facing active-package migration workbook."""
     valid_services = sorted(
@@ -1948,7 +2022,23 @@ def build_historical_import_template(
         },
         key=str.casefold,
     )
+    device_names_by_service = {
+        str(service_name).strip(): tuple(
+            sorted(
+                {
+                    str(device_name).strip()
+                    for device_name in device_names
+                    if str(device_name).strip()
+                },
+                key=str.casefold,
+            )
+        )[:2]
+        for service_name, device_names in (service_device_names or {}).items()
+        if str(service_name).strip()
+    }
     example_service = valid_services[0] if valid_services else "اختر خدمة من القائمة"
+    example_devices = device_names_by_service.get(example_service, ())
+    example_device = example_devices[0] if example_devices else None
 
     workbook = Workbook()
     instructions = workbook.active
@@ -1967,13 +2057,13 @@ def build_historical_import_template(
         bottom=thin_side,
     )
 
-    instructions.merge_cells("A1:H1")
+    instructions.merge_cells("A1:I1")
     instructions["A1"] = "دليل استيراد الباقات النشطة"
     instructions["A1"].font = title_font
     instructions["A1"].alignment = Alignment(horizontal="center", vertical="center")
     instructions.row_dimensions[1].height = 26
 
-    instructions.merge_cells("A3:H3")
+    instructions.merge_cells("A3:I3")
     instructions["A3"] = (
         "سعر الباقة اختياري. إذا تركته فارغًا، سيتعامل النظام مع المبلغ المدفوع "
         "على أنه سعر الباقة بالكامل."
@@ -1985,6 +2075,7 @@ def build_historical_import_template(
         "اسم العميل",
         "رقم الموبايل",
         "اسم الخدمة",
+        "اسم الجهاز",
         "عدد الجلسات الكلي",
         "عدد الجلسات المتبقي",
         "المبلغ المدفوع",
@@ -1992,7 +2083,7 @@ def build_historical_import_template(
         "سعر الباقة",
     ]
 
-    instructions.merge_cells("A5:H5")
+    instructions.merge_cells("A5:I5")
     instructions["A5"] = "مثال صحيح"
     instructions["A5"].font = section_font
     instructions["A5"].alignment = Alignment(horizontal="right")
@@ -2001,6 +2092,7 @@ def build_historical_import_template(
         "سارة أحمد",
         "01012345678",
         example_service,
+        example_device,
         6,
         3,
         3000,
@@ -2017,7 +2109,7 @@ def build_historical_import_template(
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     instructions["B7"].number_format = "@"
 
-    instructions.merge_cells("A9:H9")
+    instructions.merge_cells("A9:I9")
     instructions["A9"] = (
         "الخدمات التالية هي الخدمات النشطة المسجلة حاليًا داخل Linka، "
         "وهي نفسها الخدمات التي يمكن اختيارها للباقة."
@@ -2053,10 +2145,30 @@ def build_historical_import_template(
         "F": 18,
         "G": 18,
         "H": 18,
+        "I": 18,
     }
     for column_letter, width in readme_widths.items():
         instructions.column_dimensions[column_letter].width = width
     instructions.freeze_panes = "A3"
+
+    device_lists = workbook.create_sheet("_lists")
+    device_lists.sheet_state = "hidden"
+    device_lists["A2"] = None
+    device_lists["B2"] = None
+    device_lists["C2"] = None
+    for row_number, service_name in enumerate(valid_services, start=3):
+        devices = device_names_by_service.get(service_name, ())
+        device_lists.cell(row=row_number, column=1, value=service_name)
+        device_lists.cell(
+            row=row_number,
+            column=2,
+            value=devices[0] if len(devices) >= 1 else None,
+        )
+        device_lists.cell(
+            row=row_number,
+            column=3,
+            value=devices[1] if len(devices) >= 2 else None,
+        )
 
     sheet = workbook.create_sheet("active_packages")
     sheet.sheet_view.rightToLeft = True
@@ -2064,7 +2176,7 @@ def build_historical_import_template(
     sheet.append(arabic_headers)
     sheet.freeze_panes = "A2"
 
-    widths = [24, 18, 32, 20, 22, 18, 18, 18]
+    widths = [24, 18, 32, 18, 20, 22, 18, 18, 18]
     for index, width in enumerate(widths, start=1):
         header_cell = sheet.cell(row=1, column=index)
         header_cell.font = header_font
@@ -2075,7 +2187,7 @@ def build_historical_import_template(
 
     for row_number in range(2, 5001):
         sheet.cell(row=row_number, column=2).number_format = "@"
-        sheet.cell(row=row_number, column=7).number_format = "dd/mm/yyyy"
+        sheet.cell(row=row_number, column=8).number_format = "dd/mm/yyyy"
 
     if service_start_row is not None and service_end_row is not None:
         formula = (
@@ -2096,6 +2208,27 @@ def build_historical_import_template(
         validation.promptTitle = "اسم الخدمة"
         sheet.add_data_validation(validation)
         validation.add("C2:C5000")
+
+        device_list_end_row = len(valid_services) + 2
+        device_formula = (
+            "OFFSET(INDIRECT(\"'_lists'!$B$2\"),"
+            "IFERROR(MATCH($C2,INDIRECT(\"'_lists'!$A$3:$A$"
+            + str(device_list_end_row)
+            + "\"),0),0),0,1,2)"
+        )
+        device_validation = DataValidation(
+            type="list",
+            formula1=device_formula,
+            allow_blank=True,
+        )
+        device_validation.error = (
+            "اختر جهازًا من القائمة الخاصة بالخدمة، أو اترك الخانة فارغة للخدمات غير الليزر."
+        )
+        device_validation.errorTitle = "جهاز غير صحيح"
+        device_validation.prompt = "اختر الجهاز إذا كانت الخدمة ليزر."
+        device_validation.promptTitle = "اسم الجهاز"
+        sheet.add_data_validation(device_validation)
+        device_validation.add("D2:D5000")
 
     stream = io.BytesIO()
     workbook.save(stream)

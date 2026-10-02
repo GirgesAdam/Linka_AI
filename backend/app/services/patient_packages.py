@@ -12,6 +12,7 @@ from app.integrations.clinic.authority import (
 )
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
 from app.models.payment_transaction import PAYMENT_METHODS, PaymentAllocation, PaymentTransaction
@@ -72,12 +73,23 @@ def _settlement_standalone_price_minor(
     if package.opening_sessions_remaining is None or not package.sessions_total_known:
         return None
 
-    service_price = db.scalar(
-        select(Service.price_minor).where(
-            Service.workspace_id == package.workspace_id,
-            Service.id == package.service_id,
+    if package.laser_device_key:
+        service_price = db.scalar(
+            select(ServiceDevicePrice.price_minor).where(
+                ServiceDevicePrice.workspace_id == package.workspace_id,
+                ServiceDevicePrice.service_id == package.service_id,
+                ServiceDevicePrice.device_key == package.laser_device_key,
+                ServiceDevicePrice.is_active.is_(True),
+                ServiceDevicePrice.price_minor.is_not(None),
+            )
         )
-    )
+    else:
+        service_price = db.scalar(
+            select(Service.price_minor).where(
+                Service.workspace_id == package.workspace_id,
+                Service.id == package.service_id,
+            )
+        )
     if service_price is None:
         return None
 

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.branch import Branch
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
@@ -139,6 +140,41 @@ def _seed_workspace(db: Session, *, services: tuple[str, ...] = ("Hydrafacial",)
     return workspace, user, branch, service_rows, doctor
 
 
+def _configure_laser_service(
+    db: Session,
+    *,
+    workspace: Workspace,
+    service: Service,
+) -> dict[str, ServiceDevicePrice]:
+    service.operational_category = "laser"
+    service.requires_laser_device = True
+    rows = {
+        "Prime Lase": ServiceDevicePrice(
+            workspace_id=workspace.id,
+            service_id=service.id,
+            device_key="prime_lase",
+            device_name="Prime Lase",
+            price_minor=220_000,
+            duration_minutes=60,
+            currency="EGP",
+            is_active=True,
+        ),
+        "Candela Gentle": ServiceDevicePrice(
+            workspace_id=workspace.id,
+            service_id=service.id,
+            device_key="candela_gentle",
+            device_name="Candela Gentle",
+            price_minor=260_000,
+            duration_minutes=60,
+            currency="EGP",
+            is_active=True,
+        ),
+    }
+    db.add_all(rows.values())
+    db.flush()
+    return rows
+
+
 def _active_package_document(
     rows: list[list[object]],
     *,
@@ -186,6 +222,7 @@ def _arabic_active_package_document(
             "اسم العميل",
             "رقم الموبايل",
             "اسم الخدمة",
+            "اسم الجهاز",
             "عدد الجلسات الكلي",
             "عدد الجلسات المتبقي",
             "المبلغ المدفوع",
@@ -329,19 +366,26 @@ def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(va
 
 
 def test_active_package_template_is_plain_arabic_and_uses_exact_active_services() -> None:
+    laser_service = "ليزر إزالة الشعر - جسم كامل سيدات"
     payload = history.build_historical_import_template(
-        service_names=["Hydrafacial", "ليزر إزالة الشعر - جسم كامل سيدات"]
+        service_names=["Hydrafacial", laser_service],
+        service_device_names={
+            laser_service: ["Prime Lase", "Candela Gentle"],
+        },
     )
     workbook = load_workbook(io.BytesIO(payload))
     try:
-        assert workbook.sheetnames == ["README", "active_packages"]
+        assert workbook.sheetnames == ["README", "_lists", "active_packages"]
+        assert workbook["_lists"].sheet_state == "hidden"
         readme = workbook["README"]
+        lists = workbook["_lists"]
         sheet = workbook["active_packages"]
 
         expected_headers = [
             "اسم العميل",
             "رقم الموبايل",
             "اسم الخدمة",
+            "اسم الجهاز",
             "عدد الجلسات الكلي",
             "عدد الجلسات المتبقي",
             "المبلغ المدفوع",
@@ -356,11 +400,11 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
             "على أنه سعر الباقة بالكامل."
         )
         assert readme["A5"].value == "مثال صحيح"
-        assert [readme.cell(6, column).value for column in range(1, 9)] == expected_headers
+        assert [readme.cell(6, column).value for column in range(1, 10)] == expected_headers
         assert readme["A7"].value == "سارة أحمد"
         assert readme["B7"].value == "01012345678"
         assert readme["B7"].number_format == "@"
-        assert readme["G7"].value == "15/02/2026"
+        assert readme["H7"].value == "15/02/2026"
 
         readme_text = "\n".join(
             str(cell.value)
@@ -371,28 +415,33 @@ def test_active_package_template_is_plain_arabic_and_uses_exact_active_services(
         assert "طريقة الاستخدام" not in readme_text
         assert "إذا حذف Excel الصفر الأول" not in readme_text
         assert "هي نفسها الخدمات التي يمكن اختيارها للباقة." in readme_text
-        assert "استخدم نفس الاسم في service_name" not in readme_text
         assert readme["A11"].value == "اسم الخدمة"
-        assert readme["A12"].value in {
-            "Hydrafacial",
-            "ليزر إزالة الشعر - جسم كامل سيدات",
-        }
-        assert readme["B12"].value is None
-        assert readme["C12"].value is None
 
-        assert [sheet.cell(1, column).value for column in range(1, 9)] == expected_headers
+        list_rows = {
+            lists.cell(row=row_number, column=1).value: (
+                lists.cell(row=row_number, column=2).value,
+                lists.cell(row=row_number, column=3).value,
+            )
+            for row_number in range(3, lists.max_row + 1)
+        }
+        assert list_rows["Hydrafacial"] == (None, None)
+        assert set(list_rows[laser_service]) == {"Prime Lase", "Candela Gentle"}
+
+        assert [sheet.cell(1, column).value for column in range(1, 10)] == expected_headers
         assert sheet["A1"].fill.fill_type is None
         assert readme["A1"].fill.fill_type is None
         assert sheet["B2"].number_format == "@"
-        assert sheet["G2"].number_format == "dd/mm/yyyy"
+        assert sheet["H2"].number_format == "dd/mm/yyyy"
 
-        validations = list(sheet.data_validations.dataValidation)
-        assert len(validations) == 1
-        validation = validations[0]
-        assert "README" in validation.formula1
-        assert "$A$" in validation.formula1
-        assert str(validation.sqref) == "C2:C5000"
-        assert validation.error == "اختر خدمة من قائمة الخدمات الموجودة في ورقة التعليمات."
+        validations = {
+            str(validation.sqref): validation
+            for validation in sheet.data_validations.dataValidation
+        }
+        assert set(validations) == {"C2:C5000", "D2:D5000"}
+        assert "README" in validations["C2:C5000"].formula1
+        assert "MATCH($C2" in validations["D2:D5000"].formula1
+        assert "_lists" in validations["D2:D5000"].formula1
+        assert validations["D2:D5000"].allow_blank is True
     finally:
         workbook.close()
 
@@ -405,6 +454,7 @@ def test_active_package_arabic_headers_preview_and_apply() -> None:
                 "سارة أحمد",
                 "01012345678",
                 "Hydrafacial",
+                None,
                 6,
                 3,
                 3000,
@@ -434,6 +484,112 @@ def test_active_package_arabic_headers_preview_and_apply() -> None:
         assert read.cancellation_default_charge_minor == 540_000
 
 
+
+
+def test_active_package_laser_device_is_required_and_persisted() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(
+            db,
+            services=("Laser Full Body",),
+        )
+        service = services["Laser Full Body"]
+        devices = _configure_laser_service(
+            db,
+            workspace=workspace,
+            service=service,
+        )
+        document = _arabic_active_package_document(
+            [[
+                "سارة أحمد",
+                "01012345678",
+                service.name,
+                "Candela Gentle",
+                8,
+                3,
+                5000,
+                "15/02/2026",
+                5000,
+            ]]
+        )
+
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=document,
+        )
+
+        assert preview.ready_counts == {"package": 1}
+        package = db.scalar(
+            select(PatientPackage).where(PatientPackage.workspace_id == workspace.id)
+        )
+        assert package is not None
+        assert package.laser_device_key == "candela_gentle"
+        assert package.laser_device_name == "Candela Gentle"
+        assert package.standalone_session_price_minor_at_purchase == int(
+            devices["Candela Gentle"].price_minor
+        )
+        read = package_service.package_read(db, package, include_financials=True)
+        assert read.cancellation_consumed_sessions == 5
+        assert read.cancellation_default_charge_minor == 5 * 260_000
+
+
+def test_active_package_laser_device_validation_is_service_specific() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(
+            db,
+            services=("Laser Full Body", "Hydrafacial"),
+        )
+        laser_service = services["Laser Full Body"]
+        _configure_laser_service(db, workspace=workspace, service=laser_service)
+
+        missing_device = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[
+                _arabic_active_package_document(
+                    [[
+                        "سارة أحمد",
+                        "01012345678",
+                        laser_service.name,
+                        None,
+                        8,
+                        3,
+                        5000,
+                        "15/02/2026",
+                        5000,
+                    ]]
+                )
+            ],
+            mode="append",
+        )
+        assert missing_device.rejected_counts["package"] == 1
+        assert missing_device.issue_groups[0].code == "active_package_laser_device_missing"
+
+        non_laser_device = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[
+                _arabic_active_package_document(
+                    [[
+                        "مريم أحمد",
+                        "01112345678",
+                        "Hydrafacial",
+                        "Prime Lase",
+                        6,
+                        2,
+                        3000,
+                        "16/02/2026",
+                        3000,
+                    ]]
+                )
+            ],
+            mode="append",
+        )
+        assert non_laser_device.rejected_counts["package"] == 1
+        assert non_laser_device.issue_groups[0].code == "active_package_device_not_allowed"
 
 
 def test_active_package_all_invalid_rows_return_actionable_preview() -> None:
