@@ -16,7 +16,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -61,6 +61,27 @@ RECOGNIZED_SHEETS = {
     "active_packages": "package",
 }
 ACTIVE_PACKAGE_CONTRACT = "active_packages_v2"
+ACTIVE_PACKAGE_HEADER_ALIASES = {
+    "full_name": "full_name",
+    "phone": "phone",
+    "service_name": "service_name",
+    "sessions_total": "sessions_total",
+    "sessions_remaining": "sessions_remaining",
+    "amount_paid": "amount_paid",
+    "purchased_at": "purchased_at",
+    "package_price": "package_price",
+    "اسم_العميل": "full_name",
+    "رقم_الموبايل": "phone",
+    "رقم_الهاتف": "phone",
+    "اسم_الخدمة": "service_name",
+    "عدد_الجلسات_الكلي": "sessions_total",
+    "إجمالي_الجلسات": "sessions_total",
+    "عدد_الجلسات_المتبقي": "sessions_remaining",
+    "الجلسات_المتبقية": "sessions_remaining",
+    "المبلغ_المدفوع": "amount_paid",
+    "تاريخ_الشراء": "purchased_at",
+    "سعر_الباقة": "package_price",
+}
 EGYPT_TZ = ZoneInfo("Africa/Cairo")
 VALID_APPOINTMENT_STATUSES = {
     "pending",
@@ -104,6 +125,13 @@ def _header(value: Any) -> str:
     text = text.casefold().replace("-", "_").replace(" ", "_")
     text = re.sub(r"_+", "_", text)
     return text.strip("_")
+
+
+def _header_for_sheet(sheet_key: str, value: Any) -> str:
+    normalized = _header(value)
+    if sheet_key == "active_packages":
+        return ACTIVE_PACKAGE_HEADER_ALIASES.get(normalized, normalized)
+    return normalized
 
 
 def _digest(value: str) -> str:
@@ -162,7 +190,7 @@ def _rows_from_xlsx(document: HistoricalImportDocument) -> Iterable[tuple[str, i
                 continue
             iterator = sheet.iter_rows(values_only=True)
             try:
-                headers = [_header(cell) for cell in next(iterator)]
+                headers = [_header_for_sheet(key, cell) for cell in next(iterator)]
             except StopIteration:
                 continue
             if not any(headers):
@@ -190,7 +218,11 @@ def _rows_from_csv(document: HistoricalImportDocument) -> Iterable[tuple[str, in
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         return
-    headers = {_header(name): name for name in reader.fieldnames if _header(name)}
+    headers = {
+        _header_for_sheet(key, name): name
+        for name in reader.fieldnames
+        if _header_for_sheet(key, name)
+    }
     for row_number, raw_row in enumerate(reader, start=2):
         row = {key_name: raw_row.get(original) for key_name, original in headers.items()}
         if any(_clean(value) is not None for value in row.values()):
@@ -1903,11 +1935,7 @@ def build_historical_import_template(
     *,
     service_names: Iterable[str] | None = None,
 ) -> bytes:
-    """Return the clinic-facing active-package migration workbook.
-
-    Legacy multi-sheet workbooks remain accepted by the importer. The downloaded
-    workbook is intentionally minimal: README + active_packages only.
-    """
+    """Return the clinic-facing active-package migration workbook."""
     valid_services = sorted(
         {
             str(name).strip()
@@ -1924,77 +1952,61 @@ def build_historical_import_template(
     instructions.sheet_view.rightToLeft = True
     instructions.sheet_view.showGridLines = False
 
-    title_fill = PatternFill("solid", fgColor="0F766E")
-    section_fill = PatternFill("solid", fgColor="DFF4F1")
-    header_fill = PatternFill("solid", fgColor="E2E8F0")
-    example_fill = PatternFill("solid", fgColor="F8FAFC")
-    service_fill = PatternFill("solid", fgColor="F0FDFA")
-    white_font = Font(color="FFFFFF", bold=True, size=16)
-    section_font = Font(color="134E4A", bold=True, size=12)
-    header_font = Font(color="0F172A", bold=True)
-    body_font = Font(color="334155", size=11)
-    border_side = Side(style="thin", color="CBD5E1")
+    title_font = Font(bold=True, size=15)
+    section_font = Font(bold=True, size=12)
+    header_font = Font(bold=True)
+    thin_side = Side(style="thin")
     table_border = Border(
-        left=border_side,
-        right=border_side,
-        top=border_side,
-        bottom=border_side,
+        left=thin_side,
+        right=thin_side,
+        top=thin_side,
+        bottom=thin_side,
     )
 
     instructions.merge_cells("A1:H1")
-    instructions["A1"] = "دليل استيراد الباقات النشطة إلى Linka"
-    instructions["A1"].fill = title_fill
-    instructions["A1"].font = white_font
+    instructions["A1"] = "دليل استيراد الباقات النشطة"
+    instructions["A1"].font = title_font
     instructions["A1"].alignment = Alignment(horizontal="center", vertical="center")
-    instructions.row_dimensions[1].height = 28
+    instructions.row_dimensions[1].height = 26
 
-    instructions.merge_cells("A2:H2")
-    instructions["A2"] = (
-        "املأ Sheet باسم active_packages فقط. Linka ستنشئ/تربط العميل والباقة والدفعة التاريخية تلقائيًا."
-    )
-    instructions["A2"].font = Font(color="475569", italic=True, size=11)
-    instructions["A2"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
-
-    instructions.merge_cells("A4:H4")
-    instructions["A4"] = "تعليمات سريعة"
-    instructions["A4"].fill = section_fill
-    instructions["A4"].font = section_font
-    instructions["A4"].alignment = Alignment(horizontal="right")
+    instructions.merge_cells("A3:H3")
+    instructions["A3"] = "طريقة الاستخدام"
+    instructions["A3"].font = section_font
+    instructions["A3"].alignment = Alignment(horizontal="right")
 
     instruction_rows = [
-        "الحقول المطلوبة: full_name, phone, service_name, sessions_total, sessions_remaining, amount_paid, purchased_at.",
-        "package_price اختياري. لو تركته فارغًا، Linka تعتبر سعر الباقة مساويًا للمبلغ المدفوع.",
-        "لو package_price أكبر من amount_paid، الفرق سيظهر كمبلغ متبقي على الباقة. لا يمكن أن يكون package_price أقل من amount_paid.",
-        "phone لازم يكون موبايل مصري يبدأ بـ 010 أو 011 أو 012 أو 015. عمود الهاتف مضبوط كنص، ولو Excel حذف الصفر الأول Linka تصلحه تلقائيًا.",
-        "purchased_at يقبل تاريخ Excel العادي أو DD/MM/YYYY مثل 15/02/2026 أو YYYY-MM-DD مثل 2026-02-15.",
-        "لا تدخل patient IDs أو package IDs أو payment IDs أو payment method أو expiry أو status أو currency أو standalone session price.",
-        "عدد sessions_remaining هو الرصيد الفعلي الذي سيبدأ به العميل داخل Linka، بدون إنشاء جلسات استخدام تاريخية وهمية.",
+        "افتح ورقة الباقات النشطة وأدخل صفًا لكل باقة نشطة عند العميل.",
+        "اختر اسم الخدمة من القائمة المنسدلة. القائمة تحتوي على الخدمات النشطة الموجودة حاليًا داخل Linka لهذه العيادة.",
+        "رقم الموبايل يجب أن يكون رقمًا مصريًا يبدأ بـ 010 أو 011 أو 012 أو 015. إذا حذف Excel الصفر الأول، Linka تعيده تلقائيًا.",
+        "اكتب عدد الجلسات الكلي وعدد الجلسات المتبقي فعليًا للعميل.",
+        "اكتب المبلغ الذي دفعه العميل بالفعل.",
+        "تاريخ الشراء يمكن كتابته مثل 15/02/2026 أو 2026-02-15، كما يمكن استخدام خلية تاريخ عادية في Excel.",
+        "سعر الباقة اختياري. إذا تركته فارغًا، سيعتبر Linka أن سعر الباقة يساوي المبلغ المدفوع.",
+        "إذا كان سعر الباقة أكبر من المبلغ المدفوع، سيظهر الفرق كمبلغ متبقي على الباقة.",
     ]
-    for row_number, text_value in enumerate(instruction_rows, start=5):
+    for row_number, text_value in enumerate(instruction_rows, start=4):
         instructions.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=8)
         cell = instructions.cell(row=row_number, column=1)
         cell.value = f"• {text_value}"
-        cell.font = body_font
         cell.alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
-        instructions.row_dimensions[row_number].height = 28
+        instructions.row_dimensions[row_number].height = 24
 
-    example_header_row = 13
-    instructions.merge_cells(start_row=example_header_row, start_column=1, end_row=example_header_row, end_column=8)
-    instructions.cell(example_header_row, 1).value = "مثال صف صحيح — امشِ على نفس الشكل"
-    instructions.cell(example_header_row, 1).fill = section_fill
-    instructions.cell(example_header_row, 1).font = section_font
-    instructions.cell(example_header_row, 1).alignment = Alignment(horizontal="right")
-
-    headers = [
-        "full_name",
-        "phone",
-        "service_name",
-        "sessions_total",
-        "sessions_remaining",
-        "amount_paid",
-        "purchased_at",
-        "package_price",
+    arabic_headers = [
+        "اسم العميل",
+        "رقم الموبايل",
+        "اسم الخدمة",
+        "عدد الجلسات الكلي",
+        "عدد الجلسات المتبقي",
+        "المبلغ المدفوع",
+        "تاريخ الشراء",
+        "سعر الباقة",
     ]
+
+    instructions.merge_cells("A13:H13")
+    instructions["A13"] = "مثال صحيح"
+    instructions["A13"].font = section_font
+    instructions["A13"].alignment = Alignment(horizontal="right")
+
     example_values = [
         "سارة أحمد",
         "01012345678",
@@ -2005,120 +2017,81 @@ def build_historical_import_template(
         "15/02/2026",
         3000,
     ]
-    for column, header in enumerate(headers, start=1):
-        cell = instructions.cell(row=14, column=column, value=header)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = table_border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for column, header in enumerate(arabic_headers, start=1):
+        header_cell = instructions.cell(row=14, column=column, value=header)
+        header_cell.font = header_font
+        header_cell.border = table_border
+        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         value_cell = instructions.cell(row=15, column=column, value=example_values[column - 1])
-        value_cell.fill = example_fill
         value_cell.border = table_border
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     instructions["B15"].number_format = "@"
 
     instructions.merge_cells("A17:H17")
     instructions["A17"] = (
-        "الخدمات بالأسفل هي نفس الخدمات النشطة المسجلة حاليًا داخل Linka لهذه العيادة. "
-        "استخدم الاسم كما هو في service_name؛ وعند الاستيراد Linka تربط الباقة بنفس الخدمة الفعلية داخل النظام."
+        "الخدمات التالية هي الخدمات النشطة المسجلة حاليًا داخل Linka، "
+        "وهي نفسها الخدمات التي يمكن اختيارها للباقة."
     )
-    instructions["A17"].font = Font(color="0F766E", bold=True, size=11)
+    instructions["A17"].font = header_font
     instructions["A17"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
-    instructions.row_dimensions[17].height = 42
+
+    instructions["A19"] = "اسم الخدمة"
+    instructions["A19"].font = header_font
+    instructions["A19"].border = table_border
+    instructions["A19"].alignment = Alignment(horizontal="center")
 
     service_start_row: int | None = None
     service_end_row: int | None = None
-    service_table_header_row = 19
-    instructions.merge_cells(
-        start_row=service_table_header_row,
-        start_column=1,
-        end_row=service_table_header_row,
-        end_column=3,
-    )
-    instructions.cell(service_table_header_row, 1).value = "الخدمات النشطة المتاحة للباقات"
-    instructions.cell(service_table_header_row, 1).fill = title_fill
-    instructions.cell(service_table_header_row, 1).font = Font(color="FFFFFF", bold=True, size=12)
-    instructions.cell(service_table_header_row, 1).alignment = Alignment(horizontal="center")
-
-    service_columns_row = 20
-    service_headers = ["م", "اسم الخدمة في Linka", "استخدم نفس الاسم في service_name"]
-    for column, label in enumerate(service_headers, start=1):
-        cell = instructions.cell(row=service_columns_row, column=column, value=label)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = table_border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
     if valid_services:
-        service_start_row = service_columns_row + 1
-        for index, name in enumerate(valid_services, start=1):
-            row_number = service_columns_row + index
-            values = [index, name, "استخدم الاسم كما هو"]
-            for column, value in enumerate(values, start=1):
-                cell = instructions.cell(row=row_number, column=column, value=value)
-                cell.fill = service_fill
-                cell.border = table_border
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            instructions.cell(row=row_number, column=2).font = Font(color="0F172A", bold=True)
-        service_end_row = instructions.max_row
+        service_start_row = 20
+        for index, name in enumerate(valid_services, start=service_start_row):
+            cell = instructions.cell(row=index, column=1, value=name)
+            cell.border = table_border
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+        service_end_row = service_start_row + len(valid_services) - 1
     else:
-        row_number = service_columns_row + 1
-        instructions.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=3)
-        instructions.cell(row=row_number, column=1).value = (
-            "لا توجد خدمات نشطة حاليًا. أضف خدمة في إعدادات Linka قبل استيراد الباقات."
-        )
-        instructions.cell(row=row_number, column=1).fill = PatternFill("solid", fgColor="FEF3C7")
-        instructions.cell(row=row_number, column=1).font = Font(color="92400E", bold=True)
-        instructions.cell(row=row_number, column=1).alignment = Alignment(
-            horizontal="center", vertical="center", wrap_text=True
-        )
+        instructions["A20"] = "لا توجد خدمات نشطة حاليًا."
+        instructions["A20"].border = table_border
+        instructions["A20"].alignment = Alignment(horizontal="right")
 
     readme_widths = {
-        "A": 18,
-        "B": 28,
-        "C": 34,
-        "D": 18,
-        "E": 20,
-        "F": 16,
+        "A": 28,
+        "B": 18,
+        "C": 30,
+        "D": 20,
+        "E": 22,
+        "F": 18,
         "G": 18,
         "H": 18,
     }
     for column_letter, width in readme_widths.items():
         instructions.column_dimensions[column_letter].width = width
-    instructions.freeze_panes = "A4"
+    instructions.freeze_panes = "A3"
 
     sheet = workbook.create_sheet("active_packages")
+    sheet.sheet_view.rightToLeft = True
     sheet.sheet_view.showGridLines = False
-    sheet.append(headers)
+    sheet.append(arabic_headers)
     sheet.freeze_panes = "A2"
-    widths = {
-        "full_name": 24,
-        "phone": 18,
-        "service_name": 32,
-        "sessions_total": 18,
-        "sessions_remaining": 20,
-        "amount_paid": 16,
-        "purchased_at": 16,
-        "package_price": 18,
-    }
-    for index, header in enumerate(headers, start=1):
-        header_cell = sheet.cell(row=1, column=index)
-        header_cell.fill = title_fill
-        header_cell.font = Font(color="FFFFFF", bold=True)
-        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        sheet.column_dimensions[header_cell.column_letter].width = widths[header]
-    sheet.row_dimensions[1].height = 26
 
-    # Keep Egyptian mobile leading zeroes and present dates consistently.
+    widths = [24, 18, 32, 20, 22, 18, 18, 18]
+    for index, width in enumerate(widths, start=1):
+        header_cell = sheet.cell(row=1, column=index)
+        header_cell.font = header_font
+        header_cell.border = table_border
+        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.column_dimensions[header_cell.column_letter].width = width
+    sheet.row_dimensions[1].height = 24
+
     for row_number in range(2, 5001):
         sheet.cell(row=row_number, column=2).number_format = "@"
         sheet.cell(row=row_number, column=7).number_format = "dd/mm/yyyy"
 
     if service_start_row is not None and service_end_row is not None:
         formula = (
-            'INDIRECT("\'README\'!$B$'
+            'INDIRECT("\'README\'!$A$'
             + str(service_start_row)
-            + ':$B$'
+            + ':$A$'
             + str(service_end_row)
             + '")'
         )
@@ -2127,10 +2100,10 @@ def build_historical_import_template(
             formula1=formula,
             allow_blank=False,
         )
-        validation.error = "اختر خدمة من قائمة الخدمات النشطة الموجودة في README."
+        validation.error = "اختر خدمة من قائمة الخدمات الموجودة في ورقة التعليمات."
         validation.errorTitle = "خدمة غير صحيحة"
-        validation.prompt = "اختر نفس اسم الخدمة الظاهر في README."
-        validation.promptTitle = "service_name"
+        validation.prompt = "اختر خدمة من القائمة."
+        validation.promptTitle = "اسم الخدمة"
         sheet.add_data_validation(validation)
         validation.add("C2:C5000")
 
