@@ -41,7 +41,7 @@ class PulseBillingNotFound(PulseBillingError):
     pass
 
 
-def _active_clinic_laser_device(
+def _known_clinic_laser_device(
     db: Session,
     *,
     workspace_id: UUID,
@@ -51,12 +51,29 @@ def _active_clinic_laser_device(
         select(ClinicLaserDevice).where(
             ClinicLaserDevice.workspace_id == workspace_id,
             ClinicLaserDevice.device_key == device_key,
-            ClinicLaserDevice.is_active.is_(True),
         )
     )
     if row is None:
+        raise PulseBillingError("Laser device is not registered for this clinic.")
+    return row
+
+
+def _active_clinic_laser_device(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    device_key: str,
+) -> ClinicLaserDevice:
+    row = _known_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_key=device_key,
+    )
+    if not row.is_active:
         raise PulseBillingError("Laser device is not active for this clinic.")
     return row
+
+
 def get_pulse_billing_settings(
     db: Session,
     *,
@@ -1553,10 +1570,17 @@ def pulse_settlement_read(
             patient_id=appointment.patient_id,
             device_key=appointment.laser_device_key,
         )
-    settings = get_pulse_billing_settings(
+    device_key = str(appointment.laser_device_key)
+    _known_clinic_laser_device(
         db,
         workspace_id=appointment.workspace_id,
-        device_key=str(appointment.laser_device_key),
+        device_key=device_key,
+    )
+    settings = db.scalar(
+        select(PulseBillingSettings).where(
+            PulseBillingSettings.workspace_id == appointment.workspace_id,
+            PulseBillingSettings.device_key == device_key,
+        )
     )
     return AppointmentPulseSettlementRead(
         appointment_id=appointment.id,
@@ -1569,7 +1593,7 @@ def pulse_settlement_read(
         overage_charge_minor=int(settlement.overage_charge_minor),
         resolved_at=settlement.resolved_at,
         available_balance_after=balance,
-        currency=settings.currency,
+        currency=(settings.currency if settings is not None else appointment.currency),
     )
 
 
