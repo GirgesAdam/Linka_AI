@@ -41,6 +41,9 @@ class _LaserDeviceDb:
     def add(self, row):
         self.rows.append(row)
 
+    def execute(self, _stmt):
+        return None
+
     def flush(self):
         now = datetime(2026, 10, 2, tzinfo=UTC)
         for row in self.rows:

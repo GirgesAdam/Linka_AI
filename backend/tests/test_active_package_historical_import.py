@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.branch import Branch
-from app.models.clinic_inventory import ServiceDevicePrice
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
@@ -148,6 +148,23 @@ def _configure_laser_service(
 ) -> dict[str, ServiceDevicePrice]:
     service.operational_category = "laser"
     service.requires_laser_device = True
+    db.add_all(
+        [
+            ClinicLaserDevice(
+                workspace_id=workspace.id,
+                device_key="prime_lase",
+                name="Prime Lase",
+                is_active=True,
+            ),
+            ClinicLaserDevice(
+                workspace_id=workspace.id,
+                device_key="candela_gentle",
+                name="Candela Gentle",
+                is_active=True,
+            ),
+        ]
+    )
+    db.flush()
     rows = {
         "Prime Lase": ServiceDevicePrice(
             workspace_id=workspace.id,

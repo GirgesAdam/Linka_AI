@@ -1,12 +1,10 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 
 
-def test_laser_service_creation_switches_from_base_price_to_device_prices() -> None:
+def test_laser_service_creation_uses_clinic_device_registry() -> None:
     form = (FRONTEND / "src/app/(dashboard)/services/service-create-form.tsx").read_text(
         encoding="utf-8"
     )
@@ -19,19 +17,27 @@ def test_laser_service_creation_switches_from_base_price_to_device_prices() -> N
 
     assert "useState(false)" in form
     assert "requiresLaserDevice ? (" in form
-    assert 'name="prime_lase_price"' in form
-    assert 'name="prime_lase_duration_minutes"' in form
-    assert 'name="candela_gentle_price"' in form
-    assert 'name="candela_gentle_duration_minutes"' in form
+    assert "ClinicLaserDevice" in form
+    assert "activeDevices.map" in form
+    assert 'name="device_key"' in form
+    assert "device_enabled_" in form
+    assert "device_price_" in form
+    assert "device_duration_" in form
     assert 'name="price"' in form
     assert 'name="duration_minutes"' in form
+
     assert "ServiceCreateForm" in page
-    assert "price_minor: requiresLaserDevice ? 0 : basePriceMinor" in actions
-    assert "primeLaseDurationMinutes" in actions
-    assert "candelaGentleDurationMinutes" in actions
-    assert "duration_minutes: primeLaseDurationMinutes" in actions
-    assert "duration_minutes: candelaGentleDurationMinutes" in actions
-    assert 'device_key: "prime_lase"' in actions
-    assert 'device_key: "candela_gentle"' in actions
-    assert "prime_lase_price" in actions
-    assert "candela_gentle_price" in actions
+    assert 'tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices")' in page
+    assert "devices={devices}" in page
+
+    assert "selectedDeviceKeys" in actions
+    assert "devicePricePayload" in actions
+    assert "selectedDevices.map" in actions
+    assert 'tiaRequest("/inventory/laser-prices"' in actions
+    assert "device_key: deviceKey" in actions or "...devicePricePayload" in actions
+
+    # Prime/Candela are migration/backward-compatibility data, not hardcoded service-form fields.
+    assert 'name="prime_lase_price"' not in form
+    assert 'name="candela_gentle_price"' not in form
+    assert 'device_key: "prime_lase"' not in actions
+    assert 'device_key: "candela_gentle"' not in actions

@@ -72,6 +72,9 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
         "0073_appointment_additional_services",
         "0078_repair_schedule_billing_categories",
         "0080_quick_booking_device_override",
+        "0087_dynamic_laser_device_registry",
+        "0088_service_device_registry_link",
+        "0089_dynamic_laser_device_references",
     }
     assert "ALTER COLUMN version_num TYPE VARCHAR(255)" in long_revisions[
         "0052_payment_reference_constraint_repair"
@@ -82,6 +85,9 @@ def test_alembic_revision_ids_fit_version_column_and_new_chain_is_safe() -> None
     assert revisions["0073_appointment_additional_services"] == "0072_workspace_demo_policy"
     assert revisions["0074_appt_extra_services_head"] == "0073_appointment_additional_services"
     assert revisions["0080_quick_booking_device_override"] == "0079_quick_booking_laser_usage"
+    assert revisions["0087_dynamic_laser_device_registry"] == "0086_all_service_packages"
+    assert revisions["0088_service_device_registry_link"] == "0087_dynamic_laser_device_registry"
+    assert revisions["0089_dynamic_laser_device_references"] == "0088_service_device_registry_link"
     repair = (backend / "alembic/versions/0078_repair_schedule_billing_categories.py").read_text(encoding="utf-8")
     assert 'op.drop_constraint(op.f(legacy_category_check), "services", type_="check")' in repair
 
