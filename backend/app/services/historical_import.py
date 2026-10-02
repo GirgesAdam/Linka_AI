@@ -16,6 +16,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -550,6 +551,78 @@ def _active_package_payment_payload(
     }
 
 
+_EGYPTIAN_MOBILE_LOCAL_RE = re.compile(r"^01[0125]\d{8}$")
+_EGYPTIAN_MOBILE_WITHOUT_ZERO_RE = re.compile(r"^1[0125]\d{8}$")
+
+
+def _normalize_active_package_egypt_phone(value: Any) -> tuple[str, str]:
+    """Normalize clinic-facing active-package phones to one Egyptian mobile identity.
+
+    Excel commonly converts a value such as 01012345678 into the numeric
+    1012345678. That representation is repaired deterministically here.
+    """
+    if isinstance(value, bool) or value is None:
+        raise ValueError("Invalid Egyptian mobile number.")
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError("Invalid Egyptian mobile number.")
+        raw = str(int(value))
+    else:
+        raw = _clean(value) or ""
+
+    compact = re.sub(r"[\s().-]", "", raw)
+    if compact.startswith("+"):
+        compact = compact[1:]
+    if compact.startswith("0020"):
+        compact = compact[4:]
+    elif compact.startswith("20"):
+        compact = compact[2:]
+
+    if _EGYPTIAN_MOBILE_WITHOUT_ZERO_RE.fullmatch(compact):
+        compact = f"0{compact}"
+
+    if not _EGYPTIAN_MOBILE_LOCAL_RE.fullmatch(compact):
+        raise ValueError("Invalid Egyptian mobile number.")
+
+    return compact, f"+20{compact[1:]}"
+
+
+def _parse_active_package_purchase_date(value: Any) -> date | None:
+    """Parse an Egypt-facing package purchase date without US month/day ambiguity."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float, bool)):
+        # Proper Excel date cells are returned by openpyxl as datetime/date.
+        # A raw number is ambiguous and should not silently become a date.
+        return None
+
+    text = (_clean(value) or "").strip()
+    if not text:
+        return None
+
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d.%m.%Y",
+    ):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
+
 def _normalize_active_package(
     row: dict[str, Any],
     *,
@@ -560,15 +633,14 @@ def _normalize_active_package(
     if not full_name:
         return None, "active_package_name_missing", "full_name is required."
 
-    raw_phone = _clean(row.get("phone"))
-    if not raw_phone:
-        return None, "active_package_phone_invalid", "Invalid phone."
     try:
-        phone_display, phone_normalized = normalize_patient_identity_phone(raw_phone)
+        phone_display, phone_normalized = _normalize_active_package_egypt_phone(row.get("phone"))
     except ValueError:
-        return None, "active_package_phone_invalid", "Invalid phone."
-    if not phone_normalized:
-        return None, "active_package_phone_invalid", "Invalid phone."
+        return (
+            None,
+            "active_package_phone_invalid",
+            "رقم الهاتف يجب أن يكون موبايل مصري صحيح (010/011/012/015). لو Excel حذف الصفر الأول، Linka تصلحه تلقائيًا.",
+        )
     identity = f"phone:{_digest(phone_normalized)[:24]}"
 
     service_name = _clean(row.get("service_name"))
@@ -625,9 +697,13 @@ def _normalize_active_package(
             "package_price cannot be less than amount_paid.",
         )
 
-    purchased_date = _parse_date(row.get("purchased_at"))
+    purchased_date = _parse_active_package_purchase_date(row.get("purchased_at"))
     if purchased_date is None:
-        return None, "active_package_purchase_date_invalid", "purchase date invalid."
+        return (
+            None,
+            "active_package_purchase_date_invalid",
+            "تاريخ الشراء غير صالح. استخدم تاريخ Excel أو DD/MM/YYYY أو YYYY-MM-DD.",
+        )
     purchased_at = datetime.combine(purchased_date, time.min, tzinfo=EGYPT_TZ).astimezone(UTC)
 
     identity_facts = "|".join(
@@ -818,11 +894,6 @@ def preview_historical_import(
                 issue_message=issue_message,
             )
         )
-
-    total_ready = sum(ready_counts.values())
-    if total_ready == 0:
-        db.rollback()
-        raise HistoricalImportError("The uploaded files contain no usable historical records.")
 
     # Allocation references must point to explicit transaction/appointment IDs in the same
     # upload or to a previously imported source record. The contract does not guess joins.
@@ -1837,38 +1908,6 @@ def build_historical_import_template(
     Legacy multi-sheet workbooks remain accepted by the importer. The downloaded
     workbook is intentionally minimal: README + active_packages only.
     """
-    workbook = Workbook()
-    instructions = workbook.active
-    instructions.title = "README"
-    instructions.append(["Linka Active Package Import v2"])
-    instructions.append([
-        "Use active_packages to migrate customers who still have sessions remaining in packages purchased before Linka."
-    ])
-    instructions.append([
-        "Required columns: full_name, phone, service_name, sessions_total, sessions_remaining, amount_paid, purchased_at."
-    ])
-    instructions.append([
-        "package_price is optional. If blank, Linka treats package_price as amount_paid so a fully paid historical package does not show a false balance."
-    ])
-    instructions.append([
-        "If package_price is greater than amount_paid, Linka keeps the difference as the package balance due. package_price cannot be less than amount_paid."
-    ])
-    instructions.append([
-        "Do not add patient IDs, package IDs, payment IDs, payment method, expiry, status, currency, or standalone session price."
-    ])
-    instructions.append([
-        "Imported active packages use the supplied remaining balance directly. Linka does not create fake historical session-usage rows."
-    ])
-    instructions.append([
-        "Expiry is left blank in Linka. The supplied purchased_at date is preserved."
-    ])
-    instructions.append([
-        "Phone is the patient identity for this flow. An existing patient with the same normalized phone is reused without overwriting existing CRM name data."
-    ])
-    instructions.append([
-        "service_name must exactly match an active service configured in Linka. Unknown services are rejected in Preview."
-    ])
-
     valid_services = sorted(
         {
             str(name).strip()
@@ -1877,15 +1916,74 @@ def build_historical_import_template(
         },
         key=str.casefold,
     )
-    service_start_row: int | None = None
-    service_end_row: int | None = None
-    if valid_services:
-        instructions.append([])
-        instructions.append(["Valid active service names", "Copy/use one of these exact names"])
-        service_start_row = instructions.max_row + 1
-        for name in valid_services:
-            instructions.append([None, name])
-        service_end_row = instructions.max_row
+    example_service = valid_services[0] if valid_services else "اختر خدمة من القائمة"
+
+    workbook = Workbook()
+    instructions = workbook.active
+    instructions.title = "README"
+    instructions.sheet_view.rightToLeft = True
+    instructions.sheet_view.showGridLines = False
+
+    title_fill = PatternFill("solid", fgColor="0F766E")
+    section_fill = PatternFill("solid", fgColor="DFF4F1")
+    header_fill = PatternFill("solid", fgColor="E2E8F0")
+    example_fill = PatternFill("solid", fgColor="F8FAFC")
+    service_fill = PatternFill("solid", fgColor="F0FDFA")
+    white_font = Font(color="FFFFFF", bold=True, size=16)
+    section_font = Font(color="134E4A", bold=True, size=12)
+    header_font = Font(color="0F172A", bold=True)
+    body_font = Font(color="334155", size=11)
+    border_side = Side(style="thin", color="CBD5E1")
+    table_border = Border(
+        left=border_side,
+        right=border_side,
+        top=border_side,
+        bottom=border_side,
+    )
+
+    instructions.merge_cells("A1:H1")
+    instructions["A1"] = "دليل استيراد الباقات النشطة إلى Linka"
+    instructions["A1"].fill = title_fill
+    instructions["A1"].font = white_font
+    instructions["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    instructions.row_dimensions[1].height = 28
+
+    instructions.merge_cells("A2:H2")
+    instructions["A2"] = (
+        "املأ Sheet باسم active_packages فقط. Linka ستنشئ/تربط العميل والباقة والدفعة التاريخية تلقائيًا."
+    )
+    instructions["A2"].font = Font(color="475569", italic=True, size=11)
+    instructions["A2"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+
+    instructions.merge_cells("A4:H4")
+    instructions["A4"] = "تعليمات سريعة"
+    instructions["A4"].fill = section_fill
+    instructions["A4"].font = section_font
+    instructions["A4"].alignment = Alignment(horizontal="right")
+
+    instruction_rows = [
+        "الحقول المطلوبة: full_name, phone, service_name, sessions_total, sessions_remaining, amount_paid, purchased_at.",
+        "package_price اختياري. لو تركته فارغًا، Linka تعتبر سعر الباقة مساويًا للمبلغ المدفوع.",
+        "لو package_price أكبر من amount_paid، الفرق سيظهر كمبلغ متبقي على الباقة. لا يمكن أن يكون package_price أقل من amount_paid.",
+        "phone لازم يكون موبايل مصري يبدأ بـ 010 أو 011 أو 012 أو 015. عمود الهاتف مضبوط كنص، ولو Excel حذف الصفر الأول Linka تصلحه تلقائيًا.",
+        "purchased_at يقبل تاريخ Excel العادي أو DD/MM/YYYY مثل 15/02/2026 أو YYYY-MM-DD مثل 2026-02-15.",
+        "لا تدخل patient IDs أو package IDs أو payment IDs أو payment method أو expiry أو status أو currency أو standalone session price.",
+        "عدد sessions_remaining هو الرصيد الفعلي الذي سيبدأ به العميل داخل Linka، بدون إنشاء جلسات استخدام تاريخية وهمية.",
+    ]
+    for row_number, text_value in enumerate(instruction_rows, start=5):
+        instructions.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=8)
+        cell = instructions.cell(row=row_number, column=1)
+        cell.value = f"• {text_value}"
+        cell.font = body_font
+        cell.alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
+        instructions.row_dimensions[row_number].height = 28
+
+    example_header_row = 13
+    instructions.merge_cells(start_row=example_header_row, start_column=1, end_row=example_header_row, end_column=8)
+    instructions.cell(example_header_row, 1).value = "مثال صف صحيح — امشِ على نفس الشكل"
+    instructions.cell(example_header_row, 1).fill = section_fill
+    instructions.cell(example_header_row, 1).font = section_font
+    instructions.cell(example_header_row, 1).alignment = Alignment(horizontal="right")
 
     headers = [
         "full_name",
@@ -1897,13 +1995,106 @@ def build_historical_import_template(
         "purchased_at",
         "package_price",
     ]
+    example_values = [
+        "سارة أحمد",
+        "01012345678",
+        example_service,
+        6,
+        3,
+        3000,
+        "15/02/2026",
+        3000,
+    ]
+    for column, header in enumerate(headers, start=1):
+        cell = instructions.cell(row=14, column=column, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = table_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        value_cell = instructions.cell(row=15, column=column, value=example_values[column - 1])
+        value_cell.fill = example_fill
+        value_cell.border = table_border
+        value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    instructions["B15"].number_format = "@"
+
+    instructions.merge_cells("A17:H17")
+    instructions["A17"] = (
+        "الخدمات بالأسفل هي نفس الخدمات النشطة المسجلة حاليًا داخل Linka لهذه العيادة. "
+        "استخدم الاسم كما هو في service_name؛ وعند الاستيراد Linka تربط الباقة بنفس الخدمة الفعلية داخل النظام."
+    )
+    instructions["A17"].font = Font(color="0F766E", bold=True, size=11)
+    instructions["A17"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    instructions.row_dimensions[17].height = 42
+
+    service_start_row: int | None = None
+    service_end_row: int | None = None
+    service_table_header_row = 19
+    instructions.merge_cells(
+        start_row=service_table_header_row,
+        start_column=1,
+        end_row=service_table_header_row,
+        end_column=3,
+    )
+    instructions.cell(service_table_header_row, 1).value = "الخدمات النشطة المتاحة للباقات"
+    instructions.cell(service_table_header_row, 1).fill = title_fill
+    instructions.cell(service_table_header_row, 1).font = Font(color="FFFFFF", bold=True, size=12)
+    instructions.cell(service_table_header_row, 1).alignment = Alignment(horizontal="center")
+
+    service_columns_row = 20
+    service_headers = ["م", "اسم الخدمة في Linka", "استخدم نفس الاسم في service_name"]
+    for column, label in enumerate(service_headers, start=1):
+        cell = instructions.cell(row=service_columns_row, column=column, value=label)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = table_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    if valid_services:
+        service_start_row = service_columns_row + 1
+        for index, name in enumerate(valid_services, start=1):
+            row_number = service_columns_row + index
+            values = [index, name, "استخدم الاسم كما هو"]
+            for column, value in enumerate(values, start=1):
+                cell = instructions.cell(row=row_number, column=column, value=value)
+                cell.fill = service_fill
+                cell.border = table_border
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            instructions.cell(row=row_number, column=2).font = Font(color="0F172A", bold=True)
+        service_end_row = instructions.max_row
+    else:
+        row_number = service_columns_row + 1
+        instructions.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=3)
+        instructions.cell(row=row_number, column=1).value = (
+            "لا توجد خدمات نشطة حاليًا. أضف خدمة في إعدادات Linka قبل استيراد الباقات."
+        )
+        instructions.cell(row=row_number, column=1).fill = PatternFill("solid", fgColor="FEF3C7")
+        instructions.cell(row=row_number, column=1).font = Font(color="92400E", bold=True)
+        instructions.cell(row=row_number, column=1).alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True
+        )
+
+    readme_widths = {
+        "A": 18,
+        "B": 28,
+        "C": 34,
+        "D": 18,
+        "E": 20,
+        "F": 16,
+        "G": 18,
+        "H": 18,
+    }
+    for column_letter, width in readme_widths.items():
+        instructions.column_dimensions[column_letter].width = width
+    instructions.freeze_panes = "A4"
+
     sheet = workbook.create_sheet("active_packages")
+    sheet.sheet_view.showGridLines = False
     sheet.append(headers)
     sheet.freeze_panes = "A2"
     widths = {
         "full_name": 24,
         "phone": 18,
-        "service_name": 28,
+        "service_name": 32,
         "sessions_total": 18,
         "sessions_remaining": 20,
         "amount_paid": 16,
@@ -1911,7 +2102,17 @@ def build_historical_import_template(
         "package_price": 18,
     }
     for index, header in enumerate(headers, start=1):
-        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = widths[header]
+        header_cell = sheet.cell(row=1, column=index)
+        header_cell.fill = title_fill
+        header_cell.font = Font(color="FFFFFF", bold=True)
+        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.column_dimensions[header_cell.column_letter].width = widths[header]
+    sheet.row_dimensions[1].height = 26
+
+    # Keep Egyptian mobile leading zeroes and present dates consistently.
+    for row_number in range(2, 5001):
+        sheet.cell(row=row_number, column=2).number_format = "@"
+        sheet.cell(row=row_number, column=7).number_format = "dd/mm/yyyy"
 
     if service_start_row is not None and service_end_row is not None:
         formula = (
@@ -1926,9 +2127,9 @@ def build_historical_import_template(
             formula1=formula,
             allow_blank=False,
         )
-        validation.error = "Choose an active Linka service from the list."
-        validation.errorTitle = "Unknown service"
-        validation.prompt = "Select an active Linka service."
+        validation.error = "اختر خدمة من قائمة الخدمات النشطة الموجودة في README."
+        validation.errorTitle = "خدمة غير صحيحة"
+        validation.prompt = "اختر نفس اسم الخدمة الظاهر في README."
         validation.promptTitle = "service_name"
         sheet.add_data_validation(validation)
         validation.add("C2:C5000")
