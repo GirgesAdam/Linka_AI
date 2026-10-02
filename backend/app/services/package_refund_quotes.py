@@ -10,6 +10,7 @@ from app.models.patient_package import PatientPackage
 from app.services.patient_packages import (
     _default_cancellation_charge_minor,
     _package_financial_rows,
+    _settlement_standalone_price_minor,
     _usage_totals,
 )
 
@@ -78,6 +79,7 @@ def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRea
 
     consumed = ledger_consumed + historical_consumed
     consumed_value_minor = _default_cancellation_charge_minor(
+        db,
         package,
         consumed_sessions=consumed,
     )
@@ -85,7 +87,7 @@ def _quote_one(db: Session, *, package: PatientPackage) -> PackageRefundQuoteRea
         raise PackageRefundQuoteError(
             "Package pricing data is not sufficient for a safe refund quote."
         )
-    unit_price = package.standalone_session_price_minor_at_purchase
+    unit_price = _settlement_standalone_price_minor(db, package)
 
     payments, refunds = _package_financial_rows(
         db,
