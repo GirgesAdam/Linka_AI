@@ -349,6 +349,30 @@ def _verified_read_context_from_turn(
             )
             if appointment_read is not None:
                 scope_source = appointment_read.parameters
+            trace = next(
+                (
+                    item
+                    for item in reversed(turn.traces)
+                    if item.operation_index == step.operation_index
+                    and item.operation_type == "appointment_list"
+                    and isinstance(getattr(item, "verified_parameters", None), dict)
+                ),
+                None,
+            )
+            if trace is not None:
+                verified_parameters = getattr(trace, "verified_parameters", None)
+                appointment_id = (
+                    verified_parameters.get("appointment_id")
+                    if isinstance(verified_parameters, dict)
+                    else None
+                )
+                grouped_ids = (
+                    verified_parameters.get("appointment_ids")
+                    if isinstance(verified_parameters, dict)
+                    else None
+                )
+                if appointment_id not in (None, "") and not grouped_ids:
+                    context["appointment_id"] = str(appointment_id)
         for key in (
             "service_id",
             "doctor_id",

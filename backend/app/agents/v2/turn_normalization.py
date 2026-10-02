@@ -171,6 +171,7 @@ def _operation_identity(operation: TurnOperation) -> Hashable:
         operation.execution_intent,
         operation.financial_ownership,
         operation.continues_previous,
+        operation.appointment_fact_challenge,
         operation.source_appointment.model_dump_json()
         if operation.source_appointment is not None
         else None,

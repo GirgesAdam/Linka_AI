@@ -106,6 +106,7 @@ class V2RuntimeStepTrace:
     disposition_after: str
     read_kinds: tuple[str, ...]
     outcome: TurnOutcome | None = None
+    verified_parameters: dict[str, object] | None = None
     pending_write: bool = False
     skipped: bool = False
     skip_reason: str | None = None
@@ -1387,6 +1388,7 @@ def orchestrate_v2_turn(
                         disposition_before=planned_step.disposition,
                         disposition_after=advanced.disposition,
                         read_kinds=tuple(result.kind for result in reads.results),
+                        verified_parameters=dict(reads.verification.verified_parameters),
                         pending_write=True,
                     )
                 )
@@ -1415,6 +1417,7 @@ def orchestrate_v2_turn(
                     disposition_after=advanced.disposition,
                     read_kinds=tuple(result.kind for result in reads.results),
                     outcome=outcome,
+                    verified_parameters=dict(reads.verification.verified_parameters),
                 )
             )
             outcomes.append(outcome)
@@ -1474,6 +1477,7 @@ def orchestrate_v2_turn(
                         disposition_after=advanced.disposition,
                         read_kinds=tuple(result.kind for result in reads.results),
                         outcome=outcome,
+                        verified_parameters=dict(reads.verification.verified_parameters),
                     )
                 )
             break
@@ -1500,6 +1504,7 @@ def orchestrate_v2_turn(
                 disposition_after=advanced.disposition,
                 read_kinds=tuple(result.kind for result in reads.results),
                 outcome=outcome,
+                verified_parameters=dict(reads.verification.verified_parameters),
             )
         )
         outcomes.append(outcome)

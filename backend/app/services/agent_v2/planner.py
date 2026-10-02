@@ -759,6 +759,34 @@ def _plan_operation(
         )
 
     if operation.type == "appointment_list":
+        if operation.appointment_fact_challenge == "time":
+            appointment_id = params.get("appointment_id")
+            claimed_time = operation.entities.time
+            if (
+                appointment_id in (None, "")
+                or claimed_time is None
+                or claimed_time.mode != "exact"
+                or claimed_time.start_time is None
+            ):
+                return _clarify(index=index, operation=operation, field="appointment")
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="read",
+                reads=[
+                    ReadRequest(
+                        kind="appointments",
+                        parameters={"appointment_id": appointment_id},
+                    )
+                ],
+                response_goal="answer_customer_history",
+                facts={
+                    "appointment_fact_challenge": {
+                        "field": "time",
+                        "claimed_time": claimed_time.start_time,
+                    }
+                },
+            )
         appointment_params = {
             key: value
             for key, value in params.items()

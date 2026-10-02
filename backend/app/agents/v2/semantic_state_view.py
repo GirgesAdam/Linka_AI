@@ -202,6 +202,14 @@ def verified_read_semantic_view(
         return {}
     safe: dict[str, object] = {"operation_type": operation_type}
     safe.update(_safe_constraints(read_context, context))
+    if operation_type == "appointment_list":
+        appointment_ref = _entity_ref(
+            read_context.get("appointment_id"),
+            kind="appointment",
+            context=context,
+        )
+        if appointment_ref is not None:
+            safe["appointment_ref"] = appointment_ref
     option_count = read_context.get("availability_option_count")
     if isinstance(option_count, int) and option_count >= 0:
         safe["availability_option_count"] = option_count
@@ -399,6 +407,41 @@ def with_safe_task_context(
     )
     return _apply_verified_focus(context, model_input, block_focus=stale)
 
+def _with_recent_verified_read_appointment_reference(
+    context: SemanticContext,
+    read_context: dict[str, Any],
+) -> SemanticContext:
+    """Add one server-owned ephemeral ref for the immediately prior verified appointment read."""
+    if read_context.get("operation_type") != "appointment_list":
+        return context
+    appointment_id = read_context.get("appointment_id")
+    if appointment_id in (None, ""):
+        return context
+    if _entity_ref(appointment_id, kind="appointment", context=context) is not None:
+        return context
+
+    reference_map = dict(context.reference_map)
+    index = 1
+    while f"A{index}" in reference_map:
+        index += 1
+    appointment_ref = f"A{index}"
+    reference_map[appointment_ref] = SemanticReferenceTarget(
+        kind="appointment",
+        canonical_id=str(appointment_id),
+    )
+
+    metadata = dict(context.server_metadata)
+    raw_details = metadata.get("focus_details")
+    focus_details = dict(raw_details) if isinstance(raw_details, dict) else {}
+    focus_details[appointment_ref] = {"ref": appointment_ref}
+    metadata["focus_details"] = focus_details
+    return SemanticContext(
+        model_input=dict(context.model_input),
+        reference_map=reference_map,
+        server_metadata=metadata,
+    )
+
+
 def with_safe_read_context(
     context: SemanticContext,
     *,
@@ -406,6 +449,7 @@ def with_safe_read_context(
 ) -> SemanticContext:
     if read_context is None:
         return context
+    context = _with_recent_verified_read_appointment_reference(context, read_context)
     model_input = dict(context.model_input)
     model_input["recent_verified_read"] = verified_read_semantic_view(
         read_context,

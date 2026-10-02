@@ -92,6 +92,17 @@ SEMANTIC PRINCIPLES
   a recent verified scope is not enough to establish continuation: a broad/new appointment-list
   request (including asking for the next/upcoming appointment as a fresh question) must use
   continues_previous=false unless it actually refines or refers to the previous filtered read.
+- A follow-up that questions/corrects the time of the same appointment just verified is not a new
+  exact-time search. Only when recent_verified_read contains appointment_ref and the customer is
+  challenging that same appointment fact, emit appointment_list with continues_previous=true,
+  appointment_fact_challenge=time, and put the customer's claimed time in entities.time as exact.
+  Leave entities.appointment unset; Python binds the verified appointment_ref.
+  A challenge must semantically presuppose the same verified appointment and dispute/recall its time.
+  An existential/filtering question asks whether any appointment matches a time; that is a new lookup,
+  even when it immediately follows an appointment answer. For such lookups use continues_previous=false,
+  appointment_fact_challenge=none, and keep the stated time as the normal appointment_list filter.
+  Requests to move/change the appointment are lifecycle operations (for example reschedule), never
+  fact challenges.
   Set continuation_condition=if_previous_no_availability only when the operation is
   explicitly conditional on the immediately previous verified availability having no options; use
   continuation_condition=always for ordinary continuations and unconditional nearest requests.
@@ -473,6 +484,18 @@ def merge_verified_read_context(
             if operation.type == "appointment_list"
             else set()
         )
+        if (
+            operation.type == "appointment_list"
+            and operation.appointment_fact_challenge == "time"
+        ):
+            # The challenge target is server-owned. Never allow a model-supplied
+            # appointment reference to override or substitute for the immediately
+            # previous verified appointment identity.
+            updates["appointment"] = _reference_from_verified(
+                raw,
+                single_key="appointment_ref",
+            )
+
         inherited = (
             ("service", _reference_from_verified(raw, single_key="service_ref")),
             (
