@@ -5,11 +5,13 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
 from app.database.session import SessionLocal, get_db
+from app.models.service import Service
 from app.models.workspace import Workspace
 from app.schemas.clinic_setup_v2 import (
     BookingPolicyUpdateV2,
@@ -373,13 +375,26 @@ def save_booking_policy_v2(
 
 @router.get("/history/template")
 def download_history_template(
-    _access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> Response:
-    content = build_historical_import_template()
+    service_names = list(
+        db.scalars(
+            select(Service.name)
+            .where(
+                Service.workspace_id == access.workspace.id,
+                Service.is_active.is_(True),
+            )
+            .order_by(Service.name)
+        ).all()
+    )
+    content = build_historical_import_template(service_names=service_names)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="Linka_Import_Template_v1.xlsx"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="Linka_Active_Packages_Import_v2.xlsx"'
+        },
     )
 
 

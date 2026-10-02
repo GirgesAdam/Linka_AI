@@ -141,13 +141,13 @@ export function ClinicSettingsPanel({
       <Card id="historical-data">
         <CardHeader>
           <CardTitle>البيانات القديمة</CardTitle>
-          <CardDescription>لو عندك بيانات من النظام السابق، ارفعها هنا لنقل العملاء والمواعيد والمدفوعات والباقات إلى Linka.</CardDescription>
+          <CardDescription>لو عندك عملاء قدامى بباقات نشطة، انقل حالتهم الحالية إلى Linka من Sheet واحدة. ملفات الاستيراد التاريخية القديمة تظل مدعومة.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <b className="text-sm">قالب الاستيراد</b>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">استخدم قالب Linka الثابت لو محتاج تجهيز البيانات قبل الرفع.</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">القالب الجديد مخصص للباقات النشطة فقط: README + active_packages، بدون IDs أو شيت مدفوعات منفصل.</p>
             </div>
             <a href="/api/clinic-history-template" className={buttonVariants({ variant: "outline" })}><Download size={16} /> تحميل القالب</a>
           </div>

@@ -72,6 +72,13 @@ export type HistoricalPreview = {
     example_rows: number[];
   }>;
   can_import: boolean;
+  projected_counts: {
+    patients_to_create?: number;
+    existing_patients_reused?: number;
+    packages_to_create?: number;
+    historical_payments_to_create?: number;
+  };
+  total_amount_imported_minor: number;
 };
 
 export type ClinicSetupImportIssue = {

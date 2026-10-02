@@ -141,6 +141,48 @@ def test_six_session_package_blocks_seventh_future_reservation_and_cancel_return
         )
 
 
+
+
+def test_migrated_opening_balance_is_used_for_booking_and_new_usage(monkeypatch) -> None:
+    monkeypatch.setattr(package_service, "record_activity_event", lambda *args, **kwargs: None)
+    engine = _package_engine()
+    workspace_id, patient_id, service_id = uuid4(), uuid4(), uuid4()
+    with Session(engine) as db:
+        package = _package(
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            sessions=10,
+        )
+        package.opening_sessions_remaining = 4
+        package.sessions_total_known = True
+        db.add(package)
+        db.flush()
+
+        before = package_service.package_read(db, package)
+        assert before.sessions_purchased == 10
+        assert before.sessions_remaining == 4
+
+        package_service.validate_package_for_booking(
+            db,
+            workspace_id=workspace_id,
+            package_id=package.id,
+            patient_id=patient_id,
+            service_id=service_id,
+            appointment_start_at=datetime.now(UTC) + timedelta(days=2),
+        )
+        appointment = _appointment(
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+        )
+        package_service.reserve_package_usage(db, appointment=appointment, package=package)
+
+        after = package_service.package_read(db, package)
+        assert after.sessions_reserved == 1
+        assert after.sessions_remaining == 3
+
+
 def test_completion_is_idempotent_and_reschedule_transfers_same_package_reservation(monkeypatch) -> None:
     monkeypatch.setattr(package_service, "record_activity_event", lambda *args, **kwargs: None)
     engine = _package_engine()

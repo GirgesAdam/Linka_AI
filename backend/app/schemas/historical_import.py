@@ -49,6 +49,8 @@ class HistoricalImportPreviewResponse(BaseModel):
     rejected_counts: dict[str, int]
     issue_groups: list[HistoricalImportIssueGroup]
     can_import: bool
+    projected_counts: dict[str, int] = Field(default_factory=dict)
+    total_amount_imported_minor: int = 0
 
 
 class HistoricalImportApplyResponse(BaseModel):
