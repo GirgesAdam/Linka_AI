@@ -9,7 +9,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
@@ -231,6 +231,121 @@ def _preview_and_apply(
         batch=batch,
     )
     return preview, summary
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_display", "expected_normalized"),
+    [
+        ("01012345678", "01012345678", "+201012345678"),
+        (1012345678, "01012345678", "+201012345678"),
+        ("1012345678", "01012345678", "+201012345678"),
+        ("+201012345678", "01012345678", "+201012345678"),
+        ("201012345678", "01012345678", "+201012345678"),
+        ("00201012345678", "01012345678", "+201012345678"),
+    ],
+)
+def test_active_package_egypt_phone_normalization_repairs_excel_leading_zero(
+    value,
+    expected_display: str,
+    expected_normalized: str,
+) -> None:
+    display, normalized = history._normalize_active_package_egypt_phone(value)
+    assert display == expected_display
+    assert normalized == expected_normalized
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "12",
+        "abc",
+        "01312345678",
+        "+971501234567",
+        "0212345678",
+    ],
+)
+def test_active_package_phone_rejects_non_egyptian_mobile_numbers(value) -> None:
+    with pytest.raises(ValueError):
+        history._normalize_active_package_egypt_phone(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("15/2/2026", "2026-02-15"),
+        ("15-02-2026", "2026-02-15"),
+        ("15.02.2026", "2026-02-15"),
+        ("2026-02-15", "2026-02-15"),
+        ("2026/02/15", "2026-02-15"),
+        ("2026.02.15", "2026-02-15"),
+        ("2026-02-15T09:30:00", "2026-02-15"),
+        (datetime(2026, 2, 15, 9, 30), "2026-02-15"),
+    ],
+)
+def test_active_package_purchase_date_accepts_excel_and_clear_egyptian_formats(
+    value,
+    expected: str,
+) -> None:
+    parsed = history._parse_active_package_purchase_date(value)
+    assert parsed is not None
+    assert parsed.isoformat() == expected
+
+
+@pytest.mark.parametrize("value", ["02/15/2026", "not-a-date", 46000])
+def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(value) -> None:
+    assert history._parse_active_package_purchase_date(value) is None
+
+
+def test_active_package_template_formats_phone_as_text_and_date_consistently() -> None:
+    payload = history.build_historical_import_template(service_names=["Hydrafacial"])
+    workbook = load_workbook(io.BytesIO(payload))
+    try:
+        sheet = workbook["active_packages"]
+        assert sheet["B2"].number_format == "@"
+        assert sheet["G2"].number_format == "dd/mm/yyyy"
+        readme_text = "\n".join(
+            str(cell.value)
+            for row in workbook["README"].iter_rows()
+            for cell in row
+            if cell.value is not None
+        )
+        assert "Egyptian mobile number" in readme_text
+        assert "15/02/2026" in readme_text
+    finally:
+        workbook.close()
+
+
+def test_active_package_all_invalid_rows_return_actionable_preview() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[
+                _active_package_document(
+                    [[
+                        "Bad Phone",
+                        12,
+                        "Hydrafacial",
+                        6,
+                        3,
+                        3000,
+                        "15/2/2026",
+                        None,
+                    ]]
+                )
+            ],
+            mode="append",
+        )
+        assert preview.can_import is False
+        assert preview.ready_counts["package"] == 0
+        assert preview.rejected_counts["package"] == 1
+        assert len(preview.issue_groups) == 1
+        issue = preview.issue_groups[0]
+        assert issue.code == "active_package_phone_invalid"
+        assert issue.example_rows == [2]
+        assert "موبايل مصري" in issue.message
 
 
 @pytest.mark.usefixtures("monkeypatch")
