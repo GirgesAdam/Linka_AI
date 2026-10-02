@@ -90,6 +90,19 @@ def ai_dispatch_is_sendable(
         return True
 
     metadata = message.metadata_json or {}
+    if metadata.get("handoff_continuation") is True:
+        expected_handoff_id = str(metadata.get("handoff_id") or "")
+        return (
+            bool(expected_handoff_id)
+            and conversation.owner_type == OWNER_HUMAN
+            and conversation.status == "pending"
+            and active_handoff is not None
+            and active_handoff.source == "ai"
+            and active_handoff.status == "pending"
+            and active_handoff.assigned_user_id is None
+            and str(active_handoff.id) == expected_handoff_id
+        )
+
     if metadata.get("handoff_ack") is True:
         return (
             conversation.owner_type == OWNER_HUMAN
