@@ -81,6 +81,142 @@ def _v2_handoff_ack_allowed(handoff: object | None, *, created_this_turn: bool) 
     )
 
 
+def _v2_handoff_continuation_allowed(
+    conversation: Conversation,
+    handoff: object | None,
+) -> bool:
+    return (
+        handoff is not None
+        and conversation.owner_type == OWNER_HUMAN
+        and conversation.status == "pending"
+        and getattr(handoff, "source", None) == "ai"
+        and getattr(handoff, "status", None) == "pending"
+        and getattr(handoff, "assigned_user_id", None) is None
+    )
+
+
+def _previous_handoff_ack_reply(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+    handoff_id: object,
+) -> str | None:
+    messages = db.scalars(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.sender_type == "ai",
+            Message.direction == "outbound",
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(20)
+    )
+    expected_handoff_id = str(handoff_id)
+    for message in messages:
+        metadata = dict(message.metadata_json or {})
+        if metadata.get("handoff_ack") is not True:
+            continue
+        if str(metadata.get("handoff_id") or "") != expected_handoff_id:
+            continue
+        content = str(message.content or "").strip()
+        if content:
+            return content
+    return None
+
+
+def _deterministic_handoff_continuation_reply(customer_text: str) -> str:
+    arabic = any("\u0600" <= char <= "\u06ff" for char in customer_text)
+    if arabic:
+        return "الطلب لسه مع فريق العيادة للمراجعة، وأي إجراء هيتم بعد مراجعتهم."
+    return "Your request is still with the clinic team for review. Any action will happen after their review."
+
+
+def _persist_handoff_continuation(
+    *,
+    db: Session,
+    workspace: Workspace,
+    conversation: Conversation,
+    inbound: Message,
+    run_id: UUID,
+    outbound_delivery_status: str,
+    source: str,
+) -> AgentChatResponse | None:
+    locked_conversation = lock_conversation_ownership(
+        db,
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+    )
+    if locked_conversation is None:
+        raise AgentChatError("Conversation disappeared before handoff continuation.")
+    conversation = locked_conversation
+    active_handoff = get_active_handoff(
+        db,
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+        for_update=True,
+    )
+    if not _v2_handoff_continuation_allowed(conversation, active_handoff):
+        db.rollback()
+        return None
+
+    handoff_id = getattr(active_handoff, "id", None)
+    previous_ack = (
+        _previous_handoff_ack_reply(
+            db,
+            conversation=conversation,
+            inbound=inbound,
+            handoff_id=handoff_id,
+        )
+        if handoff_id is not None
+        else None
+    )
+    reply = previous_ack or _deterministic_handoff_continuation_reply(
+        str(inbound.content or "")
+    )
+
+    outbound_now = datetime.now(UTC)
+    outbound = Message(
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+        channel_connection_id=conversation.channel_connection_id,
+        sender_type="ai",
+        direction="outbound",
+        in_reply_to_message_id=inbound.id,
+        created_at=outbound_now,
+        message_type="text",
+        content=reply,
+        delivery_status=outbound_delivery_status,
+        metadata_json={
+            "agent_run_id": str(run_id),
+            "model": "deterministic:handoff-continuation",
+            "source": source,
+            "runtime": "v2",
+            "in_reply_to_message_id": str(inbound.id),
+            "dispatch_required": outbound_delivery_status == "queued",
+            "handoff_continuation": True,
+            "handoff_id": str(handoff_id),
+            "handoff_ack_reused": previous_ack is not None,
+        },
+    )
+    conversation.last_message_at = outbound_now
+    db.add(outbound)
+    db.commit()
+
+    return AgentChatResponse(
+        run_id=run_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+        outbound_message_id=outbound.id,
+        reply=reply,
+        handoff_required=True,
+        agent_paused=True,
+        model="deterministic:handoff-continuation",
+    )
+
+
 def _recent_verified_read_context(
     db: Session,
     *,
@@ -391,6 +527,18 @@ def _run_v2_after_inbound(
         workspace_id=workspace.id,
         conversation_id=conversation.id,
     )
+    if _v2_handoff_continuation_allowed(conversation, active_handoff):
+        continuation = _persist_handoff_continuation(
+            db=db,
+            workspace=workspace,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            outbound_delivery_status=outbound_delivery_status,
+            source=source,
+        )
+        if continuation is not None:
+            return continuation
     if not agent_can_reply(conversation) or active_handoff is not None:
         return AgentChatResponse(
             run_id=run_id,
@@ -528,6 +676,11 @@ def _run_v2_after_inbound(
             "in_reply_to_message_id": str(inbound.id),
             "dispatch_required": outbound_delivery_status == "queued",
             "handoff_ack": handoff_ack_allowed,
+            "handoff_id": (
+                str(active_handoff.id)
+                if handoff_ack_allowed and getattr(active_handoff, "id", None) is not None
+                else None
+            ),
             "v2_read_context": verified_read_context,
             "v2_action_context": verified_action_context,
             "v2_action_context_passthrough": _safe_action_context_passthrough(turn),

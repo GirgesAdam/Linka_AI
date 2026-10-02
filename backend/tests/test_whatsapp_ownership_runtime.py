@@ -21,14 +21,23 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _message(*, handoff_ack: bool = False) -> SimpleNamespace:
+def _message(
+    *,
+    handoff_ack: bool = False,
+    handoff_continuation: bool = False,
+    handoff_id: object | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
         workspace_id=uuid4(),
         conversation_id=uuid4(),
         sender_type="ai",
         direction="outbound",
-        metadata_json={"handoff_ack": handoff_ack},
+        metadata_json={
+            "handoff_ack": handoff_ack,
+            "handoff_continuation": handoff_continuation,
+            "handoff_id": str(handoff_id) if handoff_id is not None else None,
+        },
         delivery_status="queued",
     )
 
@@ -74,6 +83,57 @@ def test_handoff_ack_is_only_sendable_before_staff_claim() -> None:
         conversation=human,  # type: ignore[arg-type]
         message=message,  # type: ignore[arg-type]
         active_handoff=claimed,  # type: ignore[arg-type]
+    )
+
+
+def test_handoff_continuation_is_revalidated_at_dispatch_time() -> None:
+    handoff_id = uuid4()
+    message = _message(handoff_continuation=True, handoff_id=handoff_id)
+    pending = SimpleNamespace(
+        id=handoff_id,
+        source="ai",
+        status="pending",
+        assigned_user_id=None,
+    )
+    claimed = SimpleNamespace(
+        id=handoff_id,
+        source="ai",
+        status="claimed",
+        assigned_user_id=uuid4(),
+    )
+    different_pending = SimpleNamespace(
+        id=uuid4(),
+        source="ai",
+        status="pending",
+        assigned_user_id=None,
+    )
+    staff_pending = SimpleNamespace(
+        id=handoff_id,
+        source="staff",
+        status="pending",
+        assigned_user_id=None,
+    )
+    human = _conversation(owner_type="human", status="pending")
+
+    assert ai_dispatch_is_sendable(
+        conversation=human,  # type: ignore[arg-type]
+        message=message,  # type: ignore[arg-type]
+        active_handoff=pending,  # type: ignore[arg-type]
+    )
+    assert not ai_dispatch_is_sendable(
+        conversation=human,  # type: ignore[arg-type]
+        message=message,  # type: ignore[arg-type]
+        active_handoff=claimed,  # type: ignore[arg-type]
+    )
+    assert not ai_dispatch_is_sendable(
+        conversation=human,  # type: ignore[arg-type]
+        message=message,  # type: ignore[arg-type]
+        active_handoff=different_pending,  # type: ignore[arg-type]
+    )
+    assert not ai_dispatch_is_sendable(
+        conversation=human,  # type: ignore[arg-type]
+        message=message,  # type: ignore[arg-type]
+        active_handoff=staff_pending,  # type: ignore[arg-type]
     )
 
 
