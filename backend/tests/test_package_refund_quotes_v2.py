@@ -77,6 +77,31 @@ def test_migrated_opening_balance_adds_historical_consumption_for_refund(monkeyp
     assert quote.refundable_minor == 200000
 
 
+def test_migrated_quote_without_snapshot_uses_service_price(monkeypatch) -> None:
+    package = _package(
+        opening_sessions_remaining=3,
+        standalone_session_price_minor_at_purchase=None,
+    )
+    monkeypatch.setattr(
+        package_refund_quotes,
+        "_usage_totals",
+        lambda *args, **kwargs: (0, 1),
+    )
+    monkeypatch.setattr(
+        package_refund_quotes,
+        "_package_financial_rows",
+        lambda *args, **kwargs: ([SimpleNamespace(amount_minor=400000)], []),
+    )
+    db = SimpleNamespace(scalar=lambda *args, **kwargs: 70000)
+
+    quote = package_refund_quotes._quote_one(db, package=package)
+
+    assert quote.consumed_sessions == 4
+    assert quote.standalone_session_price_minor_at_purchase == 70000
+    assert quote.consumed_value_minor == 280000
+    assert quote.refundable_minor == 120000
+
+
 def test_unknown_migrated_total_fails_closed(monkeypatch) -> None:
     package = _package(opening_sessions_remaining=3, sessions_total_known=False)
     monkeypatch.setattr(
