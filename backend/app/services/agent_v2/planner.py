@@ -314,6 +314,49 @@ def _clarify(
     )
 
 
+def resolve_same_turn_verified_service_dependency(
+    step: PlanStep,
+    *,
+    operation: TurnOperation,
+    verified_appointment_parameters: dict[str, object] | None,
+) -> PlanStep:
+    """Resolve relational pricing only from a prior same-turn verified appointment read."""
+    if (
+        operation.type != "pricing"
+        or operation.same_turn_service_source != "verified_appointment"
+        or step.disposition != "clarify"
+        or step.clarification_field != "service"
+    ):
+        return step
+
+    verified = dict(verified_appointment_parameters or {})
+    service_id = verified.get("service_id")
+    if service_id in (None, ""):
+        return step
+
+    facts = {**step.facts, "service_id": service_id}
+    device_key = verified.get("device_key")
+    if device_key not in (None, ""):
+        facts["device_key"] = device_key
+
+    return step.model_copy(
+        update={
+            "disposition": "read",
+            "reads": [
+                ReadRequest(
+                    kind="service_catalog",
+                    parameters={"service_id": service_id},
+                )
+            ],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "answer_price",
+            "clarification_field": None,
+            "facts": facts,
+        }
+    )
+
+
 def _safety_handoff(turn: TiaTurnUnderstanding) -> TurnPlan | None:
     signals = set(turn.safety_signals)
     if "urgent_medical" in signals:
