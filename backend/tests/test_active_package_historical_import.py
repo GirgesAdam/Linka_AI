@@ -424,7 +424,14 @@ def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() 
         assert readme["A7"].value == "سارة أحمد"
         assert readme["B7"].value == "01012345678"
         assert readme["B7"].number_format == "@"
-        assert readme["H7"].value == "15/02/2026"
+        assert readme["C7"].value == laser_service
+        assert readme["D7"].value == "Candela Gentle"
+        assert readme["E7"].value == 8
+        assert readme["F7"].value == 3
+        assert readme["G7"].value == 5000
+        assert readme["H7"].value.date().isoformat() == "2026-02-15"
+        assert readme["H7"].number_format == "dd/mm/yyyy"
+        assert readme["I7"].value is None
 
         readme_text = "\n".join(
             str(cell.value)
@@ -433,13 +440,15 @@ def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() 
             if cell.value is not None
         )
         assert "طريقة الاستخدام" not in readme_text
-        assert readme["A9"].value == "الخدمات"
-        assert readme["D9"].value == "الأجهزة"
+        assert readme["A10"].value == "الخدمات"
+        assert readme["D10"].value == "الأجهزة"
         assert readme["A11"].value == "اسم الخدمة"
         assert readme["D11"].value == "اسم الجهاز"
 
         assert "ServicesTable" in readme.tables
         assert "DevicesTable" in readme.tables
+        assert readme.tables["ServicesTable"].tableStyleInfo.name == "TableStyleMedium2"
+        assert readme.tables["DevicesTable"].tableStyleInfo.name == "TableStyleMedium2"
         device_values = {
             readme.cell(row=row_number, column=4).value
             for row_number in range(12, 15)
@@ -448,6 +457,10 @@ def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() 
         assert "لو الخدمة لا تستخدم جهاز ليزر" in readme_text
 
         assert [sheet.cell(1, column).value for column in range(1, 10)] == expected_headers
+        assert [sheet.cell(2, column).value for column in range(1, 10)] == [None] * 9
+        assert "ActivePackagesTable" in sheet.tables
+        assert sheet.tables["ActivePackagesTable"].ref == "A1:I2"
+        assert sheet.tables["ActivePackagesTable"].tableStyleInfo.name == "TableStyleMedium2"
         assert sheet["A1"].fill.fill_type is None
         assert readme["A1"].fill.fill_type is None
         assert sheet["B2"].number_format == "@"
@@ -458,7 +471,7 @@ def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() 
             for validation in sheet.data_validations.dataValidation
         }
         assert set(validations) == {"C2:C5000", "D2:D5000"}
-        assert "README" in validations["C2:C5000"].formula1
+        assert "ServicesTable" in validations["C2:C5000"].formula1
         assert "DevicesTable" in validations["D2:D5000"].formula1
         assert validations["D2:D5000"].allow_blank is True
     finally:

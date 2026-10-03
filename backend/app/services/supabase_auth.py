@@ -4,8 +4,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from supabase import Client, create_client
-from supabase.lib.client_options import ClientOptions
+from supabase_auth import SyncGoTrueAdminAPI
 
 from app.core.config import settings
 
@@ -27,20 +26,22 @@ class InvitedAuthUser:
     email: str
 
 
-def _server_client(key: str) -> Client:
-    return create_client(
-        settings.supabase_url,
-        key,
-        options=ClientOptions(
-            auto_refresh_token=False,
-            persist_session=False,
-        ),
-    )
-
-
 @lru_cache
-def get_admin_auth_client() -> Client:
-    return _server_client(settings.supabase_secret_key)
+def get_admin_auth_client() -> SyncGoTrueAdminAPI:
+    """Return the minimal server-side Supabase Auth admin client.
+
+    Keep this independent from the full ``supabase.Client`` because workspace
+    invitations only need the GoTrue admin API. This also avoids coupling auth
+    invitations to Storage/PostgREST client option compatibility.
+    """
+    key = settings.supabase_secret_key
+    return SyncGoTrueAdminAPI(
+        url=f"{settings.supabase_url.rstrip('/')}/auth/v1",
+        headers={
+            "apiKey": key,
+            "Authorization": f"Bearer {key}",
+        },
+    )
 
 
 def _to_mapping(value: Any) -> dict[str, Any]:
@@ -136,7 +137,7 @@ def verify_access_token(token: str) -> VerifiedAuthIdentity:
 
 def invite_user_by_email(email: str) -> InvitedAuthUser:
     try:
-        response = get_admin_auth_client().auth.admin.invite_user_by_email(email)
+        response = get_admin_auth_client().invite_user_by_email(email)
     except Exception as exc:
         raise SupabaseAuthError("Supabase could not send the invitation.") from exc
 

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.table import Table
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -2042,14 +2042,22 @@ def build_historical_import_template(
         },
         key=str.casefold,
     )
-    example_service = valid_services[0] if valid_services else "اختر خدمة من القائمة"
-    example_device = valid_devices[0] if valid_devices else None
+    example_service = (
+        "ليزر إزالة الشعر - جسم كامل سيدات"
+        if "ليزر إزالة الشعر - جسم كامل سيدات" in valid_services
+        else (valid_services[0] if valid_services else "اختر خدمة من القائمة")
+    )
+    example_device = (
+        "Candela Gentle"
+        if "Candela Gentle" in valid_devices
+        else (valid_devices[0] if valid_devices else None)
+    )
 
     workbook = Workbook()
     instructions = workbook.active
     instructions.title = "README"
     instructions.sheet_view.rightToLeft = True
-    instructions.sheet_view.showGridLines = False
+    instructions.sheet_view.showGridLines = True
 
     title_font = Font(bold=True, size=15)
     section_font = Font(bold=True, size=12)
@@ -2098,11 +2106,11 @@ def build_historical_import_template(
         "01012345678",
         example_service,
         example_device,
-        6,
+        8,
         3,
-        3000,
-        "15/02/2026",
-        3000,
+        5000,
+        date(2026, 2, 15),
+        None,
     ]
     for column, header in enumerate(arabic_headers, start=1):
         header_cell = instructions.cell(row=6, column=column, value=header)
@@ -2113,11 +2121,12 @@ def build_historical_import_template(
         value_cell.border = table_border
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     instructions["B7"].number_format = "@"
+    instructions["H7"].number_format = "dd/mm/yyyy"
 
-    instructions["A9"] = "الخدمات"
-    instructions["A9"].font = section_font
-    instructions["D9"] = "الأجهزة"
-    instructions["D9"].font = section_font
+    instructions["A10"] = "الخدمات"
+    instructions["A10"].font = section_font
+    instructions["D10"] = "الأجهزة"
+    instructions["D10"].font = section_font
 
     instructions["A11"] = "اسم الخدمة"
     instructions["A11"].font = header_font
@@ -2133,12 +2142,18 @@ def build_historical_import_template(
             cell.border = table_border
             cell.alignment = Alignment(horizontal="right", vertical="center")
         service_end_row = service_start_row + len(valid_services) - 1
-        instructions.add_table(
-            Table(
-                displayName="ServicesTable",
-                ref=f"A11:A{service_end_row}",
-            )
+        services_table = Table(
+            displayName="ServicesTable",
+            ref=f"A11:A{service_end_row}",
         )
+        services_table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        instructions.add_table(services_table)
     else:
         instructions["A12"] = "لا توجد خدمات نشطة حاليًا."
         instructions["A12"].border = table_border
@@ -2158,56 +2173,55 @@ def build_historical_import_template(
             cell.border = table_border
             cell.alignment = Alignment(horizontal="right", vertical="center")
         device_end_row = device_start_row + len(valid_devices) - 1
-        instructions.add_table(
-            Table(
-                displayName="DevicesTable",
-                ref=f"D11:D{device_end_row}",
-            )
+        devices_table = Table(
+            displayName="DevicesTable",
+            ref=f"D11:D{device_end_row}",
         )
+        devices_table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        instructions.add_table(devices_table)
     else:
         instructions["D12"] = "لا توجد أجهزة ليزر مفعلة حاليًا."
         instructions["D12"].border = table_border
         instructions["D12"].alignment = Alignment(horizontal="right")
 
-    note_row = max(service_end_row or 12, device_end_row or 12) + 2
-    instructions.merge_cells(
-        start_row=note_row,
-        start_column=4,
-        end_row=note_row + 1,
-        end_column=9,
-    )
-    instructions.cell(row=note_row, column=4).value = (
+    note_row = 14
+    instructions.merge_cells("F14:I15")
+    instructions.cell(row=note_row, column=6).value = (
         "لو الخدمة لا تستخدم جهاز ليزر، اترك خانة «اسم الجهاز» فارغة "
         "في جدول الباقات النشطة."
     )
-    instructions.cell(row=note_row, column=4).alignment = Alignment(
+    instructions.cell(row=note_row, column=6).alignment = Alignment(
         horizontal="right",
         vertical="top",
         wrap_text=True,
     )
 
     readme_widths = {
-        "A": 28,
+        "A": 34,
         "B": 18,
-        "C": 30,
+        "C": 34,
         "D": 20,
-        "E": 22,
-        "F": 18,
+        "E": 20,
+        "F": 22,
         "G": 18,
         "H": 18,
         "I": 18,
     }
     for column_letter, width in readme_widths.items():
         instructions.column_dimensions[column_letter].width = width
-    instructions.freeze_panes = "A3"
-
     sheet = workbook.create_sheet("active_packages")
     sheet.sheet_view.rightToLeft = True
-    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.showGridLines = True
     sheet.append(arabic_headers)
-    sheet.freeze_panes = "A2"
+    sheet.append([None] * len(arabic_headers))
 
-    widths = [24, 18, 32, 18, 20, 22, 18, 18, 18]
+    widths = [34, 18, 34, 20, 20, 22, 18, 18, 18]
     for index, width in enumerate(widths, start=1):
         header_cell = sheet.cell(row=1, column=index)
         header_cell.font = header_font
@@ -2215,19 +2229,22 @@ def build_historical_import_template(
         header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         sheet.column_dimensions[header_cell.column_letter].width = width
     sheet.row_dimensions[1].height = 24
+    active_packages_table = Table(displayName="ActivePackagesTable", ref="A1:I2")
+    active_packages_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    sheet.add_table(active_packages_table)
 
     for row_number in range(2, 5001):
         sheet.cell(row=row_number, column=2).number_format = "@"
         sheet.cell(row=row_number, column=8).number_format = "dd/mm/yyyy"
 
     if service_start_row is not None and service_end_row is not None:
-        formula = (
-            'INDIRECT("\'README\'!$A$'
-            + str(service_start_row)
-            + ':$A$'
-            + str(service_end_row)
-            + '")'
-        )
+        formula = 'INDIRECT("ServicesTable[اسم الخدمة]")'
         validation = DataValidation(
             type="list",
             formula1=formula,
