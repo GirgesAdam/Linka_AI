@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TurnOperation
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
@@ -175,6 +177,38 @@ def _booking_followup_parameters(
     )
 
 
+ActiveTaskLifecycle = Literal["preserve", "continue", "replace"]
+
+
+def classify_active_task_lifecycle(
+    operation: TurnOperation,
+    *,
+    active_task: ActiveTaskState | None,
+) -> ActiveTaskLifecycle:
+    """Classify task-local lifecycle from typed semantics, never customer text."""
+    if active_task is None or operation.execution_intent != "execute":
+        return "preserve"
+
+    requested_task_type = (
+        "booking"
+        if operation.type == "book"
+        else "reschedule"
+        if operation.type == "reschedule"
+        else None
+    )
+    if requested_task_type is None:
+        return "preserve"
+
+    # A booking cannot continue a reschedule and vice versa. This deterministic
+    # boundary prevents a stale task from blocking a clearly different primary goal.
+    if requested_task_type != active_task.task_type:
+        return "replace"
+
+    if operation.active_task_relationship == "replace":
+        return "replace"
+    return "continue"
+
+
 def adapt_matching_active_task_step(
     step: PlanStep,
     *,
@@ -182,7 +216,16 @@ def adapt_matching_active_task_step(
     active_task: ActiveTaskState | None,
     context: SemanticContext,
 ) -> PlanStep:
-    """Merge structured continuations into verified active workflow state."""
+    """Merge continuations or mark an explicit fresh task for safe replacement."""
+    lifecycle = classify_active_task_lifecycle(operation, active_task=active_task)
+    if lifecycle == "replace":
+        params = resolved_operation_parameters(operation, context=context)
+        return step.model_copy(
+            update={
+                "state_action": "replace_active",
+                "facts": {**step.facts, **params},
+            }
+        )
     if isinstance(active_task, BookingTaskState):
         if active_task.grouped is not None and operation.type in {"continue_active", "book"}:
             return step.model_copy(update={"state_action": "none"})

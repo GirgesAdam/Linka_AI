@@ -962,9 +962,34 @@ def _persist_final_task(
     final_task: ActiveTaskState | None,
     cancelled_existing_task: bool,
     cancelled_existing_task_reason: str | None,
+    replaced_existing_task: bool,
+    replaced_existing_task_reason: str | None,
     completed_existing_task_result: dict[str, object] | None,
 ) -> PersistedActiveTask | None:
     initial_task = initial.active_task if initial is not None else None
+
+    if replaced_existing_task and initial is not None:
+        cancel_active_task(
+            db,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            patient_id=patient_id,
+            expected=initial,
+            run_id=run_id,
+            reason=replaced_existing_task_reason or "fresh_customer_task_replaced_active_task",
+        )
+        if final_task is None:
+            return None
+        return save_active_task(
+            db,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            patient_id=patient_id,
+            active_task=final_task,
+            run_id=run_id,
+            expected=None,
+        )
+
     if final_task == initial_task and completed_existing_task_result is None:
         return initial
 
@@ -1190,6 +1215,8 @@ def orchestrate_v2_turn(
     outgoing_pending_choice: OptionSnapshot | None = None
     cancelled_existing_task = False
     cancelled_existing_task_reason: str | None = None
+    replaced_existing_task = False
+    replaced_existing_task_reason: str | None = None
     completed_existing_task_result: dict[str, object] | None = None
     completed_action_context: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
@@ -1390,6 +1417,14 @@ def orchestrate_v2_turn(
                 cancelled_existing_task_reason = (
                     "canonical_reschedule_target_non_actionable"
                 )
+        if (
+            advanced.state_action == "replace_active"
+            and transition.changed
+            and persisted is not None
+        ):
+            replaced_existing_task = True
+            replaced_existing_task_reason = "fresh_customer_task_replaced_active_task"
+            outgoing_pending_choice = None
         current_task = transition.active_task
 
         if advanced.disposition == "write_ready":
@@ -1558,6 +1593,8 @@ def orchestrate_v2_turn(
         final_task=current_task,
         cancelled_existing_task=cancelled_existing_task,
         cancelled_existing_task_reason=cancelled_existing_task_reason,
+        replaced_existing_task=replaced_existing_task,
+        replaced_existing_task_reason=replaced_existing_task_reason,
         completed_existing_task_result=completed_existing_task_result,
     )
 

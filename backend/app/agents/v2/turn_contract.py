@@ -58,6 +58,7 @@ VerifiedReadClearField = Literal["date", "time"]
 AppointmentFactChallenge = Literal["none", "time"]
 SameTurnServiceSource = Literal["none", "verified_appointment"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
+ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -317,6 +318,20 @@ class TurnOperation(StrictContractModel):
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.
     execution_intent: ExecutionIntent = "execute"
+    active_task_relationship: ActiveTaskRelationship = Field(
+        default="unspecified",
+        description=(
+            "Relationship of this primary task operation to the explicitly supplied active_task. "
+            "Use continue only for book/reschedule when the latest customer message is continuing "
+            "or correcting that same unfinished task. Use replace only when the latest customer "
+            "message itself explicitly starts a separate/unrelated book or reschedule goal and "
+            "abandons the unfinished task, including an additional/new booking. Never carry replace "
+            "forward from an earlier message: a later date/time/doctor/device/service answer for the "
+            "newly active task is continue. Leave unspecified for side reads, social turns, when there "
+            "is no active_task, or when this relationship does not apply. This marker never mutates "
+            "state by itself; deterministic Python owns lifecycle transitions."
+        ),
+    )
     grouped_booking_action: GroupedBookingAction = Field(
         default="preserve_group",
         description=(
@@ -373,6 +388,17 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_active_task_relationship(self) -> TurnOperation:
+        if (
+            self.active_task_relationship != "unspecified"
+            and self.type not in {"book", "reschedule"}
+        ):
+            raise ValueError(
+                "active_task_relationship is only valid for book/reschedule primary tasks."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_same_turn_service_source(self) -> TurnOperation:

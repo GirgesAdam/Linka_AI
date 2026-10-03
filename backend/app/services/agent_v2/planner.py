@@ -56,6 +56,7 @@ StateAction = Literal[
     "none",
     "start_booking",
     "start_reschedule",
+    "replace_active",
     "update_active",
     "select_active",
     "cancel_active",

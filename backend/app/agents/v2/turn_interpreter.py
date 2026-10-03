@@ -147,11 +147,27 @@ SEMANTIC PRINCIPLES
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
+- For book/reschedule only, classify the operation's relationship to the explicitly supplied
+  active_task in active_task_relationship. Use continue when the latest customer message is still
+  working on the same unfinished task, including correcting its service/date/time/doctor/device or
+  supplying a missing constraint. Use replace only when the latest customer message itself explicitly
+  starts a separate/unrelated booking or reschedule and abandons the unfinished task, including
+  language that clearly asks for another/additional/new appointment. Never carry a replace decision
+  forward merely because an earlier customer message started the current task. Once Python exposes
+  that new task as active_task, later date/time/doctor/device/service answers for it are continuations.
+  If the active task is reschedule and the customer explicitly
+  asks to create a new appointment, that book operation is replace; a book cannot continue a
+  reschedule. Likewise an explicit new reschedule cannot continue a booking. Do not infer replace
+  merely because one constraint changes. Leave unspecified for side reads/social turns and when
+  no active task applies. Python, not this marker, performs the lifecycle transition.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
-- Use native recent dialogue to resolve elliptical follow-ups, but prefer recent_verified_read and
-  recent_verified_action when supplied because those scopes were verified by Python. Do not
-  reconstruct stale constraints from assistant prose when a verified structured scope exists.
+- Use native recent dialogue to resolve elliptical follow-ups, but prefer active_task,
+  recent_verified_read, and recent_verified_action when supplied because those scopes were verified
+  by Python. The supplied active_task is authoritative for task-local constraints. If a date/time/
+  doctor/device/slot is absent from the current active_task, do not resurrect that constraint from
+  an older abandoned task in native dialogue. Do not reconstruct stale constraints from assistant
+  prose when a verified structured scope exists.
 - Ordinal references to an immediately preceding option list are positional: first/second/third (and
   equivalents such as الأولى/التانية/الثالثة) refer to the corresponding displayed item in that
   list, in order. Never reinterpret "the second" as "the other" or the last item. Ground the chosen
