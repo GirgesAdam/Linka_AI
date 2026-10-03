@@ -332,6 +332,8 @@ Result:
 - fresh write authorization source;
 - no stale Under Arm task-local constraints leaked.
 
+Adjacent report-only observation: one live T4 responder run still mentioned the prior Under Arm booking in conversational wording even though the structured relation was `replace` and the persisted fresh task contained only Full Body with null old date/time/device/doctor/options. No responder-wording patch was made because that is outside this root-cause task.
+
 ## Metrics
 
 | Metric | Before | After |
@@ -374,6 +376,7 @@ Product/runtime:
 Tests/evidence:
 
 - `backend/tests/test_v2_fresh_task_lifecycle.py`
+- `backend/tests/test_v2_state_persistence.py` (explicit fail-closed invariant regression)
 - `tools/agent_eval/run_fresh_task_lifecycle.py`
 - `docs/AGENT_FRESH_TASK_LIFECYCLE_FIX_20261003.md`
 
@@ -399,7 +402,7 @@ pytest -q \
   tests/test_v2_turn_contract.py \
   tests/test_v2_turn_interpreter.py
 
-66 passed
+67 passed
 ```
 
 ### Historical F1–F6 guardrails

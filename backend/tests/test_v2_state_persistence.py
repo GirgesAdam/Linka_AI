@@ -225,3 +225,33 @@ def test_grouped_booking_state_round_trips_without_schema_version_bump() -> None
         "service-1",
         "service-2",
     ]
+
+
+
+def test_persisted_task_type_change_still_fails_closed() -> None:
+    booking = _booking_task()
+    reschedule = _reschedule_task()
+    flow = _flow_for_task(reschedule)
+    expected = state_persistence.PersistedActiveTask(
+        active_task=reschedule,
+        flow_id=flow.id,
+        flow_version=flow.version,
+    )
+
+    class FakeSession:
+        def scalar(self, statement):
+            return flow
+
+    with pytest.raises(
+        state_persistence.V2StateConflictError,
+        match="cannot change task type in place",
+    ):
+        state_persistence.save_active_task(
+            FakeSession(),
+            workspace_id=flow.workspace_id,
+            conversation_id=flow.conversation_id,
+            patient_id=flow.patient_id,
+            active_task=booking,
+            run_id=uuid4(),
+            expected=expected,
+        )
