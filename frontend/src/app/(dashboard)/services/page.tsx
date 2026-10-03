@@ -1,4 +1,4 @@
-import { Cpu, PackageCheck, PackagePlus, Save } from "lucide-react";
+import { ChevronDown, Cpu, PackageCheck, PackagePlus, Save, Settings2 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -209,23 +209,66 @@ export default async function ServicesPage() {
           const serviceOffers = packageOffers.filter(
             (offer) => offer.service_id === service.id && offer.device_key === null,
           );
+          const activeDevices = devices.filter((device) => device.is_active);
+          const configuredDeviceCount = activeDevices.filter((device) => {
+            const row = prices.find((item) => item.device_key === device.device_key);
+            return Boolean(row?.configured && row.price_minor != null);
+          }).length;
+
           return (
-            <Card key={service.id}>
-              <CardHeader className="flex-row items-start justify-between gap-3">
-                <div>
-                  <CardTitle>{service.name}</CardTitle>
-                  <p className="mt-1 text-xs font-semibold text-[var(--muted)]">{categoryLabel(service.operational_category)} · {service.requires_laser_device ? "المدة حسب الجهاز" : `${service.duration_minutes} دقيقة`}</p>
+            <details
+              key={service.id}
+              className="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-shadow open:shadow-md"
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-4 sm:px-5">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="truncate text-base font-black text-slate-950">{service.name}</h2>
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-black ${
+                      service.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+                    }`}>
+                      {service.is_active ? "مفعلة" : "متوقفة"}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs font-semibold text-slate-500">
+                    <span>{categoryLabel(service.operational_category)}</span>
+                    <span>
+                      {service.requires_laser_device
+                        ? `${configuredDeviceCount} من ${activeDevices.length} أجهزة مفعلة`
+                        : `${service.duration_minutes} دقيقة`}
+                    </span>
+                    <span>
+                      {service.requires_laser_device
+                        ? "السعر حسب الجهاز"
+                        : formatMoney(service.price_minor, service.currency)}
+                    </span>
+                  </div>
                 </div>
-                <span className="text-sm font-black text-slate-900">{service.requires_laser_device ? "حسب الجهاز" : formatMoney(service.price_minor, service.currency)}</span>
-              </CardHeader>
-              <CardContent className="space-y-4">
+                <div className="flex shrink-0 items-center gap-2 text-xs font-black text-slate-600">
+                  <span className="hidden sm:inline">عرض التفاصيل</span>
+                  <ChevronDown size={18} className="transition-transform group-open:rotate-180" />
+                </div>
+              </summary>
+
+              <div className="space-y-3 border-t border-slate-100 bg-slate-50/40 p-3 sm:p-4">
                 {isAdmin ? (
-                  <ServicePricingForm service={service} devicePrices={prices} devices={devices} />
+                  <details className="group/section rounded-xl border border-slate-200 bg-white">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+                      <span className="flex items-center gap-2 text-sm font-black text-slate-900">
+                        <Settings2 size={16} />
+                        إعدادات الخدمة والسعر
+                      </span>
+                      <ChevronDown size={16} className="transition-transform group-open/section:rotate-180" />
+                    </summary>
+                    <div className="border-t border-slate-100 p-3">
+                      <ServicePricingForm service={service} devicePrices={prices} devices={devices} />
+                    </div>
+                  </details>
                 ) : null}
 
-                {service.requires_laser_device && (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    {devices.filter((device) => device.is_active).map((device) => {
+                {service.requires_laser_device ? (
+                  <div className="space-y-2">
+                    {activeDevices.map((device) => {
                       const row = prices.find((item) => item.device_key === device.device_key);
                       const configured = Boolean(row?.configured && row.price_minor != null);
                       const deviceOffers = packageOffers
@@ -235,23 +278,37 @@ export default async function ServicesPage() {
                             offer.device_key === device.device_key,
                         )
                         .sort((left, right) => left.sessions_count - right.sessions_count);
-                      return (
-                        <div key={device.id} className="rounded-2xl border border-slate-200 p-4">
-                          <div className="mb-3 flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2 font-black text-slate-900"><Cpu size={16} /> {device.name}</div>
-                            {configured && row?.price_minor != null && <span className="text-xs font-black text-teal-800">{formatMoney(row.price_minor, row.currency)}</span>}
-                          </div>
-                          {configured && row?.duration_minutes ? (
-                            <div className="grid grid-cols-2 gap-2 text-xs">
-                              <div className="rounded-lg bg-slate-50 p-2"><span className="text-slate-500">السعر</span><b className="mt-1 block">{row.price_minor != null ? formatMoney(row.price_minor, row.currency) : "—"}</b></div>
-                              <div className="rounded-lg bg-slate-50 p-2"><span className="text-slate-500">المدة</span><b className="mt-1 block">{row.duration_minutes} دقيقة</b></div>
-                            </div>
-                          ) : (
-                            <div className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-600">الجهاز غير مفعّل على الخدمة دي.</div>
-                          )}
+                      const activeOfferCount = deviceOffers.filter((offer) => offer.is_active).length;
 
-                          <div className="mt-4 border-t border-slate-100 pt-4">
-                            <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900"><PackageCheck size={16} /> الباكيدجات</div>
+                      return (
+                        <details key={device.id} className="group/device rounded-xl border border-slate-200 bg-white">
+                          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 font-black text-slate-900">
+                                <Cpu size={16} />
+                                <span className="truncate">{device.name}</span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-2 text-[11px] font-semibold text-slate-500">
+                                {configured && row?.price_minor != null ? (
+                                  <>
+                                    <span>{formatMoney(row.price_minor, row.currency)}</span>
+                                    <span>·</span>
+                                    <span>{row.duration_minutes ?? service.duration_minutes} دقيقة</span>
+                                    <span>·</span>
+                                    <span>{activeOfferCount} باكيدج مفعلة</span>
+                                  </>
+                                ) : (
+                                  <span>غير مفعّل على الخدمة</span>
+                                )}
+                              </div>
+                            </div>
+                            <ChevronDown size={16} className="shrink-0 transition-transform group-open/device:rotate-180" />
+                          </summary>
+                          <div className="border-t border-slate-100 p-4">
+                            <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900">
+                              <PackageCheck size={16} />
+                              الباكيدجات
+                            </div>
                             <PackageOffersEditor
                               serviceId={service.id}
                               deviceKey={device.device_key}
@@ -261,27 +318,34 @@ export default async function ServicesPage() {
                               disabledMessage="فعّل الجهاز وحدد سعر الجلسة والمدة أولًا قبل تفعيل باكيدجاته."
                             />
                           </div>
-                        </div>
+                        </details>
                       );
                     })}
                   </div>
-                )}
-
-                {!service.requires_laser_device && (
-                  <div className="rounded-2xl border border-slate-200 p-4">
-                    <div className="mb-3 flex items-center gap-2 text-sm font-black text-slate-900">
-                      <PackageCheck size={16} /> الباكيدجات
+                ) : (
+                  <details className="group/packages rounded-xl border border-slate-200 bg-white">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+                      <span className="flex items-center gap-2 text-sm font-black text-slate-900">
+                        <PackageCheck size={16} />
+                        الباكيدجات
+                        <span className="text-xs font-semibold text-slate-500">
+                          ({serviceOffers.filter((offer) => offer.is_active).length} مفعلة)
+                        </span>
+                      </span>
+                      <ChevronDown size={16} className="transition-transform group-open/packages:rotate-180" />
+                    </summary>
+                    <div className="border-t border-slate-100 p-4">
+                      <PackageOffersEditor
+                        serviceId={service.id}
+                        deviceKey={null}
+                        offers={serviceOffers}
+                        isAdmin={isAdmin}
+                      />
                     </div>
-                    <PackageOffersEditor
-                      serviceId={service.id}
-                      deviceKey={null}
-                      offers={serviceOffers}
-                      isAdmin={isAdmin}
-                    />
-                  </div>
+                  </details>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </details>
           );
         })}
       </div>

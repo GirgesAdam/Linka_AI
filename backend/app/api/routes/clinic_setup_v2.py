@@ -409,7 +409,7 @@ def download_history_template(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": 'attachment; filename="Linka_Active_Packages_Import_v2.xlsx"'
+            "Content-Disposition": 'attachment; filename="Linka_Active_Packages_Prototype.xlsx"'
         },
     )
 
