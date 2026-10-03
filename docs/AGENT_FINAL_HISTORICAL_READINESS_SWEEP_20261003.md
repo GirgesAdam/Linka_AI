@@ -376,6 +376,130 @@ CI Run **1873** on the prior report-only head `a4f4b21848570041015b9bb1d18480002
 
 The current update changes only this evidence report to add the fresh Desktop/targeted execution evidence. Shared CI must rerun on the exact final report head before closeout.
 
+## Post-sweep production channel incident -- RESOLVED
+
+After the Agent/product sweep completed, a separate WhatsApp Production operational issue was detected: customer WhatsApp messages were sent, but the Agent did not reply.
+
+This incident is classified as an **operational / external-provider configuration incident**, not an Agent product-code regression, and is **not** added to F1-F10.
+
+### Symptom and initial evidence
+
+Initial Production evidence showed the Linka side was locally healthy:
+
+- `tia-api` healthy;
+- WhatsApp transport tick = `200`;
+- connection = active;
+- `transport_ready = true`;
+- `webhook_verified = true`.
+
+However:
+
+- there were no recent inbound WhatsApp events after `2026-09-28`;
+- there was no recent Meta `POST` webhook traffic reaching the Production callback.
+
+Therefore the Agent was not receiving the customer message at all.
+
+### Root cause
+
+Read-only Production inspection plus Meta Graph inspection established:
+
+- WABA -> Meta App `subscribed_apps` = subscribed;
+- but Meta App-level webhook subscriptions returned `subscription_count = 0`.
+
+In other words, the Meta App no longer had an active `whatsapp_business_account/messages` subscription bound to the Linka Production callback, while Linka's stored connection state still reported:
+
+- `webhook_verified = true`;
+- `transport_ready = true`.
+
+The stored readiness had therefore become stale relative to Meta's current external configuration.
+
+### Repair
+
+A surgical repair was performed on the existing Production Meta connection only.
+
+The repair did **not** change:
+
+- `workspace.is_demo`;
+- demo runtime policy;
+- environment variables;
+- DB schema;
+- customer data;
+- booking/payment/package data.
+
+The repair:
+
+1. re-confirmed WABA `subscribed_apps`;
+2. recreated the Meta App webhook subscription;
+3. bound object = `whatsapp_business_account`;
+4. reused the existing Linka Production callback;
+5. subscribed field = `messages`.
+
+Final Meta Graph verification showed:
+
+- `subscription_count = 1`;
+- object = `whatsapp_business_account`;
+- callback matches the expected Linka Production callback;
+- `messages` subscribed = true.
+
+### Meta callback verification
+
+After the repair, Meta itself performed callback verification:
+
+- timestamp: `2026-10-03 09:46:00 UTC`;
+- User-Agent: `facebookplatform/1.0`;
+- `GET /api/v1/channels/whatsapp/webhook/5f1d9345-4209-4187-b980-9189f5d84001`;
+- result: `HTTP 200`.
+
+This proves Meta could reach and verify the Linka Production callback after the subscription repair.
+
+### End-to-end Production recovery
+
+A real customer message subsequently completed the full channel path.
+
+Inbound at `2026-10-03 09:57:00 UTC`:
+
+- `channel_inbound_event.status = processed`;
+- `attempts = 1`;
+- `last_error = empty`;
+- message `direction = inbound`;
+- `sender_type = patient`;
+- `delivery_status = received`.
+
+AI reply at `2026-10-03 09:57:10 UTC`:
+
+- `message_dispatch.status = read`;
+- `attempts = 1`;
+- `last_error = empty`;
+- `sender_type = ai`;
+- `direction = outbound`;
+- `delivery_status = read`;
+- `is_reply = true`.
+
+Therefore the recovered Production path was:
+
+`WhatsApp -> Meta -> Linka webhook -> inbound processing -> Agent -> outbound dispatch -> WhatsApp -> READ`.
+
+### Readiness interpretation
+
+The final historical/product sweep verdict remains **CLEAN** for the evaluated product baseline:
+
+`f74c98abf597cf5832de1abb86915a2d3ae3917f`
+
+The sweep found no new product-code P0/P1/P2/P3 regressions. The WhatsApp incident was a separate external-channel operational configuration failure that was:
+
+- detected;
+- root-caused;
+- repaired;
+- end-to-end verified before final closeout.
+
+### Residual operational recommendation
+
+Stored `webhook_verified` / `transport_ready` state is not sufficient by itself to prove that the current Meta App webhook subscription still exists.
+
+A future operational hardening task should add webhook-subscription reconciliation / staleness health detection so Linka can detect when the Meta App subscription disappears instead of continuing to report the local connection as healthy.
+
+This is a future recommendation only and is **not** a blocker for the current CLEAN product verdict after channel recovery.
+
 ## Final verdict
 
 # CLEAN
