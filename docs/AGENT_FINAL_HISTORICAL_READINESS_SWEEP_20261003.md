@@ -318,11 +318,29 @@ No substantive P0/P1/P2/P3 regression was identified by the curated historical/n
 
 Initial evaluated main is `f74c98abf597cf5832de1abb86915a2d3ae3917f`.
 
-A final main fetch/check is required after Shared CI on this evaluation report. If main moves, the changed-file set must be compared against the evaluated Agent/domain/import surfaces before the final verdict is frozen.
+Final main check after Shared CI still returned:
+
+`f74c98abf597cf5832de1abb86915a2d3ae3917f`
+
+Therefore main did **not** move during the sweep and no reconciliation/rerun was required.
 
 ## Shared CI
 
-Pending on the report-only evaluation head. The evaluation branch contains no product-code change; CI is expected to rerun the same backend/frontend gates plus the report commit.
+Report-only Draft PR: **#197**
+
+CI Run **1872** on report commit `c1531312f84b171b5d9e1fe7639e8538c0c0c31a` completed **SUCCESS**:
+
+- backend: SUCCESS
+- frontend: SUCCESS
+- agent eval tooling: SUCCESS
+- Ruff: SUCCESS
+- compileall: SUCCESS
+- Alembic single head: SUCCESS
+- clean PostgreSQL migration: SUCCESS
+- backend tests: **2106 passed, 4 skipped in 32.92s**
+- frontend lint/typegen/typecheck/build: SUCCESS
+
+This final documentation update changes only the evidence report; Shared CI is rerun once more on the exact final report head before closeout.
 
 ## Final verdict
 
