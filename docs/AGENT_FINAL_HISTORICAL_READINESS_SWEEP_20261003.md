@@ -23,13 +23,14 @@ The two ACCEPTABLE controls are the already-adjudicated presentation-only behavi
 
 ## Methodology and baseline integrity
 
-The requested authorized Desktop Commander host went offline at the start of this sweep, so a local isolated worktree could not be materialized. To avoid direct-main writes or unsafe production interaction, the evaluation branch was created directly from the exact GitHub main commit and only this evidence report is committed to it. No product file is modified.
+The authorized Desktop Commander host was initially unavailable, but returned online before closeout. The evaluation branch was then materialized as an isolated local worktree whose product merge-base is the exact latest `main` SHA `f74c98abf597cf5832de1abb86915a2d3ae3917f`. The only branch difference remains this evidence report; no product file is modified.
 
-This sweep therefore combines:
+This sweep combines:
 1. **Fresh latest-main CI evidence:** GitHub Actions CI Run **1871** on `f74c98ab...` completed SUCCESS and ran the entire latest-main backend/frontend gate.
-2. **Latest-main deterministic regression source:** every scenario below maps to tests present in `f74c98ab...`; Run 1871 executed the full suite: **2106 passed, 4 skipped**.
-3. **Recent exact live/rollback evidence for F1–F10:** the Agent/runtime baseline immediately before PR #196 was `a0d80981...`. PR #196 changed only Historical Import/template, Supabase invites, Services UI and Team UI; it changed no Agent/runtime files. Therefore the recent live/rollback evidence for F1–F10 remains architecturally applicable and is independently guarded by the latest-main deterministic suite.
-4. **Historical Import is not carried forward by assumption:** PR #196 modified `historical_import.py`, its route/template surface, and `test_active_package_historical_import.py`. The latest-main full CI reran those current tests on `f74c98ab...`.
+2. **Fresh targeted execution on the isolated worktree:** the historical/neighboring regression set was executed directly against the Railway `tia-agent-eval` environment and completed **309 passed in 199.40s**. The run covers F1–F8, F10 typed clinic/service/package responses, Dynamic Devices, Historical Import, packages, Pulse, financial ownership, medical safety/privacy, continuity, Agent E2E and problem-regression runners.
+3. **Fresh F9 latest-main control:** Arabic, Latin-only Arabizi, English and Arabic/code-switched availability variants were rerun through the actual interpreter/planner/read/response path on `f74c98ab...`. Verified availability truth remained identical; Latin-only Arabizi still renders in English and remains the already-adjudicated presentation-only ACCEPTABLE behavior.
+4. **Recent exact live/rollback evidence for F1–F8:** the Agent/runtime baseline immediately before PR #196 was `a0d80981...`. PR #196 changed only Historical Import/template, Supabase invites, Services UI and Team UI; it changed no Agent/runtime files. The fresh 309-test targeted execution independently revalidates the current latest-main behavior.
+5. **Historical Import is not carried forward by assumption:** PR #196 modified `historical_import.py`, its route/template surface, and `test_active_package_historical_import.py`; those latest-main Historical Import tests were included in the fresh targeted execution in addition to the full latest-main CI suite.
 
 PR #196 changed only:
 - `backend/app/api/routes/clinic_setup_v2.py`
@@ -55,6 +56,39 @@ GitHub Actions Run **1871** (`CI`) on exact SHA `f74c98abf597cf5832de1abb86915a2
 - backend tests: **2106 passed, 4 skipped**
 - frontend npm ci/audit/lint/typegen/typecheck/build: SUCCESS
 - Alembic head reached: `0089_dynamic_laser_device_references`
+
+## Fresh targeted regression execution
+
+Executed from the isolated evaluation worktree on the exact latest-main product baseline, using the Railway `tia-agent-eval` environment for DB-backed coverage:
+
+- result: **309 passed in 199.40s**
+- product code under test: `f74c98abf597cf5832de1abb86915a2d3ae3917f`
+- product code changes in evaluation branch: **NONE**
+- production writes: **NONE**
+
+The targeted set included:
+- historical F1–F8 regression files;
+- availability scope/pagination and handoff ownership/dispatch;
+- F10 clinic/service/package presentation contracts;
+- Dynamic Device migration/inactive-device/resource/package behavior;
+- active-package Historical Import including the PR #196 template/import surface;
+- patient packages, auto-package booking and package pricing;
+- Pulse reads/purchases/checkout/overage/additional-service billing;
+- service/device pricing and payment-information ownership;
+- medical safety, patient privacy/CRM scoping and grounded-evidence validation;
+- Agent E2E matrix and historical problem-regression runners.
+
+## Fresh F9 control on latest main
+
+Using one fixed verified Hydrafacial availability window for all variants:
+
+- Arabic request → Arabic-family reply, same verified slot;
+- Latin-only Arabizi request → English reply, same verified slot;
+- English request → English reply, same verified slot;
+- Arabic + English code-switch → Arabic-family reply, same verified slot;
+- Arabizi + Arabic-script code-switch → Arabic-family reply, same verified slot.
+
+No booking/payment/package/other write was pending in these availability controls. The Latin-only Arabizi behavior is therefore still presentation-only and remains **ACCEPTABLE**, not a reopened product failure.
 
 ## Scenario ledger
 
@@ -97,8 +131,8 @@ Each row records the customer/domain trigger, semantic/read/write decision, grou
 
 | ID | Customer / domain trigger | Semantic / read / write decision | Verified result / final reply | DB before/after | Class | Evidence |
 |---|---|---|---|---|---|---|
-| F9-01 | Latin-only Arabizi availability, Arabic-preferred patient | availability intent/read remains correct; renderer follows latest-turn Latin script policy | English reply but correct slots, grounded, understandable, continuation remains possible | read-only | ACCEPTABLE | F9 adjudication on a0d80981; PR #196 touches no Agent/runtime files |
-| F9-02 | Arabic/code-switched availability | same verified availability contract | Arabic-family response with same verified slot truth | read-only | PASS | F9 adjudication controls; Agent/runtime unchanged by PR #196 |
+| F9-01 | Latin-only Arabizi availability, Arabic-preferred patient | availability intent/read remains correct; renderer follows latest-turn Latin script policy | English reply but correct slots, grounded, understandable, continuation remains possible | read-only | ACCEPTABLE | Fresh latest-main F9 control on `f74c98ab...` |
+| F9-02 | Arabic/code-switched availability | same verified availability contract | Arabic-family response with same verified slot truth | read-only | PASS | Fresh latest-main F9 control on `f74c98ab...` |
 | F10-01 | clinic working-hours simple fact | clinic_info working_hours only | renders exact saved weekly hours; no availability claim or unrelated fields | read-only | PASS | test_v2_clinic_information_contract::test_working_hours_are_exact_and_do_not_create_availability_claim |
 | F10-02 | service price only | requested_service_details=['price']; service_catalog shaped to price only | price rendered; duration/devices/description omitted | read-only | PASS | test_v2_service_detail_shaping::test_price_question_exposes_price_but_not_duration_or_extra_service_details |
 | F10-03 | owned package + offer summary | package truth keeps owned vs offer sets distinct | reply is somewhat record-like ('المتبقي: 3') but correct, grounded, clear, non-blocking | read-only | ACCEPTABLE | test_v2_package_information_contract::test_deterministic_renderer_keeps_owned_vs_offer_language_separate |
@@ -328,7 +362,7 @@ Therefore main did **not** move during the sweep and no reconciliation/rerun was
 
 Report-only Draft PR: **#197**
 
-CI Run **1872** on report commit `c1531312f84b171b5d9e1fe7639e8538c0c0c31a` completed **SUCCESS**:
+CI Run **1873** on the prior report-only head `a4f4b21848570041015b9bb1d184800023a99370` completed **SUCCESS**:
 
 - backend: SUCCESS
 - frontend: SUCCESS
@@ -337,10 +371,10 @@ CI Run **1872** on report commit `c1531312f84b171b5d9e1fe7639e8538c0c0c31a` comp
 - compileall: SUCCESS
 - Alembic single head: SUCCESS
 - clean PostgreSQL migration: SUCCESS
-- backend tests: **2106 passed, 4 skipped in 32.92s**
+- full backend tests: SUCCESS
 - frontend lint/typegen/typecheck/build: SUCCESS
 
-This final documentation update changes only the evidence report; Shared CI is rerun once more on the exact final report head before closeout.
+The current update changes only this evidence report to add the fresh Desktop/targeted execution evidence. Shared CI must rerun on the exact final report head before closeout.
 
 ## Final verdict
 
