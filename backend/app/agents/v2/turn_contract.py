@@ -56,6 +56,7 @@ FinancialOwnership = Literal["none", "reception"]
 ContinuationCondition = Literal["always", "if_previous_no_availability"]
 VerifiedReadClearField = Literal["date", "time"]
 AppointmentFactChallenge = Literal["none", "time"]
+SameTurnServiceSource = Literal["none", "verified_appointment"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 
 
@@ -254,6 +255,18 @@ class TurnOperation(StrictContractModel):
     selection: Selection | None = None
     package_usage: PackageUsage = "unspecified"
     requested_service_details: list[ServiceDetail] = Field(default_factory=list)
+    same_turn_service_source: SameTurnServiceSource = Field(
+        default="none",
+        description=(
+            "For pricing only, set verified_appointment when the customer asks for the price of "
+            "the primary service belonging to an appointment they also asked Linka to inspect earlier "
+            "in this same customer turn. This is a semantic relationship marker only: do not invent "
+            "or expose a service ID/ref from appointment wording. Python may bind the pricing read only "
+            "after that appointment read verifies one canonical service, and may also inherit its "
+            "verified laser device key. Leave none when the customer explicitly names/selects a service, "
+            "when the price request is independent, or when there is no same-turn appointment relation."
+        ),
+    )
     requested_clinic_details: list[ClinicDetail] = Field(
         default_factory=list,
         description=(
@@ -360,6 +373,21 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_same_turn_service_source(self) -> TurnOperation:
+        if self.same_turn_service_source == "none":
+            return self
+        if self.type != "pricing":
+            raise ValueError("same_turn_service_source is only valid for pricing.")
+        if self.execution_intent != "informational":
+            raise ValueError("same-turn appointment pricing must remain informational/read-only.")
+        service = self.entities.service
+        if service is not None and (service.ref is not None or bool(service.candidate_refs)):
+            raise ValueError(
+                "same-turn appointment pricing cannot override an explicit grounded service."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_appointment_fact_challenge(self) -> TurnOperation:

@@ -319,6 +319,14 @@ SEMANTIC PRINCIPLES
   price. A generic service-information question requests description unless the customer asks for
   a narrower detail. A request to explain or compare devices for a specific service requests both
   devices and description. Leave requested_service_details empty on unrelated operations.
+- When a pricing request refers relationally to the primary service of an appointment that the customer
+  also asked Linka to inspect earlier in the same customer turn, keep the pricing operation separate,
+  set same_turn_service_source=verified_appointment, and do not guess a service or device reference from
+  the wording. Python will bind that pricing read only after the appointment read verifies one canonical
+  service and, for laser appointments, its canonical device key. This marker is only for the same-turn
+  appointment relationship; it never refers to assistant prose or an arbitrary historical appointment.
+  If the customer explicitly names or selects a service for pricing, ground that service normally and
+  leave same_turn_service_source=none even when the same turn also asks about an appointment.
 
 DATE/TIME REPRESENTATION
 - exact date: mode=exact with start_date.

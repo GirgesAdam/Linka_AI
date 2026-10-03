@@ -60,6 +60,7 @@ from app.services.agent_v2.planner import (
     ReadRequest,
     TurnPlan,
     plan_turn,
+    resolve_same_turn_verified_service_dependency,
 )
 from app.services.agent_v2.read_executor import (
     ReadExecutionBundle,
@@ -1193,6 +1194,7 @@ def orchestrate_v2_turn(
     completed_action_context: dict[str, object] | None = None
     compound_cursors: dict[str, datetime] = {}
     operation_reads: dict[int, ReadExecutionBundle] = {}
+    same_turn_verified_appointment: dict[str, object] | None = None
     grouped_positions: dict[str, list[int]] = {}
     for position, grouped_step in enumerate(plan.steps):
         group = compound_write_group(grouped_step)
@@ -1231,6 +1233,11 @@ def orchestrate_v2_turn(
             )
             continue
 
+        planned_step = resolve_same_turn_verified_service_dependency(
+            planned_step,
+            operation=operation,
+            verified_appointment_parameters=same_turn_verified_appointment,
+        )
         effective_step = adapt_matching_active_task_step(
             planned_step,
             operation=operation,
@@ -1356,6 +1363,13 @@ def orchestrate_v2_turn(
             )
 
         operation_reads[effective_step.operation_index] = reads
+        if effective_step.operation_type == "appointment_list":
+            verified_appointment = dict(reads.verification.verified_parameters)
+            same_turn_verified_appointment = (
+                verified_appointment
+                if verified_appointment.get("service_id") not in (None, "")
+                else None
+            )
         transition = apply_step_state(
             current_task,
             step=advanced,
