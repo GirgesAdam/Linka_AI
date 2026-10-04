@@ -154,10 +154,13 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   if (filters.unread) query.set("unread_only", "true");
   if (filters.q) query.set("q", filters.q);
 
-  const [conversationPage, channelConnections, revision] = await Promise.all([
+  // Read the revision before the page data. If state changes while the
+  // conversations/connections are loading, the next lightweight probe still
+  // sees a newer revision instead of accepting stale data as current.
+  const revision = await tiaRequest<{ revision: string }>("/inbox/revision");
+  const [conversationPage, channelConnections] = await Promise.all([
     tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`),
     tiaRequest<InboxChannelConnection[]>("/channels/connections").catch(() => []),
-    tiaRequest<{ revision: string }>("/inbox/revision"),
   ]);
   const hasNextPage = conversationPage.length > PAGE_SIZE;
   const conversations = conversationPage.slice(0, PAGE_SIZE);
