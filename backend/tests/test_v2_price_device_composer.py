@@ -375,6 +375,27 @@ def test_exact_service_price_stays_zero_llm_calls(
     assert text == "جلسة Hydrafacial سعرها 1200 جنيه."
 
 
+def test_booking_price_confirmation_mentions_verified_availability_not_unverified_appointment() -> None:
+    outcome = _selected_device_price()
+    outcome.facts.update(
+        {
+            "booking_next_field": "booking",
+            "exact_time_requested": True,
+            "availability": {
+                "available_option_count": 1,
+                "availability_windows": [{"doctor_name": "مريم"}],
+            },
+        }
+    )
+    contract = build_customer_response_contract([outcome])
+
+    text = deterministic_price_device_fallback(contract, arabic=True)
+
+    assert "الوقت المطلوب متاح مع د. مريم" in text
+    assert "تحب أحجز؟" in text
+    assert "الموعد ده" not in text
+
+
 def test_multi_device_service_price_stays_zero_llm_calls_and_not_swapped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

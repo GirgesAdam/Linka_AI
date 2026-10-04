@@ -340,6 +340,10 @@ def _attach_availability_snapshot(
     slots = _availability_slots(reads)
     if not slots or step.disposition == "write_ready":
         return state
+    if step.response_goal in {"answer_price", "package_information"} and len(slots) == 1:
+        # Exact/unique availability verified alongside commercial truth does not
+        # need a customer choice snapshot; keep the task resumable for confirmation.
+        return state
     purpose = "booking_slot" if state.task_type == "booking" else "reschedule_slot"
     snapshot_id = f"{turn_id}:{step.operation_index}:{state.version + 1}"
     choices = [
@@ -448,17 +452,44 @@ def apply_step_state(
     if current is None:
         return StateTransition(active_task=None, changed=before is not None, reason="state_cleared")
 
-    if (
-        isinstance(current, BookingTaskState)
-        and step.response_goal == "answer_price"
-        and current.constraints.device_key is not None
-        and reads is not None
-        and any(result.kind == "service_catalog" and result.ok for result in reads.results)
-    ):
-        current = record_booking_commercial_basis_presented(
-            current,
-            device_key=current.constraints.device_key,
-        )
+    commercial_read_verified = False
+    if reads is not None and isinstance(current, BookingTaskState):
+        if step.response_goal == "answer_price":
+            commercial_read_verified = any(
+                result.kind == "service_catalog" and result.ok for result in reads.results
+            )
+        elif step.response_goal == "package_information":
+            package_result = next(
+                (
+                    result
+                    for result in reads.results
+                    if result.kind == "customer_packages" and result.ok
+                ),
+                None,
+            )
+            rows = package_result.payload.get("packages") if package_result is not None else None
+            commercial_read_verified = isinstance(rows, list) and any(
+                isinstance(row, dict)
+                and row.get("effective_status") == "active"
+                and isinstance(row.get("sessions_remaining"), int)
+                and row["sessions_remaining"] > 0
+                for row in rows
+            )
+
+    if isinstance(current, BookingTaskState) and commercial_read_verified:
+        commercial_key = step.facts.get("commercial_basis_key")
+        if not isinstance(commercial_key, str) or not commercial_key:
+            path = "package" if current.constraints.package_usage == "use_existing" else "standalone"
+            commercial_key = (
+                f"{current.constraints.service_id}|{current.constraints.device_key or 'none'}|{path}"
+                if current.constraints.service_id is not None
+                else None
+            )
+        if commercial_key is not None:
+            current = record_booking_commercial_basis_presented(
+                current,
+                commercial_key=commercial_key,
+            )
 
     current = _attach_availability_snapshot(
         current,

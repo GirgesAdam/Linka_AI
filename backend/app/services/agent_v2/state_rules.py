@@ -41,6 +41,7 @@ def _booking_derived(
     if reset_device_compatibility:
         update["device_compatible"] = None
     if clear_commercial_basis:
+        update["commercial_basis_presented_key"] = None
         update["commercial_basis_presented_device_key"] = None
     return state.derived.model_copy(update=update)
 
@@ -195,14 +196,18 @@ def apply_booking_package_usage_change(
 def record_booking_commercial_basis_presented(
     state: BookingTaskState,
     *,
-    device_key: str,
+    commercial_key: str,
 ) -> BookingTaskState:
-    if state.derived.commercial_basis_presented_device_key == device_key:
+    if state.derived.commercial_basis_presented_key == commercial_key:
         return state
+    legacy_device = state.constraints.device_key
     return state.model_copy(
         update={
             "derived": state.derived.model_copy(
-                update={"commercial_basis_presented_device_key": device_key}
+                update={
+                    "commercial_basis_presented_key": commercial_key,
+                    "commercial_basis_presented_device_key": legacy_device,
+                }
             ),
             "version": state.version + 1,
             "option_snapshot": None,

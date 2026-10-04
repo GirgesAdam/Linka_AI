@@ -278,7 +278,27 @@ def _render_option_list(
         if facts.get("booking_next_field") == "date":
             return rendered + (" تحب تحجز يوم إيه؟" if arabic else " What day would you like to book?")
         if facts.get("booking_next_field") == "booking":
-            return rendered + (" تحب أكمل الحجز على الموعد ده؟" if arabic else " Shall I continue with this booking?")
+            availability = facts.get("availability")
+            exact_time = facts.get("exact_time_requested") is True
+            if isinstance(availability, dict):
+                count = availability.get("available_option_count")
+                if isinstance(count, int) and count > 0:
+                    if exact_time:
+                        windows = availability.get("availability_windows")
+                        doctor_name = None
+                        if isinstance(windows, list) and len(windows) == 1 and isinstance(windows[0], dict):
+                            doctor_name = str(windows[0].get("doctor_name") or "").strip() or None
+                        if doctor_name:
+                            return rendered + (
+                                f" الوقت المطلوب متاح مع د. {doctor_name}. تحب أحجز؟"
+                                if arabic
+                                else f" The requested time is available with Dr. {doctor_name}. Shall I book it?"
+                            )
+                        return rendered + (" الوقت المطلوب متاح. تحب أحجز؟" if arabic else " The requested time is available. Shall I book it?")
+                    return rendered + (" وفي مواعيد متاحة في اليوم المطلوب." if arabic else " There is verified availability on the requested day.")
+                if count == 0:
+                    return rendered + (" الوقت المطلوب مش متاح." if arabic and exact_time else " مفيش مواعيد متاحة في اليوم المطلوب." if arabic else " The requested time is unavailable." if exact_time else " There is no availability on the requested day.")
+            return rendered + (" هتحب أكمل بعد ما أأكد المواعيد المتاحة؟" if arabic else " Shall I continue after I verify the available times?")
         return rendered
 
     if truth.kind in {

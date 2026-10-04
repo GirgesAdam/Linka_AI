@@ -1253,7 +1253,11 @@ def build_step_outcome(
         )
 
     has_availability = _availability_has_options(reads)
-    if step.operation_type in {"availability", "book", "reschedule"} and has_availability is False:
+    if (
+        step.operation_type in {"availability", "book", "reschedule"}
+        and has_availability is False
+        and step.response_goal != "answer_price"
+    ):
         goal: ResponseGoal = "requested_time_unavailable" if _time_is_exact(step) else "no_availability"
         return TurnOutcome(
             status="blocked",

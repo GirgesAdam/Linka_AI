@@ -71,6 +71,9 @@ class DerivedBookingState(StrictStateModel):
     package_validated: bool = False
     doctor_compatible: bool | None = None
     device_compatible: bool | None = None
+    # Canonical commercial presentation key: service + optional device + path.
+    # The legacy device-only field remains readable for persisted pre-contract tasks.
+    commercial_basis_presented_key: str | None = None
     commercial_basis_presented_device_key: str | None = None
 
 

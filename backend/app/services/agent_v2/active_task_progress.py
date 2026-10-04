@@ -410,6 +410,15 @@ def _service_requires_device(service_id: str | None, context: SemanticContext) -
     return target.metadata.get("requires_laser_device") is True
 
 
+def _commercial_basis_key(state: BookingTaskState) -> str | None:
+    service_id = state.constraints.service_id
+    if service_id is None:
+        return None
+    path = "package" if state.constraints.package_usage == "use_existing" else "standalone"
+    device = state.constraints.device_key or "none"
+    return f"{service_id}|{device}|{path}"
+
+
 def _booking_progress(
     state: BookingTaskState,
     *,
@@ -448,30 +457,58 @@ def _booking_progress(
                 "booking_device_price_step": True,
             },
         )
+    commercial_key = _commercial_basis_key(state)
+    commercial_presented = (
+        commercial_key is not None
+        and state.derived.commercial_basis_presented_key == commercial_key
+    )
+    # Backward-compatible laser tasks persisted by the first iteration already
+    # proved the same standalone device price to the customer.
     if (
-        requires_device
-        and state.constraints.device_key is not None
+        not commercial_presented
+        and requires_device
         and state.constraints.package_usage != "use_existing"
-        and state.derived.commercial_basis_presented_device_key
-        != state.constraints.device_key
+        and state.derived.commercial_basis_presented_device_key == state.constraints.device_key
     ):
+        commercial_presented = True
+    if not commercial_presented:
+        commercial_read = ReadRequest(
+            kind=(
+                "customer_packages"
+                if state.constraints.package_usage == "use_existing"
+                else "service_catalog"
+            ),
+            parameters={
+                key: params[key]
+                for key in ("service_id", "device_key")
+                if key in params
+            },
+        )
+        reads = [commercial_read]
+        if state.constraints.date is not None:
+            reads.append(ReadRequest(kind="availability", parameters=params))
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
             disposition="read",
-            reads=[
-                ReadRequest(
-                    kind="service_catalog",
-                    parameters={"service_id": service_id},
-                )
-            ],
+            reads=reads,
             state_action="update_active",
-            response_goal="answer_price",
+            response_goal=(
+                "package_information"
+                if state.constraints.package_usage == "use_existing"
+                else "answer_price"
+            ),
             facts={
                 **params,
-                "service_requires_laser_device": True,
-                "booking_device_price_step": True,
-                "booking_next_field": "date",
+                "service_requires_laser_device": requires_device,
+                "booking_device_price_step": requires_device,
+                "booking_commercial_basis_step": True,
+                "commercial_basis_key": commercial_key,
+                "exact_time_requested": (
+                    state.constraints.time is not None
+                    and state.constraints.time.mode == "exact"
+                ),
+                "booking_next_field": "date" if state.constraints.date is None else "booking",
             },
         )
     if state.constraints.date is None:

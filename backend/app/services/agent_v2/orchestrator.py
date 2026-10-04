@@ -138,11 +138,16 @@ def _terminal_no_reply_allowed(
     *,
     active_task: ActiveTaskState | None,
     pending_choice: OptionSnapshot | None,
+    automation_context: dict[str, Any] | None = None,
 ) -> bool:
     """Fail closed: semantic no-reply is valid only after conversational work is finished."""
-    if understanding.response_disposition != "no_reply":
+    # Compatibility/test doubles and future semantic variants must fail closed:
+    # silence is opt-in only when the typed semantic marker is explicitly present.
+    if getattr(understanding, "response_disposition", None) != "no_reply":
         return False
     if active_task is not None or pending_choice is not None or understanding.safety_signals:
+        return False
+    if automation_context is not None:
         return False
     if not understanding.operations:
         return True
@@ -1350,7 +1355,10 @@ def orchestrate_v2_turn(
         )
         step_group_key = compound_write_group(effective_step) or compound_write_group(planned_step)
 
-        if effective_step.state_action == "update_active":
+        if effective_step.state_action == "update_active" and step_group_key is None:
+            # Grouped booking steps are already reconstructed/preflighted as one
+            # atomic visit. Single-service journey progression must not replace
+            # those grouped steps with a one-component commercial gate.
             initial_transition = apply_step_state(
                 current_task,
                 step=effective_step,
@@ -1689,6 +1697,7 @@ def orchestrate_v2_turn(
         understanding,
         active_task=current_task,
         pending_choice=outgoing_pending_choice,
+        automation_context=automation_context,
     ):
         return V2OrchestratedTurn(
             understanding=understanding,

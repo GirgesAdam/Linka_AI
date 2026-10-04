@@ -45,6 +45,27 @@ def test_customer_datetime_formatter_uses_workspace_timezone() -> None:
 
 
 
+@pytest.mark.parametrize(
+    ("iso_value", "expected"),
+    [
+        ("2026-08-25T10:00:00+03:00", "الثلاثاء 25 أغسطس"),
+        ("2026-09-09T10:00:00+03:00", "الأربعاء 9 سبتمبر"),
+        ("2026-08-20T10:00:00+03:00", "الخميس 20 أغسطس"),
+    ],
+)
+def test_customer_datetime_formatter_uses_weekday_customer_date_contract(
+    iso_value: str,
+    expected: str,
+) -> None:
+    text = format_customer_datetime(
+        iso_value,
+        arabic=True,
+        timezone_name="Africa/Cairo",
+    )
+    assert expected in text
+    assert "/2026" not in text
+
+
 def _terminal(
     goal: str,
     *,

@@ -153,7 +153,7 @@ def test_exact_unavailable_time_formats_verified_nearby_slots_immediately() -> N
 
     assert reply is not None
     assert "18:00" in reply
-    assert "25/08/2026" in reply
+    assert "الثلاثاء 25 أغسطس" in reply
     assert "17:45" in reply
     assert "20:00" in reply
     assert "اختار الوقت" in reply

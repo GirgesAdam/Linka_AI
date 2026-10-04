@@ -11,6 +11,7 @@ from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.outcome import ResponseGoal
 from app.services.agent_v2.state import (
     ActiveTaskState,
+    BookingTaskState,
     OptionChoice,
     OptionSnapshot,
     RescheduleTaskState,
@@ -436,13 +437,75 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
         return _clarify(index=index, operation=operation, field="selection")
 
     if purpose == "booking_slot":
+        commercial_key = (
+            f"{state.constraints.service_id}|{state.constraints.device_key or 'none'}|"
+            f"{'package' if state.constraints.package_usage == 'use_existing' else 'standalone'}"
+            if isinstance(state, BookingTaskState) and state.constraints.service_id is not None
+            else None
+        )
+        commercial_presented = (
+            isinstance(state, BookingTaskState)
+            and commercial_key is not None
+            and (
+                state.derived.commercial_basis_presented_key == commercial_key
+                or (
+                    state.constraints.device_key is not None
+                    and state.constraints.package_usage != "use_existing"
+                    and state.derived.commercial_basis_presented_device_key
+                    == state.constraints.device_key
+                )
+            )
+        )
         authorized = (
             operation.execution_intent == "execute"
             and state.task_type == "booking"
             and state.write_authorization.authorized
             and state.write_authorization.operation == "booking"
+            and commercial_presented
         )
         if not authorized:
+            if (
+                operation.execution_intent == "execute"
+                and isinstance(state, BookingTaskState)
+                and not commercial_presented
+                and state.constraints.service_id is not None
+            ):
+                return PlanStep(
+                    operation_index=index,
+                    operation_type=operation.type,
+                    disposition="read",
+                    reads=[
+                        ReadRequest(
+                            kind=(
+                                "customer_packages"
+                                if state.constraints.package_usage == "use_existing"
+                                else "service_catalog"
+                            ),
+                            parameters={
+                                key: value
+                                for key, value in {
+                                    "service_id": state.constraints.service_id,
+                                    "device_key": state.constraints.device_key,
+                                }.items()
+                                if value not in (None, "")
+                            },
+                        )
+                    ],
+                    state_action="update_active",
+                    response_goal=(
+                        "package_information"
+                        if state.constraints.package_usage == "use_existing"
+                        else "answer_price"
+                    ),
+                    facts={
+                        **dict(selected.payload),
+                        "service_id": state.constraints.service_id,
+                        "device_key": state.constraints.device_key,
+                        "commercial_basis_key": commercial_key,
+                        "booking_commercial_basis_step": True,
+                        "booking_next_field": "booking",
+                    },
+                )
             return PlanStep(
                 operation_index=index,
                 operation_type=operation.type,
@@ -779,28 +842,9 @@ def _plan_operation(
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
         requires_device = _service_requires_laser_device(operation, context)
-        if requires_device and "device_key" not in params:
-            return PlanStep(
-                operation_index=index,
-                operation_type=operation.type,
-                disposition="read",
-                reads=[
-                    ReadRequest(
-                        kind="service_catalog",
-                        parameters={"service_id": params["service_id"]},
-                    )
-                ],
-                state_action="start_booking",
-                response_goal="answer_price",
-                facts={
-                    **params,
-                    "service_requires_laser_device": True,
-                    "booking_device_price_step": True,
-                },
-            )
         if (
             requires_device
-            and "device_key" in params
+            and "device_key" not in params
             and operation.package_usage != "use_existing"
         ):
             return PlanStep(
@@ -819,6 +863,55 @@ def _plan_operation(
                     **params,
                     "service_requires_laser_device": True,
                     "booking_device_price_step": True,
+                },
+            )
+        if not compound_book:
+            commercial_path = (
+                "package" if operation.package_usage == "use_existing" else "standalone"
+            )
+            commercial_key = (
+                f"{params['service_id']}|{params.get('device_key') or 'none'}|{commercial_path}"
+            )
+            commercial_reads = [
+                ReadRequest(
+                    kind=(
+                        "customer_packages"
+                        if operation.package_usage == "use_existing"
+                        else "service_catalog"
+                    ),
+                    parameters={
+                        key: params[key]
+                        for key in ("service_id", "device_key")
+                        if key in params
+                    },
+                )
+            ]
+            # If the customer already supplied a date/time, verify availability in
+            # the same turn as commercial truth; never ask them to continue before
+            # discovering whether the requested slot/date is actually available.
+            if "date" in params:
+                commercial_reads.append(ReadRequest(kind="availability", parameters=params))
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="read",
+                reads=commercial_reads,
+                state_action="start_booking",
+                response_goal=(
+                    "package_information"
+                    if operation.package_usage == "use_existing"
+                    else "answer_price"
+                ),
+                facts={
+                    **params,
+                    "service_requires_laser_device": requires_device,
+                    "booking_device_price_step": requires_device,
+                    "booking_commercial_basis_step": True,
+                    "commercial_basis_key": commercial_key,
+                    "exact_time_requested": (
+                        operation.entities.time is not None
+                        and operation.entities.time.mode == "exact"
+                    ),
                     "booking_next_field": (
                         "date" if "date" not in params else "booking"
                     ),

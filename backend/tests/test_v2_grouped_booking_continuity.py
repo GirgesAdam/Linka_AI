@@ -482,6 +482,8 @@ def test_group_survives_persist_side_read_reload_and_resume_without_llm() -> Non
     )
 
     assert len(guarded.steps) == 2
+    # Single-service commercial/device gating must not intercept restored grouped writes.
+    assert all(step.response_goal == "present_availability" for step in guarded.steps)
     assert all(step.write_intent is not None for step in guarded.steps)
     write_groups = [compound_write_group(step) for step in guarded.steps]
     assert write_groups[0] is not None

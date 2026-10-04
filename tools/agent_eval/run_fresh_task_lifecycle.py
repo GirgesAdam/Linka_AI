@@ -1335,6 +1335,7 @@ def run_booking_j1(db, ws):
         "DEKA",
         "الخميس",
         "الساعة 4 مساء",
+        "مريم",
         "احجز",
     ):
         if c.turns and "booking_completed" in c.turns[-1]["goals"]:
@@ -1356,13 +1357,7 @@ def run_booking_j1(db, ws):
 def run_booking_j2(db, ws):
     p = patient(db, ws, "J2")
     c = Conversation("J2", db, ws, p, SESSION1)
-    for message in (
-        "عايز Under Arm على DEKA يوم الأحد بعد 6",
-        "احجز أقرب وقت متاح",
-    ):
-        if c.turns and "booking_completed" in c.turns[-1]["goals"]:
-            break
-        c.send(message)
+    c.send("عايز Under Arm على DEKA يوم الأحد الساعة 5")
     return {
         "id": "J2",
         "turns": c.turns,

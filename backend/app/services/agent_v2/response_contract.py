@@ -440,6 +440,27 @@ def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[R
     next_field = facts.get("booking_next_field")
     if next_field in {"date", "booking"}:
         result.append(_make_fact(goal=goal, key="booking_next_field", value=next_field))
+    availability = facts.get("availability")
+    if isinstance(availability, dict) and next_field == "booking":
+        safe_availability = _safe_value(availability)
+        if isinstance(safe_availability, dict):
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="availability",
+                    value=safe_availability,
+                    complete_set=True,
+                )
+            )
+    exact_time_requested = facts.get("exact_time_requested")
+    if isinstance(exact_time_requested, bool):
+        result.append(
+            _make_fact(
+                goal=goal,
+                key="exact_time_requested",
+                value=exact_time_requested,
+            )
+        )
     return result
 
 

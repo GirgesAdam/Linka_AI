@@ -64,6 +64,39 @@ def test_no_reply_fails_closed_with_active_booking() -> None:
     ) is False
 
 
+def test_no_reply_fails_closed_when_semantic_marker_is_missing() -> None:
+    class LegacyUnderstanding:
+        operations = []
+        safety_signals = []
+
+    assert _terminal_no_reply_allowed(
+        LegacyUnderstanding(),  # type: ignore[arg-type]
+        active_task=None,
+        pending_choice=None,
+    ) is False
+
+
+def test_automation_context_presence_is_not_silenced_even_if_semantics_misclassify() -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[],
+        safety_signals=[],
+        response_disposition="no_reply",
+    )
+
+    assert _terminal_no_reply_allowed(
+        understanding,
+        active_task=None,
+        pending_choice=None,
+        automation_context={"source": "automation_engine", "kind": "appointment_reminder"},
+    ) is False
+    assert _terminal_no_reply_allowed(
+        understanding,
+        active_task=None,
+        pending_choice=None,
+        automation_context={},
+    ) is False
+
+
 def test_automation_acknowledgement_is_not_silenced() -> None:
     understanding = TiaTurnUnderstanding(
         operations=[_social(automation_relationship="acknowledge")],
