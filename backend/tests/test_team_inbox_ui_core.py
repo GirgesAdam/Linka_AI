@@ -169,6 +169,9 @@ def test_inbox_idle_refresh_uses_lightweight_revision_and_count_paths() -> None:
     assert 'tiaRequest<InboxSummary>("/inbox/summary")' in summary_route
     assert 'unread_only=true' not in summary_route
     assert 'pathname.startsWith("/inbox")' in navigation
+    assert 'inFlight' in navigation
+    assert 'signal: controller.signal' in navigation
+    assert 'controller?.abort()' in navigation
 
 
 def test_inbox_revision_is_captured_before_page_data_to_avoid_stale_acceptance() -> None:
