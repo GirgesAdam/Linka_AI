@@ -248,6 +248,7 @@ def test_automation_appointment_action_binds_server_target_not_model_target() ->
         ),
         execution_intent="execute",
         automation_context_relationship="appointment_action",
+        appointment_action_explicit_fields=["time"],
     )
 
     merged = merge_automation_context(
@@ -290,6 +291,7 @@ def test_reminder_time_only_reschedule_preserves_verified_local_appointment_date
         ),
         execution_intent="execute",
         automation_context_relationship="appointment_action",
+        appointment_action_explicit_fields=["time"],
     )
 
     merged = merge_automation_context(
@@ -372,6 +374,7 @@ def test_reminder_reschedule_explicit_new_date_wins_over_verified_original_date(
         ),
         execution_intent="execute",
         automation_context_relationship="appointment_action",
+        appointment_action_explicit_fields=["date", "time"],
     )
 
     merged = merge_automation_context(
