@@ -158,6 +158,26 @@ def test_deterministic_renderer_keeps_owned_vs_offer_language_separate() -> None
     assert "EGP" not in text
 
 
+def test_existing_package_booking_truth_confirms_coverage_and_verified_time_without_cash_price() -> None:
+    outcome = _package_outcome(owned=[_owned(remaining=3, status="active")])
+    outcome.facts.update(
+        {
+            "booking_commercial_basis_step": True,
+            "exact_time_requested": True,
+            "availability": {"available_option_count": 1},
+        }
+    )
+    contract = build_customer_response_contract([outcome])
+
+    text = deterministic_package_contract_reply(contract, arabic=True)
+
+    assert "المتبقي: 3" in text
+    assert "الجلسة هتتحسب من الباكدج الحالية" in text
+    assert "الوقت المطلوب متاح" in text
+    assert "تحب أحجز؟" in text
+    assert "جنيه" not in text
+
+
 @pytest.mark.parametrize(
     ("status", "expected"),
     [

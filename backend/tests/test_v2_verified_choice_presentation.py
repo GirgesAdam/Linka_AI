@@ -171,7 +171,7 @@ def test_appointment_choice_uses_human_datetime_not_iso(
 
     text, _source = _compose([outcome], "قصدي أنهي معاد؟")
 
-    assert "PRP للبشرة، يوم 5 أكتوبر 2026 الساعة 10 صباحًا، مع د. مريم" in text
+    assert "PRP للبشرة، يوم الاثنين 5 أكتوبر الساعة 10 صباحًا، مع د. مريم" in text
     assert "2026-10-05T10:00:00+03:00" not in text
 
 

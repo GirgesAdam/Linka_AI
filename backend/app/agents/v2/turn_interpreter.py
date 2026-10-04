@@ -148,6 +148,7 @@ SEMANTIC PRINCIPLES
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
+- response_disposition is about whether this turn needs an outbound customer message, not about intent routing. Use no_reply only for a pure closing acknowledgement after the previous task/read is already complete and only when the supplied active_task and pending choice are empty, automation_context is not being acknowledged, there is no requested action/question, and there is no safety signal. A short acknowledgement while a task/question/choice is pending is reply, not no_reply. Never classify based on a phrase list; classify the conversational role in the supplied state.
 - automation_context is server-owned system-initiated conversational focus, not a verified read/action
   and never write authority. If it is present, a simple acknowledgement of that reminder/follow-up is
   about the automation message, not an unrelated active booking: emit an informational social operation

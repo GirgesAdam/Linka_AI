@@ -13,6 +13,7 @@ _SUPPORTED_CHOICE_GOALS = frozenset(
     {
         "ask_service_choice",
         "ask_device_choice",
+        "ask_doctor_choice",
         "ask_time_choice",
         "ask_appointment_choice",
         "ask_package_choice",
@@ -22,6 +23,7 @@ _SUPPORTED_CHOICE_GOALS = frozenset(
 _INTRO_AR = {
     "ask_service_choice": "تقصد أنهي خدمة من دول؟",
     "ask_device_choice": "تقصد أنهي جهاز من دول؟",
+    "ask_doctor_choice": "الوقت ده متاح مع أكتر من دكتور، تحب مين؟",
     "ask_time_choice": "أنهي ميعاد تقصد؟",
     "ask_appointment_choice": "تقصد أنهي موعد؟",
     "ask_package_choice": "تقصد أنهي باكدج؟",
@@ -29,6 +31,7 @@ _INTRO_AR = {
 _INTRO_EN = {
     "ask_service_choice": "Which service do you mean?",
     "ask_device_choice": "Which device do you mean?",
+    "ask_doctor_choice": "That time is available with more than one doctor. Which do you prefer?",
     "ask_time_choice": "Which time do you mean?",
     "ask_appointment_choice": "Which appointment do you mean?",
     "ask_package_choice": "Which package do you mean?",
@@ -102,6 +105,7 @@ def _effective_choice_goal(unit: CustomerResponseUnit) -> str | None:
     return {
         "service": "ask_service_choice",
         "device": "ask_device_choice",
+        "doctor": "ask_doctor_choice",
         "time": "ask_time_choice",
         "appointment": "ask_appointment_choice",
         "package": "ask_package_choice",
@@ -117,6 +121,7 @@ def _outcome_choice_goal(outcome: TurnOutcome) -> str | None:
     return {
         "service": "ask_service_choice",
         "device": "ask_device_choice",
+        "doctor": "ask_doctor_choice",
         "time": "ask_time_choice",
         "appointment": "ask_appointment_choice",
         "package": "ask_package_choice",
@@ -157,7 +162,13 @@ def is_supported_verified_choice_unit(unit: CustomerResponseUnit) -> bool:
     return (
         unit.status == "needs_input"
         and _effective_choice_goal(unit) is not None
-        and bool(unit.choices)
+        and (
+            bool(unit.choices)
+            or (
+                _effective_choice_goal(unit) == "ask_doctor_choice"
+                and any(fact.key == "doctor_names" for fact in unit.facts)
+            )
+        )
         and not is_refund_package_choice(unit)
     )
 
@@ -233,10 +244,9 @@ def deterministic_verified_choice_unit_reply(
 ) -> str | None:
     if not is_supported_verified_choice_unit(unit):
         return None
-    if _duplicate_visible_labels(unit):
-        return _duplicate_fail_safe(arabic=arabic)
-
     effective_goal = _effective_choice_goal(unit)
+    if unit.choices and _duplicate_visible_labels(unit):
+        return _duplicate_fail_safe(arabic=arabic)
     intro = (
         _INTRO_AR.get(effective_goal)
         if arabic
@@ -255,6 +265,16 @@ def deterministic_verified_choice_unit_reply(
         )
         for choice in unit.choices
     ]
+    if effective_goal == "ask_doctor_choice" and not labels:
+        doctor_names = next(
+            (
+                fact.value
+                for fact in unit.facts
+                if fact.key == "doctor_names" and isinstance(fact.value, list)
+            ),
+            [],
+        )
+        labels = [str(name).strip() for name in doctor_names if str(name).strip()]
     return intro + "\n" + "\n".join(f"- {label}" for label in labels)
 
 

@@ -15,6 +15,10 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.availability_composer import (
+    render_embedded_no_availability,
+    render_embedded_verified_availability_options,
+)
 from app.core.config import settings
 from app.services.agent_v2.response_contract import (
     CommercialPriceOption,
@@ -66,9 +70,24 @@ def _latest_customer_index(history: list[BaseMessage]) -> int | None:
 
 
 def _latest_customer_is_arabic(history: list[BaseMessage]) -> bool:
-    index = _latest_customer_index(history)
-    text = _message_text(history[index]) if index is not None else ""
-    return any("\u0600" <= char <= "\u06ff" for char in text)
+    arabic_weight = 0
+    latin_weight = 0
+    seen = 0
+    for message in reversed(history):
+        if not isinstance(message, HumanMessage):
+            continue
+        text = _message_text(message)
+        if not text:
+            continue
+        weight = max(1, len(text.split()))
+        if any("\u0600" <= char <= "\u06ff" for char in text):
+            arabic_weight += weight
+        elif any(("a" <= char.casefold() <= "z") for char in text):
+            latin_weight += weight
+        seen += 1
+        if seen >= 4:
+            break
+    return arabic_weight >= latin_weight and arabic_weight > 0
 
 
 def _option_refs(unit_index: int, unit: CustomerResponseUnit) -> list[str]:
@@ -258,7 +277,48 @@ def _render_option_list(
         )
 
     if truth.kind in {"service_base_price", "service_device_price"}:
-        return _service_option_text(options[0], arabic=arabic) + "."
+        rendered = _service_option_text(options[0], arabic=arabic) + "."
+        facts = {fact.key: fact.value for fact in unit.facts}
+        if facts.get("booking_next_field") == "date":
+            return rendered + (" تحب تحجز يوم إيه؟" if arabic else " What day would you like to book?")
+        if facts.get("booking_next_field") == "booking":
+            availability = facts.get("availability")
+            exact_time = facts.get("exact_time_requested") is True
+            if isinstance(availability, dict):
+                count = availability.get("available_option_count")
+                if isinstance(count, int) and count > 0:
+                    if exact_time:
+                        windows = availability.get("availability_windows")
+                        doctor_name = None
+                        if isinstance(windows, list) and len(windows) == 1 and isinstance(windows[0], dict):
+                            doctor_name = str(windows[0].get("doctor_name") or "").strip() or None
+                        if doctor_name:
+                            return rendered + (
+                                f" الوقت المطلوب متاح مع د. {doctor_name}. تحب أحجز؟"
+                                if arabic
+                                else f" The requested time is available with Dr. {doctor_name}. Shall I book it?"
+                            )
+                        return rendered + (" الوقت المطلوب متاح. تحب أحجز؟" if arabic else " The requested time is available. Shall I book it?")
+                    options_text = render_embedded_verified_availability_options(
+                        availability,
+                        arabic=arabic,
+                    )
+                    if options_text:
+                        return rendered + "\n\n" + options_text
+                    return rendered + (" وفي مواعيد متاحة في اليوم المطلوب." if arabic else " There is verified availability on the requested day.")
+                if count == 0:
+                    if exact_time:
+                        return rendered + (
+                            " الوقت المطلوب مش متاح."
+                            if arabic
+                            else " The requested time is unavailable."
+                        )
+                    return rendered + "\n\n" + render_embedded_no_availability(
+                        availability,
+                        arabic=arabic,
+                    )
+            return rendered + (" هتحب أكمل بعد ما أأكد المواعيد المتاحة؟" if arabic else " Shall I continue after I verify the available times?")
+        return rendered
 
     if truth.kind in {
         "service_device_price_options",

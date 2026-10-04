@@ -123,6 +123,93 @@ def _availability_bundle() -> ReadExecutionBundle:
     )
 
 
+def test_commercial_price_read_records_non_laser_basis_key() -> None:
+    operation = _operation()
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="update_active",
+        response_goal="answer_price",
+        facts={
+            "service_id": "svc-underarm",
+            "commercial_basis_key": "svc-underarm|none|standalone",
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[ReadResult(kind="service_catalog", ok=True, payload={"service": {}})]
+    )
+    transition = apply_step_state(
+        _booking_state(),
+        step=step,
+        operation=operation,
+        reads=reads,
+        now=NOW,
+        turn_id="turn-price",
+    )
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert (
+        transition.active_task.derived.commercial_basis_presented_key
+        == "svc-underarm|none|standalone"
+    )
+
+
+def test_package_commercial_read_records_basis_only_for_usable_coverage() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        package_usage="use_existing",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="update_active",
+        response_goal="package_information",
+        facts={
+            "service_id": "svc-underarm",
+            "package_usage": "use_existing",
+            "commercial_basis_key": "svc-underarm|none|package",
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="customer_packages",
+                ok=True,
+                payload={
+                    "packages": [
+                        {
+                            "effective_status": "active",
+                            "sessions_remaining": 3,
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    transition = apply_step_state(
+        _booking_state().model_copy(
+            update={
+                "constraints": CustomerConstraints(
+                    service_id="svc-underarm",
+                    package_usage="use_existing",
+                )
+            }
+        ),
+        step=step,
+        operation=operation,
+        reads=reads,
+        now=NOW,
+        turn_id="turn-package-truth",
+    )
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert (
+        transition.active_task.derived.commercial_basis_presented_key
+        == "svc-underarm|none|package"
+    )
+
+
 def test_start_booking_persists_authorization_and_known_constraints() -> None:
     operation = _operation(date=DateConstraint(mode="exact", start_date="2026-09-12"))
     step = PlanStep(

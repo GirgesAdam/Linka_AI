@@ -90,7 +90,7 @@ def test_verified_booking_tool_fallback_formats_slots_without_internal_ids() -> 
     )
 
     assert reply is not None
-    assert "20/08/2026" in reply
+    assert "الخميس 20 أغسطس" in reply
     assert "18:30" in reply
     assert "أحمد محمود" in reply
     assert "مدينة نصر" not in reply
@@ -110,7 +110,7 @@ def test_verified_booking_tool_fallback_handles_empty_requested_window() -> None
     )
     assert reply is not None
     assert "الوقت المطلوب" in reply
-    assert "20/08/2026" in reply
+    assert "الخميس 20 أغسطس" in reply
 
 
 def test_existing_inbound_run_id_is_parseable_and_reusable() -> None:

@@ -23,6 +23,7 @@ def _booking_derived(
     clear_package: bool = False,
     reset_doctor_compatibility: bool = False,
     reset_device_compatibility: bool = False,
+    clear_commercial_basis: bool = False,
 ) -> DerivedBookingState:
     update: dict[str, object] = {}
     if clear_availability:
@@ -39,6 +40,9 @@ def _booking_derived(
         update["doctor_compatible"] = None
     if reset_device_compatibility:
         update["device_compatible"] = None
+    if clear_commercial_basis:
+        update["commercial_basis_presented_key"] = None
+        update["commercial_basis_presented_device_key"] = None
     return state.derived.model_copy(update=update)
 
 
@@ -113,6 +117,7 @@ def apply_booking_service_change(
         clear_package=True,
         reset_doctor_compatibility=True,
         reset_device_compatibility=True,
+        clear_commercial_basis=True,
     )
     return _next_booking_state(state, constraints=constraints, derived=derived)
 
@@ -146,6 +151,7 @@ def apply_booking_device_change(
         clear_availability=True,
         clear_package=True,
         reset_device_compatibility=True,
+        clear_commercial_basis=True,
     )
     return _next_booking_state(state, constraints=constraints, derived=derived)
 
@@ -183,8 +189,30 @@ def apply_booking_package_usage_change(
     if state.constraints.package_usage == package_usage:
         return state
     constraints = state.constraints.model_copy(update={"package_usage": package_usage})
-    derived = _booking_derived(state, clear_package=True)
+    derived = _booking_derived(state, clear_package=True, clear_commercial_basis=True)
     return _next_booking_state(state, constraints=constraints, derived=derived)
+
+
+def record_booking_commercial_basis_presented(
+    state: BookingTaskState,
+    *,
+    commercial_key: str,
+) -> BookingTaskState:
+    if state.derived.commercial_basis_presented_key == commercial_key:
+        return state
+    legacy_device = state.constraints.device_key
+    return state.model_copy(
+        update={
+            "derived": state.derived.model_copy(
+                update={
+                    "commercial_basis_presented_key": commercial_key,
+                    "commercial_basis_presented_device_key": legacy_device,
+                }
+            ),
+            "version": state.version + 1,
+            "option_snapshot": None,
+        }
+    )
 
 
 def record_booking_doctor_compatibility(

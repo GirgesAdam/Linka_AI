@@ -25,7 +25,7 @@ def test_empty_reschedule_availability_never_claims_the_day_is_available() -> No
     assert result is not None
     reply, model = result
     assert "مفيش مواعيد متاحة" in reply
-    assert "09/09/2026" in reply
+    assert "الأربعاء 9 سبتمبر" in reply
     assert "اختار" not in reply
     assert "قولي الوقت" not in reply
     assert model == "deterministic:verified-empty-get_reschedule_options"

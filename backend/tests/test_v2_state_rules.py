@@ -53,6 +53,8 @@ def _booking_state() -> BookingTaskState:
             package_validated=True,
             doctor_compatible=True,
             device_compatible=True,
+            commercial_basis_presented_key="service-underarm|candela_gentle|package",
+            commercial_basis_presented_device_key="candela_gentle",
         ),
         version=4,
     )
@@ -110,6 +112,7 @@ def test_service_change_preserves_customer_time_preferences_and_invalidates_depe
     assert changed.derived.package_validated is False
     assert changed.derived.doctor_compatible is None
     assert changed.derived.device_compatible is None
+    assert changed.derived.commercial_basis_presented_key is None
 
 
 def test_doctor_and_time_changes_do_not_destroy_unrelated_customer_constraints() -> None:
@@ -137,6 +140,7 @@ def test_device_change_invalidates_device_specific_package_selection() -> None:
     assert changed.derived.selected_package_id is None
     assert changed.derived.package_validated is False
     assert changed.derived.availability_snapshot_id is None
+    assert changed.derived.commercial_basis_presented_key is None
 
 
 def test_date_change_revalidates_package_but_keeps_selected_package_identity() -> None:
@@ -157,6 +161,7 @@ def test_package_usage_change_does_not_mutate_service_or_schedule_preferences() 
     assert changed.constraints.time == state.constraints.time
     assert changed.derived.selected_package_id is None
     assert changed.derived.package_validated is False
+    assert changed.derived.commercial_basis_presented_key is None
 
 
 def test_noop_change_and_side_read_do_not_advance_version() -> None:

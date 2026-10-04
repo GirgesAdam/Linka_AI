@@ -19,6 +19,7 @@ from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
+    DerivedBookingState,
     RescheduleTarget,
     RescheduleTaskState,
     WriteAuthorization,
@@ -224,7 +225,7 @@ def test_initial_booking_clarification_is_marked_for_state_persistence() -> None
     assert persisted.facts["service_id"] == "svc-underarm"
 
 
-def test_booking_progress_asks_only_for_missing_date() -> None:
+def test_booking_progress_presents_verified_device_prices_before_date() -> None:
     state = BookingTaskState(
         write_authorization=_authorization(),
         constraints=CustomerConstraints(service_id="svc-underarm"),
@@ -232,9 +233,12 @@ def test_booking_progress_asks_only_for_missing_date() -> None:
 
     step = plan_active_task_progress(state, operation_index=0, context=_context())
 
-    assert step.disposition == "clarify"
-    assert step.clarification_field == "date"
+    assert step.disposition == "read"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.reads[0].parameters == {"service_id": "svc-underarm"}
+    assert step.response_goal == "answer_price"
     assert step.state_action == "update_active"
+    assert step.facts["booking_device_price_step"] is True
 
 
 def test_booking_progress_reads_availability_once_service_and_date_are_known() -> None:
@@ -242,8 +246,12 @@ def test_booking_progress_reads_availability_once_service_and_date_are_known() -
         write_authorization=_authorization(),
         constraints=CustomerConstraints(
             service_id="svc-underarm",
+            device_key="candela_gentle",
             date=DateConstraint(mode="exact", start_date="2026-09-12"),
             time=TimeConstraint(mode="after", start_time="18:00"),
+        ),
+        derived=DerivedBookingState(
+            commercial_basis_presented_device_key="candela_gentle"
         ),
     )
 
@@ -265,8 +273,12 @@ def test_exact_time_is_planned_for_verification_not_immediate_success() -> None:
         write_authorization=_authorization(),
         constraints=CustomerConstraints(
             service_id="svc-underarm",
+            device_key="candela_gentle",
             date=DateConstraint(mode="exact", start_date="2026-09-12"),
             time=TimeConstraint(mode="exact", start_time="19:00"),
+        ),
+        derived=DerivedBookingState(
+            commercial_basis_presented_device_key="candela_gentle"
         ),
     )
 
@@ -597,6 +609,71 @@ def test_side_information_read_preserves_active_booking_and_resume_uses_it() -> 
     assert next_step.facts["doctor_id"] == "doc-maryam"
     assert next_step.facts["device_key"] == "candela_gentle"
     assert next_step.facts["date"]["start_date"] == "2026-09-12"
+
+
+def test_non_laser_standalone_active_booking_requires_commercial_basis_before_write() -> None:
+    state = BookingTaskState(
+        write_authorization=_authorization(),
+        constraints=CustomerConstraints(
+            service_id="svc-hydra",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="19:00"),
+        ),
+    )
+    step = plan_active_task_progress(
+        state,
+        operation_index=0,
+        context=_continuation_context(),
+    )
+
+    assert step.response_goal == "answer_price"
+    assert step.write_intent is None
+    assert [read.kind for read in step.reads] == ["service_catalog", "availability"]
+    assert step.facts["commercial_basis_key"] == "svc-hydra|none|standalone"
+
+
+def test_existing_package_path_presents_verified_package_truth_not_cash_price() -> None:
+    state = BookingTaskState(
+        write_authorization=_authorization(),
+        constraints=CustomerConstraints(
+            service_id="svc-hydra",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            package_usage="use_existing",
+        ),
+    )
+    step = plan_active_task_progress(
+        state,
+        operation_index=0,
+        context=_continuation_context(),
+    )
+
+    assert step.response_goal == "package_information"
+    assert [read.kind for read in step.reads] == ["customer_packages", "availability"]
+    assert step.write_intent is None
+    assert step.facts["commercial_basis_key"] == "svc-hydra|none|package"
+
+
+def test_presented_non_laser_commercial_basis_allows_verified_booking_progress() -> None:
+    state = BookingTaskState(
+        write_authorization=_authorization(),
+        constraints=CustomerConstraints(
+            service_id="svc-hydra",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="19:00"),
+        ),
+        derived=DerivedBookingState(
+            commercial_basis_presented_key="svc-hydra|none|standalone"
+        ),
+    )
+    step = plan_active_task_progress(
+        state,
+        operation_index=0,
+        context=_continuation_context(),
+    )
+
+    assert step.response_goal == "present_availability"
+    assert step.write_intent is not None
+    assert [read.kind for read in step.reads] == ["availability"]
 
 
 def test_cancel_active_is_not_converted_into_booking_preservation() -> None:

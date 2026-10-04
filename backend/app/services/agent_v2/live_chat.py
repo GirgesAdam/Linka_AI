@@ -702,7 +702,8 @@ def _run_v2_after_inbound(
     )
     if turn.pending_write is not None:
         raise RuntimeError("Live V2 turn returned an unexecuted verified write.")
-    if not turn.reply:
+    no_reply = turn.reply is None and turn.responder_model == "deterministic:no-reply"
+    if not turn.reply and not no_reply:
         raise RuntimeError("Live V2 turn produced no customer reply.")
 
     created_handoff_this_turn = any(outcome.status == "handoff" for outcome in turn.outcomes)
@@ -747,6 +748,19 @@ def _run_v2_after_inbound(
             handoff_required=True,
             agent_paused=True,
             model=None,
+        )
+
+    if no_reply:
+        db.commit()
+        return AgentChatResponse(
+            run_id=run_id,
+            conversation_id=conversation.id,
+            inbound_message_id=inbound.id,
+            outbound_message_id=None,
+            reply=None,
+            handoff_required=False,
+            agent_paused=False,
+            model=turn.responder_model,
         )
 
     verified_read_context = _verified_read_context_from_turn(

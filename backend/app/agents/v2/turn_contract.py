@@ -61,6 +61,7 @@ GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
 AutomationContextRelationship = Literal["none", "acknowledge", "appointment_action", "next_session"]
 AppointmentActionExplicitField = Literal["date", "time"]
+ResponseDisposition = Literal["reply", "no_reply"]
 FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
 
@@ -531,11 +532,26 @@ class TiaTurnUnderstanding(StrictContractModel):
         ),
     )
     safety_signals: list[SafetySignal] = Field(default_factory=list)
+    response_disposition: ResponseDisposition = Field(
+        default="reply",
+        description=(
+            "Use no_reply only when the latest customer message is purely a conversational closing "
+            "acknowledgement after the prior task/read is already complete, with no active task, pending "
+            "choice, automation acknowledgement, requested action, question, or safety concern. This is "
+            "semantic classification only; deterministic Python re-checks state before suppressing output."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_non_empty_turn(self) -> TiaTurnUnderstanding:
-        if not self.operations and not self.safety_signals:
-            raise ValueError("A turn must contain at least one operation or safety signal.")
+        if (
+            not self.operations
+            and not self.safety_signals
+            and self.response_disposition != "no_reply"
+        ):
+            raise ValueError(
+                "A turn must contain at least one operation, safety signal, or no-reply disposition."
+            )
         if len(self.operations) > 6:
             raise ValueError("A customer turn cannot produce more than six operations.")
         return self

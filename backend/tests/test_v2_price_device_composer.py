@@ -375,6 +375,125 @@ def test_exact_service_price_stays_zero_llm_calls(
     assert text == "جلسة Hydrafacial سعرها 1200 جنيه."
 
 
+def test_booking_price_confirmation_mentions_verified_availability_not_unverified_appointment() -> None:
+    outcome = _selected_device_price()
+    outcome.facts.update(
+        {
+            "booking_next_field": "booking",
+            "exact_time_requested": True,
+            "availability": {
+                "available_option_count": 1,
+                "availability_windows": [{"doctor_name": "مريم"}],
+            },
+        }
+    )
+    contract = build_customer_response_contract([outcome])
+
+    text = deterministic_price_device_fallback(contract, arabic=True)
+
+    assert "الوقت المطلوب متاح مع د. مريم" in text
+    assert "تحب أحجز؟" in text
+    assert "الموعد ده" not in text
+
+
+def test_booking_price_with_date_renders_verified_windows_and_one_selection_question() -> None:
+    outcome = _selected_device_price()
+    outcome.facts.update(
+        {
+            "booking_next_field": "booking",
+            "exact_time_requested": False,
+            "availability": {
+                "service_name": "Laser Underarm",
+                "checked_dates": ["2026-10-08"],
+                "available_option_count": 3,
+                "availability_windows": [
+                    {
+                        "doctor_name": "مريم حسن",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-08T16:00:00+03:00",
+                        "end_local": "2026-10-08T16:30:00+03:00",
+                    },
+                    {
+                        "doctor_name": "يوسف سمير",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-08T17:30:00+03:00",
+                        "end_local": "2026-10-08T18:00:00+03:00",
+                    },
+                    {
+                        "doctor_name": "يوسف سمير",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-08T19:00:00+03:00",
+                        "end_local": "2026-10-08T19:30:00+03:00",
+                    },
+                ],
+            },
+        }
+    )
+
+    text = deterministic_price_device_fallback(
+        build_customer_response_contract([outcome]),
+        arabic=True,
+    )
+
+    assert "650 جنيه" in text
+    assert "المتاح يوم الخميس 8 أكتوبر" in text
+    assert "مع مريم حسن" in text
+    assert "مع يوسف سمير" in text
+    assert "أنهي وقت أنسب لك؟" in text
+    assert "في مواعيد متاحة في اليوم المطلوب" not in text
+    assert text.count("Candela Gentle") == 1
+
+
+def test_booking_price_with_date_and_no_availability_names_verified_date_and_offers_other_day() -> None:
+    outcome = _selected_device_price()
+    outcome.facts.update(
+        {
+            "booking_next_field": "booking",
+            "exact_time_requested": False,
+            "availability": {
+                "service_name": "Laser Underarm",
+                "checked_dates": ["2026-10-04"],
+                "available_option_count": 0,
+                "availability_windows": [],
+            },
+        }
+    )
+
+    text = deterministic_price_device_fallback(
+        build_customer_response_contract([outcome]),
+        arabic=True,
+    )
+
+    assert "650 جنيه" in text
+    assert "مفيش مواعيد متاحة يوم الأحد 4 أكتوبر" in text
+    assert "أقدر أدورلك في يوم تاني لو تحب" in text
+
+
+def test_booking_price_with_exact_time_unavailable_keeps_existing_exact_time_behavior() -> None:
+    outcome = _selected_device_price()
+    outcome.facts.update(
+        {
+            "booking_next_field": "booking",
+            "exact_time_requested": True,
+            "availability": {
+                "service_name": "Laser Underarm",
+                "checked_dates": ["2026-10-04"],
+                "available_option_count": 0,
+                "availability_windows": [],
+            },
+        }
+    )
+
+    text = deterministic_price_device_fallback(
+        build_customer_response_contract([outcome]),
+        arabic=True,
+    )
+
+    assert "650 جنيه" in text
+    assert "الوقت المطلوب مش متاح" in text
+    assert "أقدر أدورلك" not in text
+
+
 def test_multi_device_service_price_stays_zero_llm_calls_and_not_swapped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

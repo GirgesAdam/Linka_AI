@@ -22,6 +22,7 @@ from app.services.agent_v2.planner import (
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
+    DerivedBookingState,
     OptionChoice,
     OptionSnapshot,
     RescheduleTarget,
@@ -130,7 +131,7 @@ def test_broad_appointment_list_keeps_unscoped_upcoming_read() -> None:
     assert step.reads == [ReadRequest(kind="appointments", parameters={})]
 
 
-def test_exact_booking_is_not_write_ready_until_one_verified_slot_exists() -> None:
+def test_exact_booking_first_presents_commercial_basis_and_verified_slot_without_write() -> None:
     turn = TiaTurnUnderstanding(
         operations=[
             _operation(
@@ -143,23 +144,15 @@ def test_exact_booking_is_not_write_ready_until_one_verified_slot_exists() -> No
         safety_signals=[],
     )
     step = plan_turn(turn, _context()).steps[0]
+
     assert step.disposition == "read"
-    assert step.write_intent is not None
-    assert step.write_intent.kind == "booking"
-
-    ready = advance_step_after_verification(
-        step,
-        VerificationFacts(
-            exact_slot_match_count=1,
-            verified_parameters={"start_at": "2026-09-17T19:00:00+03:00"},
-        ),
-    )
-    assert ready.disposition == "write_ready"
-    assert ready.write_intent is not None
-    assert ready.write_intent.parameters["start_at"] == "2026-09-17T19:00:00+03:00"
+    assert step.write_intent is None
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog", "availability"]
+    assert step.facts["exact_time_requested"] is True
 
 
-def test_unavailable_exact_booking_is_blocked_instead_of_guessed() -> None:
+def test_exact_booking_commercial_gate_never_auto_promotes_to_write() -> None:
     turn = TiaTurnUnderstanding(
         operations=[
             _operation(
@@ -172,12 +165,13 @@ def test_unavailable_exact_booking_is_blocked_instead_of_guessed() -> None:
         safety_signals=[],
     )
     step = plan_turn(turn, _context()).steps[0]
-    blocked = advance_step_after_verification(
+    unchanged = advance_step_after_verification(
         step,
         VerificationFacts(exact_slot_match_count=0),
     )
-    assert blocked.disposition == "blocked"
-    assert blocked.response_goal == "requested_time_unavailable"
+
+    assert unchanged == step
+    assert unchanged.write_intent is None
 
 
 def test_broad_booking_window_never_auto_promotes_to_write() -> None:
@@ -224,6 +218,9 @@ def test_verified_booking_snapshot_selection_requires_persisted_write_authorizat
             granted_at=NOW - timedelta(minutes=2),
         ),
         constraints=CustomerConstraints(service_id="service-underarm"),
+        derived=DerivedBookingState(
+            commercial_basis_presented_key="service-underarm|none|standalone"
+        ),
         option_snapshot=snapshot,
         version=5,
     )
@@ -724,15 +721,33 @@ def test_laser_device_requirement_stays_deterministic_outside_model_input() -> N
     step = plan_turn(turn, context).steps[0]
 
     assert step.facts["service_requires_laser_device"] is True
-    clarified = advance_step_after_verification(
-        step,
-        VerificationFacts(
-            exact_slot_match_count=1,
-            verified_parameters={"start_at": "2026-09-17T19:00:00+03:00"},
+    assert step.facts["booking_device_price_step"] is True
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.write_intent is None
+
+
+def test_non_laser_booking_reads_verified_price_before_availability_write() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            date=DateConstraint(mode="exact", start_date="2026-09-17", end_date=None),
+            time=TimeConstraint(mode="exact", start_time="19:00", end_time=None),
         ),
+        execution_intent="execute",
     )
-    assert clarified.disposition == "clarify"
-    assert clarified.clarification_field == "device"
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(),
+    ).steps[0]
+
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog", "availability"]
+    assert step.write_intent is None
+    assert step.facts["commercial_basis_key"].endswith("|none|standalone")
 
 
 def test_booking_planner_never_carries_pulse_billing_policy() -> None:
@@ -752,24 +767,9 @@ def test_booking_planner_never_carries_pulse_billing_policy() -> None:
     ).steps[0]
 
     assert step.disposition == "read"
-    assert step.write_intent is not None
-    assert "pulse_usage" not in step.write_intent.parameters
-
-    ready = advance_step_after_verification(
-        step,
-        VerificationFacts(
-            exact_slot_match_count=1,
-            verified_parameters={
-                "start_at": "2026-09-17T19:00:00+03:00",
-                "branch_id": "branch-main",
-                "doctor_id": "doctor-maryam",
-                "device_key": "candela_gentle",
-            },
-        ),
-    )
-    assert ready.disposition == "write_ready"
-    assert ready.write_intent is not None
-    assert "pulse_usage" not in ready.write_intent.parameters
+    assert step.write_intent is None
+    assert "pulse_usage" not in step.facts
+    assert all("pulse_usage" not in read.parameters for read in step.reads)
 
 
 def test_session_package_booking_is_independent_from_pulse_billing() -> None:
@@ -788,9 +788,11 @@ def test_session_package_booking_is_independent_from_pulse_billing() -> None:
     ).steps[0]
 
     assert step.disposition == "read"
-    assert step.write_intent is not None
-    assert step.write_intent.parameters["package_usage"] == "use_existing"
-    assert "pulse_usage" not in step.write_intent.parameters
+    assert step.write_intent is None
+    assert step.response_goal == "package_information"
+    assert [read.kind for read in step.reads] == ["customer_packages", "availability"]
+    assert step.facts["package_usage"] == "use_existing"
+    assert "pulse_usage" not in step.facts
 
 
 def test_package_info_reads_requested_offer_scope_only() -> None:

@@ -192,7 +192,46 @@ def deterministic_package_contract_reply(
                     )
                 )
 
-    return "\n".join(chunks).strip()
+    rendered = "\n".join(chunks).strip()
+    for unit in contract.units:
+        truth = unit.package_truth
+        if truth is None or not any(
+            package.effective_status == "active" and package.sessions_remaining > 0
+            for package in truth.owned_packages
+        ):
+            continue
+        facts = {fact.key: fact.value for fact in unit.facts}
+        if facts.get("booking_commercial_basis_step") is not True:
+            continue
+        availability = facts.get("availability")
+        if not isinstance(availability, dict):
+            continue
+        count = availability.get("available_option_count")
+        exact_time = facts.get("exact_time_requested") is True
+        if isinstance(count, int) and count > 0:
+            if exact_time:
+                rendered += (
+                    "\nالجلسة هتتحسب من الباكدج الحالية، والوقت المطلوب متاح. تحب أحجز؟"
+                    if arabic
+                    else "\nThis session will use your current package, and the requested time is available. Shall I book it?"
+                )
+            else:
+                rendered += (
+                    "\nالجلسة هتتحسب من الباكدج الحالية، وفي مواعيد متاحة في اليوم المطلوب."
+                    if arabic
+                    else "\nThis session will use your current package, and there is verified availability on the requested day."
+                )
+        elif count == 0:
+            rendered += (
+                "\nالباكدج الحالية تغطي الجلسة، لكن الوقت المطلوب مش متاح."
+                if arabic and exact_time
+                else "\nالباكدج الحالية تغطي الجلسة، لكن مفيش مواعيد متاحة في اليوم المطلوب."
+                if arabic
+                else "\nYour current package covers the session, but the requested time is unavailable."
+                if exact_time
+                else "\nYour current package covers the session, but there is no availability on the requested day."
+            )
+    return rendered
 
 
 def compose_package_contract_reply(

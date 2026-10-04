@@ -17,6 +17,7 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.agents.v2.availability_pagination import select_availability_window_page
+from app.agents.v2.customer_datetime import format_customer_date
 from app.core.config import settings
 from app.services.agent_v2.response_contract import (
     AVAILABILITY_STATE_BY_GOAL,
@@ -70,6 +71,24 @@ _ALLOWED_CLOSING_BY_STATE: dict[str, frozenset[str]] = {
     "no_availability": frozenset({"offer_other_scope", "none"}),
 }
 
+_AR_WEEKDAYS = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+_EN_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
 _AR_MONTHS = {
     1: "يناير",
     2: "فبراير",
@@ -306,17 +325,7 @@ def _clock(value: object, *, arabic: bool) -> str:
 
 
 def _date_text(value: object, *, arabic: bool) -> str:
-    if isinstance(value, str):
-        raw = value[:10]
-    else:
-        raw = str(value)[:10]
-    try:
-        parsed = date.fromisoformat(raw)
-    except ValueError:
-        return str(value)
-    if arabic:
-        return f"{parsed.day} {_AR_MONTHS[parsed.month]} {parsed.year}"
-    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+    return format_customer_date(value, arabic=arabic)
 
 
 def _checked_dates(unit: CustomerResponseUnit) -> list[str]:
@@ -495,6 +504,86 @@ def _render_windows(
     return rows
 
 
+def render_embedded_verified_availability_options(
+    availability: dict[str, object],
+    *,
+    arabic: bool,
+) -> str | None:
+    """Render one WhatsApp-sized page of already-verified windows for a price reply.
+
+    The caller has already named the selected service/device, so this intentionally
+    avoids repeating the device on every availability row. Exact date/time values
+    still come only from the verified availability payload.
+    """
+
+    raw_windows = availability.get("availability_windows")
+    windows = (
+        [dict(item) for item in raw_windows if isinstance(item, dict)]
+        if isinstance(raw_windows, list)
+        else []
+    )
+    if not windows:
+        return None
+
+    selected, _keys, has_more = select_availability_window_page(
+        windows,
+        service_name=availability.get("service_name"),
+    )
+    grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
+    ordered_days: list[str] = []
+    for window in selected:
+        doctor = str(window.get("doctor_name") or "").strip()
+        day, time_text = _window_time_text(window, arabic=arabic)
+        if day and day not in ordered_days:
+            ordered_days.append(day)
+        grouped[(doctor, day)].append(time_text)
+
+    single_day = ordered_days[0] if len(ordered_days) == 1 else None
+    if arabic:
+        intro = "أقرب المواعيد المتاحة" if has_more else "المتاح"
+        if single_day:
+            intro += f" يوم {single_day}"
+    else:
+        intro = "Nearest available times" if has_more else "Available times"
+        if single_day:
+            intro += f" on {single_day}"
+
+    rows: list[str] = []
+    for (doctor, day), times in grouped.items():
+        if arabic:
+            subject = f"مع {doctor}" if doctor else "متاح"
+            day_part = f" يوم {day}" if day and not single_day else ""
+            rows.append(f"{subject}{day_part}: " + "، و".join(times) + ".")
+        else:
+            subject = f"with {doctor}" if doctor else "Available"
+            day_part = f" on {day}" if day and not single_day else ""
+            rows.append(f"{subject}{day_part}: " + ", ".join(times) + ".")
+
+    if not rows:
+        return None
+    closing = "أنهي وقت أنسب لك؟" if arabic else "Which time works best for you?"
+    return "\n".join([f"{intro}:", *[f"• {row}" for row in rows], closing])
+
+
+def render_embedded_no_availability(
+    availability: dict[str, object],
+    *,
+    arabic: bool,
+) -> str:
+    """Render verified date-scoped no-availability truth for an embedded price reply."""
+
+    raw_dates = availability.get("checked_dates")
+    dates = [str(value) for value in raw_dates if value] if isinstance(raw_dates, list) else []
+    if len(dates) == 1:
+        day = _date_text(dates[0], arabic=arabic)
+        if arabic:
+            return f"مفيش مواعيد متاحة يوم {day}. أقدر أدورلك في يوم تاني لو تحب."
+        return f"There are no available times on {day}. I can check another day if you'd like."
+    if arabic:
+        return "مفيش مواعيد متاحة في اليوم المطلوب. أقدر أدورلك في يوم تاني لو تحب."
+    return "There is no availability on the requested day. I can check another day if you'd like."
+
+
 def _optional_context(
     unit: CustomerResponseUnit,
     keys: list[str],
@@ -565,7 +654,7 @@ def _render_present(
         raise AvailabilityComposerValidationError(
             "options_available requires renderable verified windows."
         )
-    parts = [f"{intro}:", *rows]
+    parts = [f"{intro}:", *[f"• {row}" for row in rows]]
     if draft.closing_action == "ask_selection":
         parts.append(
             "أنهي وقت أنسب لك؟"

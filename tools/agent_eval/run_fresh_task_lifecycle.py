@@ -865,12 +865,12 @@ def run_r2_next_day_resume(db, ws):
         c.send(message)
     before = c.turns[-1]["active_task"]
     flow_before = _raw_flow_snapshot(db, ws, c.cid)
-    c.set_now(RESUME_START + timedelta(hours=18))
+    c.set_now(RESUME_START + timedelta(hours=50))
     c.send("طب بعد الساعة 6؟")
     after = c.turns[-1]["active_task"]
     return {
         "id": "R2",
-        "time_gap": "18 hours / next calendar day / within configured TTL",
+        "time_gap": "50 hours / beyond legacy 24h / within booking TTL",
         "flow_before": flow_before,
         "flow_after": _raw_flow_snapshot(db, ws, c.cid),
         "active_task_before": before,
@@ -901,14 +901,14 @@ def _expired_booking_fixture(db, ws, label):
 
 def run_r3_expired_flow(db, ws):
     p, c, before, flow_before, old_flow_id = _expired_booking_fixture(db, ws, "R3")
-    c.set_now(RESUME_START + timedelta(hours=settings.agent_flow_ttl_hours + 2))
+    c.set_now(RESUME_START + timedelta(hours=settings.agent_booking_flow_ttl_hours + 2))
     c.send("عايز احجز")
     after = c.turns[-1]["active_task"]
     old_flow = db.get(ConversationFlowState, UUID(old_flow_id))
     return {
         "id": "R3",
-        "time_gap": f">{settings.agent_flow_ttl_hours}h configured flow TTL",
-        "configured_ttl_hours": settings.agent_flow_ttl_hours,
+        "time_gap": f">{settings.agent_booking_flow_ttl_hours}h configured booking TTL",
+        "configured_ttl_hours": settings.agent_booking_flow_ttl_hours,
         "flow_before": flow_before,
         "expired_flow": {
             "id": old_flow_id,
@@ -927,14 +927,14 @@ def run_r3_expired_flow(db, ws):
 
 def run_r4_expired_explicit_service(db, ws):
     p, c, before, flow_before, old_flow_id = _expired_booking_fixture(db, ws, "R4")
-    c.set_now(RESUME_START + timedelta(hours=settings.agent_flow_ttl_hours + 2))
+    c.set_now(RESUME_START + timedelta(hours=settings.agent_booking_flow_ttl_hours + 2))
     c.send("عايز أكمل حجز Under Arm")
     after = c.turns[-1]["active_task"]
     old_flow = db.get(ConversationFlowState, UUID(old_flow_id))
     return {
         "id": "R4",
-        "time_gap": f">{settings.agent_flow_ttl_hours}h configured flow TTL",
-        "configured_ttl_hours": settings.agent_flow_ttl_hours,
+        "time_gap": f">{settings.agent_booking_flow_ttl_hours}h configured booking TTL",
+        "configured_ttl_hours": settings.agent_booking_flow_ttl_hours,
         "flow_before": flow_before,
         "expired_flow": {
             "id": old_flow_id,
@@ -1326,6 +1326,228 @@ def assert_task1b_reminder_control(result):
 
 
 
+def run_booking_j1(db, ws):
+    p = patient(db, ws, "J1")
+    before = state_snapshot(db, ws, p)
+    c = Conversation("J1", db, ws, p, SESSION1)
+    for message in (
+        "عايز احجز Under Arm",
+        "DEKA",
+        "الخميس",
+        "الساعة 4 مساء",
+        "مريم",
+        "احجز",
+    ):
+        if c.turns and "booking_completed" in c.turns[-1]["goals"]:
+            break
+        c.send(message)
+    if c.turns and "booking_completed" in c.turns[-1]["goals"]:
+        c.send("تمام شكرا")
+    after = state_snapshot(db, ws, p)
+    return {
+        "id": "J1",
+        "turns": c.turns,
+        "errors": c.errors,
+        "before": before,
+        "after": after,
+        "writes": sum(1 for turn in c.turns if turn.get("write_attempted")),
+    }
+
+
+def run_booking_j2(db, ws):
+    p = patient(db, ws, "J2")
+    c = Conversation("J2", db, ws, p, SESSION1)
+    c.send("عايز Under Arm على DEKA يوم الأحد الساعة 5")
+    return {
+        "id": "J2",
+        "turns": c.turns,
+        "errors": c.errors,
+        "writes": sum(1 for turn in c.turns if turn.get("write_attempted")),
+    }
+
+
+def run_booking_j3(db, ws, under):
+    price_rows = list(
+        db.scalars(
+            select(ServiceDevicePrice).where(
+                ServiceDevicePrice.workspace_id == ws.id,
+                ServiceDevicePrice.service_id == under.id,
+                ServiceDevicePrice.is_active.is_(True),
+            )
+        )
+    )
+    if len(price_rows) < 2:
+        raise RuntimeError("J3 requires at least two configured device prices before narrowing")
+    keep = next((row for row in price_rows if row.device_key == "prime_lase"), price_rows[0])
+    changed = [row for row in price_rows if row.id != keep.id]
+    for row in changed:
+        row.is_active = False
+    db.flush()
+    try:
+        p = patient(db, ws, "J3")
+        c = Conversation("J3", db, ws, p, SESSION1)
+        c.send("عايز احجز Under Arm")
+        return {"id": "J3", "turns": c.turns, "errors": c.errors, "writes": 0}
+    finally:
+        for row in changed:
+            row.is_active = True
+        db.flush()
+
+
+
+def run_booking_j4(db, ws):
+    p = patient(db, ws, "J4")
+    c = Conversation("J4", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA", "لا خليها Candela"):
+        c.send(message)
+    return {"id": "J4", "turns": c.turns, "errors": c.errors, "writes": 0}
+
+
+def run_booking_j5(db, ws):
+    p = patient(db, ws, "J5")
+    c = Conversation("J5", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA", "الخميس", "لا خليها السبت"):
+        c.send(message)
+    return {"id": "J5", "turns": c.turns, "errors": c.errors, "writes": 0}
+
+
+def run_booking_j6(db, ws):
+    p = patient(db, ws, "J6")
+    c = Conversation("J6", db, ws, p, SESSION1)
+    for message in (
+        "عايز احجز Full Body",
+        "DEKA",
+        "بالمناسبة الجلسة بكام؟",
+        "والعنوان فين؟",
+        "تمام كمل الحجز",
+    ):
+        c.send(message)
+    return {"id": "J6", "turns": c.turns, "errors": c.errors, "writes": 0}
+
+
+def run_booking_j7(db, ws):
+    p = patient(db, ws, "J7")
+    c = Conversation("J7", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA"):
+        c.send(message)
+    before_gap = c.turns[-1]["active_task"]
+    c.set_now(SESSION1 + timedelta(days=2))
+    c.send("طب فيه السبت؟")
+    return {
+        "id": "J7",
+        "turns": c.turns,
+        "errors": c.errors,
+        "before_gap": before_gap,
+        "after_gap": c.turns[-1]["active_task"],
+        "writes": 0,
+    }
+
+
+def run_booking_j8(db, ws):
+    p = patient(db, ws, "J8")
+    c = Conversation("J8", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA"):
+        c.send(message)
+    c.set_now(SESSION1 + timedelta(hours=167))
+    c.send("طب فيه السبت؟")
+    return {
+        "id": "J8",
+        "turns": c.turns,
+        "errors": c.errors,
+        "active_task_after": c.turns[-1]["active_task"],
+        "writes": 0,
+    }
+
+
+def run_booking_j9(db, ws):
+    p = patient(db, ws, "J9")
+    c = Conversation("J9", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA"):
+        c.send(message)
+    c.set_now(SESSION1 + timedelta(days=8))
+    c.send("عايز احجز Full Body")
+    return {
+        "id": "J9",
+        "turns": c.turns,
+        "errors": c.errors,
+        "active_task_after": c.turns[-1]["active_task"],
+        "writes": 0,
+    }
+
+
+def run_booking_j10(db, ws):
+    p = patient(db, ws, "J10")
+    c = Conversation("J10", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA", "الخميس", "الساعة 4", "مريم", "احجز"):
+        if c.turns and "booking_completed" in c.turns[-1]["goals"]:
+            break
+        c.send(message)
+    c.set_now(SESSION1 + timedelta(hours=2))
+    c.send("عايز احجز Full Body كمان")
+    return {
+        "id": "J10",
+        "turns": c.turns,
+        "errors": c.errors,
+        "active_task_after_new_booking": c.turns[-1]["active_task"],
+        "writes": sum(1 for turn in c.turns if turn.get("write_attempted")),
+    }
+
+
+def run_booking_j13(db, ws):
+    p = patient(db, ws, "J13")
+    c = Conversation("J13", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA", "بكرة"):
+        c.send(message)
+    # Advance the canonical clock before asking for the nearest future day so the
+    # regression proves the search cannot move backward to an earlier date.
+    c.set_now(SESSION1 + timedelta(days=1))
+    c.send("طب أقرب يوم؟")
+    return {"id": "J13", "turns": c.turns, "errors": c.errors, "writes": 0}
+
+
+def run_booking_j14(db, ws):
+    p = patient(db, ws, "J14")
+    c = Conversation("J14", db, ws, p, SESSION1)
+    for message in ("عايز احجز Under Arm", "DEKA", "الخميس", "الساعة 5"):
+        if c.turns and "booking_completed" in c.turns[-1]["goals"]:
+            break
+        c.send(message)
+    return {
+        "id": "J14",
+        "turns": c.turns,
+        "errors": c.errors,
+        "writes": sum(1 for turn in c.turns if turn.get("write_attempted")),
+    }
+
+
+
+def run_booking_j11_read_closing(db, ws):
+    p = patient(db, ws, "J11")
+    c = Conversation("J11", db, ws, p, SESSION1)
+    c.send("Under Arm بكام؟")
+    c.send("شكرا")
+    return {
+        "id": "J11",
+        "turns": c.turns,
+        "errors": c.errors,
+        "writes": 0,
+    }
+
+
+def run_booking_contract_core(db, ws):
+    return [
+        run_booking_j1(db, ws),
+        run_booking_j2(db, ws),
+        run_booking_j4(db, ws),
+        run_booking_j5(db, ws),
+        run_booking_j6(db, ws),
+        run_booking_j7(db, ws),
+        run_booking_j8(db, ws),
+        run_booking_j9(db, ws),
+        run_booking_j11_read_closing(db, ws),
+    ]
+
+
 
 output = Path(sys.argv[1])
 mode = sys.argv[2] if len(sys.argv) > 2 else "after"
@@ -1337,7 +1559,35 @@ try:
     ws = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
     assert_demo_only(ws)
     under, full, mary, youssef, branch_id = prepare(db, ws)
-    if mode == "task1b_r1":
+    if mode == "booking_j1":
+        results = [run_booking_j1(db, ws)]
+    elif mode == "booking_j2":
+        results = [run_booking_j2(db, ws)]
+    elif mode == "booking_j3":
+        results = [run_booking_j3(db, ws, under)]
+    elif mode == "booking_j4":
+        results = [run_booking_j4(db, ws)]
+    elif mode == "booking_j5":
+        results = [run_booking_j5(db, ws)]
+    elif mode == "booking_j6":
+        results = [run_booking_j6(db, ws)]
+    elif mode == "booking_j7":
+        results = [run_booking_j7(db, ws)]
+    elif mode == "booking_j8":
+        results = [run_booking_j8(db, ws)]
+    elif mode == "booking_j9":
+        results = [run_booking_j9(db, ws)]
+    elif mode == "booking_j10":
+        results = [run_booking_j10(db, ws)]
+    elif mode == "booking_j11":
+        results = [run_booking_j11_read_closing(db, ws)]
+    elif mode == "booking_j13":
+        results = [run_booking_j13(db, ws)]
+    elif mode == "booking_j14":
+        results = [run_booking_j14(db, ws)]
+    elif mode == "booking_contract_core":
+        results = run_booking_contract_core(db, ws)
+    elif mode == "task1b_r1":
         results = [run_r1_same_day_resume(db, ws)]
     elif mode == "task1b_r2":
         results = [run_r2_next_day_resume(db, ws)]

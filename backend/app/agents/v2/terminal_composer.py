@@ -16,6 +16,7 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.customer_datetime import format_customer_date
 from app.core.config import settings
 from app.services.agent_v2.response_contract import (
     TERMINAL_ACTION_BY_GOAL,
@@ -191,6 +192,25 @@ _ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
         "friendly": "I’ve updated your marketing preferences",
     },
 }
+
+_ARABIC_WEEKDAYS = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+_ENGLISH_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
 
 _ARABIC_MONTHS = {
     1: "يناير",
@@ -447,12 +467,7 @@ def _extract_time(value: object) -> tuple[int, int] | None:
 
 
 def _format_date(value: object, *, arabic: bool) -> str:
-    parsed = _extract_date(value)
-    if parsed is None:
-        return str(value)
-    if arabic:
-        return f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
-    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+    return format_customer_date(value, arabic=arabic)
 
 
 def _format_clock(value: object, *, arabic: bool) -> str:
@@ -490,13 +505,13 @@ def format_customer_datetime(
             if timezone_name and parsed.tzinfo is not None:
                 parsed = parsed.astimezone(ZoneInfo(timezone_name))
             if arabic:
-                day = f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
+                day = format_customer_date(parsed, arabic=True)
                 clock = _format_clock(
                     f"{parsed.hour:02d}:{parsed.minute:02d}",
                     arabic=True,
                 )
                 return f"{day} الساعة {clock}"
-            day = f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+            day = format_customer_date(parsed, arabic=False)
             clock = _format_clock(
                 f"{parsed.hour:02d}:{parsed.minute:02d}",
                 arabic=False,
