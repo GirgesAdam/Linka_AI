@@ -15,6 +15,10 @@ from app.agents.model_provider import (
     model_label,
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
+from app.agents.v2.availability_composer import (
+    render_embedded_no_availability,
+    render_embedded_verified_availability_options,
+)
 from app.core.config import settings
 from app.services.agent_v2.response_contract import (
     CommercialPriceOption,
@@ -295,9 +299,24 @@ def _render_option_list(
                                 else f" The requested time is available with Dr. {doctor_name}. Shall I book it?"
                             )
                         return rendered + (" الوقت المطلوب متاح. تحب أحجز؟" if arabic else " The requested time is available. Shall I book it?")
+                    options_text = render_embedded_verified_availability_options(
+                        availability,
+                        arabic=arabic,
+                    )
+                    if options_text:
+                        return rendered + "\n\n" + options_text
                     return rendered + (" وفي مواعيد متاحة في اليوم المطلوب." if arabic else " There is verified availability on the requested day.")
                 if count == 0:
-                    return rendered + (" الوقت المطلوب مش متاح." if arabic and exact_time else " مفيش مواعيد متاحة في اليوم المطلوب." if arabic else " The requested time is unavailable." if exact_time else " There is no availability on the requested day.")
+                    if exact_time:
+                        return rendered + (
+                            " الوقت المطلوب مش متاح."
+                            if arabic
+                            else " The requested time is unavailable."
+                        )
+                    return rendered + "\n\n" + render_embedded_no_availability(
+                        availability,
+                        arabic=arabic,
+                    )
             return rendered + (" هتحب أكمل بعد ما أأكد المواعيد المتاحة؟" if arabic else " Shall I continue after I verify the available times?")
         return rendered
 
