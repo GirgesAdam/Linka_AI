@@ -65,12 +65,15 @@ export default async function ConversationPage({
   searchParams: Promise<{ followup?: string }>;
 }) {
   const [{ conversationId }, query] = await Promise.all([params, searchParams]);
-  const [conversation, ctx, revision] = await Promise.all([
+  // Read the revision before the detail data so a concurrent message,
+  // ownership, handoff, or delivery update cannot be absorbed into the
+  // revision while leaving this render stale.
+  const revision = await tiaRequest<{ revision: string }>(
+    `/inbox/revision?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
+  const [conversation, ctx] = await Promise.all([
     tiaRequest<InboxConversation>(`/inbox/conversations/${conversationId}`),
     getAppContext(),
-    tiaRequest<{ revision: string }>(
-      `/inbox/revision?conversation_id=${encodeURIComponent(conversationId)}`,
-    ),
   ]);
   const members =
     ctx.workspace.role === "admin"
