@@ -239,7 +239,7 @@ Customer:
 > عايز اغيره
 
 Linka:
-> تحب تغيّره لإمتى؟
+> تحب تغيّر ميعادك لأي يوم؟
 
 Customer:
 > خليه الخميس
@@ -295,7 +295,7 @@ Customer:
 > Full Body
 
 Linka:
-> تمام، Full Body. تحب الموعد يكون إمتى؟
+> تمام، لحجز الـ Full Body، تحب يكون الموعد في أي يوم؟
 
 State before any new date/time/device/doctor:
 
@@ -419,7 +419,7 @@ Customer:
 > عايز احجز Under Arm
 
 Linka:
-> تحب الحجز يكون يوم إيه؟
+> تمام، تحب تحجزه في أي تاريخ؟
 
 Customer:
 > الخميس
@@ -455,7 +455,7 @@ Customer:
 > الساعة 4
 
 Linka:
-> تمام، حجزك اتأكد.
+> تمام جدًا، ثبتنالك الحجز.
 
 The resulting `recent_verified_action` contains canonical old booking authority:
 
@@ -472,7 +472,7 @@ Customer:
 > عايز احجز جلسة جديدة
 
 Linka:
-> أكيد، تحب تحجز جلسة إيه؟
+> تحب تحجز جلسة إيه؟
 
 Before any new service/date/time/device/doctor:
 
@@ -495,7 +495,7 @@ Customer:
 > Full Body
 
 Linka:
-> تحب تحجز جلسة الـFull Body في أي تاريخ؟
+> تحب الجلسة تكون في أنهي تاريخ؟
 
 State before any new date/time/device/doctor:
 
@@ -541,7 +541,7 @@ Customer:
 > احجز الساعة 5
 
 Linka:
-> تم تأكيد الحجز.
+> تمام، حجزك اتأكد، لخدمة Full Body، يوم 8 أكتوبر 2026 الساعة 5 مساءً.
 
 Final T5 evidence:
 
@@ -641,7 +641,7 @@ pytest -q \
   tests/test_v2_turn_interpreter.py \
   tests/test_v2_responder.py
 
-91 passed
+89 passed
 ```
 
 ### Historical F1–F6 guardrails
@@ -726,34 +726,18 @@ python -m alembic heads
 
 ## Shared CI
 
-Code head validated:
+Verified code head:
 
 `e48de111b14c3ae5b1a109334d9f1e8e60687515`
 
-GitHub Actions:
+GitHub Actions Run 1879:
 
 ```
-CI Run 1879 = SUCCESS
-
+CI = SUCCESS
 backend = SUCCESS
 frontend = SUCCESS
 ```
 
-Backend job passed:
+The subsequent documentation commit `9c5833801b4fae6efeaa3de5f9785cbda781a972` also passed Shared CI Run 1880 with both backend and frontend successful.
 
-- agent-eval tooling validation;
-- Ruff;
-- compileall;
-- Alembic single-head verification;
-- clean PostgreSQL migration;
-- full backend test suite.
-
-Frontend job passed:
-
-- production dependency audit;
-- lint;
-- Next typegen;
-- typecheck;
-- production build.
-
-A final documentation-only commit records this CI result. The PR body records the exact final-head CI run after that documentation commit.
+A final documentation-only correction records the latest executed transcript/test count. The exact final PR-head CI run for that last commit is recorded in PR #199 body so the branch head is not changed again merely to describe its own CI.
