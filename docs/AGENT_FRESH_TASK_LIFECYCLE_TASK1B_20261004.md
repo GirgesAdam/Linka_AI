@@ -245,7 +245,7 @@ After a completed booking, an automation reminder is inserted with real automati
 
 ```
 Customer: تمام
-Linka: تمام.
+Linka: تمام، تحت أمرك.
 ```
 
 Structured operation:
@@ -354,7 +354,7 @@ So the reminder/acknowledgement neither contaminates the active task nor extends
 
 ```
 Customer: تمام الحمد لله
-Linka: الحمد لله، دايمًا يا رب!
+Linka: الحمد لله، يا رب دايمًا بخير.
 ```
 
 Structured:
@@ -402,7 +402,7 @@ The customer then supplies fresh date/doctor/time constraints and the second boo
 Focused Task 1 / Task 1B lifecycle, semantics, persistence and responder coverage:
 
 ```
-95 passed
+104 passed
 ```
 
 Historical F1–F6 guardrails:
@@ -435,4 +435,16 @@ Alembic single head = 0089_dynamic_laser_device_references (head)
 
 ## Shared CI
 
-Pending exact-head Shared CI after the Task 1B commit is pushed. The PR body will record the terminal workflow result for the exact final head without creating another commit solely to describe its own CI.
+Task 1B implementation head:
+
+`c17b89f0b0bb5286497408b7f804a74c051f4611`
+
+GitHub Actions Run 1883:
+
+```
+CI = SUCCESS
+backend = SUCCESS
+frontend = SUCCESS
+```
+
+The final evidence-fixture/documentation commit is validated by its own exact-head Shared CI. That terminal run is recorded in PR #199 body without creating another commit solely to describe its own CI.

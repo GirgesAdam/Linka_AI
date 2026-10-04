@@ -790,7 +790,10 @@ def _seed_appointment(
 
 
 def _complete_underarm_booking(c):
-    for message in ("عايز احجز Under Arm", "الخميس", "ديكا", "مريم", "الساعة 4"):
+    for message in (
+        "عايز احجز Under Arm يوم 8 أكتوبر الساعة 4 مع مريم على جهاز ديكا",
+        "احجز الساعة 4",
+    ):
         if c.turns and "booking_completed" in c.turns[-1]["goals"]:
             break
         c.send(message)
@@ -829,7 +832,7 @@ def run_r1_same_day_resume(db, ws):
     p = patient(db, ws, "R1")
     c = Conversation("R1", db, ws, p, RESUME_START)
     c.send("عايز احجز Under Arm")
-    c.send("ديكا")
+    c.send("جهاز DEKA Again")
     before = c.turns[-1]["active_task"]
     flow_before = _raw_flow_snapshot(db, ws, c.cid)
 
@@ -854,7 +857,7 @@ def run_r1_same_day_resume(db, ws):
 def run_r2_next_day_resume(db, ws):
     p = patient(db, ws, "R2")
     c = Conversation("R2", db, ws, p, RESUME_START)
-    for message in ("عايز احجز Under Arm", "ديكا", "السبت"):
+    for message in ("عايز احجز Under Arm", "جهاز DEKA Again", "السبت"):
         c.send(message)
     before = c.turns[-1]["active_task"]
     flow_before = _raw_flow_snapshot(db, ws, c.cid)
@@ -879,7 +882,7 @@ def run_r2_next_day_resume(db, ws):
 def _expired_booking_fixture(db, ws, label):
     p = patient(db, ws, label)
     c = Conversation(label, db, ws, p, RESUME_START)
-    for message in ("عايز احجز Under Arm", "ديكا", "السبت"):
+    for message in ("عايز احجز Under Arm", "جهاز DEKA Again", "السبت"):
         if c.turns and c.turns[-1]["active_task"] is None:
             break
         c.send(message)
@@ -1040,7 +1043,7 @@ def run_r7_active_booking_unrelated_reminder(db, ws, under, mary, branch_id):
     )
     c = Conversation("R7", db, ws, p, RESUME_START)
     c.send("عايز احجز Full Body")
-    c.send("ديكا")
+    c.send("جهاز DEKA Again")
     task_before = c.turns[-1]["active_task"]
     flow_before = _raw_flow_snapshot(db, ws, c.cid)
     automation = _inject_automation(
@@ -1156,13 +1159,16 @@ def assert_task1b_regressions(results):
 
     r1 = by_id["R1"]
     assert r1["fields_before"]["service_id"] == r1["fields_after"]["service_id"]
+    assert r1["fields_before"]["device_key"] is not None
     assert r1["fields_before"]["device_key"] == r1["fields_after"]["device_key"]
     assert r1["fields_after"]["date"] is not None
     assert r1["writes"] == 0
 
     r2 = by_id["R2"]
     assert r2["fields_before"]["service_id"] == r2["fields_after"]["service_id"]
+    assert r2["fields_before"]["device_key"] is not None
     assert r2["fields_before"]["device_key"] == r2["fields_after"]["device_key"]
+    assert r2["fields_before"]["date"] == r2["fields_after"]["date"]
     assert r2["fields_after"]["time"] is not None
     assert r2["writes"] == 0
 
@@ -1198,8 +1204,17 @@ def assert_task1b_regressions(results):
     assert reminder_turn["operations"][0]["automation_context_relationship"] == "appointment_action"
     assert any("appointments" in read for read in reminder_turn["verified_reads"])
     assert r6["target_after"] is not None
+    assert r6["target_after"]["status"] == "rescheduled"
+    replacement = next(
+        appointment
+        for appointment in r6["db_after"]["appointments"]
+        if appointment.get("rescheduled_from_appointment_id") == r6["target_appointment_id"]
+    )
+    assert replacement["status"] == "confirmed"
+    assert replacement["start_at"].endswith("15:00:00+00:00")
 
     r7 = by_id["R7"]
+    assert r7["fields_before"]["device_key"] is not None
     assert r7["fields_after_ack"] == r7["fields_before"]
     assert r7["flow_after_ack"]["version"] == r7["flow_before"]["version"]
     assert r7["flow_after_ack"]["expires_at"] == r7["flow_before"]["expires_at"]
@@ -1222,6 +1237,8 @@ def assert_task1b_regressions(results):
     for key in ("doctor_id", "date", "time", "selected_slot_ref", "option_snapshot"):
         assert r9["fields_after_request"][key] is None
     assert len(r9["state_after_request"].get("appointments", [])) == 1
+    assert len(r9["db_after"].get("appointments", [])) == 2
+    assert r9["writes"] == 1
 
 
 output = Path(sys.argv[1])
