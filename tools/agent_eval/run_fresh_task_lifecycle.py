@@ -210,6 +210,7 @@ def operation_relationship(cap):
                         "type": op.get("type"),
                         "active_task_relationship": op.get("active_task_relationship"),
                         "automation_context_relationship": op.get("automation_context_relationship"),
+                        "appointment_action_explicit_fields": op.get("appointment_action_explicit_fields"),
                         "fresh_task": op.get("fresh_task"),
                         "fresh_task_explicit_fields": op.get("fresh_task_explicit_fields"),
                         "continues_previous": op.get("continues_previous"),
@@ -1245,6 +1246,7 @@ def assert_task1b_regressions(results):
     reminder_turn = r6["action_turn"]
     operation = reminder_turn["operations"][0]
     assert operation["automation_context_relationship"] == "appointment_action"
+    assert operation["appointment_action_explicit_fields"] == ["time"]
     assert operation["date"]["mode"] == "exact"
     assert operation["date"]["start_date"] == r6["original_local_date"]
     assert operation["time"]["mode"] == "exact"
@@ -1289,6 +1291,40 @@ def assert_task1b_regressions(results):
     assert len(r9["state_after_request"].get("appointments", [])) == 1
     assert len(r9["db_after"].get("appointments", [])) == 2
     assert r9["writes"] == 1
+
+
+def assert_task1b_reminder_control(result):
+    if result["id"] == "R6A":
+        turn = result["action_turn"]
+        operation = turn["operations"][0]
+        assert operation["automation_context_relationship"] == "appointment_action"
+        assert operation["appointment_action_explicit_fields"] == []
+        assert operation["date"] is None
+        assert operation["time"] is None
+        assert result["writes"] == 0
+        task = result["active_task_after"]
+        assert task is not None
+        assert task["task_type"] == "reschedule"
+        assert task["target"]["appointment_id"] == result["target_appointment_id"]
+        assert result["fields_after"]["date"] is None
+        assert result["fields_after"]["time"] is None
+        return
+
+    if result["id"] == "R6B":
+        turn = result["action_turn"]
+        operation = turn["operations"][0]
+        assert operation["automation_context_relationship"] == "appointment_action"
+        assert set(operation["appointment_action_explicit_fields"]) == {"date", "time"}
+        assert operation["date"]["mode"] == "exact"
+        assert operation["date"]["start_date"] == result["expected_explicit_date"]
+        assert operation["date"]["start_date"] != result["original_local_date"]
+        assert operation["time"]["mode"] == "exact"
+        assert operation["time"]["start_time"] == "18:00"
+        return
+
+    raise AssertionError(f"unsupported Task 1B reminder control: {result['id']}")
+
+
 
 
 output = Path(sys.argv[1])
@@ -1362,6 +1398,8 @@ try:
     )
     if mode == "task1b":
         assert_task1b_regressions(results)
+    if mode in {"task1b_r6a", "task1b_r6b"}:
+        assert_task1b_reminder_control(results[0])
     selected = results[0]
     print("RESULT", selected["id"], "ERRORS", selected.get("errors", []))
     for turn in selected["turns"]:
