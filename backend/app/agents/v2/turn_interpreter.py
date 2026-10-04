@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -787,9 +788,35 @@ def isolate_fresh_task_context(
     return turn.model_copy(update={"operations": operations}) if changed else turn
 
 
+def _verified_automation_local_date(
+    raw: dict[str, object],
+    *,
+    timezone_name: str | None,
+) -> DateConstraint | None:
+    """Derive the unchanged local appointment date only from verified automation metadata."""
+    if not timezone_name:
+        return None
+    start_at = raw.get("start_at")
+    if not isinstance(start_at, str) or not start_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+        timezone = ZoneInfo(timezone_name)
+    except (KeyError, ValueError):
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return DateConstraint(
+        mode="exact",
+        start_date=parsed.astimezone(timezone).date().isoformat(),
+    )
+
+
 def merge_automation_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
+    *,
+    timezone_name: str | None = None,
 ) -> TiaTurnUnderstanding:
     """Bind only typed relations to server-verified automation metadata."""
     raw = semantic_context.model_input.get("automation_context")
@@ -827,6 +854,23 @@ def merge_automation_context(
             selector = operation.source_appointment or AppointmentSelector()
             selector = selector.model_copy(update={"appointment": appointment})
             operation = operation.model_copy(update={"source_appointment": selector})
+            if (
+                operation.type == "reschedule"
+                and operation.entities.date is None
+                and operation.entities.time is not None
+            ):
+                preserved_date = _verified_automation_local_date(
+                    raw,
+                    timezone_name=timezone_name,
+                )
+                if preserved_date is not None:
+                    operation = operation.model_copy(
+                        update={
+                            "entities": operation.entities.model_copy(
+                                update={"date": preserved_date}
+                            )
+                        }
+                    )
             changed = True
         elif relationship == "next_session" and operation.type == "book":
             entities = operation.entities
@@ -990,7 +1034,11 @@ def interpret_customer_turn_v2(
     isolated = isolate_fresh_task_context(bounded)
     continued = merge_verified_read_context(isolated, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)
-    continued = merge_automation_context(continued, semantic_context)
+    continued = merge_automation_context(
+        continued,
+        semantic_context,
+        timezone_name=timezone_name,
+    )
     grounded = ground_turn_references(continued, semantic_context)
     grounded = merge_same_turn_pulse_device_context(grounded, semantic_context)
     normalized = normalize_semantic_invariants(grounded)
