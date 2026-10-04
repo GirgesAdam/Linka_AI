@@ -726,4 +726,34 @@ python -m alembic heads
 
 ## Shared CI
 
-_Pending exact-head PR CI run._
+Code head validated:
+
+`e48de111b14c3ae5b1a109334d9f1e8e60687515`
+
+GitHub Actions:
+
+```
+CI Run 1879 = SUCCESS
+
+backend = SUCCESS
+frontend = SUCCESS
+```
+
+Backend job passed:
+
+- agent-eval tooling validation;
+- Ruff;
+- compileall;
+- Alembic single-head verification;
+- clean PostgreSQL migration;
+- full backend test suite.
+
+Frontend job passed:
+
+- production dependency audit;
+- lint;
+- Next typegen;
+- typecheck;
+- production build.
+
+A final documentation-only commit records this CI result. The PR body records the exact final-head CI run after that documentation commit.
