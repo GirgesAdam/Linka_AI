@@ -155,6 +155,11 @@ SEMANTIC PRINCIPLES
   customer asks to change/cancel/confirm the appointment referenced by automation_context, emit the
   matching lifecycle operation with automation_context_relationship=appointment_action; Python binds
   the canonical appointment target from server metadata, so do not reconstruct an ID from template prose.
+  For reminder-linked reschedule, appointment_action_explicit_fields must list date and/or time only when
+  that replacement dimension is explicitly stated in the latest customer message. Never mark the current
+  appointment date/time from automation_context as explicit. If the customer gives only a replacement time,
+  list only time; if they give an explicit new date plus time, list both; if they merely ask to change the
+  appointment without either dimension, leave the list empty.
   If a post-visit automation is followed by a clear request for the next session of that treatment, emit
   book with fresh_task=true and automation_context_relationship=next_session. Python may reuse only
   server-verified stable service/device treatment facts; never inherit the old date/time/doctor/slot,
@@ -854,23 +859,26 @@ def merge_automation_context(
             selector = operation.source_appointment or AppointmentSelector()
             selector = selector.model_copy(update={"appointment": appointment})
             operation = operation.model_copy(update={"source_appointment": selector})
-            if (
-                operation.type == "reschedule"
-                and operation.entities.date is None
-                and operation.entities.time is not None
-            ):
-                preserved_date = _verified_automation_local_date(
-                    raw,
-                    timezone_name=timezone_name,
+            if operation.type == "reschedule":
+                explicit = set(operation.appointment_action_explicit_fields)
+                entity_updates: dict[str, object] = {}
+                if "date" not in explicit and operation.entities.date is not None:
+                    entity_updates["date"] = None
+                if "time" not in explicit and operation.entities.time is not None:
+                    entity_updates["time"] = None
+                entities = (
+                    operation.entities.model_copy(update=entity_updates)
+                    if entity_updates
+                    else operation.entities
                 )
-                if preserved_date is not None:
-                    operation = operation.model_copy(
-                        update={
-                            "entities": operation.entities.model_copy(
-                                update={"date": preserved_date}
-                            )
-                        }
+                if "time" in explicit and "date" not in explicit:
+                    preserved_date = _verified_automation_local_date(
+                        raw,
+                        timezone_name=timezone_name,
                     )
+                    if preserved_date is not None:
+                        entities = entities.model_copy(update={"date": preserved_date})
+                operation = operation.model_copy(update={"entities": entities})
             changed = True
         elif relationship == "next_session" and operation.type == "book":
             entities = operation.entities
