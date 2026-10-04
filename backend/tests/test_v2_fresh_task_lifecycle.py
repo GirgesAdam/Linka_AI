@@ -3,13 +3,19 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
 from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
+    TiaTurnUnderstanding,
     TimeConstraint,
     TurnEntities,
     TurnOperation,
+)
+from app.agents.v2.turn_interpreter import (
+    isolate_fresh_task_context,
+    merge_verified_action_context,
+    merge_verified_read_context,
 )
 from app.services.agent_v2 import orchestrator
 from app.services.agent_v2.active_task_progress import (
@@ -130,12 +136,158 @@ def _partial_booking() -> BookingTaskState:
     )
 
 
-def _full_body_booking(*, relationship: str = "unspecified") -> TurnOperation:
+def _full_body_booking(
+    *,
+    relationship: str = "unspecified",
+    fresh_task: bool = False,
+) -> TurnOperation:
     return TurnOperation(
         type="book",
         entities=TurnEntities(service=EntityReference(ref="S2", text="Full Body")),
         execution_intent="execute",
         active_task_relationship=relationship,
+        fresh_task=fresh_task,
+        fresh_task_explicit_fields=["service"] if fresh_task else [],
+    )
+
+
+
+
+
+def test_fresh_task_context_strips_unstated_completed_booking_constraints() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1", text="Under Arm"),
+                    doctor=EntityReference(ref="D1", text="Mary"),
+                    device=EntityReference(ref="V1", text="DEKA Again"),
+                    appointment=EntityReference(ref="A1"),
+                    date=DateConstraint(mode="exact", start_date="2026-10-08"),
+                    time=TimeConstraint(mode="exact", start_time="16:00"),
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+                selection={"kind": "ref", "ref": "slot-old"},
+                package_usage="use_existing",
+                fresh_task=True,
+                fresh_task_explicit_fields=[],
+            )
+        ]
+    )
+
+    isolated = isolate_fresh_task_context(turn)
+    operation = isolated.operations[0]
+
+    assert operation.fresh_task is True
+    assert operation.continues_previous is False
+    assert operation.selection is None
+    assert operation.source_appointment is None
+    assert operation.package_usage == "unspecified"
+    assert operation.entities.service is None
+    assert operation.entities.doctor is None
+    assert operation.entities.device is None
+    assert operation.entities.appointment is None
+    assert operation.entities.date is None
+    assert operation.entities.time is None
+
+
+def test_fresh_task_context_preserves_only_current_message_explicit_fields() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S2", text="Full Body"),
+                    doctor=EntityReference(ref="D1", text="old doctor"),
+                    device=EntityReference(ref="V1", text="old device"),
+                    date=DateConstraint(mode="exact", start_date="2026-10-08"),
+                    time=TimeConstraint(mode="exact", start_time="16:00"),
+                ),
+                execution_intent="execute",
+                fresh_task=True,
+                fresh_task_explicit_fields=["service"],
+            )
+        ]
+    )
+
+    operation = isolate_fresh_task_context(turn).operations[0]
+
+    assert operation.entities.service == EntityReference(ref="S2", text="Full Body")
+    assert operation.entities.doctor is None
+    assert operation.entities.device is None
+    assert operation.entities.date is None
+    assert operation.entities.time is None
+
+
+def test_fresh_task_stays_clean_after_verified_context_merge() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S2", text="Full Body"),
+                    doctor=EntityReference(ref="D1", text="old doctor"),
+                    device=EntityReference(ref="V1", text="old device"),
+                    date=DateConstraint(mode="exact", start_date="2026-10-08"),
+                    time=TimeConstraint(mode="exact", start_time="16:00"),
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+                fresh_task=True,
+                fresh_task_explicit_fields=["service"],
+            )
+        ]
+    )
+    semantic_context = SemanticContext(
+        model_input={
+            "recent_verified_read": {
+                "service_ref": "S1",
+                "doctor_ref": "D1",
+                "device_ref": "V1",
+                "date": {"mode": "exact", "start_date": "2026-10-08"},
+                "time": {"mode": "exact", "start_time": "16:00"},
+            },
+            "recent_verified_action": {
+                "operation_type": "book",
+                "appointment_ref": "A1",
+                "appointment_id": "old-appointment",
+                "service_id": "svc-underarm",
+                "doctor_id": "doc-old",
+                "device_key": "deka",
+            },
+        },
+        reference_map={},
+    )
+
+    isolated = isolate_fresh_task_context(turn)
+    merged = merge_verified_read_context(isolated, semantic_context)
+    merged = merge_verified_action_context(merged, semantic_context)
+    operation = merged.operations[0]
+
+    assert operation.continues_previous is False
+    assert operation.entities.service == EntityReference(ref="S2", text="Full Body")
+    assert operation.entities.doctor is None
+    assert operation.entities.device is None
+    assert operation.entities.appointment is None
+    assert operation.entities.date is None
+    assert operation.entities.time is None
+    assert operation.source_appointment is None
+    assert operation.selection is None
+
+
+def test_non_task_relationship_marker_is_ignored_by_lifecycle_classifier() -> None:
+    operation = TurnOperation(
+        type="select_active",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="replace",
+    )
+
+    assert (
+        classify_active_task_lifecycle(operation, active_task=_partial_booking())
+        == "preserve"
     )
 
 
@@ -191,7 +343,7 @@ def test_same_booking_correction_remains_current_task() -> None:
 
 def test_explicit_second_booking_replaces_task_without_stale_execution_state() -> None:
     old = _partial_booking()
-    operation = _full_body_booking(relationship="replace")
+    operation = _full_body_booking(relationship="replace", fresh_task=True)
     step = PlanStep(
         operation_index=0,
         operation_type="book",
@@ -216,6 +368,7 @@ def test_explicit_second_booking_replaces_task_without_stale_execution_state() -
     )
 
     assert adapted.state_action == "replace_active"
+    assert adapted.facts["fresh_task_started"] is True
     assert transition.changed is True
     assert isinstance(transition.active_task, BookingTaskState)
     fresh = transition.active_task

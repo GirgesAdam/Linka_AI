@@ -38,25 +38,26 @@ Rejected.
 
 Operation-type inequality is not enough evidence that the customer abandoned the active task. A customer can ask pricing, clinic info, package info, or another read while a booking/reschedule remains active. It also cannot distinguish a booking correction from a genuinely separate second booking because both can be `book -> book`.
 
-### Approach B — typed task relationship + explicit replacement transition
+
+### Approach B — typed fresh-task boundary + explicit replacement transition
 
 Chosen.
 
-A typed semantic field now classifies only the relationship of a task-starting operation to the supplied active task:
+Two structured semantic signals now cover the two stale-authority shapes without giving Python access to raw customer wording:
 
-- `unspecified` — no active-task lifecycle claim;
-- `continue` — continue/correct the same unfinished task;
-- `replace` — explicitly start a separate/unrelated booking or reschedule and abandon the unfinished task.
+- `active_task_relationship = continue | replace | unspecified` classifies a task-starting operation relative to an unfinished active task;
+- `fresh_task=true` marks that the latest message itself explicitly starts a new/separate booking or reschedule, even when there is no active task because the previous booking already completed;
+- `fresh_task_explicit_fields` lists only dimensions explicitly present in that latest customer message.
 
-Python remains authoritative for lifecycle effects:
+Python remains authoritative for lifecycle/state effects:
 
 - non-task/side operations preserve the active task;
 - `booking <-> reschedule` is a deterministic cross-task replacement boundary;
-- same-type replacement happens only when the structured semantic relation is `replace`;
-- replacement is persisted as:
-  `cancel old active flow -> create new active flow`.
+- same-type replacement uses structured `replace` / `fresh_task`;
+- unfinished-task replacement is persisted as `cancel old active flow -> create new active flow`;
+- a fresh task with no active task starts from only the latest message's explicit fields.
 
-The semantic contract is message-local: `replace` may only describe what the latest customer message itself does. Once the new task is exposed as `active_task`, later date/time/doctor/device/service answers are continuations. The current active task is authoritative for task-local constraints; absent constraints are not reconstructed from an older abandoned task.
+The semantic contract is message-local. Once the new task is exposed as `active_task`, later service/date/time/doctor/device answers are normal continuations. Absent task-local dimensions are not reconstructed from an abandoned task, recent verified read, completed action, assistant prose, or older dialogue.
 
 No raw customer-text keyword/regex routing was added.
 
@@ -68,27 +69,49 @@ That would weaken a useful concurrency/workflow ownership invariant. `save_activ
 
 ## الحل اللي اتعمل
 
-### Typed semantic contract
+
+### Typed semantic contract and completed-action isolation
 
 `backend/app/agents/v2/turn_contract.py`
 
-Added:
+The task contract includes:
 
 ```
 ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
+fresh_task: bool
+fresh_task_explicit_fields: list[FreshTaskField]
 ```
 
-and `TurnOperation.active_task_relationship`, valid only for `book` / `reschedule` when non-default.
+`active_task_relationship` is the semantic relationship used by booking/reschedule lifecycle logic. Python ignores that marker on non-task operations.
+
+`fresh_task=true` is independent of active-task existence. It is used when the latest customer message explicitly opens a separate booking/reschedule after either an unfinished task, a completed booking / recent verified action, or older dialogue that still contains task-local details.
+
+`fresh_task_explicit_fields` contains only fields present in the latest customer message. It is not populated from active task state, recent verified actions, verified reads, assistant prose, or history.
 
 `backend/app/agents/v2/turn_interpreter.py`
 
-The structured interpreter is instructed to:
+`isolate_fresh_task_context(...)` runs before verified-context merge. For a fresh task it:
+
+- forces `continues_previous=False`;
+- clears stale selection/source appointment/package usage;
+- clears service/doctor/device/appointment/date/time unless that field is explicitly listed for the latest message.
+
+The subsequent verified-read merge cannot re-inherit old temporal/entity context because the operation is no longer a continuation. The completed-booking verified-action merge does not inject booking constraints into a new booking.
+
+The interpreter is also instructed to:
 
 - mark true same-task corrections/continuations as `continue`;
-- mark an explicit separate/additional task as `replace`;
-- never carry a prior replace decision into a later constraint-only reply;
-- treat the supplied active task as authoritative for task-local constraints;
-- never resurrect an absent old task date/time/doctor/device/slot from abandoned dialogue.
+- mark an explicit separate/additional unfinished-task goal as `replace`;
+- set `fresh_task=true` for a genuinely new booking/reschedule even when there is no active task;
+- never carry fresh/replace forward into later answers inside the newly active task.
+
+### Replacement-turn response boundary
+
+`backend/app/agents/v2/responder.py`
+
+When the structured outcome contains `fresh_task_started=true`, old dialogue is excluded from the responder context for that turn. The responder is instructed to answer only from the fresh task's current facts / active-task summary and must not verbally resurrect the prior appointment/task.
+
+This keeps `structured fresh/replace -> fresh customer-facing reply` consistent with the state transition.
 
 ### Deterministic Python lifecycle classification
 
@@ -200,9 +223,10 @@ V2StateConflictError: A persisted V2 task cannot change task type in place.
 
 No new appointment was created.
 
+
 ## Actual executed conversation — after fix
 
-Executed from the implementation branch using the committed live regression runner, same patient/history shape, same +3 day gap, rollback-only Demo eval fixture.
+Executed from the current implementation branch, same patient/history shape, same +3 day gap, rollback-only Demo eval fixture.
 
 Customer:
 > ميعادي الجاي امتى؟
@@ -215,7 +239,7 @@ Customer:
 > عايز اغيره
 
 Linka:
-> تحب تغيّر ميعادك لأي تاريخ؟
+> تحب تغيّره لإمتى؟
 
 Customer:
 > خليه الخميس
@@ -231,17 +255,33 @@ Customer:
 Linka:
 > مفيش مواعيد متاحة يوم 8 أكتوبر 2026 لخدمة Under Arm. أقدر أدورلك في نطاق تاني لو تحب.
 
+At this point:
+
+- verified no availability after 17:00;
+- no reschedule write;
+- old appointment remained `confirmed`;
+- persisted task remained the incomplete reschedule.
+
 ### 3 days later
 
 Customer:
-> عايز احجز Full Body كمان
+> عايز أبدأ حجز جديد منفصل
+
+Structured interpretation:
+
+```
+type = book
+active_task_relationship = replace
+fresh_task = true
+fresh_task_explicit_fields = []
+```
 
 Linka:
-> محتاج أعرف التاريخ اللي تحب تحجز فيه Full Body.
+> تمام، هنبدأ حجز جديد منفصل. تحب تحجز أنهي خدمة؟
 
-The persisted task immediately after this turn is a clean booking task:
+The fresh booking task immediately after this turn contains:
 
-- service = Full Body;
+- service = null;
 - doctor = null;
 - device = null;
 - date = null;
@@ -249,7 +289,24 @@ The persisted task immediately after this turn is a clean booking task:
 - old appointment target = absent;
 - option snapshot = null;
 - selected slot = null;
-- write authorization source = the new booking turn, not the old reschedule turn.
+- write authorization = a fresh source turn.
+
+Customer:
+> Full Body
+
+Linka:
+> تمام، Full Body. تحب الموعد يكون إمتى؟
+
+State before any new date/time/device/doctor:
+
+- service = Full Body;
+- doctor = null;
+- device = null;
+- date = null;
+- time = null;
+- old appointment target = absent;
+- old selected slot = absent;
+- old option snapshot = absent.
 
 Customer:
 > الخميس
@@ -260,13 +317,11 @@ Linka:
 > DEKA Again مع يوسف سمير يوم 8 أكتوبر 2026: من 12 ظهرًا لـ12:30 ظهرًا، ومن 2:15 مساءً لـ8 مساءً.
 > أنهي وقت أنسب لك؟
 
-The new booking still has `time = null` here; the old `after 17:00` reschedule constraint was not resurrected.
-
 Customer:
 > كانديلا
 
 Linka:
-> المتاح عندنا لخدمة Full Body:
+> لقيتلك المواعيد دي لخدمة Full Body:
 > Candela Gentle مع يوسف سمير يوم 8 أكتوبر 2026: من 12 ظهرًا لـ12:30 ظهرًا، ومن 2:15 مساءً لـ8 مساءً.
 > أنهي وقت أنسب لك؟
 
@@ -276,7 +331,7 @@ Customer:
 Linka:
 > تمام جدًا، ثبتنالك الحجز.
 
-Final DB snapshot inside the rollback transaction:
+Final T1 DB snapshot inside the rollback transaction:
 
 - old Under Arm appointment: still `confirmed`, same ID/time/doctor/device;
 - new appointment: `confirmed`;
@@ -315,40 +370,221 @@ Result:
 - date changed;
 - no replacement transition.
 
+
 ### T4 — explicit fresh booking while booking task exists
 
 Sequence:
 
-`partial Under Arm booking -> explicit Full Body second booking`
+`partial Under Arm booking -> "عايز أبدأ حجز جديد منفصل" -> Full Body`
 
-Structured interpretation emitted `book + active_task_relationship=replace`.
+Actual replacement turn:
 
-Result:
+Customer:
+> عايز أبدأ حجز جديد منفصل
 
-- old Under Arm booking task closed/replaced;
-- new Full Body booking task started;
-- doctor/device/date/time = null;
-- old option snapshot absent;
-- fresh write authorization source;
-- no stale Under Arm task-local constraints leaked.
+Structured interpretation:
 
-Adjacent report-only observation: one live T4 responder run still mentioned the prior Under Arm booking in conversational wording even though the structured relation was `replace` and the persisted fresh task contained only Full Body with null old date/time/device/doctor/options. No responder-wording patch was made because that is outside this root-cause task.
+```
+type = book
+active_task_relationship = replace
+fresh_task = true
+fresh_task_explicit_fields = []
+```
+
+Linka:
+> تمام، تحب تحجز أنهي خدمة؟
+
+The response no longer proposes adding the new service to the old appointment or preserving old task constraints.
+
+Immediately after replacement:
+
+- service = null;
+- doctor = null;
+- device = null;
+- date = null;
+- time = null;
+- option snapshot = null;
+- selected slot = null;
+- fresh write authorization source.
+
+After the next customer message `Full Body`, only the new service is present; the old date/time/device/doctor remain absent.
+
+### T5 — completed booking context -> time gap -> genuinely fresh booking
+
+This regression covers the production failure shape where there is no unfinished active task.
+
+Session 1 — successful booking:
+
+Customer:
+> عايز احجز Under Arm
+
+Linka:
+> تحب الحجز يكون يوم إيه؟
+
+Customer:
+> الخميس
+
+Linka:
+> أقرب المواعيد المتاحة لخدمة Under Arm:
+> Candela Gentle مع مريم حسن: من 10:30 صباحًا لـ4:30 مساءً يوم 8 أكتوبر 2026.
+> DEKA Again مع مريم حسن: من 10:30 صباحًا لـ4:30 مساءً يوم 8 أكتوبر 2026.
+> Candela Gentle مع يوسف سمير: من 12 ظهرًا لـ1:15 مساءً يوم 8 أكتوبر 2026.
+> DEKA Again مع يوسف سمير: من 12 ظهرًا لـ1:15 مساءً يوم 8 أكتوبر 2026.
+> أنهي وقت أنسب لك؟
+
+Customer:
+> ديكا
+
+Linka:
+> لقيتلك المواعيد دي لخدمة Under Arm:
+> DEKA Again مع مريم حسن: من 10:30 صباحًا لـ4:30 مساءً يوم 8 أكتوبر 2026.
+> DEKA Again مع يوسف سمير: من 12 ظهرًا لـ1:15 مساءً يوم 8 أكتوبر 2026.
+> DEKA Again مع يوسف سمير: من 2:15 مساءً لـ6:45 مساءً يوم 8 أكتوبر 2026.
+> DEKA Again مع يوسف سمير: الساعة 8 مساءً يوم 8 أكتوبر 2026.
+> أنهي وقت أنسب لك؟
+
+Customer:
+> مريم
+
+Linka:
+> لقيتلك المواعيد دي لخدمة Under Arm:
+> DEKA Again مع مريم حسن يوم 8 أكتوبر 2026: من 10:30 صباحًا لـ4:30 مساءً.
+> أنهي وقت أنسب لك؟
+
+Customer:
+> الساعة 4
+
+Linka:
+> تمام، حجزك اتأكد.
+
+The resulting `recent_verified_action` contains canonical old booking authority:
+
+- operation_type = book;
+- old appointment ID = present;
+- old service ID = Under Arm;
+- old doctor ID = Mary;
+- old device key = DEKA Again;
+- old start time = 16:00 local.
+
+### +2 hours, same patient and same conversation
+
+Customer:
+> عايز احجز جلسة جديدة
+
+Linka:
+> أكيد، تحب تحجز جلسة إيه؟
+
+Before any new service/date/time/device/doctor:
+
+```
+task_type = booking
+service = null
+doctor = null
+device = null
+date = null
+time = null
+option_snapshot = null
+selected_slot = null
+appointment target = absent
+write authorization source = new fresh-goal turn
+```
+
+The old completed booking authorization source is different from the fresh task's authorization source.
+
+Customer:
+> Full Body
+
+Linka:
+> تحب تحجز جلسة الـFull Body في أي تاريخ؟
+
+State before any new date/time/device/doctor:
+
+```
+service = Full Body
+doctor = null
+device = null
+date = null
+time = null
+option_snapshot = null
+selected_slot = null
+```
+
+DB evidence at this exact point:
+
+```
+appointments for this patient = 1
+booking write on fresh goal/service turns = NO
+```
+
+So none of the completed booking's old date/time/device/doctor/appointment/slot/authorization was inherited.
+
+The new journey then continues normally:
+
+Customer:
+> الخميس
+
+Linka:
+> أقرب المواعيد المتاحة لخدمة Full Body:
+> Candela Gentle مع يوسف سمير يوم 8 أكتوبر 2026: من 12 ظهرًا لـ12:30 ظهرًا، ومن 2:15 مساءً لـ6 مساءً.
+> DEKA Again مع يوسف سمير يوم 8 أكتوبر 2026: من 12 ظهرًا لـ12:30 ظهرًا، ومن 2:15 مساءً لـ3 مساءً.
+> أنهي وقت أنسب لك؟
+
+Customer:
+> كانديلا
+
+Linka:
+> المتاح عندنا لخدمة Full Body:
+> Candela Gentle مع يوسف سمير يوم 8 أكتوبر 2026: من 12 ظهرًا لـ12:30 ظهرًا، ومن 2:15 مساءً لـ6 مساءً، والساعة 8 مساءً.
+> أنهي وقت أنسب لك؟
+
+Customer:
+> احجز الساعة 5
+
+Linka:
+> تم تأكيد الحجز.
+
+Final T5 evidence:
+
+- runtime errors = none;
+- first completed appointment remains present;
+- no premature second write occurred before new date/time/device selection;
+- final patient appointment count = 2;
+- business writes = 2 total: first completed booking + second verified fresh booking.
+
+The full T1–T5 runner completed with exit code 0 and all internal lifecycle assertions passed.
+
 
 ## Metrics
+
+### Original stale-active-task regression (T1)
 
 | Metric | Before | After |
 |---|---:|---:|
 | runtime error | YES | NO |
-| new booking completed | NO | YES |
+| fresh booking completed | NO | YES |
 | stale task leakage / blocking | YES / blocked | NO |
-| customer turns in T1 | 5 | 8 |
-| assistant replies in T1 | 4 | 8 |
-| business writes in T1 | 0 | 1 |
-| old appointment changed | NO | NO |
-| new appointments created inside eval tx | 0 | 1 |
+| premature/wrong write | NO | NO |
+| old appointment changed by abandoned reschedule | NO | NO |
 | persisted fresh task after new-goal turn | none; runtime crashed | clean BookingTaskState |
 
-The higher after-turn count is expected because the customer can now proceed through the new booking instead of crashing at the first fresh-task turn.
+The customer/assistant turn counts are not directly comparable because the pre-fix journey terminates at the runtime exception while the post-fix journey continues through a complete new booking.
+
+### Completed-old-booking regression (T5)
+
+| Check | Result |
+|---|---|
+| old completed booking context exists | YES |
+| fresh goal produces booking write | NO |
+| after Full Body, new date inherited | NO |
+| old time inherited | NO |
+| old device inherited | NO |
+| old doctor inherited | NO |
+| old appointment target inherited | NO |
+| old selected slot / option snapshot inherited | NO |
+| old write authorization reused | NO |
+| appointment count before new constraints are supplied | 1 |
+| fresh second booking eventually completes | YES |
+| final appointment count | 2 |
 
 ## DB isolation evidence
 
@@ -368,6 +604,7 @@ Product/runtime:
 
 - `backend/app/agents/v2/turn_contract.py`
 - `backend/app/agents/v2/turn_interpreter.py`
+- `backend/app/agents/v2/responder.py`
 - `backend/app/services/agent_v2/active_task_progress.py`
 - `backend/app/services/agent_v2/planner.py`
 - `backend/app/services/agent_v2/state_executor.py`
@@ -376,6 +613,7 @@ Product/runtime:
 Tests/evidence:
 
 - `backend/tests/test_v2_fresh_task_lifecycle.py`
+- `backend/tests/test_v2_responder.py`
 - `backend/tests/test_v2_state_persistence.py` (explicit fail-closed invariant regression)
 - `tools/agent_eval/run_fresh_task_lifecycle.py`
 - `docs/AGENT_FRESH_TASK_LIFECYCLE_FIX_20261003.md`
@@ -400,9 +638,10 @@ pytest -q \
   tests/test_v2_lifecycle_task_invalidation.py \
   tests/test_v2_state_persistence.py \
   tests/test_v2_turn_contract.py \
-  tests/test_v2_turn_interpreter.py
+  tests/test_v2_turn_interpreter.py \
+  tests/test_v2_responder.py
 
-67 passed
+91 passed
 ```
 
 ### Historical F1–F6 guardrails
@@ -440,7 +679,7 @@ pytest -q tools/agent_eval/tests
 39 passed
 ```
 
-### Live T1–T4 regression
+### Live T1–T5 regression
 
 `tools/agent_eval/run_fresh_task_lifecycle.py` was executed against `tia-agent-eval`.
 
@@ -455,7 +694,11 @@ Its assertions cover:
 - successful new booking;
 - T2 continuation;
 - T3 booking correction;
-- T4 same-type explicit fresh booking replacement.
+- T4 same-type explicit fresh booking replacement;
+- T5 completed booking -> +2h -> fresh booking with real recent_verified_action;
+- T5 no write after the fresh-goal or service-only turns;
+- T5 no old date/time/device/doctor/appointment/slot/authorization inheritance;
+- T5 successful second booking only after new verified constraints.
 
 All assertions passed.
 

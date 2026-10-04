@@ -155,11 +155,20 @@ SEMANTIC PRINCIPLES
   language that clearly asks for another/additional/new appointment. Never carry a replace decision
   forward merely because an earlier customer message started the current task. Once Python exposes
   that new task as active_task, later date/time/doctor/device/service answers for it are continuations.
-  If the active task is reschedule and the customer explicitly
-  asks to create a new appointment, that book operation is replace; a book cannot continue a
-  reschedule. Likewise an explicit new reschedule cannot continue a booking. Do not infer replace
-  merely because one constraint changes. Leave unspecified for side reads/social turns and when
-  no active task applies. Python, not this marker, performs the lifecycle transition.
+  If the active task is reschedule and the customer explicitly asks to create a new appointment, that
+  book operation is replace; a book cannot continue a reschedule. Likewise an explicit new reschedule
+  cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
+  unspecified for side reads/social turns and when no active task applies. Python, not this marker,
+  performs the lifecycle transition.
+- Independently set fresh_task=true when the latest customer message explicitly opens a new/separate
+  booking or reschedule instead of continuing any prior task or completed action. This includes a
+  fresh goal after a completed booking even when there is no active_task. For fresh_task=true,
+  fresh_task_explicit_fields must contain only dimensions actually stated in the latest customer
+  message itself (service/doctor/device/appointment/package/date/time/package_usage). Never list a
+  field merely because recent_verified_action, active_task, assistant prose, or older history contains
+  it. If the customer says only that they want a new booking, the explicit-field list is empty even if
+  the previous completed booking had a service/date/time/device/doctor. Later answers inside the new
+  active task use fresh_task=false and active_task_relationship=continue where applicable.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
 - Use native recent dialogue to resolve elliptical follow-ups, but prefer active_task,
@@ -636,6 +645,49 @@ def merge_same_turn_pulse_device_context(
     return turn.model_copy(update={"operations": operations}) if changed else turn
 
 
+
+
+
+def isolate_fresh_task_context(
+    turn: TiaTurnUnderstanding,
+) -> TiaTurnUnderstanding:
+    """Strip task-local context that the latest message did not explicitly supply."""
+    operations = []
+    changed = False
+    for operation in turn.operations:
+        if not operation.fresh_task or operation.type not in {"book", "reschedule"}:
+            operations.append(operation)
+            continue
+
+        explicit = set(operation.fresh_task_explicit_fields)
+        entities = operation.entities
+        entity_updates: dict[str, object] = {}
+        for field in ("service", "doctor", "device", "appointment", "package", "date", "time"):
+            if field not in explicit and getattr(entities, field) is not None:
+                entity_updates[field] = None
+        if "package" not in explicit and entities.package_sessions is not None:
+            entity_updates["package_sessions"] = None
+
+        if entity_updates:
+            entities = entities.model_copy(update=entity_updates)
+
+        updates: dict[str, object] = {
+            "entities": entities,
+            "continues_previous": False,
+            "selection": None,
+        }
+        if "appointment" not in explicit:
+            updates["source_appointment"] = None
+        if "package_usage" not in explicit:
+            updates["package_usage"] = "unspecified"
+
+        isolated = operation.model_copy(update=updates)
+        changed = changed or isolated != operation
+        operations.append(isolated)
+
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
 def merge_verified_action_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
@@ -777,7 +829,8 @@ def interpret_customer_turn_v2(
         operation="v2-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    continued = merge_verified_read_context(invocation.value, semantic_context)
+    isolated = isolate_fresh_task_context(invocation.value)
+    continued = merge_verified_read_context(isolated, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
     grounded = merge_same_turn_pulse_device_context(grounded, semantic_context)

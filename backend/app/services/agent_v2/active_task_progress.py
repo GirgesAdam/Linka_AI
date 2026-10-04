@@ -204,7 +204,7 @@ def classify_active_task_lifecycle(
     if requested_task_type != active_task.task_type:
         return "replace"
 
-    if operation.active_task_relationship == "replace":
+    if operation.fresh_task or operation.active_task_relationship == "replace":
         return "replace"
     return "continue"
 
@@ -223,7 +223,7 @@ def adapt_matching_active_task_step(
         return step.model_copy(
             update={
                 "state_action": "replace_active",
-                "facts": {**step.facts, **params},
+                "facts": {**step.facts, **params, "fresh_task_started": True},
             }
         )
     if isinstance(active_task, BookingTaskState):
@@ -292,10 +292,13 @@ def persist_initial_task_intent(
     if operation.type != "book":
         return step
     params = resolved_operation_parameters(operation, context=context)
+    facts = {**params, **step.facts}
+    if operation.fresh_task:
+        facts["fresh_task_started"] = True
     return step.model_copy(
         update={
             "state_action": "start_booking",
-            "facts": {**params, **step.facts},
+            "facts": facts,
         }
     )
 

@@ -14,6 +14,7 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.booking_settings import BookingSettings
 from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
+from app.models.message import Message
 from app.models.patient import Patient
 from app.models.service import Service
 from app.models.working_hours import DoctorAvailabilityWindow, DoctorWorkingHour
@@ -32,7 +33,6 @@ from tools.agent_eval.harness import (
     send_turn,
     state_snapshot,
 )
-from tools.agent_eval.run_batch_02 import _ensure_batch2_catalog_fixtures
 from tools.agent_eval.run_batch_03 import _seed_future_appointment
 
 TZ = ZoneInfo("Africa/Cairo")
@@ -76,7 +76,8 @@ def doctor_from_catalog(db, ws, contains):
 
 
 def prepare(db, ws):
-    _ensure_batch2_catalog_fixtures(db, ws)
+    # Use only the existing Demo catalog. Do not create doctor/service fixture rows:
+    # concurrent evaluators can otherwise contend on unique assignment indexes.
     renames = {
         "ليزر إزالة الشعر - إبط": "Under Arm",
         "ليزر إزالة الشعر - جسم كامل سيدات": "Full Body",
@@ -187,6 +188,8 @@ def operation_relationship(cap):
                     {
                         "type": op.get("type"),
                         "active_task_relationship": op.get("active_task_relationship"),
+                        "fresh_task": op.get("fresh_task"),
+                        "fresh_task_explicit_fields": op.get("fresh_task_explicit_fields"),
                         "continues_previous": op.get("continues_previous"),
                     }
                 )
@@ -273,12 +276,18 @@ def run_t1(db, ws, under, full, mary, branch_id):
     c.send("بعد 5")
     pre_gap_task = c.turns[-1]["active_task"]
     c.set_now(SESSION2)
-    fresh = c.send("عايز احجز Full Body كمان")
+    fresh = c.send("عايز أبدأ حجز جديد منفصل")
+    replacement_turn = c.turns[-1]
+    fresh_goal_task = replacement_turn["active_task"]
     if fresh is not None:
+        c.send("Full Body")
+        fresh_service_task = c.turns[-1]["active_task"]
         for message in ("الخميس", "كانديلا", "الساعة 7", "يوسف", "احجز"):
             if c.turns and "booking_completed" in c.turns[-1]["goals"]:
                 break
             c.send(message)
+    else:
+        fresh_service_task = None
     after = state_snapshot(db, ws, p)
     old_after = next(
         (a for a in after.get("appointments", []) if a.get("id") == str(old.id)),
@@ -297,6 +306,9 @@ def run_t1(db, ws, under, full, mary, branch_id):
         "turns": c.turns,
         "errors": c.errors,
         "pre_gap_task": pre_gap_task,
+        "replacement_turn": replacement_turn,
+        "fresh_goal_task": fresh_goal_task,
+        "fresh_service_task": fresh_service_task,
         "old_appointment_after": old_after,
         "new_appointments": new_rows,
         "before": before,
@@ -344,19 +356,88 @@ def run_t3(db, ws):
     }
 
 
+def _latest_verified_action_context(db, conversation_id):
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.direction == "outbound",
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    metadata = dict(previous.metadata_json or {}) if previous is not None else {}
+    value = metadata.get("v2_action_context")
+    return dict(value) if isinstance(value, dict) else None
+
+
 def run_t4(db, ws):
     p = patient(db, ws, "T4")
     c = Conversation("T4", db, ws, p, SESSION1)
     c.send("عايز احجز Under Arm")
     c.send("الخميس")
     old_task = c.turns[-1]["active_task"]
-    c.send("عايز احجز Full Body كمان كحجز تاني")
+    c.send("عايز أبدأ حجز جديد منفصل")
+    after_replace = c.turns[-1]["active_task"]
+    c.send("Full Body")
     return {
         "id": "T4",
         "turns": c.turns,
         "errors": c.errors,
         "old_task": old_task,
+        "replace_turn": c.turns[-2],
+        "after_replace": after_replace,
         "fresh_task": c.turns[-1]["active_task"],
+    }
+
+
+def run_t5_completed_then_fresh(db, ws):
+    p = patient(db, ws, "T5")
+    before = state_snapshot(db, ws, p)
+    c = Conversation("T5", db, ws, p, SESSION1)
+
+    c.send("عايز احجز Under Arm")
+    completed_booking_authorization_source = c.turns[-1]["active_task"][
+        "write_authorization"
+    ]["source_turn_id"]
+    for message in ("الخميس", "ديكا", "مريم", "الساعة 4"):
+        if c.turns and "booking_completed" in c.turns[-1]["goals"]:
+            break
+        c.send(message)
+
+    completed_state = state_snapshot(db, ws, p)
+    completed_rows = completed_state.get("appointments", [])
+    completed_action = _latest_verified_action_context(db, c.cid)
+
+    c.set_now(SESSION1 + timedelta(hours=2))
+    c.send("عايز احجز جلسة جديدة")
+    new_goal_task = c.turns[-1]["active_task"]
+    c.send("Full Body")
+    after_service_task = c.turns[-1]["active_task"]
+    after_service_state = state_snapshot(db, ws, p)
+
+    for message in ("الخميس", "كانديلا", "احجز الساعة 5"):
+        if c.turns and "booking_completed" in c.turns[-1]["goals"]:
+            break
+        c.send(message)
+
+    final_state = state_snapshot(db, ws, p)
+    return {
+        "id": "T5",
+        "patient_id": str(p.id),
+        "conversation_id": str(c.cid) if c.cid else None,
+        "turns": c.turns,
+        "errors": c.errors,
+        "before": before,
+        "completed_state": completed_state,
+        "completed_appointments": completed_rows,
+        "completed_action_context": completed_action,
+        "completed_booking_authorization_source": completed_booking_authorization_source,
+        "new_goal_task": new_goal_task,
+        "after_service_task": after_service_task,
+        "after_service_state": after_service_state,
+        "final_state": final_state,
+        "writes": sum(1 for turn in c.turns if turn.get("write_attempted")),
     }
 
 
@@ -375,22 +456,33 @@ def assert_after_regressions(results):
     assert t1["old_appointment_after"]["status"] == "confirmed"
     assert len(t1["new_appointments"]) == 1
     assert t1["writes"] == 1
-    fresh = _turn(t1, "عايز احجز Full Body كمان")["active_task"]
+    replacement_operation = t1["replacement_turn"]["operations"][0]
+    assert replacement_operation["type"] == "book"
+    assert replacement_operation["active_task_relationship"] == "replace"
+    assert replacement_operation["fresh_task"] is True
+    assert replacement_operation["fresh_task_explicit_fields"] == []
+    assert "Under Arm" not in (t1["replacement_turn"]["linka"] or "")
+    fresh = t1["fresh_goal_task"]
     assert fresh["task_type"] == "booking"
-    assert fresh["constraints"]["service_id"] != t1["pre_gap_task"]["replacement"]["service_id"]
+    assert fresh["constraints"]["service_id"] is None
     assert fresh["constraints"]["doctor_id"] is None
     assert fresh["constraints"]["device_key"] is None
     assert fresh["constraints"]["date"] is None
     assert fresh["constraints"]["time"] is None
     assert fresh["option_snapshot"] is None
     assert fresh["derived"]["selected_slot_ref"] is None
+    assert "target" not in fresh
     assert (
         fresh["write_authorization"]["source_turn_id"]
         != t1["pre_gap_task"]["write_authorization"]["source_turn_id"]
     )
-    thursday = _turn(t1, "الخميس")["active_task"]
-    assert thursday["task_type"] == "booking"
-    assert thursday["constraints"]["time"] is None
+    fresh_service = t1["fresh_service_task"]
+    assert fresh_service["task_type"] == "booking"
+    assert fresh_service["constraints"]["service_id"] != t1["pre_gap_task"]["replacement"]["service_id"]
+    assert fresh_service["constraints"]["doctor_id"] is None
+    assert fresh_service["constraints"]["device_key"] is None
+    assert fresh_service["constraints"]["date"] is None
+    assert fresh_service["constraints"]["time"] is None
     assert "booking_completed" in t1["turns"][-1]["goals"]
 
     t2 = by_id["T2"]
@@ -415,6 +507,21 @@ def assert_after_regressions(results):
     t4 = by_id["T4"]
     assert t4["errors"] == []
     assert t4["old_task"]["task_type"] == "booking"
+    replacement = t4["replace_turn"]
+    replacement_operation = replacement["operations"][0]
+    assert replacement_operation["type"] == "book"
+    assert replacement_operation["active_task_relationship"] == "replace"
+    assert replacement_operation["fresh_task"] is True
+    assert replacement_operation["fresh_task_explicit_fields"] == []
+    assert "Under Arm" not in (replacement["linka"] or "")
+    assert t4["after_replace"]["task_type"] == "booking"
+    assert t4["after_replace"]["constraints"]["service_id"] is None
+    assert t4["after_replace"]["constraints"]["doctor_id"] is None
+    assert t4["after_replace"]["constraints"]["device_key"] is None
+    assert t4["after_replace"]["constraints"]["date"] is None
+    assert t4["after_replace"]["constraints"]["time"] is None
+    assert t4["after_replace"]["option_snapshot"] is None
+    assert t4["after_replace"]["derived"]["selected_slot_ref"] is None
     assert t4["fresh_task"]["task_type"] == "booking"
     assert t4["fresh_task"]["constraints"]["service_id"] != t4["old_task"]["constraints"]["service_id"]
     assert t4["fresh_task"]["constraints"]["doctor_id"] is None
@@ -427,6 +534,60 @@ def assert_after_regressions(results):
         != t4["old_task"]["write_authorization"]["source_turn_id"]
     )
 
+    t5 = by_id["T5"]
+    assert t5["errors"] == []
+    assert len(t5["completed_appointments"]) == 1
+    completed = t5["completed_action_context"]
+    assert completed["operation_type"] == "book"
+    assert completed["appointment_id"]
+    assert completed["service_id"]
+    assert completed["doctor_id"]
+    assert completed["device_key"]
+
+    fresh_turn = _turn(t5, "عايز احجز جلسة جديدة")
+    fresh_operation = fresh_turn["operations"][0]
+    assert fresh_operation["type"] == "book"
+    assert fresh_operation["fresh_task"] is True
+    assert fresh_operation["fresh_task_explicit_fields"] == []
+    assert fresh_operation["continues_previous"] is False
+    assert fresh_turn["write_attempted"] is False
+    assert "Under Arm" not in (fresh_turn["linka"] or "")
+
+    fresh_task = t5["new_goal_task"]
+    assert fresh_task["task_type"] == "booking"
+    assert fresh_task["constraints"]["service_id"] is None
+    assert fresh_task["constraints"]["doctor_id"] is None
+    assert fresh_task["constraints"]["device_key"] is None
+    assert fresh_task["constraints"]["date"] is None
+    assert fresh_task["constraints"]["time"] is None
+    assert fresh_task["option_snapshot"] is None
+    assert fresh_task["derived"]["selected_slot_ref"] is None
+    assert "target" not in fresh_task
+    assert (
+        fresh_task["write_authorization"]["source_turn_id"]
+        != t5["completed_booking_authorization_source"]
+    )
+
+    service_turn = _turn(t5, "Full Body")
+    assert service_turn["write_attempted"] is False
+    service_task = t5["after_service_task"]
+    assert service_task["task_type"] == "booking"
+    assert service_task["constraints"]["service_id"] != completed["service_id"]
+    assert service_task["constraints"]["doctor_id"] is None
+    assert service_task["constraints"]["device_key"] is None
+    assert service_task["constraints"]["date"] is None
+    assert service_task["constraints"]["time"] is None
+    assert service_task["option_snapshot"] is None
+    assert service_task["derived"]["selected_slot_ref"] is None
+    assert (
+        service_task["write_authorization"]["source_turn_id"]
+        == fresh_task["write_authorization"]["source_turn_id"]
+    )
+    assert len(t5["after_service_state"].get("appointments", [])) == 1
+    assert len(t5["final_state"].get("appointments", [])) == 2
+    assert t5["writes"] == 2
+    assert "booking_completed" in t5["turns"][-1]["goals"]
+
 
 output = Path(sys.argv[1])
 mode = sys.argv[2] if len(sys.argv) > 2 else "after"
@@ -438,17 +599,23 @@ try:
     ws = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
     assert_demo_only(ws)
     under, full, mary, youssef, branch_id = prepare(db, ws)
-    results = [run_t1(db, ws, under, full, mary, branch_id)]
-    if mode == "after":
-        results.extend(
-            [
-                run_t2(db, ws, under, mary, branch_id),
-                run_t3(db, ws),
-                run_t4(db, ws),
-            ]
-        )
-    if mode == "after":
-        assert_after_regressions(results)
+    if mode == "t5_probe":
+        results = [run_t5_completed_then_fresh(db, ws)]
+    elif mode == "t4_probe":
+        results = [run_t4(db, ws)]
+    else:
+        results = [run_t1(db, ws, under, full, mary, branch_id)]
+        if mode in {"after", "probe"}:
+            results.extend(
+                [
+                    run_t2(db, ws, under, mary, branch_id),
+                    run_t3(db, ws),
+                    run_t4(db, ws),
+                    run_t5_completed_then_fresh(db, ws),
+                ]
+            )
+        if mode == "after":
+            assert_after_regressions(results)
     payload = {
         "mode": mode,
         "results": results,
@@ -457,10 +624,9 @@ try:
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    t1 = results[0]
-    print("T1_ERRORS", t1["errors"])
-    print("T1_NEW_APPOINTMENTS", len(t1["new_appointments"]))
-    for turn in t1["turns"]:
+    selected = results[0]
+    print("RESULT", selected["id"], "ERRORS", selected["errors"])
+    for turn in selected["turns"]:
         print("C:", turn["customer"])
         print("L:", turn["linka"])
         if turn.get("error"):

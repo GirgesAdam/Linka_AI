@@ -59,6 +59,7 @@ AppointmentFactChallenge = Literal["none", "time"]
 SameTurnServiceSource = Literal["none", "verified_appointment"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
+FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -327,9 +328,27 @@ class TurnOperation(StrictContractModel):
             "message itself explicitly starts a separate/unrelated book or reschedule goal and "
             "abandons the unfinished task, including an additional/new booking. Never carry replace "
             "forward from an earlier message: a later date/time/doctor/device/service answer for the "
-            "newly active task is continue. Leave unspecified for side reads, social turns, when there "
-            "is no active_task, or when this relationship does not apply. This marker never mutates "
-            "state by itself; deterministic Python owns lifecycle transitions."
+            "newly active task is continue. Leave unspecified when there is no active_task and for "
+            "side reads/social turns. Deterministic Python owns lifecycle transitions and ignores "
+            "this marker on non-task operations."
+        ),
+    )
+    fresh_task: bool = Field(
+        default=False,
+        description=(
+            "True only when the latest customer message itself explicitly starts a new/separate "
+            "book or reschedule task that must not inherit task-local constraints from an older "
+            "completed action, abandoned task, or conversation history. This is message-local: "
+            "later answers inside the newly active task use false."
+        ),
+    )
+    fresh_task_explicit_fields: list[FreshTaskField] = Field(
+        default_factory=list,
+        description=(
+            "For fresh_task=true, list only task fields explicitly supplied in the latest customer "
+            "message itself. Never include values recovered only from active_task, recent_verified_action, "
+            "assistant prose, or older dialogue. Deterministic Python uses this list as the authority "
+            "boundary for fresh task state."
         ),
     )
     grouped_booking_action: GroupedBookingAction = Field(
@@ -388,17 +407,6 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
-
-    @model_validator(mode="after")
-    def validate_active_task_relationship(self) -> TurnOperation:
-        if (
-            self.active_task_relationship != "unspecified"
-            and self.type not in {"book", "reschedule"}
-        ):
-            raise ValueError(
-                "active_task_relationship is only valid for book/reschedule primary tasks."
-            )
-        return self
 
     @model_validator(mode="after")
     def validate_same_turn_service_source(self) -> TurnOperation:
