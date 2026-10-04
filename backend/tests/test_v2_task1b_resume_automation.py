@@ -29,7 +29,7 @@ from app.agents.v2.turn_interpreter import (
 from app.models.message import Message
 from app.services.agent_v2.active_task_progress import adapt_matching_active_task_step
 from app.services.agent_v2.live_chat import _recent_verified_action_context_from_outbounds
-from app.services.agent_v2.planner import PlanStep
+from app.services.agent_v2.planner import PlanStep, PlannerContext, plan_turn
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
@@ -259,6 +259,136 @@ def test_automation_appointment_action_binds_server_target_not_model_target() ->
     assert target is not None
     assert target.ref == "A2"
     assert target.text is None
+
+
+def _reminder_action_context() -> SemanticContext:
+    return SemanticContext(
+        model_input={
+            "automation_context": {
+                "source": "automation_engine",
+                "automation_rule_key": "appointment_reminder_6h",
+                "appointment_ref": "A2",
+                # UTC calendar date intentionally differs from Cairo local date.
+                "start_at": "2026-10-07T22:30:00+00:00",
+            }
+        },
+        reference_map={
+            "A2": SemanticReferenceTarget(
+                kind="appointment",
+                canonical_id="apt-reminder",
+            )
+        },
+    )
+
+
+def test_reminder_time_only_reschedule_preserves_verified_local_appointment_date() -> None:
+    context = _reminder_action_context()
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        execution_intent="execute",
+        automation_context_relationship="appointment_action",
+    )
+
+    merged = merge_automation_context(
+        TiaTurnUnderstanding(operations=[operation]),
+        context,
+        timezone_name="Africa/Cairo",
+    )
+    merged_operation = merged.operations[0]
+
+    assert merged_operation.source_appointment is not None
+    assert merged_operation.source_appointment.appointment == EntityReference(ref="A2")
+    assert merged_operation.entities.date == DateConstraint(
+        mode="exact",
+        start_date="2026-10-08",
+    )
+    assert merged_operation.entities.time == TimeConstraint(
+        mode="exact",
+        start_time="18:00",
+    )
+
+    plan = plan_turn(
+        merged,
+        PlannerContext(
+            semantic_context=context,
+            active_task=None,
+            now=NOW,
+        ),
+    )
+    step = plan.steps[0]
+    assert step.disposition == "read"
+    assert [request.kind for request in step.reads] == ["appointments", "availability"]
+    assert step.facts["date"] == {
+        "mode": "exact",
+        "start_date": "2026-10-08",
+        "end_date": None,
+    }
+
+
+def test_reminder_reschedule_without_date_or_time_still_asks_for_date() -> None:
+    context = _reminder_action_context()
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        automation_context_relationship="appointment_action",
+    )
+
+    merged = merge_automation_context(
+        TiaTurnUnderstanding(operations=[operation]),
+        context,
+        timezone_name="Africa/Cairo",
+    )
+    merged_operation = merged.operations[0]
+
+    assert merged_operation.entities.date is None
+    assert merged_operation.entities.time is None
+
+    plan = plan_turn(
+        merged,
+        PlannerContext(
+            semantic_context=context,
+            active_task=None,
+            now=NOW,
+        ),
+    )
+    step = plan.steps[0]
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "date"
+    assert step.state_action == "start_reschedule"
+    assert [request.kind for request in step.reads] == ["appointments"]
+
+
+def test_reminder_reschedule_explicit_new_date_wins_over_verified_original_date() -> None:
+    context = _reminder_action_context()
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-09"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        execution_intent="execute",
+        automation_context_relationship="appointment_action",
+    )
+
+    merged = merge_automation_context(
+        TiaTurnUnderstanding(operations=[operation]),
+        context,
+        timezone_name="Africa/Cairo",
+    )
+    merged_operation = merged.operations[0]
+
+    assert merged_operation.entities.date == DateConstraint(
+        mode="exact",
+        start_date="2026-10-09",
+    )
+    assert merged_operation.entities.time == TimeConstraint(
+        mode="exact",
+        start_time="18:00",
+    )
 
 
 def test_post_visit_next_session_reuses_only_verified_stable_treatment_facts() -> None:
