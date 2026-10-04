@@ -257,6 +257,53 @@ def verified_action_semantic_view(
     return safe
 
 
+def automation_context_semantic_view(
+    automation_context: dict[str, Any] | None,
+    *,
+    context: SemanticContext,
+) -> dict[str, object]:
+    """Expose only server-verified automation focus through opaque refs."""
+    if not isinstance(automation_context, dict):
+        return {}
+    if automation_context.get("source") != "automation_engine":
+        return {}
+
+    safe: dict[str, object] = {"source": "automation_engine"}
+    rule_key = automation_context.get("automation_rule_key")
+    if isinstance(rule_key, str) and rule_key:
+        safe["automation_rule_key"] = rule_key
+
+    appointment_ref = _entity_ref(
+        automation_context.get("appointment_id"),
+        kind="appointment",
+        context=context,
+    )
+    if appointment_ref is not None:
+        safe["appointment_ref"] = appointment_ref
+
+    service_ref = _entity_ref(
+        automation_context.get("service_id"),
+        kind="service",
+        context=context,
+    )
+    if service_ref is not None:
+        safe["service_ref"] = service_ref
+
+    device_ref = _entity_ref(
+        automation_context.get("device_key"),
+        kind="device",
+        context=context,
+    )
+    if device_ref is not None:
+        safe["device_ref"] = device_ref
+
+    if automation_context.get("appointment_status") not in (None, ""):
+        safe["appointment_status"] = automation_context["appointment_status"]
+    if automation_context.get("start_at") not in (None, ""):
+        safe["start_at"] = automation_context["start_at"]
+    return safe
+
+
 def pending_choice_semantic_view(
     value: dict[str, Any] | None,
     *,
@@ -344,6 +391,7 @@ def _apply_verified_focus(
         "pending_choice",
         "recent_verified_read",
         "recent_verified_action",
+        "automation_context",
     ):
         refs.update(_collect_verified_refs(model_input.get(key), context=context))
 
@@ -508,4 +556,55 @@ def with_safe_action_context(
         context=context,
     )
     stale = _state_has_stale_refs(action_context, context=context)
+    return _apply_verified_focus(context, model_input, block_focus=stale)
+
+
+def _with_automation_appointment_reference(
+    context: SemanticContext,
+    automation_context: dict[str, Any],
+) -> SemanticContext:
+    """Add one opaque appointment ref from verified automation metadata."""
+    appointment_id = automation_context.get("appointment_id")
+    if appointment_id in (None, ""):
+        return context
+    if _entity_ref(appointment_id, kind="appointment", context=context) is not None:
+        return context
+
+    reference_map = dict(context.reference_map)
+    index = 1
+    while f"A{index}" in reference_map:
+        index += 1
+    appointment_ref = f"A{index}"
+    reference_map[appointment_ref] = SemanticReferenceTarget(
+        kind="appointment",
+        canonical_id=str(appointment_id),
+    )
+
+    metadata = dict(context.server_metadata)
+    raw_details = metadata.get("focus_details")
+    focus_details = dict(raw_details) if isinstance(raw_details, dict) else {}
+    focus_details[appointment_ref] = {"ref": appointment_ref}
+    metadata["focus_details"] = focus_details
+    return SemanticContext(
+        model_input=dict(context.model_input),
+        reference_map=reference_map,
+        server_metadata=metadata,
+    )
+
+
+def with_safe_automation_context(
+    context: SemanticContext,
+    *,
+    automation_context: dict[str, Any] | None = None,
+) -> SemanticContext:
+    """Expose automation focus without promoting it to verified read/action authority."""
+    if automation_context is None:
+        return context
+    context = _with_automation_appointment_reference(context, automation_context)
+    model_input = dict(context.model_input)
+    model_input["automation_context"] = automation_context_semantic_view(
+        automation_context,
+        context=context,
+    )
+    stale = _state_has_stale_refs(automation_context, context=context)
     return _apply_verified_focus(context, model_input, block_focus=stale)

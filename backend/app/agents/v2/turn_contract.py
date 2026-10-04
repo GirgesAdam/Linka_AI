@@ -59,6 +59,7 @@ AppointmentFactChallenge = Literal["none", "time"]
 SameTurnServiceSource = Literal["none", "verified_appointment"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
+AutomationContextRelationship = Literal["none", "acknowledge", "appointment_action", "next_session"]
 FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
 
@@ -333,6 +334,19 @@ class TurnOperation(StrictContractModel):
             "this marker on non-task operations."
         ),
     )
+    automation_context_relationship: AutomationContextRelationship = Field(
+        default="none",
+        description=(
+            "Relationship of the latest customer message to server-owned automation_context. "
+            "Use acknowledge for a simple acknowledgement/reply to the automation message with no "
+            "requested lifecycle action. Use appointment_action only when the customer asks to "
+            "change/cancel/confirm the appointment referenced by automation_context. Use next_session "
+            "only when the customer asks for a new next session that clearly refers to the treatment "
+            "from a post-visit automation. Leave none when automation_context is absent or unrelated. "
+            "This marker never supplies canonical IDs by itself; Python binds only server-verified "
+            "automation metadata."
+        ),
+    )
     fresh_task: bool = Field(
         default=False,
         description=(
@@ -407,6 +421,24 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_automation_context_relationship(self) -> TurnOperation:
+        if self.automation_context_relationship == "none":
+            return self
+        if self.automation_context_relationship == "appointment_action" and self.type not in {
+            "reschedule",
+            "cancel_appointment",
+            "confirm_appointment",
+        }:
+            raise ValueError(
+                "appointment_action automation context is only valid for appointment lifecycle operations."
+            )
+        if self.automation_context_relationship == "next_session" and self.type != "book":
+            raise ValueError("next_session automation context is only valid for book.")
+        if self.automation_context_relationship == "acknowledge" and self.execution_intent != "informational":
+            raise ValueError("automation acknowledgement must remain informational/read-only.")
+        return self
 
     @model_validator(mode="after")
     def validate_same_turn_service_source(self) -> TurnOperation:

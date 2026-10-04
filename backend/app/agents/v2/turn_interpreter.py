@@ -147,6 +147,21 @@ SEMANTIC PRINCIPLES
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
+- automation_context is server-owned system-initiated conversational focus, not a verified read/action
+  and never write authority. If it is present, a simple acknowledgement of that reminder/follow-up is
+  about the automation message, not an unrelated active booking: emit an informational social operation
+  with automation_context_relationship=acknowledge and do not mutate/continue the active task. If the
+  customer asks to change/cancel/confirm the appointment referenced by automation_context, emit the
+  matching lifecycle operation with automation_context_relationship=appointment_action; Python binds
+  the canonical appointment target from server metadata, so do not reconstruct an ID from template prose.
+  If a post-visit automation is followed by a clear request for the next session of that treatment, emit
+  book with fresh_task=true and automation_context_relationship=next_session. Python may reuse only
+  server-verified stable service/device treatment facts; never inherit the old date/time/doctor/slot,
+  option snapshot, or write authorization. For unrelated turns leave automation_context_relationship=none.
+- When active_task is empty, raw dialogue history alone is never authority for task-local book/reschedule
+  constraints. A new booking/reschedule may use fields explicit in the latest customer message, supplied
+  verified contexts, or server-owned automation_context, but must not resurrect service/device/doctor/date/
+  time/slot/authorization solely from an expired/finished task described in older customer/assistant prose.
 - For book/reschedule only, classify the operation's relationship to the explicitly supplied
   active_task in active_task_relationship. Use continue when the latest customer message is still
   working on the same unfinished task, including correcting its service/date/time/doctor/device or
@@ -161,14 +176,17 @@ SEMANTIC PRINCIPLES
   unspecified for side reads/social turns and when no active task applies. Python, not this marker,
   performs the lifecycle transition.
 - Independently set fresh_task=true when the latest customer message explicitly opens a new/separate
-  booking or reschedule instead of continuing any prior task or completed action. This includes a
-  fresh goal after a completed booking even when there is no active_task. For fresh_task=true,
-  fresh_task_explicit_fields must contain only dimensions actually stated in the latest customer
-  message itself (service/doctor/device/appointment/package/date/time/package_usage). Never list a
-  field merely because recent_verified_action, active_task, assistant prose, or older history contains
-  it. If the customer says only that they want a new booking, the explicit-field list is empty even if
-  the previous completed booking had a service/date/time/device/doctor. Later answers inside the new
-  active task use fresh_task=false and active_task_relationship=continue where applicable.
+  booking or reschedule instead of continuing any prior task or completed action. Also, whenever
+  active_task is empty and a book/reschedule is not explicitly continuing supplied verified context,
+  treat it as a fresh task even if older dialogue sounds like an unfinished booking. Python enforces
+  this fail-closed boundary too. For fresh_task=true, fresh_task_explicit_fields must contain only
+  dimensions actually stated in the latest customer message itself
+  (service/doctor/device/appointment/package/date/time/package_usage). Never list a field merely because
+  recent_verified_action, active_task, assistant prose, or older history contains it. If the customer
+  says only that they want a booking, the explicit-field list is empty even if older dialogue had a
+  service/date/time/device/doctor. If they explicitly restate Under Arm, list service but do not list
+  old device/date/time/doctor unless the latest message itself states them. Later answers inside the
+  new active task use fresh_task=false and active_task_relationship=continue where applicable.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
   value only. Python owns dependency invalidation and persisted-state changes.
 - Use native recent dialogue to resolve elliptical follow-ups, but prefer active_task,
@@ -212,7 +230,13 @@ SEMANTIC PRINCIPLES
   the recent dialogue makes the customer's intended primary action and constraints clear, reconstruct
   that primary operation from the dialogue so Python can verify it again instead of emitting select_active.
 - Use continue_active for a requirement that continues an explicitly supplied active task without
-  independently restating the task's primary operation.
+  independently restating the task's primary operation. In particular, while a booking/reschedule
+  task is active, a customer who proposes/checks a missing or changed booking constraint as part of
+  completing that task (for example asking whether a particular day or time works) is continuing the
+  active task: emit continue_active with that date/time/doctor/device constraint so Python re-verifies
+  availability and updates the task. Use standalone availability only when the customer is genuinely
+  asking an exploratory availability question that is not a constraint proposal for the active task
+  (for example availability for another unrelated service without changing the current booking).
 - cancel_active stops an unfinished conversational task. cancel_appointment concerns an already
   existing appointment. Keep these meanings separate.
 - availability means asking what appointment possibilities exist without requesting creation of a
@@ -455,7 +479,21 @@ def _build_interpreter_messages(
         history,
         latest_customer_index=latest_index,
     )
-    return [system, context, *recent, HumanMessage(content=latest_text)]
+    automation_context = semantic_context.model_input.get("automation_context")
+    automation_order: list[BaseMessage] = []
+    if isinstance(automation_context, dict) and automation_context:
+        automation_order.append(
+            SystemMessage(
+                content=(
+                    "CONVERSATION_ORDER: The server-owned automation_context in SEMANTIC_CONTEXT "
+                    "was sent after all native dialogue messages shown below and immediately before "
+                    "the latest customer turn. Treat that automation as the immediate conversational "
+                    "focus when interpreting a terse reply. It is context only, not verified read/write "
+                    "authority; use only its typed relationship rules and opaque refs."
+                )
+            )
+        )
+    return [system, context, *recent, *automation_order, HumanMessage(content=latest_text)]
 
 
 def _reference_from_verified(
@@ -648,6 +686,67 @@ def merge_same_turn_pulse_device_context(
 
 
 
+def enforce_unscoped_task_boundary(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Fail closed when raw dialogue is the only possible task-local authority.
+
+    With no persisted active task, a booking/reschedule may continue only a typed
+    verified read (or the explicitly supported Pulse-purchase continuation). Otherwise
+    Python forces a fresh-task boundary before any verified-context merge. This keeps
+    old dialogue useful for language while preventing expired/finished task constraints
+    from becoming execution state again.
+    """
+    active_task = semantic_context.model_input.get("active_task")
+    if isinstance(active_task, dict) and active_task:
+        return turn
+
+    recent_read = semantic_context.model_input.get("recent_verified_read")
+    recent_action = semantic_context.model_input.get("recent_verified_action")
+    has_verified_read = isinstance(recent_read, dict) and bool(recent_read)
+    pulse_action = (
+        recent_action.get("operation_type") == "buy_pulse_pack"
+        if isinstance(recent_action, dict)
+        else False
+    )
+
+    # Compound operations are resolved jointly from the latest customer message.
+    # Their cross-operation facts are same-turn semantic input, not stale-history recovery.
+    # Keep that established path intact; this guard closes only an unscoped standalone
+    # booking/reschedule that could otherwise be reconstructed solely from old dialogue.
+    if len(turn.operations) != 1:
+        return turn
+
+    operations = []
+    changed = False
+    for operation in turn.operations:
+        if operation.type not in {"book", "reschedule"} or operation.execution_intent != "execute":
+            operations.append(operation)
+            continue
+
+        verified_continuation = bool(
+            operation.continues_previous
+            and (has_verified_read or (operation.type == "book" and pulse_action))
+        )
+        automation_targeted = (
+            operation.automation_context_relationship == "appointment_action"
+        )
+        if verified_continuation or automation_targeted:
+            operations.append(operation)
+            continue
+
+        if operation.fresh_task:
+            operations.append(operation)
+            continue
+
+        operation = operation.model_copy(update={"fresh_task": True})
+        changed = True
+        operations.append(operation)
+
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
 def isolate_fresh_task_context(
     turn: TiaTurnUnderstanding,
 ) -> TiaTurnUnderstanding:
@@ -684,6 +783,64 @@ def isolate_fresh_task_context(
         isolated = operation.model_copy(update=updates)
         changed = changed or isolated != operation
         operations.append(isolated)
+
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
+def merge_automation_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Bind only typed relations to server-verified automation metadata."""
+    raw = semantic_context.model_input.get("automation_context")
+    if not isinstance(raw, dict) or not raw:
+        return turn
+
+    # A social-only operation immediately after a server-owned automation is
+    # necessarily an acknowledgement of that conversational focus. Normalizing
+    # this marker is deterministic and grants no read/write authority.
+    normalized_operations = []
+    normalized = False
+    for operation in turn.operations:
+        if (
+            operation.type == "social"
+            and operation.execution_intent == "informational"
+            and operation.automation_context_relationship == "none"
+        ):
+            operation = operation.model_copy(
+                update={"automation_context_relationship": "acknowledge"}
+            )
+            normalized = True
+        normalized_operations.append(operation)
+    if normalized:
+        turn = turn.model_copy(update={"operations": normalized_operations})
+
+    appointment = _reference_from_verified(raw, single_key="appointment_ref")
+    service = _reference_from_verified(raw, single_key="service_ref")
+    device = _reference_from_verified(raw, single_key="device_ref")
+
+    operations = []
+    changed = False
+    for operation in turn.operations:
+        relationship = operation.automation_context_relationship
+        if relationship == "appointment_action" and appointment is not None:
+            selector = operation.source_appointment or AppointmentSelector()
+            selector = selector.model_copy(update={"appointment": appointment})
+            operation = operation.model_copy(update={"source_appointment": selector})
+            changed = True
+        elif relationship == "next_session" and operation.type == "book":
+            entities = operation.entities
+            updates: dict[str, object] = {}
+            if entities.service is None and service is not None:
+                updates["service"] = service
+            if entities.device is None and device is not None:
+                updates["device"] = device
+            if updates:
+                operation = operation.model_copy(
+                    update={"entities": entities.model_copy(update=updates)}
+                )
+                changed = True
+        operations.append(operation)
 
     return turn.model_copy(update={"operations": operations}) if changed else turn
 
@@ -829,9 +986,11 @@ def interpret_customer_turn_v2(
         operation="v2-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    isolated = isolate_fresh_task_context(invocation.value)
+    bounded = enforce_unscoped_task_boundary(invocation.value, semantic_context)
+    isolated = isolate_fresh_task_context(bounded)
     continued = merge_verified_read_context(isolated, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)
+    continued = merge_automation_context(continued, semantic_context)
     grounded = ground_turn_references(continued, semantic_context)
     grounded = merge_same_turn_pulse_device_context(grounded, semantic_context)
     normalized = normalize_semantic_invariants(grounded)
