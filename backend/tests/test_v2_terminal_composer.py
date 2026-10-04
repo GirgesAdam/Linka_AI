@@ -41,7 +41,7 @@ def test_customer_datetime_formatter_uses_workspace_timezone() -> None:
         timezone_name="Africa/Cairo",
     )
 
-    assert text == "الاثنين 5 أكتوبر 2026 الساعة 10 صباحًا"
+    assert text == "الاثنين 5 أكتوبر الساعة 10 صباحًا"
 
 
 
@@ -150,7 +150,7 @@ def test_booking_exact_values_are_backend_resolved_from_fact_refs() -> None:
     assert "حجزك اتأكد" in text
     assert "Full Legs Laser" in text
     assert "Prime Lase" in text
-    assert "28 سبتمبر 2026" in text
+    assert "الاثنين 28 سبتمبر" in text
     assert "7 مساءً" in text
 
 
@@ -273,7 +273,7 @@ def test_reschedule_preserves_new_date_time_facts(
 
     assert "ميعادك اتغيّر" in text
     if "date" in available:
-        assert "3 أكتوبر 2026" in text
+        assert "السبت 3 أكتوبر" in text
     if "time" in available:
         assert "6:30 مساءً" in text
 
@@ -414,7 +414,7 @@ def test_follow_up_aliases_due_at_to_safe_terminal_fact() -> None:
     assert facts["follow_up_at"].requirement == "required"
     text = deterministic_terminal_fallback(contract, arabic=True)
     assert "المتابعة اتسجلت" in text
-    assert "5 أكتوبر 2026" in text
+    assert "الاثنين 5 أكتوبر" in text
     assert "11:30 صباحًا" in text
 
 

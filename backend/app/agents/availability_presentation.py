@@ -4,17 +4,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.agents.v2.customer_datetime import format_customer_date
 from app.services.laser_slot_metadata import decode_laser_slot_branch
-
-_ARABIC_WEEKDAYS = (
-    "الاثنين",
-    "الثلاثاء",
-    "الأربعاء",
-    "الخميس",
-    "الجمعة",
-    "السبت",
-    "الأحد",
-)
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -29,14 +20,7 @@ def _parse_dt(value: object) -> datetime | None:
 def _display_date(value: object) -> str:
     if not value:
         return ""
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except ValueError:
-        try:
-            parsed = datetime.fromisoformat(f"{value}T00:00:00")
-        except ValueError:
-            return str(value)
-    return f"{_ARABIC_WEEKDAYS[parsed.weekday()]} {parsed.day:02d}/{parsed.month:02d}/{parsed.year}"
+    return format_customer_date(value, arabic=True)
 
 
 def _clock_ar(value: datetime) -> str:

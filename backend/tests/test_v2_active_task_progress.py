@@ -19,6 +19,7 @@ from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
+    DerivedBookingState,
     RescheduleTarget,
     RescheduleTaskState,
     WriteAuthorization,
@@ -249,6 +250,9 @@ def test_booking_progress_reads_availability_once_service_and_date_are_known() -
             date=DateConstraint(mode="exact", start_date="2026-09-12"),
             time=TimeConstraint(mode="after", start_time="18:00"),
         ),
+        derived=DerivedBookingState(
+            commercial_basis_presented_device_key="candela_gentle"
+        ),
     )
 
     step = plan_active_task_progress(state, operation_index=0, context=_context())
@@ -272,6 +276,9 @@ def test_exact_time_is_planned_for_verification_not_immediate_success() -> None:
             device_key="candela_gentle",
             date=DateConstraint(mode="exact", start_date="2026-09-12"),
             time=TimeConstraint(mode="exact", start_time="19:00"),
+        ),
+        derived=DerivedBookingState(
+            commercial_basis_presented_device_key="candela_gentle"
         ),
     )
 

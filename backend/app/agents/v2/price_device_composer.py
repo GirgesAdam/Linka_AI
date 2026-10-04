@@ -258,7 +258,13 @@ def _render_option_list(
         )
 
     if truth.kind in {"service_base_price", "service_device_price"}:
-        return _service_option_text(options[0], arabic=arabic) + "."
+        rendered = _service_option_text(options[0], arabic=arabic) + "."
+        facts = {fact.key: fact.value for fact in unit.facts}
+        if facts.get("booking_next_field") == "date":
+            return rendered + (" تحب تحجز يوم إيه؟" if arabic else " What day would you like to book?")
+        if facts.get("booking_next_field") == "booking":
+            return rendered + (" تحب أكمل الحجز على الموعد ده؟" if arabic else " Shall I continue with this booking?")
+        return rendered
 
     if truth.kind in {
         "service_device_price_options",

@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     agent_router_history_messages: int = Field(default=8, ge=2, le=24)
 
     agent_flow_ttl_hours: int = Field(default=24, ge=1, le=168)
-    agent_booking_flow_ttl_hours: int = Field(default=72, ge=1, le=168)
+    agent_booking_flow_ttl_hours: int = Field(default=168, ge=1, le=168)
     agent_flow_interpreter_max_output_tokens: int = Field(
         default=1024,
         ge=256,

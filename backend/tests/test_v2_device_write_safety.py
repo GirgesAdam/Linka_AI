@@ -91,28 +91,19 @@ def test_laser_booking_without_device_never_reaches_availability_or_write() -> N
     assert step.write_intent is None
 
 
-def test_laser_booking_single_slot_with_verified_device_can_write() -> None:
+def test_laser_booking_with_selected_device_presents_price_before_write() -> None:
     turn = TiaTurnUnderstanding(
         operations=[_booking(device=EntityReference(ref="V1"))],
         safety_signals=[],
     )
     step = plan_turn(turn, _context()).steps[0]
 
-    advanced = advance_step_after_verification(
-        step,
-        VerificationFacts(
-            exact_slot_match_count=1,
-            verified_parameters={
-                "doctor_id": "doctor-maryam",
-                "device_key": "candela",
-                "start_at": "2026-09-12T20:00:00+03:00",
-            },
-        ),
-    )
-
-    assert advanced.disposition == "write_ready"
-    assert advanced.write_intent is not None
-    assert advanced.write_intent.parameters["device_key"] == "candela"
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.write_intent is None
+    assert step.facts["device_key"] == "candela"
+    assert step.facts["booking_next_field"] == "booking"
 
 
 def test_multi_device_laser_booking_requires_device_price_step_before_slots() -> None:
@@ -125,7 +116,7 @@ def test_multi_device_laser_booking_requires_device_price_step_before_slots() ->
     assert step.write_intent is None
 
 
-def test_multiple_laser_slots_without_doctor_still_clarify_doctor_first() -> None:
+def test_doctor_is_not_requested_before_selected_device_price_is_presented() -> None:
     turn = TiaTurnUnderstanding(
         operations=[
             _booking(
@@ -137,13 +128,10 @@ def test_multiple_laser_slots_without_doctor_still_clarify_doctor_first() -> Non
     )
     step = plan_turn(turn, _context()).steps[0]
 
-    advanced = advance_step_after_verification(
-        step,
-        VerificationFacts(exact_slot_match_count=2),
-    )
-
-    assert advanced.disposition == "clarify"
-    assert advanced.clarification_field == "doctor"
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert step.write_intent is None
+    assert step.clarification_field is None
 
 
 def test_non_laser_service_does_not_require_device_for_write() -> None:

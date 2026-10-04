@@ -448,6 +448,32 @@ def _booking_progress(
                 "booking_device_price_step": True,
             },
         )
+    if (
+        requires_device
+        and state.constraints.device_key is not None
+        and state.constraints.package_usage != "use_existing"
+        and state.derived.commercial_basis_presented_device_key
+        != state.constraints.device_key
+    ):
+        return PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="read",
+            reads=[
+                ReadRequest(
+                    kind="service_catalog",
+                    parameters={"service_id": service_id},
+                )
+            ],
+            state_action="update_active",
+            response_goal="answer_price",
+            facts={
+                **params,
+                "service_requires_laser_device": True,
+                "booking_device_price_step": True,
+                "booking_next_field": "date",
+            },
+        )
     if state.constraints.date is None:
         return PlanStep(
             operation_index=operation_index,

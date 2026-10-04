@@ -133,6 +133,25 @@ def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
     return active_task.model_dump(mode="json") if active_task is not None else None
 
 
+def _terminal_no_reply_allowed(
+    understanding: TiaTurnUnderstanding,
+    *,
+    active_task: ActiveTaskState | None,
+    pending_choice: OptionSnapshot | None,
+) -> bool:
+    """Fail closed: semantic no-reply is valid only after conversational work is finished."""
+    if understanding.response_disposition != "no_reply":
+        return False
+    if active_task is not None or pending_choice is not None or understanding.safety_signals:
+        return False
+    if not understanding.operations or any(operation.type != "social" for operation in understanding.operations):
+        return False
+    return all(
+        operation.automation_context_relationship == "none"
+        for operation in understanding.operations
+    )
+
+
 def _pending_choice_from_context(
     value: dict[str, Any] | None,
     *,
@@ -237,6 +256,50 @@ def _advance_after_reads(step: PlanStep, reads: ReadExecutionBundle) -> PlanStep
     if step.write_intent is None and step.state_action != "start_reschedule":
         return step
     return advance_step_with_write_policies(step, reads)
+
+
+def _auto_resolve_single_booking_device(
+    step: PlanStep,
+    reads: ReadExecutionBundle,
+) -> PlanStep:
+    if (
+        step.facts.get("booking_device_price_step") is not True
+        or step.facts.get("device_key") not in (None, "")
+    ):
+        return step
+    candidates: list[dict[str, object]] = []
+    for result in reads.results:
+        if result.kind != "service_catalog" or not result.ok:
+            continue
+        service = result.payload.get("service")
+        if not isinstance(service, dict):
+            continue
+        raw_devices = service.get("laser_devices")
+        if not isinstance(raw_devices, list):
+            continue
+        candidates.extend(
+            device
+            for device in raw_devices
+            if isinstance(device, dict)
+            and device.get("configured") is not False
+            and device.get("device_key") not in (None, "")
+            and (
+                device.get("price_minor") is not None
+                or device.get("price") not in (None, "")
+            )
+        )
+    if len(candidates) != 1:
+        return step
+    return step.model_copy(
+        update={
+            "facts": {
+                **step.facts,
+                "device_key": str(candidates[0]["device_key"]),
+                "booking_next_field": "date",
+                "device_auto_resolved": True,
+            }
+        }
+    )
 
 
 def _compatibility_failure_step(
@@ -1396,6 +1459,7 @@ def orchestrate_v2_turn(
                 else normal_reads
             )
 
+        advanced = _auto_resolve_single_booking_device(advanced, reads)
         operation_reads[effective_step.operation_index] = reads
         if effective_step.operation_type == "appointment_list":
             verified_appointment = dict(reads.verification.verified_parameters)
@@ -1621,6 +1685,25 @@ def orchestrate_v2_turn(
 
     if not outcomes:
         raise RuntimeError("V2 runtime produced neither a customer outcome nor a pending write.")
+
+    if _terminal_no_reply_allowed(
+        understanding,
+        active_task=current_task,
+        pending_choice=outgoing_pending_choice,
+    ):
+        return V2OrchestratedTurn(
+            understanding=understanding,
+            plan=plan,
+            traces=tuple(traces),
+            outcomes=tuple(outcomes),
+            reply=None,
+            responder_model="deterministic:no-reply",
+            active_task=current_task,
+            persisted_task=persisted_after,
+            pending_write=None,
+            verified_action_context=completed_action_context,
+            pending_choice=outgoing_pending_choice,
+        )
 
     availability_continuation = _availability_presentation_continuation(
         understanding, plan, recent_read_context

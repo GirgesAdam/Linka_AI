@@ -437,6 +437,9 @@ def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[R
     for key in ("description", "duration_minutes", "customer_duration_text"):
         if service.get(key) not in (None, ""):
             result.append(_make_fact(goal=goal, key=key, value=service[key]))
+    next_field = facts.get("booking_next_field")
+    if next_field in {"date", "booking"}:
+        result.append(_make_fact(goal=goal, key="booking_next_field", value=next_field))
     return result
 
 

@@ -798,6 +798,32 @@ def _plan_operation(
                     "booking_device_price_step": True,
                 },
             )
+        if (
+            requires_device
+            and "device_key" in params
+            and operation.package_usage != "use_existing"
+        ):
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="read",
+                reads=[
+                    ReadRequest(
+                        kind="service_catalog",
+                        parameters={"service_id": params["service_id"]},
+                    )
+                ],
+                state_action="start_booking",
+                response_goal="answer_price",
+                facts={
+                    **params,
+                    "service_requires_laser_device": True,
+                    "booking_device_price_step": True,
+                    "booking_next_field": (
+                        "date" if "date" not in params else "booking"
+                    ),
+                },
+            )
         if "date" not in params:
             return _clarify(index=index, operation=operation, field="date")
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"

@@ -29,6 +29,7 @@ from app.services.agent_v2.state_rules import (
     apply_reschedule_time_change,
     attach_option_snapshot,
     preserve_task_for_side_read,
+    record_booking_commercial_basis_presented,
 )
 
 _OPTION_TTL = timedelta(minutes=15)
@@ -446,6 +447,18 @@ def apply_step_state(
 
     if current is None:
         return StateTransition(active_task=None, changed=before is not None, reason="state_cleared")
+
+    if (
+        isinstance(current, BookingTaskState)
+        and step.response_goal == "answer_price"
+        and current.constraints.device_key is not None
+        and reads is not None
+        and any(result.kind == "service_catalog" and result.ok for result in reads.results)
+    ):
+        current = record_booking_commercial_basis_presented(
+            current,
+            device_key=current.constraints.device_key,
+        )
 
     current = _attach_availability_snapshot(
         current,

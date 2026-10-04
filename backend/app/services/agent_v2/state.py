@@ -71,6 +71,7 @@ class DerivedBookingState(StrictStateModel):
     package_validated: bool = False
     doctor_compatible: bool | None = None
     device_compatible: bool | None = None
+    commercial_basis_presented_device_key: str | None = None
 
 
 class OptionChoice(StrictStateModel):
