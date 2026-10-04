@@ -39,6 +39,7 @@ export function LiveRouteRefresh({
         const payload = (await response.json()) as RevisionResponse;
         if (
           !cancelled &&
+          document.visibilityState === "visible" &&
           typeof payload.revision === "string" &&
           payload.revision !== currentRevision
         ) {
@@ -57,7 +58,11 @@ export function LiveRouteRefresh({
 
     const interval = window.setInterval(() => void checkForChange(), intervalMs);
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") void checkForChange();
+      if (document.visibilityState === "hidden") {
+        controller?.abort();
+        return;
+      }
+      void checkForChange();
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
