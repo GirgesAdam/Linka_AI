@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import type { MeResponse } from "@/lib/types";
 
@@ -18,7 +19,7 @@ export class TiaApiError extends Error {
   }
 }
 
-async function accessToken() {
+const accessToken = cache(async function accessToken() {
   const supabase = await createClient();
   const { data: claimsData } = await supabase.auth.getClaims();
   if (!claimsData?.claims?.sub) redirect("/login");
@@ -26,7 +27,7 @@ async function accessToken() {
   const token = sessionData.session?.access_token;
   if (!token) redirect("/login");
   return token;
-}
+});
 
 async function parseTechnicalError(response: Response) {
   try {
@@ -101,6 +102,6 @@ export async function tiaRequest<T>(path: string, init: RequestInit = {}, option
   return (await response.json()) as T;
 }
 
-export function getMe() {
+export const getMe = cache(function getMe() {
   return tiaRequest<MeResponse>("/auth/me", {}, { workspace: false });
-}
+});

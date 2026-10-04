@@ -13,6 +13,7 @@ from app.api.dependencies.security import (
     get_workspace_reader,
 )
 from app.database.session import get_db
+from app.models.channel_connection import ChannelConnection
 from app.models.conversation import Conversation
 from app.models.handoff_event import HandoffEvent
 from app.models.handoff_request import HandoffRequest
@@ -36,6 +37,8 @@ from app.schemas.inbox import (
     InboxConversationRead,
     InboxMessageRead,
     InboxPatientRead,
+    InboxRevisionRead,
+    InboxSummaryRead,
     ResolveHandoffRequest,
     StaffReplyRequest,
     StaffReplyResponse,
@@ -177,6 +180,122 @@ def _queue_item(
         assigned_user_name=assigned_user.full_name if assigned_user else None,
         assigned_user_email=assigned_user.email if assigned_user else None,
     )
+
+
+def _revision_value(*parts: object) -> str:
+    return "|".join("" if part is None else str(part) for part in parts)
+
+
+@router.get("/summary", response_model=InboxSummaryRead)
+def inbox_summary(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InboxSummaryRead:
+    unread_conversations = db.scalar(
+        select(func.count())
+        .select_from(Conversation)
+        .where(
+            Conversation.workspace_id == access.workspace.id,
+            Conversation.status == "open",
+            Conversation.unread_count > 0,
+        )
+    )
+    return InboxSummaryRead(unread_conversations=int(unread_conversations or 0))
+
+
+@router.get("/revision", response_model=InboxRevisionRead)
+def inbox_revision(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    conversation_id: UUID | None = None,
+) -> InboxRevisionRead:
+    workspace_id = access.workspace.id
+
+    if conversation_id is None:
+        conversation_count = (
+            select(func.count())
+            .select_from(Conversation)
+            .where(Conversation.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        conversation_updated = (
+            select(func.max(Conversation.updated_at))
+            .where(Conversation.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        handoff_updated = (
+            select(func.max(HandoffRequest.updated_at))
+            .where(HandoffRequest.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        connection_updated = (
+            select(func.max(ChannelConnection.updated_at))
+            .where(ChannelConnection.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        row = db.execute(
+            select(
+                conversation_count,
+                conversation_updated,
+                handoff_updated,
+                connection_updated,
+            )
+        ).one()
+        return InboxRevisionRead(revision=_revision_value(*row))
+
+    conversation_updated = (
+        select(Conversation.updated_at)
+        .where(
+            Conversation.workspace_id == workspace_id,
+            Conversation.id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    message_count = (
+        select(func.count())
+        .select_from(Message)
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.conversation_id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    message_updated = (
+        select(func.max(Message.updated_at))
+        .where(
+            Message.workspace_id == workspace_id,
+            Message.conversation_id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    handoff_updated = (
+        select(func.max(HandoffRequest.updated_at))
+        .where(
+            HandoffRequest.workspace_id == workspace_id,
+            HandoffRequest.conversation_id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    handoff_event_created = (
+        select(func.max(HandoffEvent.created_at))
+        .where(
+            HandoffEvent.workspace_id == workspace_id,
+            HandoffEvent.conversation_id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    row = db.execute(
+        select(
+            conversation_updated,
+            message_count,
+            message_updated,
+            handoff_updated,
+            handoff_event_created,
+        )
+    ).one()
+    if row[0] is None:
+        raise _not_found("Conversation")
+    return InboxRevisionRead(revision=_revision_value(*row))
 
 
 @router.get("/conversations", response_model=list[InboxConversationListItem])

@@ -71,6 +71,7 @@ function activeFor(pathname: string, href: string) {
 }
 
 function useInboxUnreadCount(mediaQuery: string) {
+  const pathname = usePathname();
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
@@ -78,7 +79,12 @@ function useInboxUnreadCount(mediaQuery: string) {
     let cancelled = false;
 
     const refresh = async () => {
-      if (cancelled || !media.matches || document.visibilityState !== "visible") return;
+      if (
+        cancelled ||
+        !media.matches ||
+        document.visibilityState !== "visible" ||
+        pathname.startsWith("/inbox")
+      ) return;
 
       try {
         const response = await fetch("/api/inbox/summary", { cache: "no-store" });
@@ -108,7 +114,7 @@ function useInboxUnreadCount(mediaQuery: string) {
       media.removeEventListener("change", refreshWhenRelevant);
       document.removeEventListener("visibilitychange", refreshWhenRelevant);
     };
-  }, [mediaQuery]);
+  }, [mediaQuery, pathname]);
 
   return unreadCount;
 }

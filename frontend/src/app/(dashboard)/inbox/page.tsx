@@ -154,9 +154,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   if (filters.unread) query.set("unread_only", "true");
   if (filters.q) query.set("q", filters.q);
 
-  const [conversationPage, channelConnections] = await Promise.all([
+  const [conversationPage, channelConnections, revision] = await Promise.all([
     tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`),
     tiaRequest<InboxChannelConnection[]>("/channels/connections").catch(() => []),
+    tiaRequest<{ revision: string }>("/inbox/revision"),
   ]);
   const hasNextPage = conversationPage.length > PAGE_SIZE;
   const conversations = conversationPage.slice(0, PAGE_SIZE);
@@ -164,7 +165,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <LiveRouteRefresh />
+      <LiveRouteRefresh initialRevision={revision.revision} watchUrl="/api/inbox/revision" intervalMs={5000} />
       <PageHeader
         title="الرسائل"
         description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Linka والمحادثات التي تحتاج تدخل الفريق."

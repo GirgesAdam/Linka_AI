@@ -65,9 +65,12 @@ export default async function ConversationPage({
   searchParams: Promise<{ followup?: string }>;
 }) {
   const [{ conversationId }, query] = await Promise.all([params, searchParams]);
-  const [conversation, ctx] = await Promise.all([
+  const [conversation, ctx, revision] = await Promise.all([
     tiaRequest<InboxConversation>(`/inbox/conversations/${conversationId}`),
     getAppContext(),
+    tiaRequest<{ revision: string }>(
+      `/inbox/revision?conversation_id=${encodeURIComponent(conversationId)}`,
+    ),
   ]);
   const members =
     ctx.workspace.role === "admin"
@@ -88,7 +91,10 @@ export default async function ConversationPage({
 
   return (
     <>
-      <LiveRouteRefresh />
+      <LiveRouteRefresh
+        initialRevision={revision.revision}
+        watchUrl={`/api/inbox/revision?conversation_id=${encodeURIComponent(conversationId)}`}
+      />
       <ConversationReadMarker
         conversationId={conversation.id}
         unreadCount={conversation.unread_count}
