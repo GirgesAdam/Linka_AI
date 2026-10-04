@@ -144,7 +144,9 @@ def _terminal_no_reply_allowed(
         return False
     if active_task is not None or pending_choice is not None or understanding.safety_signals:
         return False
-    if not understanding.operations or any(operation.type != "social" for operation in understanding.operations):
+    if not understanding.operations:
+        return True
+    if any(operation.type != "social" for operation in understanding.operations):
         return False
     return all(
         operation.automation_context_relationship == "none"
@@ -1683,9 +1685,6 @@ def orchestrate_v2_turn(
             pending_choice=outgoing_pending_choice,
         )
 
-    if not outcomes:
-        raise RuntimeError("V2 runtime produced neither a customer outcome nor a pending write.")
-
     if _terminal_no_reply_allowed(
         understanding,
         active_task=current_task,
@@ -1704,6 +1703,9 @@ def orchestrate_v2_turn(
             verified_action_context=completed_action_context,
             pending_choice=outgoing_pending_choice,
         )
+
+    if not outcomes:
+        raise RuntimeError("V2 runtime produced neither a customer outcome nor a pending write.")
 
     availability_continuation = _availability_presentation_continuation(
         understanding, plan, recent_read_context

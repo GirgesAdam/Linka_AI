@@ -1220,7 +1220,7 @@ def advance_step_after_verification(
                 update={
                     "disposition": "clarify",
                     "clarification_field": field,
-                    "response_goal": "ask_doctor_choice" if field == "doctor" else "clarification",
+                    "response_goal": "clarification",
                 }
             )
         return step

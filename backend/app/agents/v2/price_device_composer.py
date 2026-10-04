@@ -66,9 +66,24 @@ def _latest_customer_index(history: list[BaseMessage]) -> int | None:
 
 
 def _latest_customer_is_arabic(history: list[BaseMessage]) -> bool:
-    index = _latest_customer_index(history)
-    text = _message_text(history[index]) if index is not None else ""
-    return any("\u0600" <= char <= "\u06ff" for char in text)
+    arabic_weight = 0
+    latin_weight = 0
+    seen = 0
+    for message in reversed(history):
+        if not isinstance(message, HumanMessage):
+            continue
+        text = _message_text(message)
+        if not text:
+            continue
+        weight = max(1, len(text.split()))
+        if any("\u0600" <= char <= "\u06ff" for char in text):
+            arabic_weight += weight
+        elif any(("a" <= char.casefold() <= "z") for char in text):
+            latin_weight += weight
+        seen += 1
+        if seen >= 4:
+            break
+    return arabic_weight >= latin_weight and arabic_weight > 0
 
 
 def _option_refs(unit_index: int, unit: CustomerResponseUnit) -> list[str]:

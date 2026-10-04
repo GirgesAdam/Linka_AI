@@ -17,6 +17,7 @@ from app.agents.model_provider import (
 )
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.agents.v2.availability_pagination import select_availability_window_page
+from app.agents.v2.customer_datetime import format_customer_date
 from app.core.config import settings
 from app.services.agent_v2.response_contract import (
     AVAILABILITY_STATE_BY_GOAL,
@@ -324,23 +325,7 @@ def _clock(value: object, *, arabic: bool) -> str:
 
 
 def _date_text(value: object, *, arabic: bool) -> str:
-    if isinstance(value, str):
-        raw = value[:10]
-    else:
-        raw = str(value)[:10]
-    try:
-        parsed = date.fromisoformat(raw)
-    except ValueError:
-        return str(value)
-    if arabic:
-        return (
-            f"{_AR_WEEKDAYS[parsed.weekday()]} "
-            f"{parsed.day} {_AR_MONTHS[parsed.month]} {parsed.year}"
-        )
-    return (
-        f"{_EN_WEEKDAYS[parsed.weekday()]}, "
-        f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
-    )
+    return format_customer_date(value, arabic=arabic)
 
 
 def _checked_dates(unit: CustomerResponseUnit) -> list[str]:

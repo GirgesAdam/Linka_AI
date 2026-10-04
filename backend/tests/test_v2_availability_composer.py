@@ -269,8 +269,8 @@ def test_multiple_dates_are_backend_resolved() -> None:
         mode="detailed",
     )
 
-    assert "1 أكتوبر 2026" in text
-    assert "2 أكتوبر 2026" in text
+    assert "1 أكتوبر" in text
+    assert "2 أكتوبر" in text
 
 
 def test_continuous_verified_range_is_described_as_bookable_starts_not_duration() -> None:
@@ -347,10 +347,10 @@ def test_progressive_availability_pages_are_nearest_first_without_repetition() -
     assert len(second_keys) == 2
     assert set(first_keys).isdisjoint(second_keys)
     assert "أقرب المواعيد المتاحة" in first_text
-    assert "1 أكتوبر 2026" in first_text
-    assert "4 أكتوبر 2026" in second_text
-    assert "5 أكتوبر 2026" in second_text
-    assert "1 أكتوبر 2026" not in second_text
+    assert "1 أكتوبر" in first_text
+    assert "4 أكتوبر" in second_text
+    assert "5 أكتوبر" in second_text
+    assert "1 أكتوبر" not in second_text
     assert "كمان متاح عندنا" in second_text
 
 
@@ -397,7 +397,7 @@ def test_requested_exact_time_unavailable_is_explicit_and_backend_resolved() -> 
 
     assert "الساعة 7 مساءً" in text
     assert "مش متاح" in text
-    assert "1 أكتوبر 2026" in text
+    assert "1 أكتوبر" in text
 
 
 def test_runtime_exact_miss_has_no_same_outcome_alternatives() -> None:
@@ -423,11 +423,11 @@ def test_exact_miss_plus_separate_verified_alternative_unit_keeps_both_semantics
 @pytest.mark.parametrize(
     ("checked_dates", "truncated", "expected"),
     [
-        (["2026-10-01"], False, "يوم الخميس 1 أكتوبر 2026"),
+        (["2026-10-01"], False, "يوم الخميس 1 أكتوبر"),
         (
             ["2026-10-01", "2026-10-02", "2026-10-03"],
             False,
-            "من الخميس 1 أكتوبر 2026 لحد السبت 3 أكتوبر 2026",
+            "من الخميس 1 أكتوبر لحد السبت 3 أكتوبر",
         ),
         (
             ["2026-10-01", "2026-10-03"],
@@ -459,7 +459,7 @@ def test_next_available_bounded_zero_search_stays_scoped() -> None:
     dates = [f"2026-10-{day:02d}" for day in range(1, 15)]
     text = _render([_no_availability(dates, search_truncated=True)])
 
-    assert "من الخميس 1 أكتوبر 2026 لحد الأربعاء 14 أكتوبر 2026" in text
+    assert "من الخميس 1 أكتوبر لحد الأربعاء 14 أكتوبر" in text
     assert "بس نطاق البحث اللي اتفحص" in text
 
 

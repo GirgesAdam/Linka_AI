@@ -33,9 +33,9 @@ def test_different_year_customer_date_includes_year() -> None:
     ) == "الاثنين 4 أكتوبر 2027"
 
 
-def test_terminal_social_closing_can_be_no_reply() -> None:
+def test_terminal_empty_semantic_closing_can_be_no_reply() -> None:
     understanding = TiaTurnUnderstanding(
-        operations=[_social()],
+        operations=[],
         safety_signals=[],
         response_disposition="no_reply",
     )

@@ -544,8 +544,14 @@ class TiaTurnUnderstanding(StrictContractModel):
 
     @model_validator(mode="after")
     def validate_non_empty_turn(self) -> TiaTurnUnderstanding:
-        if not self.operations and not self.safety_signals:
-            raise ValueError("A turn must contain at least one operation or safety signal.")
+        if (
+            not self.operations
+            and not self.safety_signals
+            and self.response_disposition != "no_reply"
+        ):
+            raise ValueError(
+                "A turn must contain at least one operation, safety signal, or no-reply disposition."
+            )
         if len(self.operations) > 6:
             raise ValueError("A customer turn cannot produce more than six operations.")
         return self

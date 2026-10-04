@@ -846,6 +846,16 @@ def _facts_for_completed_write(facts: dict[str, object], write_kind: str) -> dic
     availability = shaped.get("availability")
     if not isinstance(availability, dict):
         return shaped
+    windows = availability.get("availability_windows")
+    if isinstance(windows, list) and len(windows) == 1 and isinstance(windows[0], dict):
+        window = windows[0]
+        for source, target in (
+            ("doctor_name", "doctor_name"),
+            ("laser_device_name", "device_name"),
+            ("start_local", "start_local"),
+        ):
+            if shaped.get(target) in (None, "") and window.get(source) not in (None, ""):
+                shaped[target] = window[source]
     visible_availability = dict(availability)
     windows = visible_availability.get("availability_windows")
     if isinstance(windows, list):
@@ -1149,6 +1159,26 @@ def build_step_outcome(
         )
 
     if step.disposition == "clarify":
+        if step.clarification_field == "doctor" and reads is not None:
+            availability = next(
+                (
+                    result
+                    for result in reads.results
+                    if result.kind == "availability" and result.ok
+                ),
+                None,
+            )
+            raw_slots = availability.payload.get("slots") if availability is not None else None
+            if isinstance(raw_slots, list):
+                doctor_names = sorted(
+                    {
+                        str(slot.get("doctor_name") or "").strip()
+                        for slot in raw_slots
+                        if isinstance(slot, dict) and str(slot.get("doctor_name") or "").strip()
+                    }
+                )
+                if doctor_names:
+                    base_facts["doctor_names"] = doctor_names
         choices = _clarification_choices(
             step=step,
             turn=turn,
