@@ -204,6 +204,7 @@ def operation_relationship(cap):
         understanding = trace.get("understanding") or {}
         for op in understanding.get("operations") or []:
             if isinstance(op, dict):
+                entities = op.get("entities") if isinstance(op.get("entities"), dict) else {}
                 values.append(
                     {
                         "type": op.get("type"),
@@ -212,6 +213,8 @@ def operation_relationship(cap):
                         "fresh_task": op.get("fresh_task"),
                         "fresh_task_explicit_fields": op.get("fresh_task_explicit_fields"),
                         "continues_previous": op.get("continues_previous"),
+                        "date": entities.get("date"),
+                        "time": entities.get("time"),
                     }
                 )
     return values
@@ -974,8 +977,8 @@ def run_r5_completed_reminder_ack(db, ws):
     }
 
 
-def run_r6_reminder_reschedule(db, ws, under, youssef, branch_id):
-    p = patient(db, ws, "R6")
+def _reminder_reschedule_fixture(db, ws, label, under, youssef, branch_id):
+    p = patient(db, ws, label)
     appointment = _seed_appointment(
         db,
         ws,
@@ -985,7 +988,7 @@ def run_r6_reminder_reschedule(db, ws, under, youssef, branch_id):
         branch_id,
         day=datetime(2026, 10, 8, tzinfo=TZ).date(),
     )
-    c = Conversation("R6", db, ws, p, RESUME_START)
+    c = Conversation(label, db, ws, p, RESUME_START)
     c.send("ميعادي الجاي امتى؟")
     automation = _inject_automation(
         db,
@@ -993,22 +996,19 @@ def run_r6_reminder_reschedule(db, ws, under, youssef, branch_id):
         c,
         appointment,
         rule_key="appointment_reminder_6h",
-        content="فكرك بميعادك النهاردة.",
+        # Deliberately misleading prose: lifecycle identity/date must come from
+        # server-owned verified metadata, never from template text.
+        content="تذكير تجريبي: بكرة الساعة 9.",
+    )
+    return p, appointment, c, automation
+
+
+def run_r6_reminder_reschedule(db, ws, under, youssef, branch_id):
+    p, appointment, c, automation = _reminder_reschedule_fixture(
+        db, ws, "R6", under, youssef, branch_id
     )
     c.send("ممكن أخليه الساعة 6؟")
-    first_action_task = c.turns[-1]["active_task"]
-    # If normal reschedule flow asks for the implied date explicitly, answer naturally.
-    if c.turns[-1]["active_task"] is not None and "booking_completed" not in c.turns[-1]["goals"] and "reschedule_completed" not in c.turns[-1]["goals"]:
-        needed = []
-        for action in c.turns[-1].get("actions") or []:
-            if isinstance(action, dict):
-                needed.append(action)
-        reply = c.turns[-1]["linka"] or ""
-        if "يوم" in reply or "تاريخ" in reply:
-            c.send("نفس اليوم")
-        if "reschedule_completed" not in c.turns[-1]["goals"] and c.turns[-1]["active_task"] is not None:
-            # Selection/confirmation of the verified exact-time option.
-            c.send("الساعة 6")
+    action_turn = c.turns[-1]
     final = state_snapshot(db, ws, p)
     target_after = next(
         (
@@ -1022,11 +1022,54 @@ def run_r6_reminder_reschedule(db, ws, under, youssef, branch_id):
         "id": "R6",
         "automation": automation,
         "target_appointment_id": str(appointment.id),
-        "first_action_task": first_action_task,
+        "original_local_date": appointment.start_at.astimezone(TZ).date().isoformat(),
+        "action_turn": action_turn,
         "turns": c.turns,
         "writes": sum(bool(t.get("write_attempted")) for t in c.turns),
         "target_after": target_after,
         "db_after": final,
+    }
+
+
+def run_r6a_reminder_reschedule_unspecified(db, ws, under, youssef, branch_id):
+    p, appointment, c, automation = _reminder_reschedule_fixture(
+        db, ws, "R6A", under, youssef, branch_id
+    )
+    c.send("عايز أغير الميعاد")
+    action_turn = c.turns[-1]
+    return {
+        "id": "R6A",
+        "automation": automation,
+        "target_appointment_id": str(appointment.id),
+        "action_turn": action_turn,
+        "active_task_after": action_turn["active_task"],
+        "fields_after": _fields(action_turn["active_task"]),
+        "turns": c.turns,
+        "writes": sum(bool(t.get("write_attempted")) for t in c.turns),
+        "db_after": state_snapshot(db, ws, p),
+    }
+
+
+def run_r6b_reminder_reschedule_explicit_date(db, ws, under, youssef, branch_id):
+    p, appointment, c, automation = _reminder_reschedule_fixture(
+        db, ws, "R6B", under, youssef, branch_id
+    )
+    c.send("خليه بكرة الساعة 6")
+    action_turn = c.turns[-1]
+    return {
+        "id": "R6B",
+        "automation": automation,
+        "target_appointment_id": str(appointment.id),
+        "original_local_date": appointment.start_at.astimezone(TZ).date().isoformat(),
+        "expected_explicit_date": (
+            RESUME_START.astimezone(TZ).date() + timedelta(days=1)
+        ).isoformat(),
+        "action_turn": action_turn,
+        "active_task_after": action_turn["active_task"],
+        "fields_after": _fields(action_turn["active_task"]),
+        "turns": c.turns,
+        "writes": sum(bool(t.get("write_attempted")) for t in c.turns),
+        "db_after": state_snapshot(db, ws, p),
     }
 
 
@@ -1199,10 +1242,17 @@ def assert_task1b_regressions(results):
 
     r6 = by_id["R6"]
     assert r6["automation"]["context_preview"]["automation_context"]["appointment_id"] == r6["target_appointment_id"]
-    # The first lifecycle action after the reminder must be grounded to reminder metadata.
-    reminder_turn = next(t for t in r6["turns"] if t["customer"] == "ممكن أخليه الساعة 6؟")
-    assert reminder_turn["operations"][0]["automation_context_relationship"] == "appointment_action"
+    reminder_turn = r6["action_turn"]
+    operation = reminder_turn["operations"][0]
+    assert operation["automation_context_relationship"] == "appointment_action"
+    assert operation["date"]["mode"] == "exact"
+    assert operation["date"]["start_date"] == r6["original_local_date"]
+    assert operation["time"]["mode"] == "exact"
+    assert operation["time"]["start_time"] == "18:00"
     assert any("appointments" in read for read in reminder_turn["verified_reads"])
+    assert any("availability" in read for read in reminder_turn["verified_reads"])
+    assert "reschedule_completed" in reminder_turn["goals"]
+    assert r6["writes"] == 1
     assert r6["target_after"] is not None
     assert r6["target_after"]["status"] == "rescheduled"
     replacement = next(
@@ -1263,6 +1313,10 @@ try:
         results = [run_r5_completed_reminder_ack(db, ws)]
     elif mode == "task1b_r6":
         results = [run_r6_reminder_reschedule(db, ws, under, youssef, branch_id)]
+    elif mode == "task1b_r6a":
+        results = [run_r6a_reminder_reschedule_unspecified(db, ws, under, youssef, branch_id)]
+    elif mode == "task1b_r6b":
+        results = [run_r6b_reminder_reschedule_explicit_date(db, ws, under, youssef, branch_id)]
     elif mode == "task1b_r7":
         results = [run_r7_active_booking_unrelated_reminder(db, ws, under, mary, branch_id)]
     elif mode == "task1b_r8":
