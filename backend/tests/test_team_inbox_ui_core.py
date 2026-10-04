@@ -163,10 +163,32 @@ def test_inbox_idle_refresh_uses_lightweight_revision_and_count_paths() -> None:
     assert 'conversation_id=' in detail_page and '/inbox/revision?' in detail_page
     assert 'fetch(watchUrl' in live_refresh
     assert 'payload.revision !== currentRevision' in live_refresh
+    assert 'document.visibilityState === "hidden"' in live_refresh
+    assert 'controller?.abort()' in live_refresh
     assert 'router.refresh()' in live_refresh
     assert 'tiaRequest<InboxSummary>("/inbox/summary")' in summary_route
     assert 'unread_only=true' not in summary_route
     assert 'pathname.startsWith("/inbox")' in navigation
+
+
+def test_inbox_revision_is_captured_before_page_data_to_avoid_stale_acceptance() -> None:
+    root = _root()
+    list_page = (root / "frontend/src/app/(dashboard)/inbox/page.tsx").read_text(encoding="utf-8")
+    detail_page = (root / "frontend/src/app/(dashboard)/inbox/[conversationId]/page.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    list_revision = list_page.index(
+        'const revision = await tiaRequest<{ revision: string }>("/inbox/revision")'
+    )
+    list_data = list_page.index("const [conversationPage, channelConnections] = await Promise.all")
+    assert list_revision < list_data
+
+    detail_revision = detail_page.index(
+        "const revision = await tiaRequest<{ revision: string }>("
+    )
+    detail_data = detail_page.index("const [conversation, ctx] = await Promise.all")
+    assert detail_revision < detail_data
 
 
 def test_inbox_revision_covers_visible_list_delivery_patient_and_assignee_state() -> None:
