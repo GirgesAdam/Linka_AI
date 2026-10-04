@@ -29,7 +29,7 @@ from app.agents.v2.turn_interpreter import (
 from app.models.message import Message
 from app.services.agent_v2.active_task_progress import adapt_matching_active_task_step
 from app.services.agent_v2.live_chat import _recent_verified_action_context_from_outbounds
-from app.services.agent_v2.planner import PlanStep, PlannerContext, plan_turn
+from app.services.agent_v2.planner import PlannerContext, PlanStep, plan_turn
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
