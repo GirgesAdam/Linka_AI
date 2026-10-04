@@ -60,6 +60,7 @@ SameTurnServiceSource = Literal["none", "verified_appointment"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
 AutomationContextRelationship = Literal["none", "acknowledge", "appointment_action", "next_session"]
+AppointmentActionExplicitField = Literal["date", "time"]
 FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
 
@@ -347,6 +348,16 @@ class TurnOperation(StrictContractModel):
             "automation metadata."
         ),
     )
+    appointment_action_explicit_fields: list[AppointmentActionExplicitField] = Field(
+        default_factory=list,
+        description=(
+            "For automation_context_relationship=appointment_action with reschedule only, list date "
+            "and/or time exactly when that replacement dimension is explicitly supplied in the latest "
+            "customer message. Never mark a dimension copied or inferred from automation_context, "
+            "template prose, assistant prose, or older dialogue. Python uses this list to distinguish "
+            "a true time-only edit from an unspecified reschedule request."
+        ),
+    )
     fresh_task: bool = Field(
         default=False,
         description=(
@@ -424,7 +435,12 @@ class TurnOperation(StrictContractModel):
 
     @model_validator(mode="after")
     def validate_automation_context_relationship(self) -> TurnOperation:
+        explicit = set(self.appointment_action_explicit_fields)
         if self.automation_context_relationship == "none":
+            if explicit:
+                raise ValueError(
+                    "appointment_action_explicit_fields requires appointment_action automation context."
+                )
             return self
         if self.automation_context_relationship == "appointment_action" and self.type not in {
             "reschedule",
@@ -438,6 +454,30 @@ class TurnOperation(StrictContractModel):
             raise ValueError("next_session automation context is only valid for book.")
         if self.automation_context_relationship == "acknowledge" and self.execution_intent != "informational":
             raise ValueError("automation acknowledgement must remain informational/read-only.")
+        if explicit:
+            if (
+                self.automation_context_relationship != "appointment_action"
+                or self.type != "reschedule"
+            ):
+                raise ValueError(
+                    "appointment_action_explicit_fields is only valid for reminder-linked reschedule."
+                )
+            if ("date" in explicit) != (self.entities.date is not None):
+                raise ValueError(
+                    "appointment_action explicit date marker must match an explicit date entity."
+                )
+            if ("time" in explicit) != (self.entities.time is not None):
+                raise ValueError(
+                    "appointment_action explicit time marker must match an explicit time entity."
+                )
+        elif (
+            self.automation_context_relationship == "appointment_action"
+            and self.type == "reschedule"
+            and (self.entities.date is not None or self.entities.time is not None)
+        ):
+            raise ValueError(
+                "Reminder-linked replacement date/time entities require explicit-field markers."
+            )
         return self
 
     @model_validator(mode="after")
