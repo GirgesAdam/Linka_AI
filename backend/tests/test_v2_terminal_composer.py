@@ -41,7 +41,7 @@ def test_customer_datetime_formatter_uses_workspace_timezone() -> None:
         timezone_name="Africa/Cairo",
     )
 
-    assert text == "5 أكتوبر 2026 الساعة 10 صباحًا"
+    assert text == "الاثنين 5 أكتوبر 2026 الساعة 10 صباحًا"
 
 
 

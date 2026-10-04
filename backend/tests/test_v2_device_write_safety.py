@@ -81,28 +81,21 @@ def test_ambiguous_device_is_clarified_before_availability_or_write() -> None:
     assert step.write_intent is None
 
 
-def test_laser_booking_single_slot_without_verified_device_never_writes() -> None:
+def test_laser_booking_without_device_never_reaches_availability_or_write() -> None:
     turn = TiaTurnUnderstanding(operations=[_booking()], safety_signals=[])
     step = plan_turn(turn, _context()).steps[0]
 
-    advanced = advance_step_after_verification(
-        step,
-        VerificationFacts(
-            exact_slot_match_count=1,
-            verified_parameters={
-                "doctor_id": "doctor-maryam",
-                "start_at": "2026-09-12T20:00:00+03:00",
-            },
-        ),
-    )
-
-    assert advanced.disposition == "clarify"
-    assert advanced.clarification_field == "device"
-    assert advanced.write_intent is not None
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.write_intent is None
 
 
 def test_laser_booking_single_slot_with_verified_device_can_write() -> None:
-    turn = TiaTurnUnderstanding(operations=[_booking()], safety_signals=[])
+    turn = TiaTurnUnderstanding(
+        operations=[_booking(device=EntityReference(ref="V1"))],
+        safety_signals=[],
+    )
     step = plan_turn(turn, _context()).steps[0]
 
     advanced = advance_step_after_verification(
@@ -122,22 +115,24 @@ def test_laser_booking_single_slot_with_verified_device_can_write() -> None:
     assert advanced.write_intent.parameters["device_key"] == "candela"
 
 
-def test_multiple_laser_slots_with_fixed_doctor_clarify_device() -> None:
+def test_multi_device_laser_booking_requires_device_price_step_before_slots() -> None:
     turn = TiaTurnUnderstanding(operations=[_booking()], safety_signals=[])
     step = plan_turn(turn, _context()).steps[0]
 
-    advanced = advance_step_after_verification(
-        step,
-        VerificationFacts(exact_slot_match_count=2),
-    )
-
-    assert advanced.disposition == "clarify"
-    assert advanced.clarification_field == "device"
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.write_intent is None
 
 
 def test_multiple_laser_slots_without_doctor_still_clarify_doctor_first() -> None:
     turn = TiaTurnUnderstanding(
-        operations=[_booking(doctor_ref=None)],
+        operations=[
+            _booking(
+                doctor_ref=None,
+                device=EntityReference(ref="V1"),
+            )
+        ],
         safety_signals=[],
     )
     step = plan_turn(turn, _context()).steps[0]

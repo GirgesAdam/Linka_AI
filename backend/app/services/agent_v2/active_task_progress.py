@@ -428,6 +428,26 @@ def _booking_progress(
             clarification_field="service",
             facts=params,
         )
+    requires_device = _service_requires_device(service_id, context)
+    if requires_device and state.constraints.device_key is None:
+        return PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="read",
+            reads=[
+                ReadRequest(
+                    kind="service_catalog",
+                    parameters={"service_id": service_id},
+                )
+            ],
+            state_action="update_active",
+            response_goal="answer_price",
+            facts={
+                **params,
+                "service_requires_laser_device": True,
+                "booking_device_price_step": True,
+            },
+        )
     if state.constraints.date is None:
         return PlanStep(
             operation_index=operation_index,
@@ -440,7 +460,6 @@ def _booking_progress(
         )
 
     exact_time = state.constraints.time is not None and state.constraints.time.mode == "exact"
-    requires_device = _service_requires_device(service_id, context)
     return PlanStep(
         operation_index=operation_index,
         operation_type="book",

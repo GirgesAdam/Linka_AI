@@ -228,7 +228,7 @@ def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> se
     except IndexError:
         return set()
     details = set(operation.requested_service_details)
-    if operation.type == "pricing":
+    if operation.type == "pricing" or step.response_goal == "answer_price":
         details.add("price")
     if operation.type == "service_info" and not details:
         details.add("description")

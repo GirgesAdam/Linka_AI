@@ -224,7 +224,7 @@ def test_initial_booking_clarification_is_marked_for_state_persistence() -> None
     assert persisted.facts["service_id"] == "svc-underarm"
 
 
-def test_booking_progress_asks_only_for_missing_date() -> None:
+def test_booking_progress_presents_verified_device_prices_before_date() -> None:
     state = BookingTaskState(
         write_authorization=_authorization(),
         constraints=CustomerConstraints(service_id="svc-underarm"),
@@ -232,9 +232,12 @@ def test_booking_progress_asks_only_for_missing_date() -> None:
 
     step = plan_active_task_progress(state, operation_index=0, context=_context())
 
-    assert step.disposition == "clarify"
-    assert step.clarification_field == "date"
+    assert step.disposition == "read"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.reads[0].parameters == {"service_id": "svc-underarm"}
+    assert step.response_goal == "answer_price"
     assert step.state_action == "update_active"
+    assert step.facts["booking_device_price_step"] is True
 
 
 def test_booking_progress_reads_availability_once_service_and_date_are_known() -> None:
@@ -242,6 +245,7 @@ def test_booking_progress_reads_availability_once_service_and_date_are_known() -
         write_authorization=_authorization(),
         constraints=CustomerConstraints(
             service_id="svc-underarm",
+            device_key="candela_gentle",
             date=DateConstraint(mode="exact", start_date="2026-09-12"),
             time=TimeConstraint(mode="after", start_time="18:00"),
         ),
@@ -265,6 +269,7 @@ def test_exact_time_is_planned_for_verification_not_immediate_success() -> None:
         write_authorization=_authorization(),
         constraints=CustomerConstraints(
             service_id="svc-underarm",
+            device_key="candela_gentle",
             date=DateConstraint(mode="exact", start_date="2026-09-12"),
             time=TimeConstraint(mode="exact", start_time="19:00"),
         ),

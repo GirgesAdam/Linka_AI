@@ -865,12 +865,12 @@ def run_r2_next_day_resume(db, ws):
         c.send(message)
     before = c.turns[-1]["active_task"]
     flow_before = _raw_flow_snapshot(db, ws, c.cid)
-    c.set_now(RESUME_START + timedelta(hours=18))
+    c.set_now(RESUME_START + timedelta(hours=50))
     c.send("طب بعد الساعة 6؟")
     after = c.turns[-1]["active_task"]
     return {
         "id": "R2",
-        "time_gap": "18 hours / next calendar day / within configured TTL",
+        "time_gap": "50 hours / beyond legacy 24h / within booking TTL",
         "flow_before": flow_before,
         "flow_after": _raw_flow_snapshot(db, ws, c.cid),
         "active_task_before": before,
@@ -901,14 +901,14 @@ def _expired_booking_fixture(db, ws, label):
 
 def run_r3_expired_flow(db, ws):
     p, c, before, flow_before, old_flow_id = _expired_booking_fixture(db, ws, "R3")
-    c.set_now(RESUME_START + timedelta(hours=settings.agent_flow_ttl_hours + 2))
+    c.set_now(RESUME_START + timedelta(hours=settings.agent_booking_flow_ttl_hours + 2))
     c.send("عايز احجز")
     after = c.turns[-1]["active_task"]
     old_flow = db.get(ConversationFlowState, UUID(old_flow_id))
     return {
         "id": "R3",
-        "time_gap": f">{settings.agent_flow_ttl_hours}h configured flow TTL",
-        "configured_ttl_hours": settings.agent_flow_ttl_hours,
+        "time_gap": f">{settings.agent_booking_flow_ttl_hours}h configured booking TTL",
+        "configured_ttl_hours": settings.agent_booking_flow_ttl_hours,
         "flow_before": flow_before,
         "expired_flow": {
             "id": old_flow_id,
@@ -927,14 +927,14 @@ def run_r3_expired_flow(db, ws):
 
 def run_r4_expired_explicit_service(db, ws):
     p, c, before, flow_before, old_flow_id = _expired_booking_fixture(db, ws, "R4")
-    c.set_now(RESUME_START + timedelta(hours=settings.agent_flow_ttl_hours + 2))
+    c.set_now(RESUME_START + timedelta(hours=settings.agent_booking_flow_ttl_hours + 2))
     c.send("عايز أكمل حجز Under Arm")
     after = c.turns[-1]["active_task"]
     old_flow = db.get(ConversationFlowState, UUID(old_flow_id))
     return {
         "id": "R4",
-        "time_gap": f">{settings.agent_flow_ttl_hours}h configured flow TTL",
-        "configured_ttl_hours": settings.agent_flow_ttl_hours,
+        "time_gap": f">{settings.agent_booking_flow_ttl_hours}h configured booking TTL",
+        "configured_ttl_hours": settings.agent_booking_flow_ttl_hours,
         "flow_before": flow_before,
         "expired_flow": {
             "id": old_flow_id,

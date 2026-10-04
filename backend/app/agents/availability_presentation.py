@@ -6,6 +6,16 @@ from typing import Any
 
 from app.services.laser_slot_metadata import decode_laser_slot_branch
 
+_ARABIC_WEEKDAYS = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+
 
 def _parse_dt(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -26,7 +36,7 @@ def _display_date(value: object) -> str:
             parsed = datetime.fromisoformat(f"{value}T00:00:00")
         except ValueError:
             return str(value)
-    return parsed.strftime("%d/%m/%Y")
+    return f"{_ARABIC_WEEKDAYS[parsed.weekday()]} {parsed.day:02d}/{parsed.month:02d}/{parsed.year}"
 
 
 def _clock_ar(value: datetime) -> str:

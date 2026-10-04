@@ -21,6 +21,13 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def flow_ttl_hours(flow_type: str) -> int:
+    """Return the authority lifetime for a persisted conversational flow."""
+    if flow_type == "booking":
+        return settings.agent_booking_flow_ttl_hours
+    return settings.agent_flow_ttl_hours
+
+
 def _add_event(
     db: Session,
     flow: ConversationFlowState,
@@ -154,7 +161,7 @@ def start_flow(
         option_snapshot={},
         last_decision=last_decision,
         version=1,
-        expires_at=now + timedelta(hours=settings.agent_flow_ttl_hours),
+        expires_at=now + timedelta(hours=flow_ttl_hours(flow_type)),
         last_turn_at=now,
     )
     db.add(flow)
@@ -204,7 +211,7 @@ def transition_flow(
         **changes,
         "version": expected_version + 1,
         "last_turn_at": now,
-        "expires_at": now + timedelta(hours=settings.agent_flow_ttl_hours),
+        "expires_at": now + timedelta(hours=flow_ttl_hours(flow.flow_type)),
     }
 
     result = db.execute(

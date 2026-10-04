@@ -724,15 +724,11 @@ def test_laser_device_requirement_stays_deterministic_outside_model_input() -> N
     step = plan_turn(turn, context).steps[0]
 
     assert step.facts["service_requires_laser_device"] is True
-    clarified = advance_step_after_verification(
-        step,
-        VerificationFacts(
-            exact_slot_match_count=1,
-            verified_parameters={"start_at": "2026-09-17T19:00:00+03:00"},
-        ),
-    )
-    assert clarified.disposition == "clarify"
-    assert clarified.clarification_field == "device"
+    assert step.facts["booking_device_price_step"] is True
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert [read.kind for read in step.reads] == ["service_catalog"]
+    assert step.write_intent is None
 
 
 def test_booking_planner_never_carries_pulse_billing_policy() -> None:

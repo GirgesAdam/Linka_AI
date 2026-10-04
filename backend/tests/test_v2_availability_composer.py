@@ -423,11 +423,11 @@ def test_exact_miss_plus_separate_verified_alternative_unit_keeps_both_semantics
 @pytest.mark.parametrize(
     ("checked_dates", "truncated", "expected"),
     [
-        (["2026-10-01"], False, "يوم 1 أكتوبر 2026"),
+        (["2026-10-01"], False, "يوم الخميس 1 أكتوبر 2026"),
         (
             ["2026-10-01", "2026-10-02", "2026-10-03"],
             False,
-            "من 1 أكتوبر 2026 لحد 3 أكتوبر 2026",
+            "من الخميس 1 أكتوبر 2026 لحد السبت 3 أكتوبر 2026",
         ),
         (
             ["2026-10-01", "2026-10-03"],
@@ -459,7 +459,7 @@ def test_next_available_bounded_zero_search_stays_scoped() -> None:
     dates = [f"2026-10-{day:02d}" for day in range(1, 15)]
     text = _render([_no_availability(dates, search_truncated=True)])
 
-    assert "من 1 أكتوبر 2026 لحد 14 أكتوبر 2026" in text
+    assert "من الخميس 1 أكتوبر 2026 لحد الأربعاء 14 أكتوبر 2026" in text
     assert "بس نطاق البحث اللي اتفحص" in text
 
 

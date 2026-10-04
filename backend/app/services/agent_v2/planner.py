@@ -778,10 +778,29 @@ def _plan_operation(
             return _clarify(index=index, operation=operation, field="doctor", goal="ask_doctor_choice")
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
+        requires_device = _service_requires_laser_device(operation, context)
+        if requires_device and "device_key" not in params:
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="read",
+                reads=[
+                    ReadRequest(
+                        kind="service_catalog",
+                        parameters={"service_id": params["service_id"]},
+                    )
+                ],
+                state_action="start_booking",
+                response_goal="answer_price",
+                facts={
+                    **params,
+                    "service_requires_laser_device": True,
+                    "booking_device_price_step": True,
+                },
+            )
         if "date" not in params:
             return _clarify(index=index, operation=operation, field="date")
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
-        requires_device = _service_requires_laser_device(operation, context)
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,

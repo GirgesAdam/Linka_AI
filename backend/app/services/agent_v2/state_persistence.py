@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.conversation_flow_event import ConversationFlowEvent
 from app.models.conversation_flow_state import ConversationFlowState
 from app.services.agent_v2.state import (
@@ -21,6 +20,7 @@ from app.services.conversation_flows import (
     FlowStateConflictError,
     cancel_flow,
     complete_flow,
+    flow_ttl_hours,
     get_active_flow,
     transition_flow,
 )
@@ -271,7 +271,7 @@ def _create_active_task(
         option_snapshot=_option_snapshot_for_task(active_task),
         last_decision=_last_decision_for_task(active_task),
         version=1,
-        expires_at=now + timedelta(hours=settings.agent_flow_ttl_hours),
+        expires_at=now + timedelta(hours=flow_ttl_hours(_flow_type_for_task(active_task))),
         last_turn_at=now,
     )
 

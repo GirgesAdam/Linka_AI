@@ -637,6 +637,50 @@ def test_normal_service_pricing_is_derived_from_verified_read(
     assert service["price"] == expected
 
 
+def test_booking_answer_price_goal_exposes_verified_service_price() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text="PRP للبشرة", ref="S1", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-1"})],
+        response_goal="answer_price",
+        facts={"service_id": "service-1"},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-1",
+                        "name": "PRP للبشرة",
+                        "price_minor": 200_000,
+                        "currency": "EGP",
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+
+    assert outcome.facts["service_catalog"]["service"]["price"] == "2000.00 EGP"
+
+
 def test_selected_laser_device_price_uses_matching_verified_device() -> None:
     operation = TurnOperation(
         type="pricing",

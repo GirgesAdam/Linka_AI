@@ -192,6 +192,25 @@ _ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
     },
 }
 
+_ARABIC_WEEKDAYS = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+_ENGLISH_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
 _ARABIC_MONTHS = {
     1: "يناير",
     2: "فبراير",
@@ -451,8 +470,14 @@ def _format_date(value: object, *, arabic: bool) -> str:
     if parsed is None:
         return str(value)
     if arabic:
-        return f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
-    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+        return (
+            f"{_ARABIC_WEEKDAYS[parsed.weekday()]} "
+            f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
+        )
+    return (
+        f"{_ENGLISH_WEEKDAYS[parsed.weekday()]}, "
+        f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+    )
 
 
 def _format_clock(value: object, *, arabic: bool) -> str:
@@ -490,13 +515,19 @@ def format_customer_datetime(
             if timezone_name and parsed.tzinfo is not None:
                 parsed = parsed.astimezone(ZoneInfo(timezone_name))
             if arabic:
-                day = f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
+                day = (
+                    f"{_ARABIC_WEEKDAYS[parsed.weekday()]} "
+                    f"{parsed.day} {_ARABIC_MONTHS[parsed.month]} {parsed.year}"
+                )
                 clock = _format_clock(
                     f"{parsed.hour:02d}:{parsed.minute:02d}",
                     arabic=True,
                 )
                 return f"{day} الساعة {clock}"
-            day = f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+            day = (
+                f"{_ENGLISH_WEEKDAYS[parsed.weekday()]}, "
+                f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+            )
             clock = _format_clock(
                 f"{parsed.hour:02d}:{parsed.minute:02d}",
                 arabic=False,

@@ -70,6 +70,24 @@ _ALLOWED_CLOSING_BY_STATE: dict[str, frozenset[str]] = {
     "no_availability": frozenset({"offer_other_scope", "none"}),
 }
 
+_AR_WEEKDAYS = (
+    "الاثنين",
+    "الثلاثاء",
+    "الأربعاء",
+    "الخميس",
+    "الجمعة",
+    "السبت",
+    "الأحد",
+)
+_EN_WEEKDAYS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
 _AR_MONTHS = {
     1: "يناير",
     2: "فبراير",
@@ -315,8 +333,14 @@ def _date_text(value: object, *, arabic: bool) -> str:
     except ValueError:
         return str(value)
     if arabic:
-        return f"{parsed.day} {_AR_MONTHS[parsed.month]} {parsed.year}"
-    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+        return (
+            f"{_AR_WEEKDAYS[parsed.weekday()]} "
+            f"{parsed.day} {_AR_MONTHS[parsed.month]} {parsed.year}"
+        )
+    return (
+        f"{_EN_WEEKDAYS[parsed.weekday()]}, "
+        f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+    )
 
 
 def _checked_dates(unit: CustomerResponseUnit) -> list[str]:
@@ -565,7 +589,7 @@ def _render_present(
         raise AvailabilityComposerValidationError(
             "options_available requires renderable verified windows."
         )
-    parts = [f"{intro}:", *rows]
+    parts = [f"{intro}:", *[f"• {row}" for row in rows]]
     if draft.closing_action == "ask_selection":
         parts.append(
             "أنهي وقت أنسب لك؟"
