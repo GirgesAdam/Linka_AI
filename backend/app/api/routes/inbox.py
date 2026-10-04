@@ -21,7 +21,7 @@ from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
 from app.models.user import User
-from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
+from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
 from app.schemas.inbox import (
     ConversationOwnerType,
     ConversationReadReceipt,
@@ -228,6 +228,27 @@ def inbox_revision(
             .where(HandoffRequest.workspace_id == workspace_id)
             .scalar_subquery()
         )
+        message_updated = (
+            select(func.max(Message.updated_at))
+            .where(Message.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        patient_updated = (
+            select(func.max(Patient.updated_at))
+            .join(
+                Conversation,
+                (Conversation.workspace_id == Patient.workspace_id)
+                & (Conversation.patient_id == Patient.id),
+            )
+            .where(Conversation.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
+        assignee_updated = (
+            select(func.max(User.updated_at))
+            .join(Conversation, Conversation.assigned_user_id == User.id)
+            .where(Conversation.workspace_id == workspace_id)
+            .scalar_subquery()
+        )
         connection_updated = (
             select(func.max(ChannelConnection.updated_at))
             .where(ChannelConnection.workspace_id == workspace_id)
@@ -237,6 +258,9 @@ def inbox_revision(
             select(
                 conversation_count,
                 conversation_updated,
+                message_updated,
+                patient_updated,
+                assignee_updated,
                 handoff_updated,
                 connection_updated,
             )
@@ -276,6 +300,39 @@ def inbox_revision(
         )
         .scalar_subquery()
     )
+    patient_updated = (
+        select(Patient.updated_at)
+        .join(
+            Conversation,
+            (Conversation.workspace_id == Patient.workspace_id)
+            & (Conversation.patient_id == Patient.id),
+        )
+        .where(
+            Conversation.workspace_id == workspace_id,
+            Conversation.id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    assignee_updated = (
+        select(User.updated_at)
+        .join(Conversation, Conversation.assigned_user_id == User.id)
+        .where(
+            Conversation.workspace_id == workspace_id,
+            Conversation.id == conversation_id,
+        )
+        .scalar_subquery()
+    )
+    member_updated = (
+        select(func.max(WorkspaceMember.updated_at))
+        .where(WorkspaceMember.workspace_id == workspace_id)
+        .scalar_subquery()
+    )
+    member_user_updated = (
+        select(func.max(User.updated_at))
+        .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+        .where(WorkspaceMember.workspace_id == workspace_id)
+        .scalar_subquery()
+    )
     handoff_event_created = (
         select(func.max(HandoffEvent.created_at))
         .where(
@@ -289,6 +346,10 @@ def inbox_revision(
             conversation_updated,
             message_count,
             message_updated,
+            patient_updated,
+            assignee_updated,
+            member_updated,
+            member_user_updated,
             handoff_updated,
             handoff_event_created,
         )

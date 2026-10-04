@@ -54,22 +54,25 @@ def test_inbox_summary_uses_count_only_query() -> None:
 
 def test_inbox_revision_builds_stable_opaque_workspace_revision() -> None:
     now = datetime(2026, 10, 4, 10, 0, tzinfo=UTC)
-    db = _ExecuteSession((12, now, None, now))
+    db = _ExecuteSession((12, now, now, now, now, None, now))
 
     result = inbox_revision(access=_access(), db=db, conversation_id=None)
 
     assert result.revision.startswith("12|")
-    assert result.revision.count("|") == 3
+    assert result.revision.count("|") == 6
     assert db.statement is not None
     sql = str(db.statement.compile(dialect=postgresql.dialect()))
     assert "max(conversations.updated_at)" in sql
+    assert "max(messages.updated_at)" in sql
+    assert "max(patients.updated_at)" in sql
+    assert "max(users.updated_at)" in sql
     assert "max(handoff_requests.updated_at)" in sql
     assert "max(channel_connections.updated_at)" in sql
 
 
 def test_inbox_revision_tracks_conversation_messages_and_handoffs() -> None:
     now = datetime(2026, 10, 4, 10, 0, tzinfo=UTC)
-    db = _ExecuteSession((now, 9, now, now, now))
+    db = _ExecuteSession((now, 9, now, now, now, now, now, now, now))
 
     result = inbox_revision(access=_access(), db=db, conversation_id=uuid4())
 
@@ -77,5 +80,8 @@ def test_inbox_revision_tracks_conversation_messages_and_handoffs() -> None:
     assert db.statement is not None
     sql = str(db.statement.compile(dialect=postgresql.dialect()))
     assert "max(messages.updated_at)" in sql
+    assert "patients.updated_at" in sql
+    assert "users.updated_at" in sql
+    assert "max(workspace_members.updated_at)" in sql
     assert "max(handoff_requests.updated_at)" in sql
     assert "max(handoff_events.created_at)" in sql

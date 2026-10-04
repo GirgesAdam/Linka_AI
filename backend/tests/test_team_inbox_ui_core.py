@@ -167,3 +167,21 @@ def test_inbox_idle_refresh_uses_lightweight_revision_and_count_paths() -> None:
     assert 'tiaRequest<InboxSummary>("/inbox/summary")' in summary_route
     assert 'unread_only=true' not in summary_route
     assert 'pathname.startsWith("/inbox")' in navigation
+
+
+def test_inbox_revision_covers_visible_list_delivery_patient_and_assignee_state() -> None:
+    root = _root()
+    backend = (root / "backend/app/api/routes/inbox.py").read_text(encoding="utf-8")
+    list_page = (root / "frontend/src/app/(dashboard)/inbox/page.tsx").read_text(encoding="utf-8")
+
+    start = backend.index("def inbox_revision(")
+    end = backend.index('@router.get("/conversations"', start)
+    revision_block = backend[start:end]
+
+    assert 'conversation.last_message.delivery_status === "failed"' in list_page
+    assert "conversation.patient.first_name" in list_page
+    assert "conversation.assigned_user" in list_page
+    assert "func.max(Message.updated_at)" in revision_block
+    assert "func.max(Patient.updated_at)" in revision_block
+    assert "func.max(User.updated_at)" in revision_block
+    assert "func.max(ChannelConnection.updated_at)" in revision_block
