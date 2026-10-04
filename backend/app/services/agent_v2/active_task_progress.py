@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, time
+from typing import Literal
+
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TurnOperation
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
@@ -158,21 +161,129 @@ def _invalidate_incompatible_booking_identities(
     return cleaned
 
 
+def _past_temporal_resume_updates(
+    active_task: BookingTaskState,
+    *,
+    now: datetime | None,
+) -> dict[str, object]:
+    """Drop only temporal constraints that can no longer describe a future booking."""
+    if now is None:
+        return {}
+
+    date_constraint = active_task.constraints.date
+    time_constraint = active_task.constraints.time
+    updates: dict[str, object] = {}
+    today = now.date()
+
+    if date_constraint is not None:
+        start_date = (
+            datetime.fromisoformat(date_constraint.start_date).date()
+            if date_constraint.start_date
+            else None
+        )
+        end_date = (
+            datetime.fromisoformat(date_constraint.end_date).date()
+            if date_constraint.end_date
+            else None
+        )
+        fully_past = (
+            date_constraint.mode == "exact"
+            and start_date is not None
+            and start_date < today
+        ) or (
+            date_constraint.mode == "range"
+            and end_date is not None
+            and end_date < today
+        )
+        if fully_past:
+            return {"date": None, "time": None}
+
+        if (
+            date_constraint.mode == "exact"
+            and start_date == today
+            and time_constraint is not None
+        ):
+            now_time = now.timetz().replace(tzinfo=None)
+            start = (
+                time.fromisoformat(time_constraint.start_time)
+                if time_constraint.start_time
+                else None
+            )
+            end = (
+                time.fromisoformat(time_constraint.end_time)
+                if time_constraint.end_time
+                else None
+            )
+            time_fully_past = (
+                time_constraint.mode in {"exact", "before"}
+                and start is not None
+                and start <= now_time
+            ) or (
+                time_constraint.mode == "range"
+                and end is not None
+                and end <= now_time
+            ) or (
+                time_constraint.mode == "nearest"
+                and start is not None
+                and start <= now_time
+            )
+            if time_fully_past:
+                updates["time"] = None
+    return updates
+
+
 def _booking_followup_parameters(
     operation: TurnOperation,
     *,
     active_task: BookingTaskState,
     context: SemanticContext,
+    now: datetime | None = None,
 ) -> dict[str, object]:
     params = _drop_implicit_identity_refs(
         resolved_operation_parameters(operation, context=context),
         operation=operation,
     )
+    params = {
+        **_past_temporal_resume_updates(active_task, now=now),
+        **params,
+    }
     return _invalidate_incompatible_booking_identities(
         params,
         active_task=active_task,
         context=context,
     )
+
+
+ActiveTaskLifecycle = Literal["preserve", "continue", "replace"]
+
+
+def classify_active_task_lifecycle(
+    operation: TurnOperation,
+    *,
+    active_task: ActiveTaskState | None,
+) -> ActiveTaskLifecycle:
+    """Classify task-local lifecycle from typed semantics, never customer text."""
+    if active_task is None or operation.execution_intent != "execute":
+        return "preserve"
+
+    requested_task_type = (
+        "booking"
+        if operation.type == "book"
+        else "reschedule"
+        if operation.type == "reschedule"
+        else None
+    )
+    if requested_task_type is None:
+        return "preserve"
+
+    # A booking cannot continue a reschedule and vice versa. This deterministic
+    # boundary prevents a stale task from blocking a clearly different primary goal.
+    if requested_task_type != active_task.task_type:
+        return "replace"
+
+    if operation.fresh_task or operation.active_task_relationship == "replace":
+        return "replace"
+    return "continue"
 
 
 def adapt_matching_active_task_step(
@@ -181,8 +292,18 @@ def adapt_matching_active_task_step(
     operation: TurnOperation,
     active_task: ActiveTaskState | None,
     context: SemanticContext,
+    now: datetime | None = None,
 ) -> PlanStep:
-    """Merge structured continuations into verified active workflow state."""
+    """Merge continuations or mark an explicit fresh task for safe replacement."""
+    lifecycle = classify_active_task_lifecycle(operation, active_task=active_task)
+    if lifecycle == "replace":
+        params = resolved_operation_parameters(operation, context=context)
+        return step.model_copy(
+            update={
+                "state_action": "replace_active",
+                "facts": {**step.facts, **params, "fresh_task_started": True},
+            }
+        )
     if isinstance(active_task, BookingTaskState):
         if active_task.grouped is not None and operation.type in {"continue_active", "book"}:
             return step.model_copy(update={"state_action": "none"})
@@ -191,6 +312,7 @@ def adapt_matching_active_task_step(
                 operation,
                 active_task=active_task,
                 context=context,
+                now=now,
             )
             return step.model_copy(update={"facts": params})
         if operation.type == "book":
@@ -203,6 +325,7 @@ def adapt_matching_active_task_step(
                 operation,
                 active_task=active_task,
                 context=context,
+                now=now,
             )
             return PlanStep(
                 operation_index=step.operation_index,
@@ -249,10 +372,13 @@ def persist_initial_task_intent(
     if operation.type != "book":
         return step
     params = resolved_operation_parameters(operation, context=context)
+    facts = {**params, **step.facts}
+    if operation.fresh_task:
+        facts["fresh_task_started"] = True
     return step.model_copy(
         update={
             "state_action": "start_booking",
-            "facts": {**params, **step.facts},
+            "facts": facts,
         }
     )
 

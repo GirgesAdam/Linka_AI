@@ -58,6 +58,10 @@ VerifiedReadClearField = Literal["date", "time"]
 AppointmentFactChallenge = Literal["none", "time"]
 SameTurnServiceSource = Literal["none", "verified_appointment"]
 GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
+ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
+AutomationContextRelationship = Literal["none", "acknowledge", "appointment_action", "next_session"]
+AppointmentActionExplicitField = Literal["date", "time"]
+FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -317,6 +321,61 @@ class TurnOperation(StrictContractModel):
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.
     execution_intent: ExecutionIntent = "execute"
+    active_task_relationship: ActiveTaskRelationship = Field(
+        default="unspecified",
+        description=(
+            "Relationship of this primary task operation to the explicitly supplied active_task. "
+            "Use continue only for book/reschedule when the latest customer message is continuing "
+            "or correcting that same unfinished task. Use replace only when the latest customer "
+            "message itself explicitly starts a separate/unrelated book or reschedule goal and "
+            "abandons the unfinished task, including an additional/new booking. Never carry replace "
+            "forward from an earlier message: a later date/time/doctor/device/service answer for the "
+            "newly active task is continue. Leave unspecified when there is no active_task and for "
+            "side reads/social turns. Deterministic Python owns lifecycle transitions and ignores "
+            "this marker on non-task operations."
+        ),
+    )
+    automation_context_relationship: AutomationContextRelationship = Field(
+        default="none",
+        description=(
+            "Relationship of the latest customer message to server-owned automation_context. "
+            "Use acknowledge for a simple acknowledgement/reply to the automation message with no "
+            "requested lifecycle action. Use appointment_action only when the customer asks to "
+            "change/cancel/confirm the appointment referenced by automation_context. Use next_session "
+            "only when the customer asks for a new next session that clearly refers to the treatment "
+            "from a post-visit automation. Leave none when automation_context is absent or unrelated. "
+            "This marker never supplies canonical IDs by itself; Python binds only server-verified "
+            "automation metadata."
+        ),
+    )
+    appointment_action_explicit_fields: list[AppointmentActionExplicitField] = Field(
+        default_factory=list,
+        description=(
+            "For automation_context_relationship=appointment_action with reschedule only, list date "
+            "and/or time exactly when that replacement dimension is explicitly supplied in the latest "
+            "customer message. Never mark a dimension copied or inferred from automation_context, "
+            "template prose, assistant prose, or older dialogue. Python uses this list to distinguish "
+            "a true time-only edit from an unspecified reschedule request."
+        ),
+    )
+    fresh_task: bool = Field(
+        default=False,
+        description=(
+            "True only when the latest customer message itself explicitly starts a new/separate "
+            "book or reschedule task that must not inherit task-local constraints from an older "
+            "completed action, abandoned task, or conversation history. This is message-local: "
+            "later answers inside the newly active task use false."
+        ),
+    )
+    fresh_task_explicit_fields: list[FreshTaskField] = Field(
+        default_factory=list,
+        description=(
+            "For fresh_task=true, list only task fields explicitly supplied in the latest customer "
+            "message itself. Never include values recovered only from active_task, recent_verified_action, "
+            "assistant prose, or older dialogue. Deterministic Python uses this list as the authority "
+            "boundary for fresh task state."
+        ),
+    )
     grouped_booking_action: GroupedBookingAction = Field(
         default="preserve_group",
         description=(
@@ -373,6 +432,53 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_automation_context_relationship(self) -> TurnOperation:
+        explicit = set(self.appointment_action_explicit_fields)
+        if self.automation_context_relationship == "none":
+            if explicit:
+                raise ValueError(
+                    "appointment_action_explicit_fields requires appointment_action automation context."
+                )
+            return self
+        if self.automation_context_relationship == "appointment_action" and self.type not in {
+            "reschedule",
+            "cancel_appointment",
+            "confirm_appointment",
+        }:
+            raise ValueError(
+                "appointment_action automation context is only valid for appointment lifecycle operations."
+            )
+        if self.automation_context_relationship == "next_session" and self.type != "book":
+            raise ValueError("next_session automation context is only valid for book.")
+        if self.automation_context_relationship == "acknowledge" and self.execution_intent != "informational":
+            raise ValueError("automation acknowledgement must remain informational/read-only.")
+        if explicit:
+            if (
+                self.automation_context_relationship != "appointment_action"
+                or self.type != "reschedule"
+            ):
+                raise ValueError(
+                    "appointment_action_explicit_fields is only valid for reminder-linked reschedule."
+                )
+            if ("date" in explicit) != (self.entities.date is not None):
+                raise ValueError(
+                    "appointment_action explicit date marker must match an explicit date entity."
+                )
+            if ("time" in explicit) != (self.entities.time is not None):
+                raise ValueError(
+                    "appointment_action explicit time marker must match an explicit time entity."
+                )
+        elif (
+            self.automation_context_relationship == "appointment_action"
+            and self.type == "reschedule"
+            and (self.entities.date is not None or self.entities.time is not None)
+        ):
+            raise ValueError(
+                "Reminder-linked replacement date/time entities require explicit-field markers."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_same_turn_service_source(self) -> TurnOperation:

@@ -708,6 +708,12 @@ RULES
   Doctor existence or compatibility never proves appointment availability.
 - For needs_input, ask only the focused missing detail and present supplied choices naturally without
   refs/internal metadata. Never imply a future write already happened.
+- fresh_task_started=true is an authoritative workflow boundary. Respond only from the new task's
+  current facts/active_task_summary. Never suggest adding it to, keeping the date/time/device/doctor
+  from, or otherwise continuing the previous appointment/task unless the current TURN_OUTCOMES
+  explicitly establish that relation. Ask only the missing field for the fresh task. Do not narrate
+  lifecycle implementation such as starting a "new/separate task", resuming an "active task", replacing
+  state, or clearing old context; simply answer/ask the business-facing next question naturally.
 - For a read-only payment-information outcome, booking_requires_payment=false means the customer can
   continue booking without paying during the booking flow. payment_execution_owner=reception is an
   execution boundary, not a handoff instruction. Mention a specific payment method only when verified
@@ -766,6 +772,14 @@ def _build_responder_messages(
 
     latest_text = _message_text(history[latest_index])
     visible_outcomes = [customer_visible_outcome(outcome) for outcome in outcomes]
+    fresh_task_started = any(
+        outcome.facts.get("fresh_task_started") is True for outcome in outcomes
+    )
+    recent_messages = (
+        []
+        if fresh_task_started
+        else _native_recent_messages(history, latest_customer_index=latest_index)
+    )
     outcome_message = SystemMessage(
         content=(
             "TURN_OUTCOMES (authoritative customer-visible business result):\n"
@@ -785,7 +799,7 @@ def _build_responder_messages(
                 local_now=local_now,
             )
         ),
-        *_native_recent_messages(history, latest_customer_index=latest_index),
+        *recent_messages,
         outcome_message,
         HumanMessage(content=latest_text),
     ]

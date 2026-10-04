@@ -398,7 +398,25 @@ def apply_step_state(
         return StateTransition(active_task=None, changed=before is not None, reason="cancel_active")
 
     current = active_task
-    if step.state_action == "start_booking":
+    if step.state_action == "replace_active":
+        if operation.type == "book":
+            current = _new_booking_state(
+                step=step,
+                operation=operation,
+                turn_id=turn_id,
+                now=now,
+            )
+        elif operation.type == "reschedule":
+            current = _new_reschedule_state(
+                step=step,
+                operation=operation,
+                reads=reads,
+                turn_id=turn_id,
+                now=now,
+            )
+        else:
+            raise RuntimeError("replace_active requires a book or reschedule operation.")
+    elif step.state_action == "start_booking":
         current = _new_booking_state(step=step, operation=operation, turn_id=turn_id, now=now)
     elif step.state_action == "start_reschedule":
         current = _new_reschedule_state(

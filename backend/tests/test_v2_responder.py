@@ -72,6 +72,49 @@ def test_responder_preserves_native_dialogue_roles_and_keeps_latest_customer_las
     assert messages[4].content == "السعر كام؟"
 
 
+
+
+def test_fresh_task_responder_boundary_excludes_old_task_dialogue() -> None:
+    history = [
+        HumanMessage(content="عايز احجز Under Arm الخميس"),
+        AIMessage(content="تمام، نكمل على نفس الميعاد القديم؟"),
+        HumanMessage(content="عايز أبدأ حجز جديد منفصل"),
+    ]
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "needed": "service",
+            "fresh_task_started": True,
+            "active_task_summary": {
+                "task_type": "booking",
+                "service_id": None,
+                "doctor_id": None,
+                "device_key": None,
+                "date": None,
+                "time": None,
+            },
+        },
+    )
+
+    messages = _build_responder_messages(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=history,
+        outcomes=[outcome],
+    )
+
+    assert len(messages) == 3
+    assert isinstance(messages[0], SystemMessage)
+    assert isinstance(messages[1], SystemMessage)
+    assert isinstance(messages[2], HumanMessage)
+    assert messages[2].content == "عايز أبدأ حجز جديد منفصل"
+    serialized = "\n".join(str(message.content) for message in messages)
+    assert "Under Arm" not in serialized
+    assert "نفس الميعاد القديم" not in serialized
+
+
 def test_responder_payload_removes_internal_ids_and_formats_money_before_llm() -> None:
     messages = _build_responder_messages(
         clinic_name="Linka Clinic",

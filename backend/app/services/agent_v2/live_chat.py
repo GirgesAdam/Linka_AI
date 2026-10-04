@@ -19,6 +19,7 @@ from app.agents.v2.availability_scope import (
 )
 from app.core.config import settings
 from app.integrations.clinic.registry import get_clinic_adapter
+from app.models.appointment import Appointment
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.patient import Patient
@@ -284,6 +285,69 @@ def _recent_verified_action_context(
         ).all()
     )
     return _recent_verified_action_context_from_outbounds(previous_outbounds)
+
+
+def _recent_automation_context(
+    db: Session,
+    *,
+    conversation: Conversation,
+    patient: Patient,
+    inbound: Message,
+) -> dict[str, Any] | None:
+    """Return the immediately preceding verified system automation focus.
+
+    Template prose is never parsed for identity. The appointment target comes only
+    from server-owned automation metadata and is re-verified against the patient.
+    """
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if (
+        previous is None
+        or previous.sender_type != "system"
+        or previous.direction != "outbound"
+    ):
+        return None
+
+    metadata = dict(previous.metadata_json or {})
+    if metadata.get("source") != "automation_engine":
+        return None
+
+    appointment_id = _uuid_from_metadata(metadata.get("appointment_id"))
+    if appointment_id is None:
+        return None
+    appointment = db.scalar(
+        select(Appointment).where(
+            Appointment.workspace_id == conversation.workspace_id,
+            Appointment.id == appointment_id,
+            Appointment.patient_id == patient.id,
+        )
+    )
+    if appointment is None:
+        return None
+
+    return {
+        "source": "automation_engine",
+        "automation_message_id": str(previous.id),
+        "automation_job_id": str(metadata.get("automation_job_id") or ""),
+        "automation_rule_key": str(metadata.get("automation_rule_key") or ""),
+        "appointment_id": str(appointment.id),
+        "service_id": str(appointment.service_id),
+        "device_key": (
+            str(appointment.laser_device_key)
+            if appointment.laser_device_key not in (None, "")
+            else None
+        ),
+        "appointment_status": appointment.status,
+        "start_at": appointment.start_at.isoformat(),
+    }
 
 
 def _recent_pending_choice_context(
@@ -596,6 +660,12 @@ def _run_v2_after_inbound(
         conversation=conversation,
         inbound=inbound,
     )
+    automation_context = _recent_automation_context(
+        db,
+        conversation=conversation,
+        patient=patient,
+        inbound=inbound,
+    )
     pending_choice_context = _recent_pending_choice_context(
         db,
         conversation=conversation,
@@ -627,6 +697,7 @@ def _run_v2_after_inbound(
         write_executor=live_write,
         recent_read_context=recent_read_context,
         recent_action_context=recent_action_context,
+        automation_context=automation_context,
         pending_choice_context=pending_choice_context,
     )
     if turn.pending_write is not None:
