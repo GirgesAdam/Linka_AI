@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.agents.v2.turn_contract import (
     DateConstraint,
     TiaTurnUnderstanding,
@@ -8,7 +10,6 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from app.services.agent_v2 import orchestrator as runtime
-from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 
 
 _RECENT_DATE_LEVEL_MISS = {
@@ -18,10 +19,10 @@ _RECENT_DATE_LEVEL_MISS = {
 }
 
 
-def _availability_bundle(count: int) -> ReadExecutionBundle:
-    return ReadExecutionBundle(
+def _availability_bundle(count: int) -> runtime.ReadExecutionBundle:
+    return runtime.ReadExecutionBundle(
         results=[
-            ReadResult(
+            SimpleNamespace(
                 kind="availability",
                 ok=True,
                 payload={"matching_slot_count": count},
