@@ -67,7 +67,7 @@ def test_clinic_and_doctor_end_time_is_latest_allowed_booking_start(monkeypatch)
     ]
     db = _FakeDb(
         assignments=[(doctor_branch, doctor_service, doctor)],
-        scalar_batches=[branch_hours, [], doctor_hours, []],
+        scalar_batches=[branch_hours, [], [], doctor_hours, []],
     )
 
     monkeypatch.setattr(
@@ -133,6 +133,7 @@ def test_booking_start_after_shared_end_time_is_not_offered(monkeypatch) -> None
         assignments=[(doctor_branch, doctor_service, doctor)],
         scalar_batches=[
             [SimpleNamespace(start_time=time(9, 0), end_time=time(22, 0))],
+            [],
             [],
             [
                 SimpleNamespace(
@@ -208,6 +209,7 @@ def test_staff_immediate_override_skips_one_hour_notice(monkeypatch) -> None:
             assignments=[(doctor_branch, doctor_service, doctor)],
             scalar_batches=[
                 [SimpleNamespace(start_time=time(9, 0), end_time=time(18, 0))],
+                [],
                 [],
                 [
                     SimpleNamespace(

@@ -76,6 +76,7 @@ def _fixture(*, doctor_existing=None, device_existing=None):
         scalar_batches=[
             branch_hours,
             doctor_existing_rows,
+            [],
             list(device_existing or []),
             doctor_hours,
             [],

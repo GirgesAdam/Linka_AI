@@ -20,6 +20,7 @@ from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
+from app.models.availability_block import AvailabilityBlock
 from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.lead import Lead
@@ -42,6 +43,8 @@ from app.schemas.booking import (
     AppointmentReschedule,
     AppointmentStatus,
     AppointmentStatusHistoryRead,
+    AvailabilityBlockCreate,
+    AvailabilityBlockRead,
     AvailabilityResponse,
     AvailabilitySlot,
     QuickAppointmentCreate,
@@ -273,6 +276,110 @@ def make_appointment(
         idempotency_key=idempotency_key,
         confirmed_at=now if initial_status == "confirmed" else None,
     )
+
+
+
+@router.get("/availability-blocks", response_model=list[AvailabilityBlockRead])
+def list_availability_blocks(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    branch_id: UUID = Query(...),
+    date_value: date | None = Query(default=None, alias="date"),
+) -> list[AvailabilityBlockRead]:
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.id == branch_id,
+            Branch.workspace_id == access.workspace.id,
+            Branch.is_active.is_(True),
+        )
+    )
+    if branch is None:
+        raise not_found("Branch")
+    stmt = select(AvailabilityBlock).where(
+        AvailabilityBlock.workspace_id == access.workspace.id,
+        AvailabilityBlock.branch_id == branch.id,
+    )
+    if date_value is not None:
+        tz = workspace_timezone(access, branch)
+        local_start = datetime.combine(date_value, time.min, tzinfo=tz).astimezone(UTC)
+        local_end = (datetime.combine(date_value, time.min, tzinfo=tz) + timedelta(days=1)).astimezone(UTC)
+        stmt = stmt.where(
+            AvailabilityBlock.start_at < local_end,
+            AvailabilityBlock.end_at > local_start,
+        )
+    rows = list(db.scalars(stmt.order_by(AvailabilityBlock.start_at)))
+    return [AvailabilityBlockRead.model_validate(row) for row in rows]
+
+
+@router.post("/availability-blocks", response_model=AvailabilityBlockRead, status_code=status.HTTP_201_CREATED)
+def create_availability_block(
+    payload: AvailabilityBlockCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AvailabilityBlockRead:
+    require_local_appointment_write(db, access.workspace.id)
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.id == payload.branch_id,
+            Branch.workspace_id == access.workspace.id,
+            Branch.is_active.is_(True),
+        ).with_for_update()
+    )
+    if branch is None:
+        raise not_found("Branch")
+    tz = workspace_timezone(access, branch)
+    start_at = datetime.combine(payload.date, payload.start_time, tzinfo=tz).astimezone(UTC)
+    end_at = datetime.combine(payload.date, payload.end_time, tzinfo=tz).astimezone(UTC)
+    if end_at <= start_at:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Block end must be after start.")
+    overlap = db.scalar(
+        select(AvailabilityBlock).where(
+            AvailabilityBlock.workspace_id == access.workspace.id,
+            AvailabilityBlock.branch_id == branch.id,
+            AvailabilityBlock.start_at < end_at,
+            AvailabilityBlock.end_at > start_at,
+        ).limit(1)
+    )
+    if overlap is not None:
+        raise booking_conflict("This period overlaps an existing availability block.")
+    existing_count = len(list(db.scalars(select(Appointment.id).where(
+        Appointment.workspace_id == access.workspace.id,
+        Appointment.branch_id == branch.id,
+        Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress")),
+        Appointment.start_at < end_at,
+        Appointment.end_at > start_at,
+    ))))
+    block = AvailabilityBlock(
+        workspace_id=access.workspace.id,
+        branch_id=branch.id,
+        start_at=start_at,
+        end_at=end_at,
+        reason=payload.reason,
+        created_by_user_id=access.user.id,
+    )
+    db.add(block)
+    db.commit()
+    db.refresh(block)
+    result = AvailabilityBlockRead.model_validate(block)
+    return result.model_copy(update={"overlapping_appointments": existing_count})
+
+
+@router.delete("/availability-blocks/{block_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_availability_block(
+    block_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    require_local_appointment_write(db, access.workspace.id)
+    block = db.scalar(select(AvailabilityBlock).where(
+        AvailabilityBlock.id == block_id,
+        AvailabilityBlock.workspace_id == access.workspace.id,
+    ))
+    if block is None:
+        raise not_found("Availability block")
+    db.delete(block)
+    db.commit()
+    return None
 
 
 @router.get("/availability", response_model=AvailabilityResponse)
@@ -517,6 +624,16 @@ def create_quick_appointment(
 
     start_at = payload.start_at.astimezone(UTC)
     end_at = start_at + timedelta(minutes=duration_minutes)
+    blocked = db.scalar(
+        select(AvailabilityBlock.id).where(
+            AvailabilityBlock.workspace_id == access.workspace.id,
+            AvailabilityBlock.branch_id == branch.id,
+            AvailabilityBlock.start_at < end_at,
+            AvailabilityBlock.end_at > start_at,
+        ).limit(1)
+    )
+    if blocked is not None:
+        raise booking_conflict("The requested period is closed for new bookings.")
     if payload.patient_package_id is not None and payload.use_pulse_balance:
         raise booking_conflict("Choose either a session package or pulse balance, not both.")
     patient_package = None

@@ -7,6 +7,7 @@ from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
 from app.models.automation_worker import AutomationWorker
+from app.models.availability_block import AvailabilityBlock
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
@@ -83,6 +84,7 @@ __all__ = [
     "AppointmentAdditionalService",
     "AppointmentProductLine",
     "AppointmentStatusHistory",
+    "AvailabilityBlock",
     "AutomationJob",
     "AutomationRule",
     "AutomationWorker",

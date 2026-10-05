@@ -6,6 +6,44 @@ import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { Appointment, Patient } from "@/lib/types";
 
 export type ManualAppointmentState = { ok: boolean; message: string };
+export type AvailabilityBlockActionState = { ok: boolean; message: string };
+
+export async function createAvailabilityBlock(previous: AvailabilityBlockActionState, formData: FormData): Promise<AvailabilityBlockActionState> {
+  void previous;
+  const branchId = String(formData.get("branch_id") || "").trim();
+  const date = String(formData.get("date") || "").trim();
+  const startTime = String(formData.get("start_time") || "").trim();
+  const endTime = String(formData.get("end_time") || "").trim();
+  const reason = String(formData.get("reason") || "").trim();
+  if (!branchId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !startTime || !endTime) {
+    return { ok: false, message: "كمّل التاريخ ووقت البداية والنهاية." };
+  }
+  try {
+    const result = await tiaRequest<{ overlapping_appointments: number }>("/booking/availability-blocks", {
+      method: "POST",
+      body: JSON.stringify({ branch_id: branchId, date, start_time: startTime, end_time: endTime, reason: reason || null }),
+    });
+    revalidatePath("/appointments");
+    return {
+      ok: true,
+      message: result.overlapping_appointments > 0
+        ? `تم قفل الفترة. فيها ${result.overlapping_appointments.toLocaleString("ar-EG")} موعد موجود بالفعل؛ المواعيد الحالية لم تتغير.`
+        : "تم قفل الفترة ومنع الحجوزات الجديدة فيها.",
+    };
+  } catch (error) {
+    if (error instanceof TiaApiError && error.status === 409) {
+      return { ok: false, message: "الفترة بتتداخل مع فترة مقفولة بالفعل." };
+    }
+    return { ok: false, message: error instanceof Error ? error.message : "تعذر قفل الفترة." };
+  }
+}
+
+export async function reopenAvailabilityBlock(formData: FormData) {
+  const blockId = String(formData.get("block_id") || "").trim();
+  if (!blockId) return;
+  await tiaRequest(`/booking/availability-blocks/${blockId}`, { method: "DELETE" });
+  revalidatePath("/appointments");
+}
 
 export type ManualAvailabilitySlot = {
   doctor_id: string;

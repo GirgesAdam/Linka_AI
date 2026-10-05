@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
+from app.models.availability_block import AvailabilityBlock
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.doctor import Doctor
@@ -342,6 +343,16 @@ def calculate_availability(
             Appointment.id.notin_(tuple(excluded_appointment_ids))
         )
     existing = list(db.scalars(appointment_stmt))
+    availability_blocks = list(
+        db.scalars(
+            select(AvailabilityBlock).where(
+                AvailabilityBlock.workspace_id == workspace.id,
+                AvailabilityBlock.branch_id == branch.id,
+                AvailabilityBlock.start_at < conflict_end_utc,
+                AvailabilityBlock.end_at > conflict_start_utc,
+            )
+        )
+    )
     by_doctor: dict[UUID, list[Appointment]] = {doctor: [] for doctor in doctor_ids}
     for appointment in existing:
         by_doctor.setdefault(appointment.doctor_id, []).append(appointment)
@@ -472,7 +483,16 @@ def calculate_availability(
                     busy_end_utc,
                     device_existing,
                 )
-                if start_utc >= minimum_start_utc and not doctor_busy and not device_busy:
+                branch_blocked = any(
+                    block.start_at < busy_end_utc and block.end_at > busy_start_utc
+                    for block in availability_blocks
+                )
+                if (
+                    start_utc >= minimum_start_utc
+                    and not doctor_busy
+                    and not device_busy
+                    and not branch_blocked
+                ):
                     slots.append(
                         SlotCandidate(
                             branch_id=branch.id,

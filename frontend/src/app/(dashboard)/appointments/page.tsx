@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarDays, ChevronLeft, ChevronRight, Plus, Search } from "lucide-react";
+import { Ban, CalendarDays, ChevronLeft, ChevronRight, Plus, Search } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,8 @@ import type {
 } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 import { QuickAppointmentDialog } from "./quick-appointment-dialog";
+import { AvailabilityBlockControls } from "./availability-block-controls";
+import { reopenAvailabilityBlock } from "./actions";
 
 type SearchParams = {
   patient_id?: string;
@@ -33,6 +35,14 @@ type SearchParams = {
   quick_start?: string;
   quick_end?: string;
   column?: string | string[];
+};
+
+type AvailabilityBlock = {
+  id: string;
+  branch_id: string;
+  start_at: string;
+  end_at: string;
+  reason: string | null;
 };
 
 type KnowledgeHour = {
@@ -269,12 +279,14 @@ type SchedulePeriod = {
   start: number;
   end: number;
   appointments: Appointment[];
+  block: AvailabilityBlock | null;
 };
 
 function buildSchedulePeriods(
   appointments: Appointment[],
   interval: KnowledgeHour,
   timezone: string,
+  blocks: AvailabilityBlock[] = [],
 ) {
   const workStart = toMinutes(interval.start_time);
   const workEnd = toMinutes(interval.end_time);
@@ -292,44 +304,55 @@ function buildSchedulePeriods(
     .filter((booking) => booking.end > booking.start)
     .sort((a, b) => a.start - b.start || a.end - b.end);
 
-  const periods: SchedulePeriod[] = [];
+  const basePeriods: SchedulePeriod[] = [];
   let cursor = workStart;
   let index = 0;
-
   while (index < bookings.length) {
     const first = bookings[index];
     const busyStart = first.start;
     let busyEnd = first.end;
     const busyAppointments = [first.appointment];
     index += 1;
-
     while (index < bookings.length && bookings[index].start < busyEnd) {
       busyEnd = Math.max(busyEnd, bookings[index].end);
       busyAppointments.push(bookings[index].appointment);
       index += 1;
     }
-
-    if (busyStart > cursor) {
-      periods.push({ start: cursor, end: busyStart, appointments: [] });
-    }
-
-    periods.push({
-      start: busyStart,
-      end: busyEnd,
-      appointments: busyAppointments,
-    });
+    if (busyStart > cursor) basePeriods.push({ start: cursor, end: busyStart, appointments: [], block: null });
+    basePeriods.push({ start: busyStart, end: busyEnd, appointments: busyAppointments, block: null });
     cursor = Math.max(cursor, busyEnd);
   }
+  if (cursor < workEnd) basePeriods.push({ start: cursor, end: workEnd, appointments: [], block: null });
 
-  if (cursor < workEnd) {
-    periods.push({ start: cursor, end: workEnd, appointments: [] });
-  }
+  const blockRanges = blocks.map((block) => ({
+    block,
+    start: Math.max(minuteInTimezone(block.start_at, timezone), workStart),
+    end: Math.min(minuteInTimezone(block.end_at, timezone), workEnd),
+  })).filter((item) => item.end > item.start);
 
-  return periods;
+  return basePeriods.flatMap((period) => {
+    const overlapping = blockRanges.filter((item) => item.start < period.end && item.end > period.start);
+    if (!overlapping.length) return [period];
+    if (period.appointments.length) {
+      return [{ ...period, block: overlapping[0].block }];
+    }
+    const boundaries = new Set<number>([period.start, period.end]);
+    overlapping.forEach((item) => {
+      boundaries.add(Math.max(period.start, item.start));
+      boundaries.add(Math.min(period.end, item.end));
+    });
+    const points = [...boundaries].sort((left, right) => left - right);
+    return points.slice(0, -1).map((start, pointIndex) => {
+      const end = points[pointIndex + 1];
+      const block = overlapping.find((item) => item.start < end && item.end > start)?.block || null;
+      return { start, end, appointments: [], block };
+    }).filter((item) => item.end > item.start);
+  });
 }
 
-function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking }: {
+function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable }: {
   appointments: Appointment[];
+  blocks: AvailabilityBlock[];
   hours: KnowledgeHour[];
   timezone: string;
   patientNames: Map<string, string>;
@@ -340,15 +363,18 @@ function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById
   branchId: string;
   currentParams: SearchParams;
   allowQuickBooking: boolean;
+  availabilityTruthAvailable: boolean;
 }) {
   const visible = appointments
     .filter((appointment) => visibleColumns.includes(appointmentColumn(appointment, serviceById)))
     .slice()
     .sort((a, b) => a.start_at.localeCompare(b.start_at));
 
-  const freePeriods = visibleColumns.flatMap((column) =>
-    hours.flatMap((interval) => buildSchedulePeriods(appointmentsForColumn(appointments, column, serviceById), interval, timezone).filter((period) => period.appointments.length === 0).map((period) => ({ column, ...period }))),
-  ).sort((a, b) => a.start - b.start);
+  const freePeriods = availabilityTruthAvailable
+    ? visibleColumns.flatMap((column) =>
+        hours.flatMap((interval) => buildSchedulePeriods(appointmentsForColumn(appointments, column, serviceById), interval, timezone, blocks).filter((period) => period.appointments.length === 0 && !period.block).map((period) => ({ column, ...period }))),
+      ).sort((a, b) => a.start - b.start)
+    : [];
 
   return (
     <div className="space-y-4 lg:hidden" aria-label="mobile appointment agenda">
@@ -356,6 +382,7 @@ function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById
         <div className="mb-2 flex items-center justify-between gap-2"><div className="text-xs font-black text-slate-700">????? ?????</div><div className="text-[11px] font-semibold text-slate-400">???? ????? ??????</div></div>
         <div className="grid gap-2 sm:grid-cols-2">{freePeriods.slice(0, 8).map((period) => { const resource = scheduleColumns.find((item) => item.id === period.column); return <Link key={`${period.column}-${period.start}-${period.end}`} href={quickBookingHref(currentParams, selectedDate, branchId, period.column, period.start, period.end)} className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm transition hover:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"><span className="font-black text-[var(--accent-strong)]">{minuteLabel(period.start)} ? {minuteLabel(period.end)}</span><span className="text-xs font-bold text-slate-600">{resource?.label}</span></Link>; })}</div>
       </section>}
+      {blocks.map((block) => <div key={block.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black text-rose-950">فترة غير متاحة</div><div className="mt-1 text-xs font-bold text-rose-800">{appointmentTime(block.start_at, timezone)} – {appointmentTime(block.end_at, timezone)}{block.reason ? ` · ${block.reason}` : ""}</div></div><form action={reopenAvailabilityBlock}><input type="hidden" name="block_id" value={block.id} /><Button type="submit" size="sm" variant="outline">فتح الفترة</Button></form></div></div>)}
       {!visible.length && <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-semibold text-slate-500">?? ???? ?????? ?????? ??? ??????? ????????. ??????? ??????? ????? ??????? ????? ??????.</div>}
       {visible.map((appointment) => {
         const service = serviceById.get(appointment.service_id);
@@ -385,6 +412,7 @@ function MobileAgenda({ appointments, hours, timezone, patientNames, serviceById
 
 function DailySchedule({
   appointments,
+  blocks,
   hours,
   timezone,
   patientNames,
@@ -395,8 +423,10 @@ function DailySchedule({
   branchId,
   currentParams,
   allowQuickBooking,
+  availabilityTruthAvailable,
 }: {
   appointments: Appointment[];
+  blocks: AvailabilityBlock[];
   hours: KnowledgeHour[];
   timezone: string;
   patientNames: Map<string, string>;
@@ -407,6 +437,7 @@ function DailySchedule({
   branchId: string;
   currentParams: SearchParams;
   allowQuickBooking: boolean;
+  availabilityTruthAvailable: boolean;
 }) {
   if (!hours.length) {
     return (
@@ -423,7 +454,7 @@ function DailySchedule({
 
   return (
     <>
-      <MobileAgenda appointments={appointments} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} />
+      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} availabilityTruthAvailable={availabilityTruthAvailable} />
       <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
@@ -441,7 +472,7 @@ function DailySchedule({
                       column.id,
                       serviceById,
                     );
-                    const periods = buildSchedulePeriods(columnAppointments, interval, timezone);
+                    const periods = buildSchedulePeriods(columnAppointments, interval, timezone, blocks);
                     periods.forEach((period) => period.appointments.forEach((appointment) => rendered.add(appointment.id)));
 
                     return (
@@ -454,7 +485,7 @@ function DailySchedule({
                                 {columnAppointments.length.toLocaleString("ar-EG")}
                               </span>
                             </span>
-                            {allowQuickBooking && column.id === "quick" && (
+                            {allowQuickBooking && availabilityTruthAvailable && column.id === "quick" && (
                               <Link
                                 href={quickBookingHref(currentParams, selectedDate, branchId, "quick", start, end)}
                                 className="inline-flex items-center gap-1 rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-black text-[var(--accent-strong)] transition hover:bg-[var(--accent-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
@@ -467,17 +498,27 @@ function DailySchedule({
                         </div>
                         <div className="divide-y divide-slate-100">
                           {periods.map((period, periodIndex) => {
-                            const isAvailable = period.appointments.length === 0;
+                            const isBlocked = Boolean(period.block);
+                            const isAvailable = period.appointments.length === 0 && !isBlocked;
+                            const availabilityUnknown = isAvailable && !availabilityTruthAvailable;
                             return (
-                              <div key={`${column.id}-${period.start}-${period.end}-${periodIndex}`} className={isAvailable ? "bg-slate-50/50 p-2" : "bg-white p-2"}>
+                              <div key={`${column.id}-${period.start}-${period.end}-${periodIndex}`} className={isBlocked ? "bg-rose-50 p-2" : availabilityUnknown ? "bg-amber-50/60 p-2" : isAvailable ? "bg-slate-50/50 p-2" : "bg-white p-2"}>
                                 <div className="mb-2 flex items-center justify-between gap-2 text-[11px] font-bold">
                                   <span className="text-slate-700">{minuteLabel(period.start)} – {minuteLabel(period.end)}</span>
-                                  {isAvailable && column.id !== "quick" && <span className="text-slate-400">متاح</span>}
-                                  {isAvailable && column.id === "quick" && <span className="text-slate-400">لا توجد حجوزات سريعة</span>}
+                                  {isBlocked ? <span className="inline-flex items-center gap-1 text-rose-700"><Ban size={12} /> غير متاحة</span> : availabilityUnknown ? <span className="text-amber-700">حالة التوفر غير مؤكدة</span> : isAvailable && column.id !== "quick" ? <span className="text-slate-400">متاح</span> : null}
+                                  {isAvailable && !availabilityUnknown && column.id === "quick" && <span className="text-slate-400">لا توجد حجوزات سريعة</span>}
                                 </div>
-                                {isAvailable ? (
+                                {isBlocked ? (
+                                  <div className="space-y-2">
+                                    <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-900">{period.block?.reason || "الفترة مقفولة للحجوزات الجديدة"}{period.appointments.length ? " · المواعيد الموجودة بالفعل لم تتغير" : ""}</div>
+                                    {period.appointments.map((appointment) => {
+                                      const service = serviceById.get(appointment.service_id);
+                                      return <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div><div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div></div><StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" /></div><div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">{appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}</div></Link>;
+                                    })}
+                                  </div>
+                                ) : isAvailable ? (
                                   <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
-                                    {allowQuickBooking && column.id !== "quick" && (
+                                    {allowQuickBooking && availabilityTruthAvailable && column.id !== "quick" && (
                                       <Link
                                         href={quickBookingHref(
                                           currentParams,
@@ -608,10 +649,17 @@ export default async function AppointmentsPage({
   if (selectedBranch) query.set("branch_id", selectedBranch.id);
   if (patientId) query.set("patient_id", patientId);
 
-  const [allAppointments, selectedPatient] = await Promise.all([
+  const [allAppointments, selectedPatient, availabilityBlockState] = await Promise.all([
     tiaRequest<Appointment[]>(`/booking/appointments?${query.toString()}`),
     patientId ? tiaRequest<Patient>(`/crm/patients/${patientId}`).catch(() => null) : Promise.resolve(null),
+    selectedBranch
+      ? tiaRequest<AvailabilityBlock[]>(`/booking/availability-blocks?branch_id=${selectedBranch.id}&date=${selectedDate}`)
+          .then((blocks) => ({ blocks, failed: false }))
+          .catch(() => ({ blocks: [] as AvailabilityBlock[], failed: true }))
+      : Promise.resolve({ blocks: [] as AvailabilityBlock[], failed: false }),
   ]);
+  const availabilityBlocks = availabilityBlockState.blocks;
+  const availabilityTruthAvailable = !availabilityBlockState.failed;
   const appointments = allAppointments.filter((appointment) => scheduleStatuses.has(appointment.status));
 
   const [manualPatient, quickPatient] = await Promise.all([
@@ -774,9 +822,7 @@ export default async function AppointmentsPage({
                 {new Intl.DateTimeFormat("ar-EG", { dateStyle: "full", timeZone: "UTC" }).format(new Date(`${selectedDate}T12:00:00Z`))}
               </div>
             </div>
-            <div className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-700">
-              {appointments.length.toLocaleString("ar-EG")} موعد
-            </div>
+            <div className="flex items-center gap-2">{selectedBranch && <AvailabilityBlockControls branchId={selectedBranch.id} date={selectedDate} />}<div className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-700">{appointments.length.toLocaleString("ar-EG")} موعد</div></div>
           </div>
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
@@ -834,9 +880,15 @@ export default async function AppointmentsPage({
         </CardHeader>
 
         <CardContent className="p-3 sm:p-5">
+          {availabilityBlockState.failed && (
+            <div role="alert" className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-950">
+              تعذر تحميل الفترات غير المتاحة. حدّث الصفحة قبل إنشاء حجز جديد.
+            </div>
+          )}
           {selectedBranch ? (
             <DailySchedule
               appointments={appointments}
+              blocks={availabilityBlocks}
               hours={workingHours}
               timezone={timezone}
               patientNames={patientNames}
@@ -847,6 +899,7 @@ export default async function AppointmentsPage({
               branchId={selectedBranch.id}
               currentParams={currentParams}
               allowQuickBooking={!patientId}
+              availabilityTruthAvailable={availabilityTruthAvailable}
             />
           ) : (
             <div className="py-12 text-center text-sm font-semibold text-[var(--muted)]">لا يوجد فرع نشط لعرض جدول المواعيد.</div>
@@ -854,7 +907,7 @@ export default async function AppointmentsPage({
         </CardContent>
       </Card>
 
-      {quickWindow && selectedBranch && !patientId && (
+      {quickWindow && selectedBranch && !patientId && availabilityTruthAvailable && (
         <QuickAppointmentDialog
           branchId={selectedBranch.id}
           bookingDate={selectedDate}

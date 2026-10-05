@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal
 from uuid import UUID
 
@@ -40,6 +40,37 @@ def require_timezone_aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Datetime must include a timezone offset.")
     return value
+
+
+class AvailabilityBlockCreate(BaseModel):
+    branch_id: UUID
+    date: date
+    start_time: time
+    end_time: time
+    reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_reason(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+
+class AvailabilityBlockRead(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    branch_id: UUID
+    start_at: datetime
+    end_at: datetime
+    reason: str | None
+    created_by_user_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+    overlapping_appointments: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AvailabilitySlot(BaseModel):
