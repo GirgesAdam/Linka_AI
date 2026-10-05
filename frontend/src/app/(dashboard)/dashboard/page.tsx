@@ -1,27 +1,37 @@
-import type { ClinicSetupV2Snapshot } from "@/lib/clinic-setup-v2-types";
 import { tiaRequest } from "@/lib/tia/api";
-import type { CRMTask, DashboardSummary, HandoffQueueItem } from "@/lib/types";
+import type { CRMTask, DashboardSummary, DashboardToday, DashboardTodayRevenue } from "@/lib/types";
 import { DashboardWorkspace } from "./dashboard-workspace";
 
+async function loadToday(): Promise<DashboardToday> {
+  try {
+    return await tiaRequest<DashboardToday>("/dashboard/today");
+  } catch {
+    const legacy = await tiaRequest<DashboardSummary>("/dashboard/summary");
+    return {
+      timezone: legacy.timezone || "Africa/Cairo",
+      local_date: "",
+      appointments: legacy.today_appointments || [],
+      next_appointment_id: null,
+    };
+  }
+}
+
 export default async function DashboardPage() {
-  const [summaryResult, handoffsResult, setupResult, overdueTasksResult] = await Promise.allSettled([
-    tiaRequest<DashboardSummary>("/dashboard/summary"),
-    tiaRequest<HandoffQueueItem[]>("/inbox/handoffs?limit=5"),
-    tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
-    tiaRequest<CRMTask[]>("/crm/tasks?scope=overdue&limit=5"),
+  const [todayResult, followUpsResult, revenueResult] = await Promise.allSettled([
+    loadToday(),
+    tiaRequest<CRMTask[]>("/crm/tasks?scope=today&task_type=follow_up&limit=100"),
+    tiaRequest<DashboardTodayRevenue>("/dashboard/today-revenue"),
   ]);
 
-  if (summaryResult.status === "rejected") throw summaryResult.reason;
+  if (todayResult.status === "rejected") throw todayResult.reason;
 
   return (
     <DashboardWorkspace
-      summary={summaryResult.value}
-      handoffs={handoffsResult.status === "fulfilled" ? handoffsResult.value : []}
-      setup={setupResult.status === "fulfilled" ? setupResult.value : null}
-      overdueTasks={overdueTasksResult.status === "fulfilled" ? overdueTasksResult.value : []}
-      handoffsUnavailable={handoffsResult.status === "rejected"}
-      setupUnavailable={setupResult.status === "rejected"}
-      overdueTasksUnavailable={overdueTasksResult.status === "rejected"}
+      today={todayResult.value}
+      followUps={followUpsResult.status === "fulfilled" ? followUpsResult.value : []}
+      revenue={revenueResult.status === "fulfilled" ? revenueResult.value : null}
+      followUpsUnavailable={followUpsResult.status === "rejected"}
+      revenueUnavailable={revenueResult.status === "rejected"}
     />
   );
 }

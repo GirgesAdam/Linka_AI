@@ -180,9 +180,12 @@ export default async function AutomationsPage() {
                       ? `${whatsappSetup.verified_name || whatsappSetup.display_phone_number || "رقم العيادة"} متصل وجاهز لإرسال الرسائل المفعّلة.`
                       : "كمّل ربط واتساب مرة واحدة قبل تشغيل الرسائل المفعّلة فعليًا."}
                 </p>
-                <p className="mt-1.5 text-xs leading-5 text-slate-600">
-                  خارج نافذة الـ24 ساعة من آخر رسالة للعميل، WhatsApp يتطلب قالبًا معتمدًا من Meta. Linka تجهّز القوالب المطلوبة وتستخدم المعتمد منها فقط.
-                </p>
+                <div role="note" className="mt-3 rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-950">
+                  <b className="block">تنبيه رسائل WhatsApp التلقائية</b>
+                  <p className="mt-1 leading-5">
+                    لو مرّ أكثر من 24 ساعة على آخر رسالة من العميل، سياسات WhatsApp من Meta تسمح بالإرسال التلقائي فقط باستخدام Template معتمد. الرسائل التلقائية في Linka تعتمد على الـTemplates المعتمدة، مش على نص حر تكتبه Linka وقت الإرسال.
+                  </p>
+                </div>
               </div>
             </div>
             <Link href="/setup/whatsapp" className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-800 transition hover:bg-slate-50">

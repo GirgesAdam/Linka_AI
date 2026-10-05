@@ -40,6 +40,7 @@ from app.schemas.crm import (
     CRMTaskCreate,
     CRMTaskRead,
     CRMTaskStatus,
+    CRMTaskType,
     CRMTaskUpdate,
     LeadCreate,
     LeadRead,
@@ -809,6 +810,7 @@ def list_tasks(
     db: Annotated[Session, Depends(get_db)],
     scope: Literal["all", "overdue", "today", "upcoming"] = "all",
     task_status: Annotated[CRMTaskStatus | None, Query(alias="status")] = None,
+    task_type: CRMTaskType | None = None,
     patient_id: UUID | None = None,
     assigned_user_id: UUID | None = None,
     assigned_to_me: bool = False,
@@ -829,6 +831,8 @@ def list_tasks(
     )
     if task_status is not None:
         stmt = stmt.where(CRMTask.status == task_status)
+    if task_type is not None:
+        stmt = stmt.where(CRMTask.task_type == task_type)
     if patient_id is not None:
         stmt = stmt.where(CRMTask.patient_id == patient_id)
     if assigned_to_me:
