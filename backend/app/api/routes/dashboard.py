@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -12,16 +12,50 @@ from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
+from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
 from app.models.doctor import Doctor
 from app.models.handoff_request import HandoffRequest
 from app.models.patient import Patient
+from app.models.payment_transaction import PaymentTransaction
 from app.models.service import Service
 from app.models.staff import Staff
-from app.schemas.dashboard import DashboardAppointmentRead, DashboardSummaryRead
+from app.schemas.dashboard import (
+    DashboardAppointmentRead,
+    DashboardSummaryRead,
+    DashboardTodayRevenueRead,
+)
 
 router = APIRouter()
+
+
+def _summarize_today_revenue(rows, *, currency: str) -> DashboardTodayRevenueRead:
+    currency = currency.upper()
+    gross_collected_minor = 0
+    refunds_minor = 0
+    net_by_method = {"cash": 0, "visa": 0, "instapay": 0, "other": 0}
+    for method, row_currency, transaction_type, amount in rows:
+        if str(row_currency).upper() != currency:
+            continue
+        value = int(amount or 0)
+        bucket = str(method) if str(method) in {"cash", "visa", "instapay"} else "other"
+        if transaction_type == "payment":
+            gross_collected_minor += value
+            net_by_method[bucket] += value
+        elif transaction_type == "refund":
+            refunds_minor += value
+            net_by_method[bucket] -= value
+    return DashboardTodayRevenueRead(
+        currency=currency,
+        gross_collected_minor=gross_collected_minor,
+        refunds_minor=refunds_minor,
+        total_minor=gross_collected_minor - refunds_minor,
+        cash_minor=net_by_method["cash"],
+        visa_minor=net_by_method["visa"],
+        instapay_minor=net_by_method["instapay"],
+        other_minor=net_by_method["other"],
+    )
 
 
 def _count(db: Session, stmt) -> int:
@@ -109,6 +143,33 @@ def dashboard_summary(
         .where(AutomationJob.workspace_id == workspace_id, AutomationJob.status == "failed"),
     )
 
+    next_day_start_utc = (start_local + timedelta(days=1)).astimezone(UTC)
+    revenue_rows = db.execute(
+        select(
+            PaymentTransaction.payment_method,
+            PaymentTransaction.currency,
+            PaymentTransaction.transaction_type,
+            func.coalesce(func.sum(PaymentTransaction.amount_minor), 0),
+        )
+        .where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.created_at >= start_utc,
+            PaymentTransaction.created_at < next_day_start_utc,
+        )
+        .group_by(
+            PaymentTransaction.payment_method,
+            PaymentTransaction.currency,
+            PaymentTransaction.transaction_type,
+        )
+    ).all()
+    revenue_currency = str(
+        db.scalar(
+            select(BookingSettings.default_currency).where(
+                BookingSettings.workspace_id == workspace_id
+            )
+        )
+        or "EGP"
+    ).upper()
     appointment_detail_stmt = (
         select(Appointment, Patient, Service, Branch, Staff)
         .join(
@@ -165,10 +226,9 @@ def dashboard_summary(
         appointment_detail_stmt.where(
             Appointment.start_at >= start_utc,
             Appointment.start_at <= end_utc,
-            Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress")),
+            Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress", "completed")),
         )
         .order_by(Appointment.start_at)
-        .limit(8)
     ).all()
     next_rows = db.execute(
         appointment_detail_stmt.where(
@@ -180,6 +240,7 @@ def dashboard_summary(
     ).all()
 
     return DashboardSummaryRead(
+        timezone=tz.key,
         active_patients=active_patients,
         appointments_today=appointments_today,
         upcoming_appointments=upcoming,
@@ -190,4 +251,5 @@ def dashboard_summary(
         recent_appointments=appointment_reads(recent_rows),
         today_appointments=appointment_reads(today_rows),
         next_appointments=appointment_reads(next_rows),
+        today_revenue=_summarize_today_revenue(revenue_rows, currency=revenue_currency),
     )
