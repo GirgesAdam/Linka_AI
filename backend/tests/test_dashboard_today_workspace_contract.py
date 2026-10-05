@@ -35,7 +35,8 @@ def test_today_appointments_are_backend_partitioned_by_clinic_day() -> None:
     assert '"completed"' in route
     assert '"cancelled"' in route
     assert '"no_show"' in route
-    assert '"rescheduled"' not in route.split('@router.get("/today", response_model=DashboardTodayRead)', 1)[1].split('@router.get("/today-revenue"', 1)[0]
+    today_block = route.split('@router.get("/today", response_model=DashboardTodayRead)', 1)[1].split('@router.get("/today-revenue"', 1)[0]
+    assert '"rescheduled"' not in today_block
 
 
 def test_next_appointment_is_backend_owned_and_only_non_terminal() -> None:
@@ -86,21 +87,42 @@ def test_today_revenue_zero_is_valid() -> None:
     assert result.instapay_minor == 0
 
 
-def test_home_information_architecture_is_today_only() -> None:
+def test_home_shows_team_messages_and_due_followups_without_future_appointments() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/dashboard/page.tsx").read_text(encoding="utf-8")
     workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
     assert 'tiaRequest<DashboardToday>("/dashboard/today")' in page
-    assert 'tiaRequest<CRMTask[]>("/crm/tasks?scope=today&task_type=follow_up&limit=100")' in page
+    assert 'tiaRequest<InboxConversationListItem[]>("/inbox/conversations?owner_type=human&status=pending&limit=100")' in page
+    assert 'tiaRequest<CRMTask[]>("/crm/tasks?scope=due&task_type=follow_up&limit=100")' in page
     assert 'tiaRequest<DashboardTodayRevenue>("/dashboard/today-revenue")' in page
     assert "today.appointments" in workspace
-    assert "متابعات اليوم" in workspace
+    assert "رسائل على الفريق" in workspace
+    assert "المتابعات المستحقة" in workspace
     assert "إيرادات اليوم" in workspace
+    assert 'href={`/inbox/${conversation.id}`}' in workspace
     assert "summary.next_appointments" not in workspace
     assert "upcoming_appointments" not in workspace
-    assert "Inbox" not in workspace
-    assert "/inbox" not in workspace
     assert "active_patients" not in workspace
     assert "price_minor" not in workspace
+
+
+def test_team_messages_and_followups_keep_old_unresolved_work_visible() -> None:
+    page = (_root() / "frontend/src/app/(dashboard)/dashboard/page.tsx").read_text(encoding="utf-8")
+    crm_route = (_root() / "backend/app/api/routes/crm.py").read_text(encoding="utf-8")
+    assert "owner_type=human&status=pending" in page
+    assert "scope=due&task_type=follow_up" in page
+    assert 'scope: Literal["all", "overdue", "today", "upcoming", "due"]' in crm_route
+    assert 'elif scope == "due":' in crm_route
+    assert "CRMTask.due_at < tomorrow_utc" in crm_route
+    assert "CRMTask.status.in_(ACTIVE_TASK_STATUSES)" in crm_route
+
+
+def test_dashboard_followup_can_be_completed_inline_and_revalidates_home() -> None:
+    workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
+    actions = (_root() / "frontend/src/app/(dashboard)/tasks/actions.ts").read_text(encoding="utf-8")
+    assert 'form action={setTaskStatus}' in workspace
+    assert 'name="status" value="completed"' in workspace
+    assert "تعليم المتابعة كمكتملة" in workspace
+    assert 'revalidatePath("/dashboard")' in actions
 
 
 def test_secondary_home_failures_are_local() -> None:
@@ -108,6 +130,7 @@ def test_secondary_home_failures_are_local() -> None:
     workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
     assert "Promise.allSettled" in page
     assert 'if (todayResult.status === "rejected") throw todayResult.reason' in page
+    assert "teamMessagesUnavailable" in page and "teamMessagesUnavailable" in workspace
     assert "followUpsUnavailable" in page and "followUpsUnavailable" in workspace
     assert "revenueUnavailable" in page and "revenueUnavailable" in workspace
 
@@ -123,14 +146,14 @@ def test_agenda_clock_is_frontend_only_and_has_no_product_polling() -> None:
     assert "الآن" in agenda
 
 
-def test_today_follow_up_scope_is_clinic_local_active_only() -> None:
+def test_due_follow_up_scope_is_clinic_local_active_only() -> None:
     crm_route = (_root() / "backend/app/api/routes/crm.py").read_text(encoding="utf-8")
-    assert 'scope: Literal["all", "overdue", "today", "upcoming"]' in crm_route
+    assert 'scope: Literal["all", "overdue", "today", "upcoming", "due"]' in crm_route
     assert "task_type: CRMTaskType | None = None" in crm_route
     assert "CRMTask.task_type == task_type" in crm_route
     assert "CRMTask.status.in_(ACTIVE_TASK_STATUSES)" in crm_route
-    assert 'if scope == "today":' in crm_route
-    assert "CRMTask.due_at >= start_utc" in crm_route
+    assert 'elif scope in {"today", "upcoming", "due"}:' in crm_route
+    assert 'elif scope == "due":' in crm_route
     assert "CRMTask.due_at < tomorrow_utc" in crm_route
 
 

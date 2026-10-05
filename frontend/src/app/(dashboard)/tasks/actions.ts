@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { tiaRequest } from "@/lib/tia/api";
 
 function refreshTaskViews(patientId?: string) {
+  revalidatePath("/dashboard");
   revalidatePath("/tasks");
   if (patientId) revalidatePath(`/patients/${patientId}`);
 }

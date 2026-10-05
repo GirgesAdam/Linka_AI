@@ -808,7 +808,7 @@ def create_task(
 def list_tasks(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
-    scope: Literal["all", "overdue", "today", "upcoming"] = "all",
+    scope: Literal["all", "overdue", "today", "upcoming", "due"] = "all",
     task_status: Annotated[CRMTaskStatus | None, Query(alias="status")] = None,
     task_type: CRMTaskType | None = None,
     patient_id: UUID | None = None,
@@ -844,7 +844,7 @@ def list_tasks(
         stmt = stmt.where(CRMTask.status.in_(ACTIVE_TASK_STATUSES))
     if scope == "overdue":
         stmt = stmt.where(CRMTask.due_at < now)
-    elif scope in {"today", "upcoming"}:
+    elif scope in {"today", "upcoming", "due"}:
         tz = _workspace_timezone(access.workspace.timezone)
         local_now = now.astimezone(tz)
         start_local = datetime.combine(local_now.date(), time.min, tzinfo=tz)
@@ -852,6 +852,8 @@ def list_tasks(
         start_utc = start_local.astimezone(UTC)
         if scope == "today":
             stmt = stmt.where(CRMTask.due_at >= start_utc, CRMTask.due_at < tomorrow_utc)
+        elif scope == "due":
+            stmt = stmt.where(CRMTask.due_at < tomorrow_utc)
         else:
             stmt = stmt.where(CRMTask.due_at >= tomorrow_utc)
 
