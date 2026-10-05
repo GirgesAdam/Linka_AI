@@ -15,6 +15,7 @@ export interface WorkspaceAccess {
 export interface MeResponse { user: CurrentUser; workspaces: WorkspaceAccess[]; }
 
 export interface DashboardSummary {
+  timezone: string;
   active_patients: number;
   appointments_today: number;
   upcoming_appointments: number;
@@ -25,6 +26,11 @@ export interface DashboardSummary {
   recent_appointments: DashboardAppointment[];
   today_appointments: DashboardAppointment[];
   next_appointments: DashboardAppointment[];
+  today_revenue: DashboardTodayRevenue;
+}
+export interface DashboardTodayRevenue {
+  currency: string; gross_collected_minor: number; refunds_minor: number; total_minor: number;
+  cash_minor: number; visa_minor: number; instapay_minor: number; other_minor: number;
 }
 export interface DashboardAppointment {
   id: string; patient_id: string; patient_name: string; service_name: string;
