@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.agents.v2 import turn_contract as contract
-from app.services.agent_v2 import orchestrator as runtime
+import app.agents.v2.turn_contract as contract
+import app.services.agent_v2.orchestrator as runtime
 
 
 _RECENT_DATE_LEVEL_MISS = {
