@@ -147,7 +147,7 @@ def test_task_routes_are_workspace_scoped_and_overdue_is_computed_at_read_time()
     assert '@router.patch("/tasks/{task_id}"' in route
     assert '@router.post("/tasks/{task_id}/claim"' in route
     assert "CRMTask.workspace_id == access.workspace.id" in route
-    assert 'Literal["all", "overdue", "today", "upcoming"]' in route
+    assert 'Literal["all", "overdue", "today", "upcoming", "due"]' in route
     assert "task.due_at < now" in route
     assert ".with_for_update(of=CRMTask)" in route
     assert "llm" not in route.lower()

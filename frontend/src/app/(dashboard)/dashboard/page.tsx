@@ -1,5 +1,12 @@
 import { tiaRequest } from "@/lib/tia/api";
-import type { CRMTask, DashboardSummary, DashboardToday, DashboardTodayRevenue } from "@/lib/types";
+import { getAppContext } from "@/lib/tia/workspace";
+import type {
+  CRMTask,
+  DashboardSummary,
+  DashboardToday,
+  DashboardTodayRevenue,
+  InboxConversationListItem,
+} from "@/lib/types";
 import { DashboardWorkspace } from "./dashboard-workspace";
 
 async function loadToday(): Promise<DashboardToday> {
@@ -17,9 +24,11 @@ async function loadToday(): Promise<DashboardToday> {
 }
 
 export default async function DashboardPage() {
-  const [todayResult, followUpsResult, revenueResult] = await Promise.allSettled([
+  const ctx = await getAppContext();
+  const [todayResult, teamMessagesResult, followUpsResult, revenueResult] = await Promise.allSettled([
     loadToday(),
-    tiaRequest<CRMTask[]>("/crm/tasks?scope=today&task_type=follow_up&limit=100"),
+    tiaRequest<InboxConversationListItem[]>("/inbox/conversations?owner_type=human&status=pending&limit=100"),
+    tiaRequest<CRMTask[]>("/crm/tasks?scope=due&task_type=follow_up&limit=100"),
     tiaRequest<DashboardTodayRevenue>("/dashboard/today-revenue"),
   ]);
 
@@ -28,10 +37,14 @@ export default async function DashboardPage() {
   return (
     <DashboardWorkspace
       today={todayResult.value}
+      teamMessages={teamMessagesResult.status === "fulfilled" ? teamMessagesResult.value : []}
       followUps={followUpsResult.status === "fulfilled" ? followUpsResult.value : []}
       revenue={revenueResult.status === "fulfilled" ? revenueResult.value : null}
+      teamMessagesUnavailable={teamMessagesResult.status === "rejected"}
       followUpsUnavailable={followUpsResult.status === "rejected"}
       revenueUnavailable={revenueResult.status === "rejected"}
+      currentUserId={ctx.me.user.id}
+      isAdmin={ctx.workspace.role === "admin"}
     />
   );
 }
