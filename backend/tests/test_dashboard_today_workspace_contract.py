@@ -81,6 +81,7 @@ def test_dashboard_ui_is_today_only_and_has_no_financial_inference() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/dashboard/page.tsx").read_text(encoding="utf-8")
     workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
     assert 'tiaRequest<DashboardSummary>("/dashboard/summary")' in page
+    assert 'tiaRequest<CRMTask[]>("/crm/tasks?scope=today&task_type=follow_up&limit=100")' in page
     assert "summary.today_appointments" in workspace
     assert "summary.next_appointments" not in workspace
     assert "summary.upcoming_appointments" not in workspace
@@ -92,6 +93,9 @@ def test_dashboard_ui_is_today_only_and_has_no_financial_inference() -> None:
     assert "revenue.instapay_minor" in workspace
     assert "gross_collected_minor" not in workspace
     assert "PaymentTransaction" not in workspace
+    assert "todayTasks.slice(0, 6)" in workspace
+    assert 'href="/tasks?scope=today"' in workspace
+    assert "TodayTaskRow" in workspace
 
 
 def test_dashboard_partial_failures_stay_local() -> None:
@@ -102,9 +106,22 @@ def test_dashboard_partial_failures_stay_local() -> None:
     assert "handoffsUnavailable" in page and "handoffsUnavailable" in workspace
     assert "setupUnavailable" in page and "setupUnavailable" in workspace
     assert "overdueTasksUnavailable" in page and "overdueTasksUnavailable" in workspace
+    assert "todayTasksUnavailable" in page and "todayTasksUnavailable" in workspace
 
 
 def test_dashboard_uses_linka_interaction_tokens_not_legacy_teal() -> None:
     workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
     assert "teal-" not in workspace
     assert "var(--interactive)" in workspace
+
+
+def test_today_task_scope_is_clinic_local_and_active_only() -> None:
+    crm_route = (_root() / "backend/app/api/routes/crm.py").read_text(encoding="utf-8")
+    assert 'scope: Literal["all", "overdue", "today", "upcoming"]' in crm_route
+    assert "task_type: CRMTaskType | None = None" in crm_route
+    assert "CRMTask.task_type == task_type" in crm_route
+    assert 'if scope != "all" and task_status is None:' in crm_route
+    assert "CRMTask.status.in_(ACTIVE_TASK_STATUSES)" in crm_route
+    assert 'if scope == "today":' in crm_route
+    assert "CRMTask.due_at >= start_utc" in crm_route
+    assert "CRMTask.due_at < tomorrow_utc" in crm_route

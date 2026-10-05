@@ -34,6 +34,12 @@ const COPY = {
   otherMethods: "\u0637\u0631\u0642 \u062f\u0641\u0639 \u0642\u062f\u064a\u0645\u0629/\u0623\u062e\u0631\u0649 \u0636\u0645\u0646 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a:",
   todayListTitle: "\u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
   todayListDescription: "\u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f \u062f\u0627\u062e\u0644 \u0627\u0644\u064a\u0648\u0645 \u0627\u0644\u062d\u0627\u0644\u064a \u0644\u0644\u0639\u064a\u0627\u062f\u0629 \u0641\u0642\u0637.",
+  todayFollowupsTitle: "\u0645\u062a\u0627\u0628\u0639\u0627\u062a \u0627\u0644\u064a\u0648\u0645",
+  todayFollowupsDescription: "\u0627\u0644\u0645\u062a\u0627\u0628\u0639\u0627\u062a \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \u062a\u0646\u0641\u064a\u0630\u0647\u0627 \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647 \u0648\u0644\u0633\u0647 \u0645\u0627 \u0627\u062a\u0643\u0645\u0644\u062a\u0634.",
+  allTodayFollowups: "\u0643\u0644 \u0645\u062a\u0627\u0628\u0639\u0627\u062a \u0627\u0644\u064a\u0648\u0645",
+  pendingTask: "\u0645\u0639\u0644\u0642\u0629",
+  inProgressTask: "\u0642\u064a\u062f \u0627\u0644\u062a\u0646\u0641\u064a\u0630",
+  moreFollowups: "\u0645\u062a\u0627\u0628\u0639\u0629 \u0623\u062e\u0631\u0649",
   noAppointments: "\u0645\u0641\u064a\u0634 \u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
   noAppointmentsDescription: "\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629 \u0628\u062a\u0639\u0631\u0636 \u064a\u0648\u0645 \u0627\u0644\u0639\u064a\u0627\u062f\u0629 \u0627\u0644\u062d\u0627\u0644\u064a \u0641\u0642\u0637.",
   openAppointments: "\u0641\u062a\u062d \u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f",
@@ -89,21 +95,55 @@ function RevenueMethod({ label, amount, currency }: { label: string; amount: num
   );
 }
 
+function TodayTaskRow({ task, timezone }: { task: CRMTask; timezone: string }) {
+  const time = new Intl.DateTimeFormat("ar-EG", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: timezone,
+  }).format(new Date(task.due_at));
+  const statusLabel = task.status === "in_progress" ? COPY.inProgressTask : COPY.pendingTask;
+
+  return (
+    <Link
+      href={`/tasks?scope=today&patient_id=${task.patient_id}`}
+      className="grid min-h-16 gap-3 rounded-xl px-3 py-4 transition hover:bg-[var(--surface-2)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="break-words font-black text-slate-950">{task.patient_name}</div>
+          <StatusBadge domain="priority" status={task.priority} showIcon={false} />
+        </div>
+        <div className="mt-1 break-words text-xs leading-5 text-[var(--muted)]">{task.title}</div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-bold text-slate-700">{time}</span>
+        <span className="rounded-full bg-[var(--surface-2)] px-2 py-1 font-bold text-slate-700">
+          {statusLabel}
+        </span>
+      </div>
+    </Link>
+  );
+}
+
 export function DashboardWorkspace({
   summary,
   setup,
   overdueTasks,
+  todayTasks,
   handoffsUnavailable = false,
   setupUnavailable = false,
   overdueTasksUnavailable = false,
+  todayTasksUnavailable = false,
 }: {
   summary: DashboardSummary;
   handoffs: HandoffQueueItem[];
   setup: ClinicSetupV2Snapshot | null;
   overdueTasks: CRMTask[];
+  todayTasks: CRMTask[];
   handoffsUnavailable?: boolean;
   setupUnavailable?: boolean;
   overdueTasksUnavailable?: boolean;
+  todayTasksUnavailable?: boolean;
 }) {
   const incompleteSetup = Boolean(setup && !setup.readiness.ready);
   const needsAttention =
@@ -113,7 +153,8 @@ export function DashboardWorkspace({
     summary.open_handoffs > 0 ||
     handoffsUnavailable ||
     setupUnavailable ||
-    overdueTasksUnavailable;
+    overdueTasksUnavailable ||
+    todayTasksUnavailable;
   const revenue = summary.today_revenue;
 
   return (
@@ -199,6 +240,39 @@ export function DashboardWorkspace({
         </Card>
       </section>
 
+      {todayTasks.length > 0 && (
+        <section aria-labelledby="today-followups-heading" className="mt-6">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 id="today-followups-heading" className="text-lg font-black text-slate-950">
+                {COPY.todayFollowupsTitle}
+              </h2>
+              <p className="mt-1 text-xs text-[var(--muted)]">{COPY.todayFollowupsDescription}</p>
+            </div>
+            <Link href="/tasks?scope=today" className="text-xs font-black text-[var(--interactive)]">
+              {COPY.allTodayFollowups}
+            </Link>
+          </div>
+          <Card>
+            <CardContent className="p-2 sm:p-3">
+              <div className="divide-y divide-[var(--border)]">
+                {todayTasks.slice(0, 6).map((task) => (
+                  <TodayTaskRow key={task.id} task={task} timezone={summary.timezone} />
+                ))}
+              </div>
+              {todayTasks.length > 6 && (
+                <Link
+                  href="/tasks?scope=today"
+                  className="mt-2 flex min-h-10 items-center justify-center rounded-lg text-xs font-black text-[var(--interactive)] hover:bg-[var(--surface-2)]"
+                >
+                  +{todayTasks.length - 6} {COPY.moreFollowups}
+                </Link>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
       <section aria-labelledby="attention-heading" className="mt-6">
         <div className="mb-3">
           <h2 id="attention-heading" className="text-lg font-black text-slate-950">
@@ -255,7 +329,7 @@ export function DashboardWorkspace({
                 </div>
               </Link>
             )}
-            {(handoffsUnavailable || setupUnavailable || overdueTasksUnavailable) && (
+            {(handoffsUnavailable || setupUnavailable || overdueTasksUnavailable || todayTasksUnavailable) && (
               <div role="status" className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-amber-950">
                 <div className="flex gap-3">
                   <CircleAlert size={18} />
