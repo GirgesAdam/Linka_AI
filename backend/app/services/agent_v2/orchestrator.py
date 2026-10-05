@@ -449,7 +449,7 @@ def _normalize_cross_turn_nearest_after_verified_miss(
     if not understanding.operations:
         return understanding
     operation = understanding.operations[0]
-    if not operation.continues_previous:
+    if not bool(getattr(operation, "continues_previous", False)):
         return understanding
     time_constraint = operation.entities.time
     if time_constraint is not None and time_constraint.mode != "nearest":
