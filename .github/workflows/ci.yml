@@ -57,7 +57,7 @@ jobs:
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0089_dynamic_laser_device_references (head)"
+        run: test "$(python -m alembic heads)" = "0090_availability_blocks (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
