@@ -691,6 +691,7 @@ def _task_read(
     *,
     patient_first_name: str,
     patient_last_name: str | None,
+    patient_phone: str | None,
     assigned_user: User | None,
     now: datetime,
 ) -> CRMTaskRead:
@@ -716,6 +717,7 @@ def _task_read(
         due_at=task.due_at,
         completed_at=task.completed_at,
         patient_name=patient_name or patient_first_name,
+        patient_phone=patient_phone,
         assigned_user_name=(assigned_user.full_name if assigned_user else None),
         assigned_user_email=(assigned_user.email if assigned_user else None),
         is_overdue=(task.status in ACTIVE_TASK_STATUSES and task.due_at < now),
@@ -799,6 +801,7 @@ def create_task(
         stored,
         patient_first_name=patient.first_name,
         patient_last_name=patient.last_name,
+        patient_phone=patient.phone,
         assigned_user=assigned_user,
         now=datetime.now(UTC),
     )
@@ -868,6 +871,7 @@ def list_tasks(
             task,
             patient_first_name=patient.first_name,
             patient_last_name=patient.last_name,
+            patient_phone=patient.phone,
             assigned_user=user,
             now=now,
         )
@@ -919,6 +923,7 @@ def update_task(
         stored,
         patient_first_name=patient.first_name,
         patient_last_name=patient.last_name,
+        patient_phone=patient.phone,
         assigned_user=assigned_user,
         now=datetime.now(UTC),
     )
@@ -954,6 +959,7 @@ def claim_task(
         stored,
         patient_first_name=patient.first_name,
         patient_last_name=patient.last_name,
+        patient_phone=patient.phone,
         assigned_user=assigned_user,
         now=datetime.now(UTC),
     )

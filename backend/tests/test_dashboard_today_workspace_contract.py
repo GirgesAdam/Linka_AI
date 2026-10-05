@@ -125,6 +125,18 @@ def test_dashboard_followup_can_be_completed_inline_and_revalidates_home() -> No
     assert 'revalidatePath("/dashboard")' in actions
 
 
+def test_dashboard_followup_shows_patient_phone_from_existing_task_join() -> None:
+    workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
+    frontend_types = (_root() / "frontend/src/lib/types.ts").read_text(encoding="utf-8")
+    crm_schema = (_root() / "backend/app/schemas/crm.py").read_text(encoding="utf-8")
+    crm_route = (_root() / "backend/app/api/routes/crm.py").read_text(encoding="utf-8")
+    assert "patient_phone: str | None = None" in crm_schema
+    assert "patient_phone=patient.phone" in crm_route
+    assert "patient_phone:string|null" in frontend_types
+    assert "task.patient_phone" in workspace
+    assert 'dir="ltr"' in workspace
+
+
 def test_secondary_home_failures_are_local() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/dashboard/page.tsx").read_text(encoding="utf-8")
     workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
