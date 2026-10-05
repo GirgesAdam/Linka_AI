@@ -24,6 +24,7 @@ from app.models.staff import Staff
 from app.schemas.dashboard import (
     DashboardAppointmentRead,
     DashboardSummaryRead,
+    DashboardTodayRead,
     DashboardTodayRevenueRead,
 )
 
@@ -67,6 +68,140 @@ def _timezone(name: str) -> ZoneInfo:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
         return ZoneInfo("Africa/Cairo")
+
+
+def _today_bounds(timezone_name: str, *, now: datetime | None = None) -> tuple[ZoneInfo, datetime, datetime, datetime]:
+    reference = now or datetime.now(UTC)
+    tz = _timezone(timezone_name)
+    local_today = reference.astimezone(tz).date()
+    start_local = datetime.combine(local_today, time.min, tzinfo=tz)
+    start_utc = start_local.astimezone(UTC)
+    next_day_start_utc = (start_local + timedelta(days=1)).astimezone(UTC)
+    return tz, reference, start_utc, next_day_start_utc
+
+
+def _appointment_reads(rows) -> list[DashboardAppointmentRead]:
+    return [
+        DashboardAppointmentRead(
+            id=appointment.id,
+            patient_id=patient.id,
+            patient_name=f"{patient.first_name} {patient.last_name or ''}".strip(),
+            service_name=service.name,
+            branch_name=branch.name,
+            doctor_name=f"{staff.first_name} {staff.last_name}".strip(),
+            status=appointment.status,
+            start_at=appointment.start_at,
+            end_at=appointment.end_at,
+            price_minor=appointment.price_minor,
+            currency=appointment.currency,
+        )
+        for appointment, patient, service, branch, staff in rows
+    ]
+
+
+def _appointment_detail_stmt(workspace_id):
+    return (
+        select(Appointment, Patient, Service, Branch, Staff)
+        .join(
+            Patient,
+            (Patient.workspace_id == Appointment.workspace_id)
+            & (Patient.id == Appointment.patient_id),
+        )
+        .join(
+            Service,
+            (Service.workspace_id == Appointment.workspace_id)
+            & (Service.id == Appointment.service_id),
+        )
+        .join(
+            Branch,
+            (Branch.workspace_id == Appointment.workspace_id)
+            & (Branch.id == Appointment.branch_id),
+        )
+        .join(
+            Doctor,
+            (Doctor.workspace_id == Appointment.workspace_id)
+            & (Doctor.id == Appointment.doctor_id),
+        )
+        .join(Staff, (Staff.workspace_id == Doctor.workspace_id) & (Staff.id == Doctor.staff_id))
+        .where(Appointment.workspace_id == workspace_id)
+    )
+
+
+@router.get("/today", response_model=DashboardTodayRead)
+def dashboard_today(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DashboardTodayRead:
+    workspace_id = access.workspace.id
+    tz, now, start_utc, next_day_start_utc = _today_bounds(access.workspace.timezone)
+    rows = db.execute(
+        _appointment_detail_stmt(workspace_id)
+        .where(
+            Appointment.start_at >= start_utc,
+            Appointment.start_at < next_day_start_utc,
+            Appointment.status.in_((
+                "pending",
+                "confirmed",
+                "checked_in",
+                "in_progress",
+                "completed",
+                "cancelled",
+                "no_show",
+            )),
+        )
+        .order_by(Appointment.start_at, Appointment.id)
+    ).all()
+    next_appointment_id = next(
+        (
+            appointment.id
+            for appointment, _patient, _service, _branch, _staff in rows
+            if appointment.status in {"pending", "confirmed", "checked_in", "in_progress"}
+            and appointment.end_at >= now
+        ),
+        None,
+    )
+    return DashboardTodayRead(
+        timezone=tz.key,
+        local_date=now.astimezone(tz).date().isoformat(),
+        appointments=_appointment_reads(rows),
+        next_appointment_id=next_appointment_id,
+    )
+
+
+@router.get("/today-revenue", response_model=DashboardTodayRevenueRead)
+def dashboard_today_revenue(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DashboardTodayRevenueRead:
+    workspace_id = access.workspace.id
+    _tz, _now, start_utc, next_day_start_utc = _today_bounds(access.workspace.timezone)
+    rows = db.execute(
+        select(
+            PaymentTransaction.payment_method,
+            PaymentTransaction.currency,
+            PaymentTransaction.transaction_type,
+            func.coalesce(func.sum(PaymentTransaction.amount_minor), 0),
+        )
+        .where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.created_at >= start_utc,
+            PaymentTransaction.created_at < next_day_start_utc,
+        )
+        .group_by(
+            PaymentTransaction.payment_method,
+            PaymentTransaction.currency,
+            PaymentTransaction.transaction_type,
+        )
+    ).all()
+    currency = str(
+        db.scalar(
+            select(BookingSettings.default_currency).where(
+                BookingSettings.workspace_id == workspace_id
+            )
+        )
+        or "EGP"
+    ).upper()
+    return _summarize_today_revenue(rows, currency=currency)
 
 
 @router.get("/summary", response_model=DashboardSummaryRead)

@@ -61,7 +61,6 @@ export async function createPatientTask(formData: FormData) {
   const assignedUserId = String(formData.get("assigned_user_id") || "");
   const executionMode = String(formData.get("execution_mode") || "ai") === "human" ? "human" : "ai";
   const conversationId = String(formData.get("conversation_id") || "");
-  const description = String(formData.get("description") || "").trim();
   if (!patientId || !title || !dueAt) return;
 
   await tiaRequest("/crm/tasks", {
@@ -74,7 +73,6 @@ export async function createPatientTask(formData: FormData) {
       execution_mode: executionMode,
       priority: "normal",
       title,
-      description: description || null,
       due_at: dueAt,
     }),
   });

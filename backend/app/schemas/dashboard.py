@@ -29,6 +29,13 @@ class DashboardTodayRevenueRead(BaseModel):
     other_minor: int
 
 
+class DashboardTodayRead(BaseModel):
+    timezone: str
+    local_date: str
+    appointments: list[DashboardAppointmentRead]
+    next_appointment_id: UUID | None
+
+
 class DashboardSummaryRead(BaseModel):
     timezone: str
     active_patients: int

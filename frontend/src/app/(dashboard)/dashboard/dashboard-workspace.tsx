@@ -1,345 +1,194 @@
 import Link from "next/link";
-import {
-  CalendarCheck2,
-  CircleAlert,
-  ListTodo,
-  MessageSquareMore,
-  Settings2,
-  WalletCards,
-  Workflow,
-} from "lucide-react";
+import { ArrowUpLeft, CircleAlert, ListTodo, WalletCards } from "lucide-react";
 
-import { EmptyState } from "@/components/empty-state";
-import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import type { ClinicSetupV2Snapshot } from "@/lib/clinic-setup-v2-types";
 import { formatMoney } from "@/lib/format";
-import type {
-  CRMTask,
-  DashboardAppointment,
-  DashboardSummary,
-  HandoffQueueItem,
-} from "@/lib/types";
+import type { CRMTask, DashboardToday, DashboardTodayRevenue } from "@/lib/types";
+import { TodayAgenda } from "./today-agenda";
 
-const COPY = {
-  pageTitle: "\u0627\u0644\u064a\u0648\u0645",
-  pageDescription:
-    "\u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u064a\u0648\u0645\u060c \u0627\u0644\u062a\u062d\u0635\u064a\u0644 \u0627\u0644\u0641\u0639\u0644\u064a\u060c \u0648\u0627\u0644\u062d\u0627\u062c\u0627\u062a \u0627\u0644\u0644\u064a \u0645\u062d\u062a\u0627\u062c\u0629 \u062a\u062f\u062e\u0644 \u062f\u0644\u0648\u0642\u062a\u064a.",
-  todayAppointments: "\u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u064a\u0648\u0645",
-  sortedByClinicTime: "\u0645\u0631\u062a\u0628\u0629 \u062d\u0633\u0628 \u0627\u0644\u0648\u0642\u062a \u062f\u0627\u062e\u0644 \u064a\u0648\u0645 \u0627\u0644\u0639\u064a\u0627\u062f\u0629",
-  allAppointments: "\u0643\u0644 \u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f",
-  todayRevenue: "\u0625\u064a\u0631\u0627\u062f\u0627\u062a \u0627\u0644\u064a\u0648\u0645",
-  refundsIncluded: "\u064a\u0634\u0645\u0644 \u062e\u0635\u0645 \u0645\u0631\u062a\u062c\u0639\u0627\u062a \u0627\u0644\u064a\u0648\u0645:",
-  otherMethods: "\u0637\u0631\u0642 \u062f\u0641\u0639 \u0642\u062f\u064a\u0645\u0629/\u0623\u062e\u0631\u0649 \u0636\u0645\u0646 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a:",
-  todayListTitle: "\u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
-  todayListDescription: "\u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f \u062f\u0627\u062e\u0644 \u0627\u0644\u064a\u0648\u0645 \u0627\u0644\u062d\u0627\u0644\u064a \u0644\u0644\u0639\u064a\u0627\u062f\u0629 \u0641\u0642\u0637.",
-  todayFollowupsTitle: "\u0645\u062a\u0627\u0628\u0639\u0627\u062a \u0627\u0644\u064a\u0648\u0645",
-  todayFollowupsDescription: "\u0627\u0644\u0645\u062a\u0627\u0628\u0639\u0627\u062a \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \u062a\u0646\u0641\u064a\u0630\u0647\u0627 \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647 \u0648\u0644\u0633\u0647 \u0645\u0627 \u0627\u062a\u0643\u0645\u0644\u062a\u0634.",
-  allTodayFollowups: "\u0643\u0644 \u0645\u062a\u0627\u0628\u0639\u0627\u062a \u0627\u0644\u064a\u0648\u0645",
-  pendingTask: "\u0645\u0639\u0644\u0642\u0629",
-  inProgressTask: "\u0642\u064a\u062f \u0627\u0644\u062a\u0646\u0641\u064a\u0630",
-  moreFollowups: "\u0645\u062a\u0627\u0628\u0639\u0629 \u0623\u062e\u0631\u0649",
-  noAppointments: "\u0645\u0641\u064a\u0634 \u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
-  noAppointmentsDescription: "\u0627\u0644\u0635\u0641\u062d\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629 \u0628\u062a\u0639\u0631\u0636 \u064a\u0648\u0645 \u0627\u0644\u0639\u064a\u0627\u062f\u0629 \u0627\u0644\u062d\u0627\u0644\u064a \u0641\u0642\u0637.",
-  openAppointments: "\u0641\u062a\u062d \u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f",
-  attentionTitle: "\u0645\u062d\u062a\u0627\u062c \u062a\u062f\u062e\u0644",
-  attentionDescription: "\u0627\u0633\u062a\u062b\u0646\u0627\u0621\u0627\u062a \u062a\u0634\u063a\u064a\u0644\u064a\u0629 \u0628\u0633\u060c \u0645\u0646 \u063a\u064a\u0631 \u0645\u0627 \u062a\u0632\u0627\u062d\u0645 \u0634\u063a\u0644 \u0627\u0644\u064a\u0648\u0645.",
-  noAttention: "\u0645\u0641\u064a\u0634 \u062d\u0627\u062c\u0629 \u0645\u062d\u062a\u0627\u062c\u0629 \u062a\u062f\u062e\u0644 \u062d\u0627\u0644\u064a\u064b\u0627.",
-  setupIncomplete: "\u0625\u0639\u062f\u0627\u062f \u0627\u0644\u0639\u064a\u0627\u062f\u0629 \u063a\u064a\u0631 \u0645\u0643\u062a\u0645\u0644",
-  complete: "\u0645\u0643\u062a\u0645\u0644",
-  automationFailed: "Automation \u0641\u0634\u0644",
-  overdueFollowup: "\u0645\u062a\u0627\u0628\u0639\u0629 \u0645\u062a\u0623\u062e\u0631\u0629",
-  conversationNeedsHuman: "\u0645\u062d\u0627\u062f\u062b\u0629 \u0645\u062d\u062a\u0627\u062c\u0629 \u062a\u062f\u062e\u0644",
-  partialUnavailable: "\u0628\u0639\u0636 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0645\u062a\u0627\u0628\u0639\u0629 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d\u0629 \u0645\u0624\u0642\u062a\u064b\u0627",
-} as const;
+function formatClinicDate(localDate: string, timezone: string) {
+  const value = localDate ? new Date(`${localDate}T12:00:00Z`) : new Date();
+  return new Intl.DateTimeFormat("ar-EG", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: localDate ? "UTC" : timezone,
+  }).format(value);
+}
 
-function AppointmentRow({
-  appointment,
-  timezone,
-}: {
-  appointment: DashboardAppointment;
-  timezone: string;
-}) {
-  const time = new Intl.DateTimeFormat("ar-EG", {
+function formatTaskTime(value: string, timezone: string) {
+  return new Intl.DateTimeFormat("ar-EG", {
     hour: "numeric",
     minute: "2-digit",
     timeZone: timezone,
-  }).format(new Date(appointment.start_at));
-
-  return (
-    <Link
-      href={`/appointments/${appointment.id}`}
-      className="grid min-h-16 gap-3 rounded-xl px-3 py-4 transition hover:bg-[var(--surface-2)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-    >
-      <div className="min-w-0">
-        <div className="break-words font-black text-slate-950">{appointment.patient_name}</div>
-        <div className="mt-1 break-words text-xs leading-5 text-[var(--muted)]">
-          {appointment.service_name} - {appointment.doctor_name}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-bold text-slate-700">{time}</span>
-        <StatusBadge domain="appointment" status={appointment.status} showIcon={false} />
-      </div>
-    </Link>
-  );
+  }).format(new Date(value));
 }
 
-function RevenueMethod({ label, amount, currency }: { label: string; amount: number; currency: string }) {
-  return (
-    <div className="rounded-xl bg-[var(--surface-2)] p-3">
-      <div className="text-[11px] font-bold text-[var(--muted)]">{label}</div>
-      <div className="mt-1 text-sm font-black text-slate-950">{formatMoney(amount, currency)}</div>
-    </div>
-  );
-}
-
-function TodayTaskRow({ task, timezone }: { task: CRMTask; timezone: string }) {
-  const time = new Intl.DateTimeFormat("ar-EG", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: timezone,
-  }).format(new Date(task.due_at));
-  const statusLabel = task.status === "in_progress" ? COPY.inProgressTask : COPY.pendingTask;
-
+function FollowUpRow({ task, timezone }: { task: CRMTask; timezone: string }) {
   return (
     <Link
       href={`/tasks?scope=today&patient_id=${task.patient_id}`}
-      className="grid min-h-16 gap-3 rounded-xl px-3 py-4 transition hover:bg-[var(--surface-2)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+      className="group grid min-h-16 gap-3 px-1 py-4 transition hover:bg-slate-50 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-3"
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="break-words font-black text-slate-950">{task.patient_name}</div>
+          <span className="truncate text-[15px] font-semibold text-slate-950">{task.patient_name}</span>
           <StatusBadge domain="priority" status={task.priority} showIcon={false} />
         </div>
-        <div className="mt-1 break-words text-xs leading-5 text-[var(--muted)]">{task.title}</div>
+        <p className="mt-1 break-words text-[13px] leading-5 text-slate-500">{task.title}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <span>{formatTaskTime(task.due_at, timezone)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{task.status === "in_progress" ? "قيد التنفيذ" : "معلقة"}</span>
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-bold text-slate-700">{time}</span>
-        <span className="rounded-full bg-[var(--surface-2)] px-2 py-1 font-bold text-slate-700">
-          {statusLabel}
-        </span>
-      </div>
+      <span className="inline-flex min-h-11 items-center gap-1 text-xs font-bold text-violet-700">
+        فتح المهمة <ArrowUpLeft size={14} />
+      </span>
     </Link>
+  );
+}
+
+function RevenueSection({
+  revenue,
+  unavailable,
+}: {
+  revenue: DashboardTodayRevenue | null;
+  unavailable: boolean;
+}) {
+  return (
+    <section aria-labelledby="revenue-heading" className="mt-8 sm:mt-10">
+      <div className="mb-3">
+        <h2 id="revenue-heading" className="text-xl font-semibold text-slate-950">إيرادات اليوم</h2>
+        <p className="mt-1 text-sm text-slate-500">المبالغ المحصلة فعليًا خلال اليوم</p>
+      </div>
+
+      <Card className="overflow-hidden border-slate-100 shadow-none">
+        <CardContent className="p-5 sm:p-7">
+          {unavailable || !revenue ? (
+            <div className="flex items-start gap-3 rounded-xl bg-amber-50 p-4 text-sm text-amber-950" role="status">
+              <CircleAlert size={18} className="mt-0.5 shrink-0" />
+              <div>
+                <div className="font-semibold">تعذر تحميل إيرادات اليوم مؤقتًا</div>
+                <p className="mt-1 text-xs leading-5">المواعيد والمتابعات ما زالت متاحة بشكل طبيعي.</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">إجمالي اليوم</div>
+                  <div className="mt-2 text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
+                    {formatMoney(revenue.total_minor, revenue.currency)}
+                  </div>
+                  {revenue.total_minor === 0 && (
+                    <p className="mt-2 text-xs text-slate-500">لم يتم تسجيل تحصيلات اليوم بعد</p>
+                  )}
+                </div>
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-violet-50 text-violet-700">
+                  <WalletCards size={20} />
+                </span>
+              </div>
+
+              <div className="mt-6 divide-y divide-slate-100 sm:grid sm:grid-cols-3 sm:divide-x sm:divide-y-0 sm:divide-x-reverse">
+                {[
+                  ["Cash", revenue.cash_minor],
+                  ["Visa", revenue.visa_minor],
+                  ["InstaPay", revenue.instapay_minor],
+                ].map(([label, amount]) => (
+                  <div key={String(label)} className="flex items-center justify-between gap-4 py-3 sm:block sm:px-5 sm:py-1 first:sm:pr-0 last:sm:pl-0">
+                    <div className="text-xs font-semibold text-slate-500">{label}</div>
+                    <div className="text-sm font-semibold text-slate-900 sm:mt-2">{formatMoney(Number(amount), revenue.currency)}</div>
+                  </div>
+                ))}
+              </div>
+
+              {(revenue.refunds_minor > 0 || revenue.other_minor !== 0) && (
+                <div className="mt-5 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500">
+                  {revenue.refunds_minor > 0 && (
+                    <div>الإجمالي صافي بعد خصم مرتجعات اليوم: {formatMoney(revenue.refunds_minor, revenue.currency)}</div>
+                  )}
+                  {revenue.other_minor !== 0 && (
+                    <div>طرق دفع قديمة/أخرى ضمن الإجمالي: {formatMoney(revenue.other_minor, revenue.currency)}</div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
 export function DashboardWorkspace({
-  summary,
-  setup,
-  overdueTasks,
-  todayTasks,
-  handoffsUnavailable = false,
-  setupUnavailable = false,
-  overdueTasksUnavailable = false,
-  todayTasksUnavailable = false,
+  today,
+  followUps,
+  revenue,
+  followUpsUnavailable = false,
+  revenueUnavailable = false,
 }: {
-  summary: DashboardSummary;
-  handoffs: HandoffQueueItem[];
-  setup: ClinicSetupV2Snapshot | null;
-  overdueTasks: CRMTask[];
-  todayTasks: CRMTask[];
-  handoffsUnavailable?: boolean;
-  setupUnavailable?: boolean;
-  overdueTasksUnavailable?: boolean;
-  todayTasksUnavailable?: boolean;
+  today: DashboardToday;
+  followUps: CRMTask[];
+  revenue: DashboardTodayRevenue | null;
+  followUpsUnavailable?: boolean;
+  revenueUnavailable?: boolean;
 }) {
-  const incompleteSetup = Boolean(setup && !setup.readiness.ready);
-  const needsAttention =
-    incompleteSetup ||
-    summary.failed_automation_jobs > 0 ||
-    overdueTasks.length > 0 ||
-    summary.open_handoffs > 0 ||
-    handoffsUnavailable ||
-    setupUnavailable ||
-    overdueTasksUnavailable ||
-    todayTasksUnavailable;
-  const revenue = summary.today_revenue;
-
   return (
-    <>
-      <PageHeader title={COPY.pageTitle} description={COPY.pageDescription} />
+    <main className="mx-auto w-full max-w-[1120px] pb-12">
+      <header className="mb-7 sm:mb-9">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-[28px]">اليوم في العيادة</h1>
+        <p className="mt-1 text-sm text-slate-500">{formatClinicDate(today.local_date, today.timezone)}</p>
+      </header>
 
-      <section className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-        <Card>
-          <CardContent className="p-5 sm:p-6">
-            <div className="text-xs font-bold text-[var(--muted)]">{COPY.todayAppointments}</div>
-            <div className="mt-2 text-4xl font-black text-slate-950">{summary.appointments_today}</div>
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <span className="text-xs text-[var(--muted)]">{COPY.sortedByClinicTime}</span>
-              <Link href="/appointments" className="text-xs font-black text-[var(--interactive)]">
-                {COPY.allAppointments}
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
+      <section aria-labelledby="appointments-heading">
+        <div className="mb-3 flex items-end justify-between gap-4">
+          <div>
+            <h2 id="appointments-heading" className="text-xl font-semibold text-slate-950">مواعيد اليوم</h2>
+            <p className="mt-1 text-sm text-slate-500">اليوم الحالي داخل توقيت العيادة فقط</p>
+          </div>
+          <Link href="/appointments" className="hidden text-xs font-bold text-violet-700 sm:inline-flex">كل المواعيد</Link>
+        </div>
+        <TodayAgenda
+          appointments={today.appointments}
+          timezone={today.timezone}
+          nextAppointmentId={today.next_appointment_id}
+        />
+      </section>
 
-        <Card>
-          <CardContent className="p-5 sm:p-6">
-            <div className="flex items-start justify-between gap-3">
+      <section aria-labelledby="followups-heading" className="mt-8 sm:mt-10">
+        <div className="mb-3 flex items-end justify-between gap-4">
+          <div>
+            <h2 id="followups-heading" className="text-xl font-semibold text-slate-950">متابعات اليوم</h2>
+            <p className="mt-1 text-sm text-slate-500">المتابعات المستحقة النهارده ولسه ما اتقفلتش</p>
+          </div>
+          <Link href="/tasks?scope=today" className="hidden text-xs font-bold text-violet-700 sm:inline-flex">كل المتابعات</Link>
+        </div>
+
+        <div className="rounded-2xl bg-white px-3 sm:px-4">
+          {followUpsUnavailable ? (
+            <div className="flex items-start gap-3 py-5 text-sm text-amber-950" role="status">
+              <CircleAlert size={18} className="mt-0.5 shrink-0" />
               <div>
-                <div className="text-xs font-bold text-[var(--muted)]">{COPY.todayRevenue}</div>
-                <div className="mt-2 text-3xl font-black text-slate-950">
-                  {formatMoney(revenue.total_minor, revenue.currency)}
-                </div>
+                <div className="font-semibold">تعذر تحميل متابعات اليوم مؤقتًا</div>
+                <p className="mt-1 text-xs text-slate-500">تقدر تكمل شغلك من المواعيد أو تفتح صفحة المتابعات.</p>
               </div>
-              <WalletCards className="text-[var(--interactive)]" size={22} />
             </div>
-            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <RevenueMethod label="Cash" amount={revenue.cash_minor} currency={revenue.currency} />
-              <RevenueMethod label="Visa" amount={revenue.visa_minor} currency={revenue.currency} />
-              <RevenueMethod label="InstaPay" amount={revenue.instapay_minor} currency={revenue.currency} />
+          ) : followUps.length ? (
+            <div className="divide-y divide-slate-100">
+              {followUps.map((task) => <FollowUpRow key={task.id} task={task} timezone={today.timezone} />)}
             </div>
-            {revenue.refunds_minor > 0 && (
-              <div className="mt-3 text-xs text-[var(--muted)]">
-                {COPY.refundsIncluded} {formatMoney(revenue.refunds_minor, revenue.currency)}
-              </div>
-            )}
-            {revenue.other_minor !== 0 && (
-              <div className="mt-1 text-xs text-[var(--muted)]">
-                {COPY.otherMethods} {formatMoney(revenue.other_minor, revenue.currency)}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
-      <section aria-labelledby="today-heading" className="mt-6">
-        <div className="mb-3">
-          <h2 id="today-heading" className="text-lg font-black text-slate-950">
-            {COPY.todayListTitle}
-          </h2>
-          <p className="mt-1 text-xs text-[var(--muted)]">{COPY.todayListDescription}</p>
+          ) : (
+            <div className="py-8 text-center">
+              <ListTodo size={20} className="mx-auto text-slate-300" />
+              <div className="mt-2 text-sm font-semibold text-slate-800">مفيش متابعات معلقة لليوم</div>
+            </div>
+          )}
         </div>
-        <Card>
-          <CardContent className="p-2 sm:p-3">
-            {summary.today_appointments.length ? (
-              <div className="divide-y divide-[var(--border)]">
-                {summary.today_appointments.map((appointment) => (
-                  <AppointmentRow
-                    key={appointment.id}
-                    appointment={appointment}
-                    timezone={summary.timezone}
-                  />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                icon={CalendarCheck2}
-                title={COPY.noAppointments}
-                description={COPY.noAppointmentsDescription}
-                action={
-                  <Link href="/appointments" className="text-xs font-black text-[var(--interactive)]">
-                    {COPY.openAppointments}
-                  </Link>
-                }
-              />
-            )}
-          </CardContent>
-        </Card>
       </section>
 
-      {todayTasks.length > 0 && (
-        <section aria-labelledby="today-followups-heading" className="mt-6">
-          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 id="today-followups-heading" className="text-lg font-black text-slate-950">
-                {COPY.todayFollowupsTitle}
-              </h2>
-              <p className="mt-1 text-xs text-[var(--muted)]">{COPY.todayFollowupsDescription}</p>
-            </div>
-            <Link href="/tasks?scope=today" className="text-xs font-black text-[var(--interactive)]">
-              {COPY.allTodayFollowups}
-            </Link>
-          </div>
-          <Card>
-            <CardContent className="p-2 sm:p-3">
-              <div className="divide-y divide-[var(--border)]">
-                {todayTasks.slice(0, 6).map((task) => (
-                  <TodayTaskRow key={task.id} task={task} timezone={summary.timezone} />
-                ))}
-              </div>
-              {todayTasks.length > 6 && (
-                <Link
-                  href="/tasks?scope=today"
-                  className="mt-2 flex min-h-10 items-center justify-center rounded-lg text-xs font-black text-[var(--interactive)] hover:bg-[var(--surface-2)]"
-                >
-                  +{todayTasks.length - 6} {COPY.moreFollowups}
-                </Link>
-              )}
-            </CardContent>
-          </Card>
-        </section>
-      )}
-
-      <section aria-labelledby="attention-heading" className="mt-6">
-        <div className="mb-3">
-          <h2 id="attention-heading" className="text-lg font-black text-slate-950">
-            {COPY.attentionTitle}
-          </h2>
-          <p className="mt-1 text-xs text-[var(--muted)]">{COPY.attentionDescription}</p>
-        </div>
-        {!needsAttention ? (
-          <div className="rounded-xl border border-[var(--border)] bg-white p-5 text-sm text-slate-700">
-            {COPY.noAttention}
-          </div>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2">
-            {incompleteSetup && setup && (
-              <Link href="/setup" className="rounded-xl border border-[var(--border)] bg-white p-4">
-                <div className="flex gap-3">
-                  <Settings2 size={18} className="text-[var(--interactive)]" />
-                  <div>
-                    <div className="text-sm font-black">{COPY.setupIncomplete}</div>
-                    <div className="mt-1 text-xs text-[var(--muted)]">
-                      {setup.readiness.progress_percent}% {COPY.complete}
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            )}
-            {summary.failed_automation_jobs > 0 && (
-              <Link href="/automations" className="rounded-xl border border-red-200 bg-red-50/60 p-4">
-                <div className="flex gap-3">
-                  <Workflow size={18} />
-                  <div className="text-sm font-black">
-                    {summary.failed_automation_jobs} {COPY.automationFailed}
-                  </div>
-                </div>
-              </Link>
-            )}
-            {overdueTasks.length > 0 && (
-              <Link href="/tasks?scope=overdue" className="rounded-xl border border-amber-200 bg-amber-50/60 p-4">
-                <div className="flex gap-3">
-                  <ListTodo size={18} />
-                  <div className="text-sm font-black">
-                    {overdueTasks.length} {COPY.overdueFollowup}
-                  </div>
-                </div>
-              </Link>
-            )}
-            {summary.open_handoffs > 0 && (
-              <Link href="/inbox?owner=human" className="rounded-xl border border-[var(--border)] bg-white p-4">
-                <div className="flex gap-3">
-                  <MessageSquareMore size={18} className="text-[var(--interactive)]" />
-                  <div className="text-sm font-black">
-                    {summary.open_handoffs} {COPY.conversationNeedsHuman}
-                  </div>
-                </div>
-              </Link>
-            )}
-            {(handoffsUnavailable || setupUnavailable || overdueTasksUnavailable || todayTasksUnavailable) && (
-              <div role="status" className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-amber-950">
-                <div className="flex gap-3">
-                  <CircleAlert size={18} />
-                  <div className="text-sm font-black">{COPY.partialUnavailable}</div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-    </>
+      <RevenueSection revenue={revenue} unavailable={revenueUnavailable} />
+    </main>
   );
 }
