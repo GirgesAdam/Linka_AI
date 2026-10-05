@@ -23,7 +23,7 @@ from app.agents.v2.semantic_state_view import (
     with_safe_read_context,
     with_safe_task_context,
 )
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
+from app.agents.v2.turn_contract import DateConstraint, TiaTurnUnderstanding, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.integrations.clinic.base import ClinicAdapter
 from app.models.patient import Patient
@@ -413,6 +413,69 @@ def _verified_recent_no_availability(
         isinstance(option_count, int)
         and not isinstance(option_count, bool)
         and option_count == 0
+    )
+
+
+def _recent_zero_availability_exact_date(
+    recent_read_context: dict[str, Any] | None,
+) -> datetime | None:
+    if not _verified_recent_no_availability(recent_read_context):
+        return None
+    if not isinstance(recent_read_context, dict):
+        return None
+    if recent_read_context.get("time") not in (None, "", {}, []):
+        return None
+    raw_date = recent_read_context.get("date")
+    if isinstance(raw_date, dict):
+        if raw_date.get("mode") != "exact":
+            return None
+        raw_value = raw_date.get("start_date")
+    else:
+        raw_value = raw_date
+    if not isinstance(raw_value, str) or not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(raw_value)
+    except ValueError:
+        return None
+
+
+def _normalize_cross_turn_nearest_after_verified_miss(
+    understanding: TiaTurnUnderstanding,
+    *,
+    recent_read_context: dict[str, Any] | None,
+) -> TiaTurnUnderstanding:
+    """Advance typed nearest semantics beyond an immediately verified date-level miss."""
+    if not understanding.operations:
+        return understanding
+    operation = understanding.operations[0]
+    if not operation.continues_previous:
+        return understanding
+    time_constraint = operation.entities.time
+    if time_constraint is not None and time_constraint.mode != "nearest":
+        return understanding
+    missed = _recent_zero_availability_exact_date(recent_read_context)
+    if missed is None:
+        return understanding
+    current_date = operation.entities.date
+    missed_iso = missed.date().isoformat()
+    if current_date is not None and (
+        current_date.mode != "exact" or current_date.start_date != missed_iso
+    ):
+        return understanding
+    next_date = (missed.date() + timedelta(days=1)).isoformat()
+    entities = operation.entities.model_copy(
+        update={
+            "date": DateConstraint(
+                mode="from_date",
+                start_date=next_date,
+                end_date=None,
+            )
+        }
+    )
+    normalized = operation.model_copy(update={"entities": entities})
+    return understanding.model_copy(
+        update={"operations": [normalized, *understanding.operations[1:]]}
     )
 
 
@@ -1222,6 +1285,10 @@ def orchestrate_v2_turn(
         **semantic_visit_groups,
         **restored_visit_groups,
     }
+    understanding = _normalize_cross_turn_nearest_after_verified_miss(
+        understanding,
+        recent_read_context=recent_read_context,
+    )
     planner_active_task: ActiveTaskState | None = narrowed_booking_task or initial_task
     plan = plan_turn(
         understanding,

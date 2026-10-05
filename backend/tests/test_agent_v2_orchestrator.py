@@ -6,7 +6,13 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
@@ -898,3 +904,122 @@ def test_device_compatibility_failure_preserves_booking_context_and_clears_devic
     assert advanced.facts["service_id"] == "service-1"
     assert advanced.facts["doctor_id"] == "doctor-1"
     assert advanced.facts["device_key"] is None
+
+
+def test_cross_turn_nearest_after_date_level_miss_advances_past_missed_date() -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-05"),
+                    time=TimeConstraint(mode="nearest"),
+                ),
+                continues_previous=True,
+                continuation_condition="always",
+            )
+        ]
+    )
+
+    normalized = runtime._normalize_cross_turn_nearest_after_verified_miss(
+        understanding,
+        recent_read_context={
+            "operation_type": "book",
+            "availability_option_count": 0,
+            "date": {"mode": "exact", "start_date": "2026-10-05", "end_date": None},
+        },
+    )
+
+    date_constraint = normalized.operations[0].entities.date
+    assert date_constraint is not None
+    assert date_constraint.mode == "from_date"
+    assert date_constraint.start_date == "2026-10-06"
+    assert normalized.operations[0].entities.time is not None
+    assert normalized.operations[0].entities.time.mode == "nearest"
+
+
+def test_cross_turn_nearest_does_not_advance_from_positive_recent_availability() -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-05"),
+                    time=TimeConstraint(mode="nearest"),
+                ),
+                continues_previous=True,
+            )
+        ]
+    )
+
+    normalized = runtime._normalize_cross_turn_nearest_after_verified_miss(
+        understanding,
+        recent_read_context={
+            "operation_type": "availability",
+            "availability_option_count": 2,
+            "date": {"mode": "exact", "start_date": "2026-10-05", "end_date": None},
+        },
+    )
+
+    assert normalized == understanding
+
+
+def test_cross_turn_nearest_does_not_override_time_scoped_miss_or_new_date() -> None:
+    operation = TurnOperation(
+        type="continue_active",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-06"),
+            time=TimeConstraint(mode="nearest"),
+        ),
+        continues_previous=True,
+    )
+    understanding = TiaTurnUnderstanding(operations=[operation])
+
+    for recent in (
+        {
+            "operation_type": "availability",
+            "availability_option_count": 0,
+            "date": {"mode": "exact", "start_date": "2026-10-05", "end_date": None},
+            "time": {"mode": "after", "start_time": "19:00"},
+        },
+        {
+            "operation_type": "availability",
+            "availability_option_count": 0,
+            "date": {"mode": "exact", "start_date": "2026-10-05", "end_date": None},
+        },
+    ):
+        normalized = runtime._normalize_cross_turn_nearest_after_verified_miss(
+            understanding,
+            recent_read_context=recent,
+        )
+        assert normalized == understanding
+
+
+def test_cross_turn_date_level_miss_advances_when_continuation_adds_no_time_scope() -> None:
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-05"),
+                ),
+                continues_previous=True,
+                continuation_condition="always",
+            )
+        ]
+    )
+
+    normalized = runtime._normalize_cross_turn_nearest_after_verified_miss(
+        understanding,
+        recent_read_context={
+            "operation_type": "book",
+            "availability_option_count": 0,
+            "date": {"mode": "exact", "start_date": "2026-10-05", "end_date": None},
+        },
+    )
+
+    date_constraint = normalized.operations[0].entities.date
+    assert date_constraint is not None
+    assert date_constraint.mode == "from_date"
+    assert date_constraint.start_date == "2026-10-06"
+    assert normalized.operations[0].entities.time is None
