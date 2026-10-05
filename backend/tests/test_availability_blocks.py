@@ -32,6 +32,10 @@ def test_appointments_ui_can_create_display_and_reopen_blocks() -> None:
     assert "غير متاحة" in page
     assert "reopenAvailabilityBlock" in page
     assert 'method: "DELETE"' in actions
+    assert "تعذر تحميل الفترات غير المتاحة" in page
+    assert "availabilityTruthAvailable" in page
+    block_read = page[page.index("/booking/availability-blocks"):page.index("/booking/availability-blocks") + 360]
+    assert ".catch(() => [])" not in block_read
 
 
 class _Rows:

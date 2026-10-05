@@ -314,7 +314,7 @@ def list_availability_blocks(
 @router.post("/availability-blocks", response_model=AvailabilityBlockRead, status_code=status.HTTP_201_CREATED)
 def create_availability_block(
     payload: AvailabilityBlockCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AvailabilityBlockRead:
     require_local_appointment_write(db, access.workspace.id)
@@ -367,7 +367,7 @@ def create_availability_block(
 @router.delete("/availability-blocks/{block_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_availability_block(
     block_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     require_local_appointment_write(db, access.workspace.id)
