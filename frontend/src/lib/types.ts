@@ -32,6 +32,12 @@ export interface DashboardTodayRevenue {
   currency: string; gross_collected_minor: number; refunds_minor: number; total_minor: number;
   cash_minor: number; visa_minor: number; instapay_minor: number; other_minor: number;
 }
+export interface DashboardToday {
+  timezone: string;
+  local_date: string;
+  appointments: DashboardAppointment[];
+  next_appointment_id: string | null;
+}
 export interface DashboardAppointment {
   id: string; patient_id: string; patient_name: string; service_name: string;
   branch_name: string; doctor_name: string; status: string; start_at: string;
