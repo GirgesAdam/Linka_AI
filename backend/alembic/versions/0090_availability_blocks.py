@@ -46,6 +46,8 @@ def upgrade() -> None:
         "availability_blocks",
         ["workspace_id", "branch_id", "start_at", "end_at"],
     )
+    op.execute(sa.text('ALTER TABLE public."availability_blocks" ENABLE ROW LEVEL SECURITY'))
+    op.execute(sa.text('REVOKE ALL ON TABLE public."availability_blocks" FROM anon, authenticated'))
 
 
 def downgrade() -> None:

@@ -504,7 +504,7 @@ def test_local_write_guards_cover_dashboard_and_native_adapter(db_and_workspace)
 
     backend = Path(__file__).resolve().parent.parent
     booking_source = (backend / "app/api/routes/booking.py").read_text(encoding="utf-8")
-    assert booking_source.count("require_local_appointment_write(db, access.workspace.id)") == 7
+    assert booking_source.count("require_local_appointment_write(db, access.workspace.id)") == 9
 def test_migration_0035_extends_sync_domain_checks_and_head() -> None:
     backend = Path(__file__).resolve().parent.parent
     migration = (backend / "alembic/versions/0035_appointment_sync.py").read_text(encoding="utf-8")
