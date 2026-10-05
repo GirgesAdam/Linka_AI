@@ -396,16 +396,41 @@ def _availability_shown_window_keys(
     return {str(value) for value in raw if isinstance(value, str) and value}
 
 
+def _verified_recent_no_availability(
+    recent_read_context: dict[str, Any] | None,
+) -> bool:
+    """Accept only the immediately previous server-owned verified zero-availability summary."""
+    if not isinstance(recent_read_context, dict):
+        return False
+    if recent_read_context.get("operation_type") not in {
+        "availability",
+        "book",
+        "reschedule",
+    }:
+        return False
+    option_count = recent_read_context.get("availability_option_count")
+    return (
+        isinstance(option_count, int)
+        and not isinstance(option_count, bool)
+        and option_count == 0
+    )
+
+
 def _continuation_condition_satisfied(
     operation: TurnOperation,
     *,
     previous_reads: ReadExecutionBundle | None,
+    recent_read_context: dict[str, Any] | None = None,
 ) -> bool:
     condition = getattr(operation, "continuation_condition", "always")
     if condition == "always":
         return True
     if condition == "if_previous_no_availability":
-        return _verified_no_availability(previous_reads)
+        if previous_reads is not None:
+            return _verified_no_availability(previous_reads)
+        if not bool(getattr(operation, "continues_previous", False)):
+            return False
+        return _verified_recent_no_availability(recent_read_context)
     raise RuntimeError(f"Unsupported continuation condition: {condition}")
 
 
@@ -1319,6 +1344,7 @@ def orchestrate_v2_turn(
         if not _continuation_condition_satisfied(
             operation,
             previous_reads=operation_reads.get(planned_step.operation_index - 1),
+            recent_read_context=recent_read_context,
         ):
             traces.append(
                 V2RuntimeStepTrace(

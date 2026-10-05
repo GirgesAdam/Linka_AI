@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ARABIC_WEEKDAYS = (
     "الاثنين",
@@ -55,18 +56,52 @@ def parse_customer_date(value: object) -> date | None:
             return None
 
 
+def _customer_reference_date(
+    *,
+    reference_date: date | None,
+    reference_datetime: datetime | None,
+    timezone_name: str | None,
+) -> date:
+    if reference_date is not None:
+        return reference_date
+    if reference_datetime is None:
+        return date.today()
+    if timezone_name:
+        try:
+            timezone = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            timezone = None
+        if timezone is not None:
+            if reference_datetime.tzinfo is None:
+                reference_datetime = reference_datetime.replace(tzinfo=timezone)
+            else:
+                reference_datetime = reference_datetime.astimezone(timezone)
+    return reference_datetime.date()
+
+
 def format_customer_date(
     value: object,
     *,
     arabic: bool,
     reference_date: date | None = None,
+    reference_datetime: datetime | None = None,
+    timezone_name: str | None = None,
 ) -> str:
     parsed = parse_customer_date(value)
     if parsed is None:
         return str(value)
-    reference = reference_date or date.today()
+    use_relative_label = reference_date is not None or reference_datetime is not None
+    reference = _customer_reference_date(
+        reference_date=reference_date,
+        reference_datetime=reference_datetime,
+        timezone_name=timezone_name,
+    )
     include_year = parsed.year != reference.year
     if arabic:
+        if use_relative_label and parsed == reference:
+            return "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647"
+        if use_relative_label and parsed == reference + timedelta(days=1):
+            return "\u0628\u0643\u0631\u0629"
         rendered = f"{ARABIC_WEEKDAYS[parsed.weekday()]} {parsed.day} {ARABIC_MONTHS[parsed.month]}"
         return f"{rendered} {parsed.year}" if include_year else rendered
     rendered = f"{ENGLISH_WEEKDAYS[parsed.weekday()]}, {parsed.strftime('%B')} {parsed.day}"

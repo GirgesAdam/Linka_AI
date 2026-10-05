@@ -214,6 +214,47 @@ def test_exact_miss_projects_requested_time_from_step_facts() -> None:
     assert facts["requested_time"].requirement == "required"
 
 
+def test_present_availability_uses_workspace_local_today_without_day_prefix() -> None:
+    contract = build_customer_response_contract(
+        [
+            _present(
+                [
+                    {
+                        **_window("17:00"),
+                        "start_local": "2026-10-05T17:00:00+03:00",
+                        "end_local": "2026-10-05T17:00:00+03:00",
+                    }
+                ],
+                checked_dates=["2026-10-05"],
+            )
+        ]
+    )
+
+    text = deterministic_availability_fallback(
+        contract,
+        arabic=True,
+        reference_date=datetime(2026, 10, 5, 9, 0, tzinfo=UTC).date(),
+    )
+
+    assert "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647" in text
+    assert "\u064a\u0648\u0645 \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647" not in text
+    assert "5 \u0623\u0643\u062a\u0648\u0628\u0631" not in text
+
+
+def test_no_availability_uses_workspace_local_today_label() -> None:
+    contract = build_customer_response_contract([_no_availability(["2026-10-05"])])
+
+    text = deterministic_availability_fallback(
+        contract,
+        arabic=True,
+        reference_date=datetime(2026, 10, 5, 9, 0, tzinfo=UTC).date(),
+    )
+
+    assert "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647" in text
+    assert "\u064a\u0648\u0645 \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647" not in text
+    assert "5 \u0623\u0643\u062a\u0648\u0628\u0631" not in text
+
+
 def test_no_availability_projects_search_scope_and_truncation() -> None:
     contract = build_customer_response_contract(
         [_no_availability(["2026-10-01", "2026-10-02"], search_truncated=True)]
@@ -330,6 +371,7 @@ def test_progressive_availability_pages_are_nearest_first_without_repetition() -
         first,
         arabic=True,
         has_more_by_unit=first_more,
+        reference_date=NOW.date(),
     )
 
     second, second_keys, second_more = _paged_contract(
@@ -341,6 +383,7 @@ def test_progressive_availability_pages_are_nearest_first_without_repetition() -
         arabic=True,
         has_more_by_unit=second_more,
         continuation=True,
+        reference_date=NOW.date(),
     )
 
     assert len(first_keys) == 4

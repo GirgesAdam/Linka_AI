@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
@@ -255,6 +256,7 @@ def _render_option_list(
     *,
     arabic: bool,
     presentation: PriceDevicePresentation,
+    reference_date: date | None = None,
 ) -> str:
     truth = unit.commercial_truth
     if truth is None:
@@ -302,6 +304,7 @@ def _render_option_list(
                     options_text = render_embedded_verified_availability_options(
                         availability,
                         arabic=arabic,
+                        reference_date=reference_date,
                     )
                     if options_text:
                         return rendered + "\n\n" + options_text
@@ -316,6 +319,7 @@ def _render_option_list(
                     return rendered + "\n\n" + render_embedded_no_availability(
                         availability,
                         arabic=arabic,
+                        reference_date=reference_date,
                     )
             return rendered + (" هتحب أكمل بعد ما أأكد المواعيد المتاحة؟" if arabic else " Shall I continue after I verify the available times?")
         return rendered
@@ -378,6 +382,7 @@ def resolve_price_device_composer_draft(
     draft: PriceDeviceComposerDraft,
     *,
     arabic: bool,
+    reference_date: date | None = None,
 ) -> str:
     validate_price_device_composer_draft(contract, draft)
     chunks: list[str] = []
@@ -388,6 +393,7 @@ def resolve_price_device_composer_draft(
             unit,
             arabic=arabic,
             presentation=draft_unit.presentation,
+            reference_date=reference_date,
         )
         if index == 0:
             chunks.append(rendered)
@@ -433,11 +439,13 @@ def deterministic_price_device_fallback(
     contract: CustomerResponseContract,
     *,
     arabic: bool,
+    reference_date: date | None = None,
 ) -> str:
     return resolve_price_device_composer_draft(
         contract,
         _default_draft(contract),
         arabic=arabic,
+        reference_date=reference_date,
     )
 
 
@@ -455,12 +463,14 @@ def compose_price_device_contract_reply(
     *,
     history: list[BaseMessage],
     contract: CustomerResponseContract,
+    reference_date: date | None = None,
 ) -> tuple[str, str]:
     """Compose commercial reads without model-authored amounts or bindings."""
     arabic = _latest_customer_is_arabic(history)
     fallback_text = deterministic_price_device_fallback(
         contract,
         arabic=arabic,
+        reference_date=reference_date,
     )
     if not _requires_model(contract):
         return fallback_text, "deterministic:price-device-contract"
@@ -510,6 +520,7 @@ def compose_price_device_contract_reply(
             contract,
             invocation.value,
             arabic=arabic,
+            reference_date=reference_date,
         )
         return text, f"price-device-contract:{model_label(invocation.model_name)}"
     except (

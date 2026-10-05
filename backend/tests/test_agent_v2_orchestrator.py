@@ -667,6 +667,66 @@ def test_conditional_fallback_skipped_when_primary_availability_exists(
     )
 
 
+def test_cross_turn_conditional_fallback_uses_recent_verified_no_availability() -> None:
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(),
+        continues_previous=True,
+        continuation_condition="if_previous_no_availability",
+    )
+    recent = {
+        "operation_type": "availability",
+        "availability_option_count": 0,
+        "date": "2026-10-05",
+    }
+
+    assert runtime._continuation_condition_satisfied(
+        operation,
+        previous_reads=None,
+        recent_read_context=recent,
+    ) is True
+
+
+def test_cross_turn_conditional_fallback_fails_closed_without_verified_zero() -> None:
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(),
+        continues_previous=True,
+        continuation_condition="if_previous_no_availability",
+    )
+
+    for recent in (
+        None,
+        {},
+        {"operation_type": "availability", "availability_option_count": 1},
+        {"operation_type": "clinic_info", "availability_option_count": 0},
+        {"operation_type": "availability", "availability_option_count": True},
+    ):
+        assert runtime._continuation_condition_satisfied(
+            operation,
+            previous_reads=None,
+            recent_read_context=recent,
+        ) is False
+
+
+def test_same_turn_availability_evidence_takes_priority_over_recent_context() -> None:
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(),
+        continues_previous=True,
+        continuation_condition="if_previous_no_availability",
+    )
+
+    assert runtime._continuation_condition_satisfied(
+        operation,
+        previous_reads=_availability_bundle(1),
+        recent_read_context={
+            "operation_type": "availability",
+            "availability_option_count": 0,
+        },
+    ) is False
+
+
 def test_conditional_fallback_executes_after_verified_no_availability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
