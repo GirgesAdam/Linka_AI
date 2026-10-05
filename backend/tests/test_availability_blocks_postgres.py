@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -257,7 +257,7 @@ def test_stale_exact_write_quick_booking_and_reschedule_are_rejected_after_block
         with pytest.raises(HTTPException) as standard_error:
             _create_standard(db, block_fixture, 14)
         assert standard_error.value.status_code == 409
-        assert "closed for new bookings" in str(standard_error.value.detail)
+        assert "no longer available" in str(standard_error.value.detail)
 
         with pytest.raises(HTTPException) as quick_error:
             booking_routes.create_quick_appointment(
@@ -284,7 +284,7 @@ def test_stale_exact_write_quick_booking_and_reschedule_are_rejected_after_block
                 idempotency_key=None,
             )
         assert reschedule_error.value.status_code == 409
-        assert "closed for new bookings" in str(reschedule_error.value.detail)
+        assert "no longer available" in str(reschedule_error.value.detail)
 
 
 def test_existing_appointment_inside_new_block_is_unchanged(block_fixture: BlockFixture) -> None:
@@ -305,3 +305,4 @@ def test_existing_appointment_inside_new_block_is_unchanged(block_fixture: Block
         assert block.overlapping_appointments == 1
         db.refresh(appointment)
         assert (appointment.id, appointment.start_at, appointment.end_at, appointment.status) == original
+
