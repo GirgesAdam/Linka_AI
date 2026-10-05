@@ -23,7 +23,7 @@ from app.agents.v2.semantic_state_view import (
     with_safe_read_context,
     with_safe_task_context,
 )
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
+from app.agents.v2.turn_contract import DateConstraint, TiaTurnUnderstanding, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.integrations.clinic.base import ClinicAdapter
 from app.models.patient import Patient
@@ -396,16 +396,109 @@ def _availability_shown_window_keys(
     return {str(value) for value in raw if isinstance(value, str) and value}
 
 
+def _verified_recent_no_availability(
+    recent_read_context: dict[str, Any] | None,
+) -> bool:
+    """Accept only the immediately previous server-owned verified zero-availability summary."""
+    if not isinstance(recent_read_context, dict):
+        return False
+    if recent_read_context.get("operation_type") not in {
+        "availability",
+        "book",
+        "reschedule",
+    }:
+        return False
+    option_count = recent_read_context.get("availability_option_count")
+    return (
+        isinstance(option_count, int)
+        and not isinstance(option_count, bool)
+        and option_count == 0
+    )
+
+
+def _recent_zero_availability_exact_date(
+    recent_read_context: dict[str, Any] | None,
+) -> datetime | None:
+    if not _verified_recent_no_availability(recent_read_context):
+        return None
+    if not isinstance(recent_read_context, dict):
+        return None
+    if recent_read_context.get("time") not in (None, "", {}, []):
+        return None
+    raw_date = recent_read_context.get("date")
+    if isinstance(raw_date, dict):
+        if raw_date.get("mode") != "exact":
+            return None
+        raw_value = raw_date.get("start_date")
+    else:
+        raw_value = raw_date
+    if not isinstance(raw_value, str) or not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(raw_value)
+    except ValueError:
+        return None
+
+
+def _normalize_cross_turn_nearest_after_verified_miss(
+    understanding: TiaTurnUnderstanding,
+    *,
+    recent_read_context: dict[str, Any] | None,
+) -> TiaTurnUnderstanding:
+    """Advance typed nearest semantics beyond an immediately verified date-level miss."""
+    if not understanding.operations:
+        return understanding
+    operation = understanding.operations[0]
+    if not bool(getattr(operation, "continues_previous", False)):
+        return understanding
+    if operation.type not in {"continue_active", "availability", "book", "reschedule"}:
+        return understanding
+    time_constraint = operation.entities.time
+    condition = getattr(operation, "continuation_condition", "always")
+    if time_constraint is not None and time_constraint.mode != "nearest":
+        return understanding
+    if time_constraint is None and condition != "if_previous_no_availability":
+        return understanding
+    missed = _recent_zero_availability_exact_date(recent_read_context)
+    if missed is None:
+        return understanding
+    current_date = operation.entities.date
+    missed_iso = missed.date().isoformat()
+    if current_date is not None and (
+        current_date.mode != "exact" or current_date.start_date != missed_iso
+    ):
+        return understanding
+    next_date = (missed.date() + timedelta(days=1)).isoformat()
+    entities = operation.entities.model_copy(
+        update={
+            "date": DateConstraint(
+                mode="from_date",
+                start_date=next_date,
+                end_date=None,
+            )
+        }
+    )
+    normalized = operation.model_copy(update={"entities": entities})
+    return understanding.model_copy(
+        update={"operations": [normalized, *understanding.operations[1:]]}
+    )
+
+
 def _continuation_condition_satisfied(
     operation: TurnOperation,
     *,
     previous_reads: ReadExecutionBundle | None,
+    recent_read_context: dict[str, Any] | None = None,
 ) -> bool:
     condition = getattr(operation, "continuation_condition", "always")
     if condition == "always":
         return True
     if condition == "if_previous_no_availability":
-        return _verified_no_availability(previous_reads)
+        if previous_reads is not None:
+            return _verified_no_availability(previous_reads)
+        if not bool(getattr(operation, "continues_previous", False)):
+            return False
+        return _verified_recent_no_availability(recent_read_context)
     raise RuntimeError(f"Unsupported continuation condition: {condition}")
 
 
@@ -784,6 +877,7 @@ def _canonical_recent_booking_is_current(
     """Require the recent booking to still match canonical active appointment truth."""
     if not isinstance(recent_action, dict):
         return False
+
     appointment_id = recent_action.get("appointment_id")
     if appointment_id in (None, "") or reads.verification.appointment_match_count != 1:
         return False
@@ -1197,6 +1291,10 @@ def orchestrate_v2_turn(
         **semantic_visit_groups,
         **restored_visit_groups,
     }
+    understanding = _normalize_cross_turn_nearest_after_verified_miss(
+        understanding,
+        recent_read_context=recent_read_context,
+    )
     planner_active_task: ActiveTaskState | None = narrowed_booking_task or initial_task
     plan = plan_turn(
         understanding,
@@ -1319,6 +1417,7 @@ def orchestrate_v2_turn(
         if not _continuation_condition_satisfied(
             operation,
             previous_reads=operation_reads.get(planned_step.operation_index - 1),
+            recent_read_context=recent_read_context,
         ):
             traces.append(
                 V2RuntimeStepTrace(

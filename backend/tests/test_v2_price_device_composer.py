@@ -444,6 +444,39 @@ def test_booking_price_with_date_renders_verified_windows_and_one_selection_ques
     assert text.count("Candela Gentle") == 1
 
 
+def test_booking_price_embedded_availability_uses_reference_date_for_today() -> None:
+    outcome = _selected_device_price()
+    outcome.facts.update(
+        {
+            "booking_next_field": "booking",
+            "exact_time_requested": False,
+            "availability": {
+                "service_name": "Laser Underarm",
+                "checked_dates": ["2026-10-08"],
+                "available_option_count": 1,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Dr Maryam",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-08T16:00:00+03:00",
+                        "end_local": "2026-10-08T16:30:00+03:00",
+                    }
+                ],
+            },
+        }
+    )
+
+    text = deterministic_price_device_fallback(
+        build_customer_response_contract([outcome]),
+        arabic=True,
+        reference_date=datetime(2026, 10, 8, 9, 0, tzinfo=UTC).date(),
+    )
+
+    assert "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647" in text
+    assert "\u064a\u0648\u0645 \u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647" not in text
+    assert "8 \u0623\u0643\u062a\u0648\u0628\u0631" not in text
+
+
 def test_booking_price_with_date_and_no_availability_names_verified_date_and_offers_other_day() -> None:
     outcome = _selected_device_price()
     outcome.facts.update(

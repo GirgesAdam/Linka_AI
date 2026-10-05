@@ -324,8 +324,26 @@ def _clock(value: object, *, arabic: bool) -> str:
     return f"{display}{minute_text} {period}"
 
 
-def _date_text(value: object, *, arabic: bool) -> str:
-    return format_customer_date(value, arabic=arabic)
+_AR_RELATIVE_DATE_LABELS = frozenset({"\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647", "\u0628\u0643\u0631\u0629"})
+
+
+def _date_text(
+    value: object,
+    *,
+    arabic: bool,
+    reference_date: date | None = None,
+) -> str:
+    return format_customer_date(
+        value,
+        arabic=arabic,
+        reference_date=reference_date,
+    )
+
+
+def _arabic_day_phrase(label: str) -> str:
+    if label in _AR_RELATIVE_DATE_LABELS:
+        return label
+    return f"\u064a\u0648\u0645 {label}"
 
 
 def _checked_dates(unit: CustomerResponseUnit) -> list[str]:
@@ -335,7 +353,12 @@ def _checked_dates(unit: CustomerResponseUnit) -> list[str]:
     return [str(value) for value in fact.value if value]
 
 
-def _date_scope_text(unit: CustomerResponseUnit, *, arabic: bool) -> str:
+def _date_scope_text(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+    reference_date: date | None = None,
+) -> str:
     raw_dates = _checked_dates(unit)
     if not raw_dates:
         return "النطاق اللي اتفحص" if arabic else "the checked search scope"
@@ -350,16 +373,16 @@ def _date_scope_text(unit: CustomerResponseUnit, *, arabic: bool) -> str:
         (current - previous).days == 1
         for previous, current in zip(parsed, parsed[1:], strict=False)
     ):
-        first = _date_text(parsed[0].isoformat(), arabic=arabic)
-        last = _date_text(parsed[-1].isoformat(), arabic=arabic)
+        first = _date_text(parsed[0].isoformat(), arabic=arabic, reference_date=reference_date)
+        last = _date_text(parsed[-1].isoformat(), arabic=arabic, reference_date=reference_date)
         return (
             f"من {first} لحد {last}"
             if arabic
             else f"from {first} through {last}"
         )
-    labels = [_date_text(raw, arabic=arabic) for raw in raw_dates]
+    labels = [_date_text(raw, arabic=arabic, reference_date=reference_date) for raw in raw_dates]
     if len(labels) == 1:
-        return (f"يوم {labels[0]}" if arabic else f"on {labels[0]}")
+        return (_arabic_day_phrase(labels[0]) if arabic else f"on {labels[0]}")
     joined = "، ".join(labels)
     return (
         f"في الأيام اللي اتفحصت: {joined}"
@@ -415,15 +438,20 @@ def _paged_contract(
     )
 
 
-def _window_time_text(window: dict[str, object], *, arabic: bool) -> tuple[str, str]:
+def _window_time_text(
+    window: dict[str, object],
+    *,
+    arabic: bool,
+    reference_date: date | None = None,
+) -> tuple[str, str]:
     start = _parse_datetime(window.get("start_local"))
     end = _parse_datetime(window.get("end_local"))
     if start is not None:
-        date_label = _date_text(start.date().isoformat(), arabic=arabic)
+        date_label = _date_text(start.date().isoformat(), arabic=arabic, reference_date=reference_date)
         start_label = _clock(start.isoformat(), arabic=arabic)
     else:
         checked = str(window.get("date") or "")
-        date_label = _date_text(checked, arabic=arabic) if checked else ""
+        date_label = _date_text(checked, arabic=arabic, reference_date=reference_date) if checked else ""
         start_label = _clock(window.get("start_time_24h"), arabic=arabic)
     if end is not None:
         end_label = _clock(end.isoformat(), arabic=arabic)
@@ -468,16 +496,17 @@ def _render_windows(
     *,
     arabic: bool,
     mode: AvailabilityPresentationMode,
+    reference_date: date | None = None,
 ) -> list[str]:
     windows = _window_values(unit)
     if mode == "detailed":
         rows: list[str] = []
         for window in windows:
             label = _window_label(window, arabic=arabic)
-            day, time_text = _window_time_text(window, arabic=arabic)
+            day, time_text = _window_time_text(window, arabic=arabic, reference_date=reference_date)
             if arabic:
                 prefix = f"{label}: " if label else ""
-                day_part = f" يوم {day}" if day else ""
+                day_part = f" {_arabic_day_phrase(day)}" if day else ""
                 rows.append(f"{prefix}{time_text}{day_part}.")
             else:
                 prefix = f"{label}: " if label else ""
@@ -488,14 +517,14 @@ def _render_windows(
     grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
     for window in windows:
         label = _window_label(window, arabic=arabic)
-        day, time_text = _window_time_text(window, arabic=arabic)
+        day, time_text = _window_time_text(window, arabic=arabic, reference_date=reference_date)
         grouped[(label, day)].append(time_text)
 
     rows = []
     for (label, day), times in grouped.items():
         if arabic:
             subject = label or "المتاح"
-            day_part = f" يوم {day}" if day else ""
+            day_part = f" {_arabic_day_phrase(day)}" if day else ""
             rows.append(f"{subject}{day_part}: " + "، و".join(times) + ".")
         else:
             subject = label or "Available"
@@ -508,6 +537,7 @@ def render_embedded_verified_availability_options(
     availability: dict[str, object],
     *,
     arabic: bool,
+    reference_date: date | None = None,
 ) -> str | None:
     """Render one WhatsApp-sized page of already-verified windows for a price reply.
 
@@ -533,7 +563,7 @@ def render_embedded_verified_availability_options(
     ordered_days: list[str] = []
     for window in selected:
         doctor = str(window.get("doctor_name") or "").strip()
-        day, time_text = _window_time_text(window, arabic=arabic)
+        day, time_text = _window_time_text(window, arabic=arabic, reference_date=reference_date)
         if day and day not in ordered_days:
             ordered_days.append(day)
         grouped[(doctor, day)].append(time_text)
@@ -542,7 +572,7 @@ def render_embedded_verified_availability_options(
     if arabic:
         intro = "أقرب المواعيد المتاحة" if has_more else "المتاح"
         if single_day:
-            intro += f" يوم {single_day}"
+            intro += f" {_arabic_day_phrase(single_day)}"
     else:
         intro = "Nearest available times" if has_more else "Available times"
         if single_day:
@@ -552,7 +582,7 @@ def render_embedded_verified_availability_options(
     for (doctor, day), times in grouped.items():
         if arabic:
             subject = f"مع {doctor}" if doctor else "متاح"
-            day_part = f" يوم {day}" if day and not single_day else ""
+            day_part = f" {_arabic_day_phrase(day)}" if day and not single_day else ""
             rows.append(f"{subject}{day_part}: " + "، و".join(times) + ".")
         else:
             subject = f"with {doctor}" if doctor else "Available"
@@ -569,15 +599,16 @@ def render_embedded_no_availability(
     availability: dict[str, object],
     *,
     arabic: bool,
+    reference_date: date | None = None,
 ) -> str:
     """Render verified date-scoped no-availability truth for an embedded price reply."""
 
     raw_dates = availability.get("checked_dates")
     dates = [str(value) for value in raw_dates if value] if isinstance(raw_dates, list) else []
     if len(dates) == 1:
-        day = _date_text(dates[0], arabic=arabic)
+        day = _date_text(dates[0], arabic=arabic, reference_date=reference_date)
         if arabic:
-            return f"مفيش مواعيد متاحة يوم {day}. أقدر أدورلك في يوم تاني لو تحب."
+            return f"\u0645\u0641\u064a\u0634 \u0645\u0648\u0627\u0639\u064a\u062f \u0645\u062a\u0627\u062d\u0629 {_arabic_day_phrase(day)}. \u0623\u0642\u062f\u0631 \u0623\u062f\u0648\u0631\u0644\u0643 \u0641\u064a \u064a\u0648\u0645 \u062a\u0627\u0646\u064a \u0644\u0648 \u062a\u062d\u0628."
         return f"There are no available times on {day}. I can check another day if you'd like."
     if arabic:
         return "مفيش مواعيد متاحة في اليوم المطلوب. أقدر أدورلك في يوم تاني لو تحب."
@@ -609,6 +640,7 @@ def _render_present(
     arabic: bool,
     has_more: bool = False,
     continuation: bool = False,
+    reference_date: date | None = None,
 ) -> str:
     intro_by_style = (
         {
@@ -643,6 +675,7 @@ def _render_present(
         unit,
         arabic=arabic,
         mode=draft.presentation_mode,
+        reference_date=reference_date,
     )
     if not rows:
         if continuation:
@@ -669,11 +702,12 @@ def _render_requested_miss(
     draft: AvailabilityComposerUnitDraft,
     *,
     arabic: bool,
+    reference_date: date | None = None,
 ) -> str:
     facts = _fact_map(unit)
     requested = facts.get("requested_time")
     requested_text = _clock(requested.value, arabic=arabic) if requested else ""
-    scope = _date_scope_text(unit, arabic=arabic)
+    scope = _date_scope_text(unit, arabic=arabic, reference_date=reference_date)
     context = _optional_context(unit, draft.optional_fact_keys, arabic=arabic)
     if arabic:
         target = f"ميعاد الساعة {requested_text}" if requested_text else "الوقت المطلوب"
@@ -697,8 +731,9 @@ def _render_no_availability(
     draft: AvailabilityComposerUnitDraft,
     *,
     arabic: bool,
+    reference_date: date | None = None,
 ) -> str:
-    scope = _date_scope_text(unit, arabic=arabic)
+    scope = _date_scope_text(unit, arabic=arabic, reference_date=reference_date)
     context = _optional_context(unit, draft.optional_fact_keys, arabic=arabic)
     truncated_fact = _fact_map(unit).get("search_truncated")
     truncated = truncated_fact is not None and truncated_fact.value is True
@@ -728,6 +763,7 @@ def _render_unit(
     arabic: bool,
     has_more: bool = False,
     continuation: bool = False,
+    reference_date: date | None = None,
 ) -> str:
     truth = unit.availability_truth
     if truth is None:
@@ -741,11 +777,16 @@ def _render_unit(
             arabic=arabic,
             has_more=has_more,
             continuation=continuation,
+            reference_date=reference_date,
         )
     if truth.state == "requested_time_unavailable":
-        return _render_requested_miss(unit, draft, arabic=arabic)
+        return _render_requested_miss(
+            unit, draft, arabic=arabic, reference_date=reference_date
+        )
     if truth.state == "no_availability":
-        return _render_no_availability(unit, draft, arabic=arabic)
+        return _render_no_availability(
+            unit, draft, arabic=arabic, reference_date=reference_date
+        )
     raise AvailabilityComposerValidationError("Unsupported availability state.")
 
 
@@ -756,6 +797,7 @@ def resolve_availability_composer_draft(
     arabic: bool,
     has_more_by_unit: dict[int, bool] | None = None,
     continuation: bool = False,
+    reference_date: date | None = None,
 ) -> str:
     validate_availability_composer_draft(contract, draft)
     chunks: list[str] = []
@@ -784,6 +826,7 @@ def resolve_availability_composer_draft(
             arabic=arabic,
             has_more=bool((has_more_by_unit or {}).get(index)),
             continuation=continuation,
+            reference_date=reference_date,
         )
         if index == 0:
             chunks.append(rendered)
@@ -812,6 +855,7 @@ def deterministic_availability_fallback(
     arabic: bool,
     has_more_by_unit: dict[int, bool] | None = None,
     continuation: bool = False,
+    reference_date: date | None = None,
 ) -> str:
     units: list[AvailabilityComposerUnitDraft] = []
     for index, unit in enumerate(contract.units):
@@ -843,6 +887,7 @@ def deterministic_availability_fallback(
         arabic=arabic,
         has_more_by_unit=has_more_by_unit,
         continuation=continuation,
+        reference_date=reference_date,
     )
 
 
@@ -852,6 +897,7 @@ def compose_availability_contract_reply(
     contract: CustomerResponseContract,
     shown_window_keys: set[str] | frozenset[str] | None = None,
     continuation: bool = False,
+    reference_date: date | None = None,
 ) -> tuple[str, str]:
     """Compose one deterministic page from the full verified availability truth."""
     arabic = _latest_customer_is_arabic(history)
@@ -864,6 +910,7 @@ def compose_availability_contract_reply(
         arabic=arabic,
         has_more_by_unit=has_more_by_unit,
         continuation=continuation,
+        reference_date=reference_date,
     )
 
     try:
@@ -913,6 +960,7 @@ def compose_availability_contract_reply(
             arabic=arabic,
             has_more_by_unit=has_more_by_unit,
             continuation=continuation,
+            reference_date=reference_date,
         )
         return text, f"availability-contract:{model_label(invocation.model_name)}"
     except (

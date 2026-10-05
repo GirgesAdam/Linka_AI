@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from app.agents.v2.customer_datetime import format_customer_date
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
@@ -31,6 +31,39 @@ def test_different_year_customer_date_includes_year() -> None:
         arabic=True,
         reference_date=date(2026, 10, 1),
     ) == "الاثنين 4 أكتوبر 2027"
+
+
+def test_customer_date_uses_local_today_label() -> None:
+    assert format_customer_date(
+        "2026-10-05",
+        arabic=True,
+        reference_date=date(2026, 10, 5),
+    ) == "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647"
+
+
+def test_customer_date_uses_local_tomorrow_label() -> None:
+    assert format_customer_date(
+        "2026-10-06",
+        arabic=True,
+        reference_date=date(2026, 10, 5),
+    ) == "\u0628\u0643\u0631\u0629"
+
+
+def test_customer_date_later_date_keeps_weekday_day_month() -> None:
+    assert format_customer_date(
+        "2026-10-07",
+        arabic=True,
+        reference_date=date(2026, 10, 5),
+    ) == "\u0627\u0644\u0623\u0631\u0628\u0639\u0627\u0621 7 \u0623\u0643\u062a\u0648\u0628\u0631"
+
+
+def test_customer_date_uses_workspace_timezone_across_utc_calendar_boundary() -> None:
+    assert format_customer_date(
+        "2026-10-05",
+        arabic=True,
+        reference_datetime=datetime(2026, 10, 4, 22, 30, tzinfo=UTC),
+        timezone_name="Africa/Cairo",
+    ) == "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647"
 
 
 def test_terminal_empty_semantic_closing_can_be_no_reply() -> None:
