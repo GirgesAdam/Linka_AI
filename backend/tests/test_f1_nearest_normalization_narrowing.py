@@ -12,16 +12,16 @@ _RECENT_DATE_LEVEL_MISS = {
 }
 
 
-class _AvailabilityResult:
-    kind = "availability"
-    ok = True
-
-    def __init__(self, count: int) -> None:
-        self.payload = {"matching_slot_count": count}
-
-
 def _availability_bundle(count: int) -> runtime.ReadExecutionBundle:
-    return runtime.ReadExecutionBundle(results=[_AvailabilityResult(count)])
+    return runtime.ReadExecutionBundle(
+        results=[
+            {
+                "kind": "availability",
+                "ok": True,
+                "payload": {"matching_slot_count": count},
+            }
+        ]
+    )
 
 
 def test_cross_turn_conditional_fallback_uses_recent_verified_no_availability() -> None:
