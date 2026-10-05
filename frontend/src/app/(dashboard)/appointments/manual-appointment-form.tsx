@@ -222,7 +222,7 @@ export function ManualAppointmentForm({
             </label>
             <label>
               <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم الهاتف</span>
-              <Input name="phone" required readOnly value={phone} dir="ltr" />
+              <Input name="phone" required readOnly value={phone} inputMode="numeric" minLength={11} maxLength={11} dir="ltr" />
             </label>
           </div>
         </>

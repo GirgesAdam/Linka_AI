@@ -162,3 +162,18 @@ def test_home_uses_no_legacy_teal() -> None:
     agenda = (_root() / "frontend/src/app/(dashboard)/dashboard/today-agenda.tsx").read_text(encoding="utf-8")
     assert "teal-" not in workspace
     assert "teal-" not in agenda
+
+
+def test_manual_patient_phone_entry_requires_exactly_11_digits() -> None:
+    schema = (_root() / "backend/app/schemas/crm.py").read_text(encoding="utf-8")
+    page = (_root() / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+    quick = (_root() / "frontend/src/app/(dashboard)/appointments/quick-appointment-dialog.tsx").read_text(encoding="utf-8")
+    actions = (_root() / "frontend/src/app/(dashboard)/appointments/actions.ts").read_text(encoding="utf-8")
+    phone_util = (_root() / "frontend/src/lib/patient-phone.ts").read_text(encoding="utf-8")
+    assert "def normalize_patient_entry_phone" in schema
+    assert "len(compact) != 11" in schema
+    assert 'pattern="[0-9]{11}"' in page
+    assert 'pattern="[0-9]{11}"' in quick
+    assert "PATIENT_PHONE_ERROR" in page and "PATIENT_PHONE_ERROR" in quick
+    assert "isValidPatientPhone(phone)" in actions
+    assert "رقم التليفون مش صحيح. لازم يكون 11 رقم." in phone_util
