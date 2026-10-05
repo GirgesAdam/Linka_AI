@@ -451,8 +451,13 @@ def _normalize_cross_turn_nearest_after_verified_miss(
     operation = understanding.operations[0]
     if not bool(getattr(operation, "continues_previous", False)):
         return understanding
+    if operation.type not in {"continue_active", "availability", "book", "reschedule"}:
+        return understanding
     time_constraint = operation.entities.time
+    condition = getattr(operation, "continuation_condition", "always")
     if time_constraint is not None and time_constraint.mode != "nearest":
+        return understanding
+    if time_constraint is None and condition != "if_previous_no_availability":
         return understanding
     missed = _recent_zero_availability_exact_date(recent_read_context)
     if missed is None:
@@ -872,6 +877,7 @@ def _canonical_recent_booking_is_current(
     """Require the recent booking to still match canonical active appointment truth."""
     if not isinstance(recent_action, dict):
         return False
+
     appointment_id = recent_action.get("appointment_id")
     if appointment_id in (None, "") or reads.verification.appointment_match_count != 1:
         return False
