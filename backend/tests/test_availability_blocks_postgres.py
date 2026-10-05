@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -305,4 +305,3 @@ def test_existing_appointment_inside_new_block_is_unchanged(block_fixture: Block
         assert block.overlapping_appointments == 1
         db.refresh(appointment)
         assert (appointment.id, appointment.start_at, appointment.end_at, appointment.status) == original
-
