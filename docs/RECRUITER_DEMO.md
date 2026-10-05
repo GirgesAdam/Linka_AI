@@ -2,8 +2,8 @@
 
 The public portfolio entry point is the live Linka application:
 
-- Application: `https://app.tiaai.online`
-- Demo email: `demo@tiaai.online`
+- Application: `https://app.linkaai.online`
+- Demo email: `demo@tiaai.online` (existing Supabase demo identity retained temporarily for compatibility; not a canonical product-domain or sender-mailbox reference)
 - Demo password: `TiaDemo2026!`
 - Public role: `member`
 

@@ -35,3 +35,17 @@ def test_cors_origins_keeps_json_array_compatibility(monkeypatch) -> None:
         "https://tia-demo-seven.vercel.app",
         "http://localhost:3000",
     ]
+
+
+def test_cors_origins_supports_domain_migration_window(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "https://app.linkaai.online,https://app.tiaai.online",
+    )
+
+    settings = Settings()
+
+    assert settings.cors_origins == [
+        "https://app.linkaai.online",
+        "https://app.tiaai.online",
+    ]
