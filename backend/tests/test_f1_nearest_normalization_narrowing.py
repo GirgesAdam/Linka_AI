@@ -1,14 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from app.agents.v2.turn_contract import (
-    DateConstraint,
-    TiaTurnUnderstanding,
-    TimeConstraint,
-    TurnEntities,
-    TurnOperation,
-)
+from app.agents.v2 import turn_contract as contract
 from app.services.agent_v2 import orchestrator as runtime
 
 
@@ -19,22 +11,22 @@ _RECENT_DATE_LEVEL_MISS = {
 }
 
 
+class _AvailabilityResult:
+    kind = "availability"
+    ok = True
+
+    def __init__(self, count: int) -> None:
+        self.payload = {"matching_slot_count": count}
+
+
 def _availability_bundle(count: int) -> runtime.ReadExecutionBundle:
-    return runtime.ReadExecutionBundle(
-        results=[
-            SimpleNamespace(
-                kind="availability",
-                ok=True,
-                payload={"matching_slot_count": count},
-            )
-        ]
-    )
+    return runtime.ReadExecutionBundle(results=[_AvailabilityResult(count)])
 
 
 def test_cross_turn_conditional_fallback_uses_recent_verified_no_availability() -> None:
-    operation = TurnOperation(
+    operation = contract.TurnOperation(
         type="availability",
-        entities=TurnEntities(),
+        entities=contract.TurnEntities(),
         continues_previous=True,
         continuation_condition="if_previous_no_availability",
     )
@@ -50,9 +42,9 @@ def test_cross_turn_conditional_fallback_uses_recent_verified_no_availability() 
 
 
 def test_cross_turn_conditional_fallback_fails_closed_without_verified_zero() -> None:
-    operation = TurnOperation(
+    operation = contract.TurnOperation(
         type="availability",
-        entities=TurnEntities(),
+        entities=contract.TurnEntities(),
         continues_previous=True,
         continuation_condition="if_previous_no_availability",
     )
@@ -71,9 +63,9 @@ def test_cross_turn_conditional_fallback_fails_closed_without_verified_zero() ->
 
 
 def test_same_turn_availability_evidence_takes_priority_over_recent_context() -> None:
-    operation = TurnOperation(
+    operation = contract.TurnOperation(
         type="availability",
-        entities=TurnEntities(),
+        entities=contract.TurnEntities(),
         continues_previous=True,
         continuation_condition="if_previous_no_availability",
     )
@@ -88,12 +80,12 @@ def test_same_turn_availability_evidence_takes_priority_over_recent_context() ->
 
 
 def test_n1_same_date_continuation_without_forward_semantics_does_not_advance() -> None:
-    understanding = TiaTurnUnderstanding(
+    understanding = contract.TiaTurnUnderstanding(
         operations=[
-            TurnOperation(
+            contract.TurnOperation(
                 type="continue_active",
-                entities=TurnEntities(
-                    date=DateConstraint(mode="exact", start_date="2026-10-05"),
+                entities=contract.TurnEntities(
+                    date=contract.DateConstraint(mode="exact", start_date="2026-10-05"),
                 ),
                 continues_previous=True,
                 continuation_condition="always",
@@ -114,13 +106,13 @@ def test_n1_same_date_continuation_without_forward_semantics_does_not_advance() 
 
 
 def test_n2_typed_nearest_still_advances_after_verified_date_level_miss() -> None:
-    understanding = TiaTurnUnderstanding(
+    understanding = contract.TiaTurnUnderstanding(
         operations=[
-            TurnOperation(
+            contract.TurnOperation(
                 type="continue_active",
-                entities=TurnEntities(
-                    date=DateConstraint(mode="exact", start_date="2026-10-05"),
-                    time=TimeConstraint(mode="nearest"),
+                entities=contract.TurnEntities(
+                    date=contract.DateConstraint(mode="exact", start_date="2026-10-05"),
+                    time=contract.TimeConstraint(mode="nearest"),
                 ),
                 continues_previous=True,
                 continuation_condition="always",
@@ -143,13 +135,13 @@ def test_n2_typed_nearest_still_advances_after_verified_date_level_miss() -> Non
 
 
 def test_nearest_does_not_advance_from_positive_recent_availability() -> None:
-    understanding = TiaTurnUnderstanding(
+    understanding = contract.TiaTurnUnderstanding(
         operations=[
-            TurnOperation(
+            contract.TurnOperation(
                 type="continue_active",
-                entities=TurnEntities(
-                    date=DateConstraint(mode="exact", start_date="2026-10-05"),
-                    time=TimeConstraint(mode="nearest"),
+                entities=contract.TurnEntities(
+                    date=contract.DateConstraint(mode="exact", start_date="2026-10-05"),
+                    time=contract.TimeConstraint(mode="nearest"),
                 ),
                 continues_previous=True,
             )
@@ -166,13 +158,13 @@ def test_nearest_does_not_advance_from_positive_recent_availability() -> None:
 
 
 def test_nearest_does_not_override_time_scoped_miss_or_different_date() -> None:
-    understanding = TiaTurnUnderstanding(
+    understanding = contract.TiaTurnUnderstanding(
         operations=[
-            TurnOperation(
+            contract.TurnOperation(
                 type="continue_active",
-                entities=TurnEntities(
-                    date=DateConstraint(mode="exact", start_date="2026-10-06"),
-                    time=TimeConstraint(mode="nearest"),
+                entities=contract.TurnEntities(
+                    date=contract.DateConstraint(mode="exact", start_date="2026-10-06"),
+                    time=contract.TimeConstraint(mode="nearest"),
                 ),
                 continues_previous=True,
             )
