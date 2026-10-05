@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { legacyDomainRedirectUrl } from "@/lib/production-domain";
+
 const PUBLIC_PATHS = new Set([
   "/login",
   "/signup",
@@ -17,6 +19,14 @@ function safeDestination(value: string | null) {
 }
 
 export async function updateSession(request: NextRequest) {
+  const legacyRedirect = legacyDomainRedirectUrl(
+    request.nextUrl,
+    process.env.LINKA_LEGACY_DOMAIN_REDIRECT_ENABLED === "true",
+  );
+  if (legacyRedirect) {
+    return NextResponse.redirect(legacyRedirect, 308);
+  }
+
   let response = NextResponse.next({ request });
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

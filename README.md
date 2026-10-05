@@ -15,7 +15,7 @@ Patient conversations, booking, clinic operations, CRM, payments, packages, inve
 
 **FastAPI · Next.js · PostgreSQL · Supabase · SQLAlchemy · Alembic · OpenAI · n8n**
 
-### [Open the live Linka application](https://app.tiaai.online)
+### [Open the live Linka application](https://app.linkaai.online)
 
 </div>
 
@@ -27,10 +27,12 @@ The live application is connected only to synthetic clinic data for portfolio/de
 
 | | Demo access |
 |---|---|
-| **Application** | https://app.tiaai.online |
+| **Application** | https://app.linkaai.online |
 | **Email** | `demo@tiaai.online` |
 | **Password** | `TiaDemo2026!` |
 | **Role** | Demo member |
+
+> `demo@tiaai.online` is an existing Supabase demo login identity retained temporarily for compatibility; it is not the canonical Linka domain or a sender mailbox. Migrate that auth identity separately before removing the old-domain reference.
 
 The demo account can explore the operational product, including dashboard data, appointments, patients, finance views, analytics, inventory, products, inbox and agent-backed workflows. Admin-only configuration is intentionally protected from the public account. Demo records may be reset periodically.
 

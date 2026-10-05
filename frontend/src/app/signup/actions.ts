@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { authCallbackUrl, configuredAppOrigin } from "@/lib/production-domain";
 import { createClient } from "@/lib/supabase/server";
 
 async function requestOrigin() {
@@ -25,12 +26,12 @@ export async function signupAction(formData: FormData) {
   }
 
   const supabase = await createClient();
-  const origin = await requestOrigin();
+  const origin = configuredAppOrigin(await requestOrigin());
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: origin
-      ? { emailRedirectTo: `${origin}/auth/callback?next=/onboarding` }
+      ? { emailRedirectTo: authCallbackUrl(origin, "/onboarding") }
       : undefined,
   });
 
