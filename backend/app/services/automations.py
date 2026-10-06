@@ -201,6 +201,244 @@ def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
     return False
 
 
+def _candidate_appointment_states(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    rule: AutomationRule,
+    now: datetime,
+    horizon: datetime,
+):
+    columns = (
+        Appointment.id,
+        Appointment.created_at,
+        Appointment.start_at,
+        Appointment.completed_at,
+        Appointment.no_show_at,
+        Appointment.cancelled_at,
+    )
+    if rule.trigger_kind in {"appointment_created", "before_appointment"}:
+        appointment_horizon = horizon
+        if rule.trigger_kind == "before_appointment" and rule.offset_minutes < 0:
+            appointment_horizon = horizon + timedelta(minutes=abs(rule.offset_minutes))
+        stmt = select(*columns).where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.status.in_(("pending", "confirmed")),
+            Appointment.start_at > now,
+            Appointment.start_at <= appointment_horizon,
+        )
+    elif rule.trigger_kind == "after_completed":
+        oldest = now - max(
+            timedelta(days=14),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
+        stmt = select(*columns).where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.status == "completed",
+            Appointment.completed_at.is_not(None),
+            Appointment.completed_at >= oldest,
+        )
+    elif rule.trigger_kind == "after_no_show":
+        oldest = now - max(
+            timedelta(days=7),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
+        stmt = select(*columns).where(
+            Appointment.workspace_id == workspace_id,
+            Appointment.status == "no_show",
+            Appointment.no_show_at.is_not(None),
+            Appointment.no_show_at >= oldest,
+        )
+    elif rule.trigger_kind == "after_cancelled":
+        oldest = now - max(
+            timedelta(days=7),
+            timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+        )
+        stmt = select(*columns).where(
+            Appointment.workspace_id == workspace_id,
+            or_(
+                and_(
+                    Appointment.status == "cancelled",
+                    Appointment.cancelled_at.is_not(None),
+                    Appointment.cancelled_at >= oldest,
+                ),
+                and_(
+                    Appointment.status == "no_show",
+                    Appointment.no_show_at.is_not(None),
+                    Appointment.no_show_at >= oldest,
+                ),
+            ),
+        )
+    else:
+        return []
+    return list(db.execute(stmt))
+
+
+def _scheduled_for_candidate_state(rule: AutomationRule, state) -> datetime | None:
+    when = scheduled_for(
+        trigger_kind=rule.trigger_kind,
+        offset_minutes=rule.offset_minutes,
+        appointment_created_at=state.created_at,
+        appointment_start_at=state.start_at,
+        completed_at=state.completed_at,
+        no_show_at=state.no_show_at,
+        cancelled_at=state.cancelled_at or state.no_show_at,
+    )
+    return when.astimezone(UTC) if when is not None else None
+
+
+def automation_planning_may_have_work(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    rules: list[AutomationRule],
+    planning_horizon_days: int = 14,
+    now: datetime | None = None,
+) -> bool:
+    """Return False only when compact planning state proves the workspace is stable.
+
+    The preflight intentionally accepts false positives. It checks lifecycle eligibility,
+    candidate/job coverage, and canonical scheduled times using narrow projections; any
+    ambiguity falls through to the full planner. Claim/retry work remains independent.
+    """
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    horizon = now + timedelta(days=planning_horizon_days)
+    rule_by_id = {rule.id: rule for rule in rules}
+
+    active_job_states = db.execute(
+        select(
+            AutomationJob.rule_id,
+            AutomationJob.status.label("job_status"),
+            Appointment.status.label("appointment_status"),
+            Appointment.completed_at,
+            Appointment.no_show_at,
+            Appointment.cancelled_at,
+        )
+        .join(
+            Appointment,
+            and_(
+                Appointment.workspace_id == AutomationJob.workspace_id,
+                Appointment.id == AutomationJob.appointment_id,
+            ),
+        )
+        .where(
+            AutomationJob.workspace_id == workspace_id,
+            AutomationJob.status.in_(("queued", "failed", "dispatched")),
+        )
+    )
+    for state in active_job_states:
+        rule = rule_by_id.get(state.rule_id)
+        if rule is None or not rule.enabled:
+            return True
+        if rule.trigger_kind in {"appointment_created", "before_appointment"}:
+            eligible = state.appointment_status in {"pending", "confirmed"}
+        elif rule.trigger_kind == "after_completed":
+            eligible = state.appointment_status == "completed" and state.completed_at is not None
+        elif rule.trigger_kind == "after_no_show":
+            eligible = state.appointment_status == "no_show" and state.no_show_at is not None
+        elif rule.trigger_kind == "after_cancelled":
+            eligible = (
+                (state.appointment_status == "cancelled" and state.cancelled_at is not None)
+                or (state.appointment_status == "no_show" and state.no_show_at is not None)
+            )
+        else:
+            eligible = False
+        if not eligible:
+            return True
+
+    active_system_followup_id = db.scalar(
+        select(CRMTask.id)
+        .where(
+            CRMTask.workspace_id == workspace_id,
+            CRMTask.source == "system",
+            CRMTask.execution_mode == "ai",
+            CRMTask.status.in_(("pending", "in_progress")),
+            CRMTask.dedupe_key.like(f"{LEAD_FOLLOWUP_DEDUPE_PREFIX}%"),
+        )
+        .limit(1)
+    )
+    if active_system_followup_id is not None:
+        return True
+
+    for rule in rules:
+        if not rule.enabled:
+            continue
+        if rule.trigger_kind == "after_lead_activity":
+            oldest = now - max(
+                timedelta(days=30),
+                timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
+            )
+            lead_id = db.scalar(
+                select(Lead.id)
+                .where(
+                    Lead.workspace_id == workspace_id,
+                    Lead.status.in_(tuple(LEAD_FOLLOWUP_ELIGIBLE_STATUSES)),
+                    or_(Lead.created_at >= oldest, Lead.last_contact_at >= oldest),
+                )
+                .limit(1)
+            )
+            if lead_id is not None:
+                return True
+            continue
+
+        candidates = _candidate_appointment_states(
+            db,
+            workspace_id=workspace_id,
+            rule=rule,
+            now=now,
+            horizon=horizon,
+        )
+        candidate_state_by_key: dict[str, tuple[object, datetime]] = {}
+        for candidate in candidates:
+            when = _scheduled_for_candidate_state(rule, candidate)
+            if when is None or when + timedelta(minutes=rule.max_lateness_minutes) < now:
+                continue
+            candidate_state_by_key[_job_dedupe_key(candidate.id, rule.key)] = (candidate, when)
+        if not candidate_state_by_key:
+            continue
+
+        existing_states = {
+            state.dedupe_key: state
+            for state in db.execute(
+                select(
+                    AutomationJob.dedupe_key,
+                    AutomationJob.status,
+                    AutomationJob.scheduled_for,
+                    AutomationJob.next_attempt_at,
+                    AutomationJob.locked_at,
+                    AutomationJob.completed_at,
+                    AutomationJob.last_error,
+                    AutomationJob.result_json,
+                ).where(
+                    AutomationJob.workspace_id == workspace_id,
+                    AutomationJob.dedupe_key.in_(tuple(candidate_state_by_key)),
+                )
+            )
+        }
+        for dedupe_key, (_candidate, when) in candidate_state_by_key.items():
+            state = existing_states.get(dedupe_key)
+            if state is None:
+                return True
+            renewable_cancel = (
+                state.status == "cancelled"
+                and str((state.result_json or {}).get("reason") or "")
+                in REPLANNABLE_CANCELLATION_REASONS
+            )
+            if state.status == "failed" or renewable_cancel:
+                return True
+            if state.status in {"queued", "dispatched"} and state.scheduled_for != when:
+                return True
+            if state.status == "queued" and (
+                state.next_attempt_at is not None
+                or state.locked_at is not None
+                or state.completed_at is not None
+                or state.last_error is not None
+                or bool(state.result_json)
+            ):
+                return True
+    return False
+
+
 def _candidate_appointments(
     db: Session,
     *,
@@ -566,10 +804,11 @@ def plan_automation_jobs(
     workspace_id: UUID,
     planning_horizon_days: int = 14,
     now: datetime | None = None,
+    rules: list[AutomationRule] | None = None,
 ) -> PlanningResult:
     now = (now or datetime.now(UTC)).astimezone(UTC)
     horizon = now + timedelta(days=planning_horizon_days)
-    rules = ensure_default_rules(db, workspace_id, commit=False)
+    rules = rules if rules is not None else ensure_default_rules(db, workspace_id, commit=False)
     planned = 0
     cancelled = 0
 
@@ -591,6 +830,7 @@ def plan_automation_jobs(
         if rule.enabled and rule.trigger_kind != "after_lead_activity"
     ]
     for rule in enabled_rules:
+        candidates: list[tuple[Appointment, datetime, str]] = []
         for appointment in _candidate_appointments(
             db,
             workspace_id=workspace_id,
@@ -610,48 +850,102 @@ def plan_automation_jobs(
             if when is None:
                 continue
             when = when.astimezone(UTC)
-
-            latest_allowed = when + timedelta(minutes=rule.max_lateness_minutes)
-            if latest_allowed < now:
+            if when + timedelta(minutes=rule.max_lateness_minutes) < now:
                 continue
+            candidates.append((appointment, when, _job_dedupe_key(appointment.id, rule.key)))
 
-            dedupe_key = _job_dedupe_key(appointment.id, rule.key)
-            existing = db.scalar(
-                select(AutomationJob).where(
-                    AutomationJob.workspace_id == workspace_id,
-                    AutomationJob.dedupe_key == dedupe_key,
+        existing_state_by_key: dict[str, tuple] = {}
+        existing_by_id: dict[UUID, AutomationJob] = {}
+        if candidates:
+            dedupe_keys = [dedupe_key for _, _, dedupe_key in candidates]
+            states = list(
+                db.execute(
+                    select(
+                        AutomationJob.id,
+                        AutomationJob.dedupe_key,
+                        AutomationJob.status,
+                        AutomationJob.scheduled_for,
+                        AutomationJob.next_attempt_at,
+                        AutomationJob.locked_at,
+                        AutomationJob.completed_at,
+                        AutomationJob.last_error,
+                        AutomationJob.result_json,
+                    ).where(
+                        AutomationJob.workspace_id == workspace_id,
+                        AutomationJob.dedupe_key.in_(dedupe_keys),
+                    )
                 )
             )
-            if existing is not None:
-                renewable_cancel = _cancelled_job_can_be_replanned(existing)
-                if existing.status in {"queued", "failed"} or renewable_cancel:
-                    existing.status = "queued"
-                    existing.scheduled_for = when
-                    existing.next_attempt_at = None
-                    existing.locked_at = None
-                    existing.completed_at = None
-                    existing.last_error = None
-                    if renewable_cancel:
-                        existing.message_id = None
-                        existing.dispatch_id = None
-                    existing.result_json = {}
-                elif existing.status == "dispatched" and existing.scheduled_for != when:
-                    if _cancel_pending_job_dispatch(
-                        db,
-                        job=existing,
-                        reason="Appointment timing changed before provider send.",
-                    ):
+            existing_state_by_key = {state.dedupe_key: state for state in states}
+            mutation_ids: set[UUID] = set()
+            for _, when, dedupe_key in candidates:
+                state = existing_state_by_key.get(dedupe_key)
+                if state is None:
+                    continue
+                renewable_cancel = (
+                    state.status == "cancelled"
+                    and str((state.result_json or {}).get("reason") or "")
+                    in REPLANNABLE_CANCELLATION_REASONS
+                )
+                queued_needs_reset = state.status == "queued" and (
+                    state.scheduled_for != when
+                    or state.next_attempt_at is not None
+                    or state.locked_at is not None
+                    or state.completed_at is not None
+                    or state.last_error is not None
+                    or bool(state.result_json)
+                )
+                if (
+                    state.status == "failed"
+                    or renewable_cancel
+                    or queued_needs_reset
+                    or (state.status == "dispatched" and state.scheduled_for != when)
+                ):
+                    mutation_ids.add(state.id)
+            if mutation_ids:
+                existing_by_id = {
+                    job.id: job
+                    for job in db.scalars(
+                        select(AutomationJob).where(
+                            AutomationJob.workspace_id == workspace_id,
+                            AutomationJob.id.in_(mutation_ids),
+                        )
+                    )
+                }
+
+        for appointment, when, dedupe_key in candidates:
+            state = existing_state_by_key.get(dedupe_key)
+            if state is not None:
+                existing = existing_by_id.get(state.id)
+                if existing is not None:
+                    renewable_cancel = _cancelled_job_can_be_replanned(existing)
+                    if existing.status in {"queued", "failed"} or renewable_cancel:
                         existing.status = "queued"
                         existing.scheduled_for = when
                         existing.next_attempt_at = None
                         existing.locked_at = None
                         existing.completed_at = None
                         existing.last_error = None
-                        existing.message_id = None
-                        existing.dispatch_id = None
-                        existing.result_json = {"reason": "rescheduled_before_provider_send"}
-                # Manual job cancellations stay terminal. Lifecycle cancellations
-                # are renewable only when the rule/appointment becomes eligible again.
+                        if renewable_cancel:
+                            existing.message_id = None
+                            existing.dispatch_id = None
+                        existing.result_json = {}
+                    elif existing.status == "dispatched" and existing.scheduled_for != when:
+                        if _cancel_pending_job_dispatch(
+                            db,
+                            job=existing,
+                            reason="Appointment timing changed before provider send.",
+                        ):
+                            existing.status = "queued"
+                            existing.scheduled_for = when
+                            existing.next_attempt_at = None
+                            existing.locked_at = None
+                            existing.completed_at = None
+                            existing.last_error = None
+                            existing.message_id = None
+                            existing.dispatch_id = None
+                            existing.result_json = {"reason": "rescheduled_before_provider_send"}
+                # Stable jobs need no full-row read. Manual job cancellations stay terminal.
                 continue
 
             db.add(
@@ -673,9 +967,17 @@ def plan_automation_jobs(
             )
             planned += 1
 
-    active_rule_ids = {rule.id for rule in enabled_rules}
+    active_rule_by_id = {rule.id: rule for rule in enabled_rules}
     stale_stmt = (
-        select(AutomationJob, Appointment)
+        select(
+            AutomationJob.id,
+            AutomationJob.rule_id,
+            AutomationJob.status.label("job_status"),
+            Appointment.status.label("appointment_status"),
+            Appointment.completed_at,
+            Appointment.no_show_at,
+            Appointment.cancelled_at,
+        )
         .join(
             Appointment,
             and_(
@@ -688,26 +990,51 @@ def plan_automation_jobs(
             AutomationJob.status.in_(("queued", "failed", "dispatched")),
         )
     )
-    for job, appointment in db.execute(stale_stmt).all():
-        rule = db.get(AutomationRule, job.rule_id)
-        if (
-            rule is None
-            or rule.id not in active_rule_ids
-            or not _eligible_for_rule(appointment, rule)
+    stale_job_ids: list[UUID] = []
+    for state in db.execute(stale_stmt):
+        rule = active_rule_by_id.get(state.rule_id)
+        eligible = False
+        if rule is not None:
+            if rule.trigger_kind in {"appointment_created", "before_appointment"}:
+                eligible = state.appointment_status in {"pending", "confirmed"}
+            elif rule.trigger_kind == "after_completed":
+                eligible = state.appointment_status == "completed" and state.completed_at is not None
+            elif rule.trigger_kind == "after_no_show":
+                eligible = state.appointment_status == "no_show" and state.no_show_at is not None
+            elif rule.trigger_kind == "after_cancelled":
+                eligible = (
+                    (state.appointment_status == "cancelled" and state.cancelled_at is not None)
+                    or (state.appointment_status == "no_show" and state.no_show_at is not None)
+                )
+        if not eligible:
+            stale_job_ids.append(state.id)
+
+    stale_jobs_by_id: dict[UUID, AutomationJob] = {}
+    if stale_job_ids:
+        stale_jobs_by_id = {
+            job.id: job
+            for job in db.scalars(
+                select(AutomationJob).where(
+                    AutomationJob.workspace_id == workspace_id,
+                    AutomationJob.id.in_(stale_job_ids),
+                )
+            )
+        }
+    for job_id in stale_job_ids:
+        job = stale_jobs_by_id[job_id]
+        if job.status == "dispatched" and not _cancel_pending_job_dispatch(
+            db,
+            job=job,
+            reason="Appointment or rule became ineligible before provider send.",
         ):
-            if job.status == "dispatched" and not _cancel_pending_job_dispatch(
-                db,
-                job=job,
-                reason="Appointment or rule became ineligible before provider send.",
-            ):
-                # A processing/sent provider delivery cannot be safely recalled.
-                continue
-            job.status = "cancelled"
-            job.locked_at = None
-            job.next_attempt_at = None
-            job.completed_at = now
-            job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}
-            cancelled += 1
+            # A processing/sent provider delivery cannot be safely recalled.
+            continue
+        job.status = "cancelled"
+        job.locked_at = None
+        job.next_attempt_at = None
+        job.completed_at = now
+        job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}
+        cancelled += 1
 
     try:
         db.commit()

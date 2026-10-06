@@ -32,3 +32,14 @@ def test_reschedule_requeues_only_before_provider_send() -> None:
     assert '"reason": "rescheduled_before_provider_send"' in planner
     assert "existing.message_id = None" in planner
     assert "existing.dispatch_id = None" in planner
+
+
+def test_planner_batches_dedupe_and_projects_idle_state_before_full_rows() -> None:
+    source = _source()
+    planner = source.split("def plan_automation_jobs(", 1)[1].split("def claim_due_jobs(", 1)[0]
+    assert "AutomationJob.dedupe_key.in_(dedupe_keys)" in planner
+    assert "existing_state_by_key" in planner
+    assert "mutation_ids" in planner
+    assert "Stable jobs need no full-row read" in planner
+    assert "Appointment.status.label(\"appointment_status\")" in planner
+    assert "stale_job_ids" in planner

@@ -16,6 +16,8 @@ from app.models.workspace import Workspace
 from app.services.automation_template_rotation import sync_approved_automation_template_rotation
 from app.services.automations import (
     AutomationError,
+    PlanningResult,
+    automation_planning_may_have_work,
     claim_due_jobs,
     ensure_default_rules,
     execute_job,
@@ -123,13 +125,26 @@ def run_workspace_tick(
 
         # Default rules must exist before we can sync the approved template pool.
         # Rotation is system-owned; admins still only control rule enablement/timing.
-        ensure_default_rules(db, workspace.id)
+        rules = ensure_default_rules(db, workspace.id)
         sync_approved_automation_template_rotation(db, workspace_id=workspace.id)
 
-        planning = plan_automation_jobs(
+        planning_skipped_preflight = not automation_planning_may_have_work(
             db,
             workspace_id=workspace.id,
+            rules=rules,
             planning_horizon_days=planning_horizon_days,
+            now=now,
+        )
+        planning = (
+            PlanningResult(planned=0, cancelled=0)
+            if planning_skipped_preflight
+            else plan_automation_jobs(
+                db,
+                workspace_id=workspace.id,
+                planning_horizon_days=planning_horizon_days,
+                now=now,
+                rules=rules,
+            )
         )
         claimed = claim_due_jobs(
             db,
@@ -181,8 +196,9 @@ def run_workspace_tick(
                 sync_reason = sync.reason or (sync.cycle.status if sync.cycle else None)
 
         logger.info(
-            "automation_tick workspace=%s planned=%s cancelled=%s claimed=%s executed=%s failed=%s sync_claimed=%s sync_reason=%s",
+            "automation_tick workspace=%s planning_skipped_preflight=%s planned=%s cancelled=%s claimed=%s executed=%s failed=%s sync_claimed=%s sync_reason=%s",
             workspace.id,
+            int(planning_skipped_preflight),
             planning.planned,
             planning.cancelled,
             len(claimed),
