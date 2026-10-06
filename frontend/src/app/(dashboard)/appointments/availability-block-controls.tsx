@@ -41,6 +41,7 @@ function defaultsForDate(requestedDate: string, timezone: string) {
   const now = zonedParts(timezone);
   let date = requestedDate < now.date ? now.date : requestedDate;
   let startMinutes = date === now.date ? (Math.floor(now.minutes / 30) + 1) * 30 : 0;
+  // 23:30 cannot start a same-day block because there is no 24:00 end option.
   if (startMinutes >= 23 * 60 + 30) {
     date = addDays(now.date, 1);
     startMinutes = 0;
@@ -67,8 +68,9 @@ export function AvailabilityBlockControls({ branchId, date, timezone, services }
   const [scope, setScope] = useState<"all_services" | "selected_services">("all_services");
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const activeServices = services.filter((service) => service.is_active);
-  const today = zonedParts(timezone).date;
-  const minStartMinutes = blockDate === today ? (Math.floor(zonedParts(timezone).minutes / 30) + 1) * 30 : 0;
+  const now = zonedParts(timezone);
+  const today = now.date;
+  const minStartMinutes = blockDate === today ? (Math.floor(now.minutes / 30) + 1) * 30 : 0;
   const startMinutes = Number(startTime.slice(0, 2)) * 60 + Number(startTime.slice(3, 5));
   const invalidSelectedScope = scope === "selected_services" && selectedServices.length === 0;
 
@@ -82,7 +84,9 @@ export function AvailabilityBlockControls({ branchId, date, timezone, services }
   function updateStart(nextStart: string) {
     setStartTime(nextStart);
     const index = timeOptions.indexOf(nextStart);
-    if (index >= 0 && timeOptions.indexOf(endTime) <= index) setEndTime(timeOptions[index + 1] || endTime);
+    if (index >= 0 && timeOptions.indexOf(endTime) <= index) {
+      setEndTime(timeOptions[index + 1] || endTime);
+    }
   }
 
   return <>
@@ -90,7 +94,7 @@ export function AvailabilityBlockControls({ branchId, date, timezone, services }
     <dialog ref={dialogRef} className="m-auto w-[min(92vw,32rem)] rounded-2xl border border-slate-200 bg-white p-0 shadow-2xl backdrop:bg-slate-950/30">
       <form action={action} className="p-5">
         <input type="hidden" name="branch_id" value={branchId} />
-        <div className="flex items-start justify-between gap-3"><div><div className="text-base font-black text-slate-950">قفل فترة</div><div className="mt-1 text-xs font-semibold text-slate-500">اقفل كل الخدمات أو خدمات محددة للحجز العادي والـAI خلال الفترة.</div></div><button type="button" aria-label="إغلاق" onClick={() => dialogRef.current?.close()} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={17} /></button></div>
+        <div className="flex items-start justify-between gap-3"><div><div className="text-base font-black text-slate-950">قفل فترة</div><div className="mt-1 text-xs font-semibold text-slate-500">اقفل كل الخدمات أو خدمات محددة للحجوزات العادية والـAI خلال الفترة.</div></div><button type="button" aria-label="إغلاق" onClick={() => dialogRef.current?.close()} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={17} /></button></div>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <label className="text-xs font-bold text-slate-700 sm:col-span-2">التاريخ<Input className="mt-1.5" name="date" type="date" min={today} value={blockDate} onChange={(event) => updateDate(event.target.value)} required /></label>
           <label className="text-xs font-bold text-slate-700">من<select className="form-control mt-1.5 h-10 min-h-10" name="start_time" value={startTime} onChange={(event) => updateStart(event.target.value)} required>{timeOptions.slice(0, -1).map((value, index) => <option key={value} value={value} disabled={blockDate === today && index * 30 < minStartMinutes}>{value}</option>)}</select></label>

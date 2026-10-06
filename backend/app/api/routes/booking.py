@@ -398,7 +398,7 @@ def create_availability_block(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Block end must be after start.",
         )
-    if start_at < datetime.now(UTC):
+    if start_at <= datetime.now(UTC):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Block start must not be in the past.",

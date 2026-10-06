@@ -352,7 +352,7 @@ def test_block_removes_availability_reopen_restores_it_and_other_branch_is_unaff
         assert target in _starts(db, block_fixture, block_fixture.branch_a_id)
 
 
-def test_stale_exact_write_quick_booking_and_reschedule_are_rejected_after_block(
+def test_standard_and_reschedule_reject_block_but_quick_booking_ignores_it(
     block_fixture: BlockFixture,
 ) -> None:
     with SessionLocal() as db:
@@ -656,6 +656,35 @@ def test_exact_duplicate_is_rejected_but_overlapping_service_scopes_are_allowed(
         )
         assert _at(block_fixture.booking_date, 14) in _starts(
             db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
+        assert _at(block_fixture.booking_date, 15) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
+
+        booking_routes.delete_availability_block(
+            block_id=first.id, access=access, db=db
+        )
+        assert _at(block_fixture.booking_date, 15) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
+        assert _at(block_fixture.booking_date, 14) in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id
+        )
+
+        all_services = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(18),
+                scope="all_services",
+            ),
+            access=access,
+            db=db,
+        )
+        assert all_services.scope == "all_services"
+        assert _at(block_fixture.booking_date, 15) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id
         )
         assert _at(block_fixture.booking_date, 15) not in _starts(
             db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
