@@ -304,7 +304,7 @@ def _business_signature(db: Session, workspace_id) -> tuple:
 def test_demo_reset_manifest_classifies_every_workspace_table() -> None:
     validate_demo_reset_manifest()
     discovered = set(_workspace_tables())
-    assert len(discovered) == 75
+    assert len(discovered) == 76
     assert discovered == set(PRESERVE_TABLES | RESET_RESEED_TABLES | CLEAR_TABLES)
 
 

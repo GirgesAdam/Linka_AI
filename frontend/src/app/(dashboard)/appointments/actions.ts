@@ -15,24 +15,29 @@ export async function createAvailabilityBlock(previous: AvailabilityBlockActionS
   const startTime = String(formData.get("start_time") || "").trim();
   const endTime = String(formData.get("end_time") || "").trim();
   const reason = String(formData.get("reason") || "").trim();
-  if (!branchId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !startTime || !endTime) {
-    return { ok: false, message: "كمّل التاريخ ووقت البداية والنهاية." };
+  const scope = String(formData.get("scope") || "all_services").trim();
+  const serviceIds = formData.getAll("service_ids").map((value) => String(value).trim()).filter(Boolean);
+  const halfHour = /^(?:[01]\d|2[0-3]):(?:00|30)$/;
+  if (!branchId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !halfHour.test(startTime) || !halfHour.test(endTime)) {
+    return { ok: false, message: "اختر التاريخ ووقت البداية والنهاية بنصف ساعة." };
   }
+  if (scope !== "all_services" && scope !== "selected_services") return { ok: false, message: "اختر نطاق قفل صحيح." };
+  if (scope === "selected_services" && serviceIds.length === 0) return { ok: false, message: "اختر خدمة واحدة على الأقل." };
   try {
     const result = await tiaRequest<{ overlapping_appointments: number }>("/booking/availability-blocks", {
       method: "POST",
-      body: JSON.stringify({ branch_id: branchId, date, start_time: startTime, end_time: endTime, reason: reason || null }),
+      body: JSON.stringify({ branch_id: branchId, date, start_time: startTime, end_time: endTime, scope, service_ids: scope === "selected_services" ? serviceIds : [], reason: reason || null }),
     });
     revalidatePath("/appointments");
     return {
       ok: true,
       message: result.overlapping_appointments > 0
         ? `تم قفل الفترة. فيها ${result.overlapping_appointments.toLocaleString("ar-EG")} موعد موجود بالفعل؛ المواعيد الحالية لم تتغير.`
-        : "تم قفل الفترة ومنع الحجوزات الجديدة فيها.",
+        : "تم قفل الفترة للحجوزات العادية والـAI.",
     };
   } catch (error) {
     if (error instanceof TiaApiError && error.status === 409) {
-      return { ok: false, message: "الفترة بتتداخل مع فترة مقفولة بالفعل." };
+      return { ok: false, message: "يوجد قفل مطابق لنفس الفترة والنطاق بالفعل." };
     }
     return { ok: false, message: error instanceof Error ? error.message : "تعذر قفل الفترة." };
   }

@@ -6,11 +6,12 @@ from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.availability_block import AvailabilityBlock
+from app.models.availability_block_service import AvailabilityBlockService
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.doctor import Doctor
@@ -343,6 +344,10 @@ def calculate_availability(
             Appointment.id.notin_(tuple(excluded_appointment_ids))
         )
     existing = list(db.scalars(appointment_stmt))
+    relevant_block_ids = select(AvailabilityBlockService.availability_block_id).where(
+        AvailabilityBlockService.workspace_id == workspace.id,
+        AvailabilityBlockService.service_id == service.id,
+    )
     availability_blocks = list(
         db.scalars(
             select(AvailabilityBlock).where(
@@ -350,6 +355,10 @@ def calculate_availability(
                 AvailabilityBlock.branch_id == branch.id,
                 AvailabilityBlock.start_at < conflict_end_utc,
                 AvailabilityBlock.end_at > conflict_start_utc,
+                or_(
+                    AvailabilityBlock.scope == "all_services",
+                    AvailabilityBlock.id.in_(relevant_block_ids),
+                ),
             )
         )
     )
@@ -368,9 +377,7 @@ def calculate_availability(
             Appointment.busy_end_at > conflict_start_utc,
         )
         if excluded_appointment_ids:
-            device_stmt = device_stmt.where(
-                Appointment.id.notin_(tuple(excluded_appointment_ids))
-            )
+            device_stmt = device_stmt.where(Appointment.id.notin_(tuple(excluded_appointment_ids)))
         device_existing = list(db.scalars(device_stmt))
 
     minimum_notice_minutes = (
