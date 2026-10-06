@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 AppointmentStatus = Literal[
     "pending",
@@ -31,9 +31,7 @@ AppointmentSource = Literal[
 LaserDeviceKey = str
 OperationalAppointmentStatus = Literal["completed", "no_show"]
 AppointmentListScope = Literal["all", "today", "upcoming", "past"]
-AppointmentOperationAction = Literal[
-    "confirm", "reschedule", "cancel", "complete", "no_show"
-]
+AppointmentOperationAction = Literal["confirm", "reschedule", "cancel", "complete", "no_show"]
 
 
 def require_timezone_aware(value: datetime) -> datetime:
@@ -42,12 +40,24 @@ def require_timezone_aware(value: datetime) -> datetime:
     return value
 
 
+AvailabilityBlockScope = Literal["all_services", "selected_services"]
+
+
 class AvailabilityBlockCreate(BaseModel):
     branch_id: UUID
     date: date
     start_time: time
     end_time: time
+    scope: AvailabilityBlockScope = "all_services"
+    service_ids: list[UUID] = Field(default_factory=list)
     reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_half_hour_boundary(cls, value: time) -> time:
+        if value.minute not in {0, 30} or value.second != 0 or value.microsecond != 0:
+            raise ValueError("Availability block times must use 30-minute increments.")
+        return value
 
     @field_validator("reason", mode="before")
     @classmethod
@@ -57,6 +67,16 @@ class AvailabilityBlockCreate(BaseModel):
             return value or None
         return value
 
+    @model_validator(mode="after")
+    def validate_scope_services(self):
+        unique_ids = list(dict.fromkeys(self.service_ids))
+        self.service_ids = unique_ids
+        if self.scope == "selected_services" and not unique_ids:
+            raise ValueError("Select at least one service for a selected-services block.")
+        if self.scope == "all_services" and unique_ids:
+            raise ValueError("All-services blocks must not include service IDs.")
+        return self
+
 
 class AvailabilityBlockRead(BaseModel):
     id: UUID
@@ -64,6 +84,8 @@ class AvailabilityBlockRead(BaseModel):
     branch_id: UUID
     start_at: datetime
     end_at: datetime
+    scope: AvailabilityBlockScope
+    service_ids: list[UUID] = Field(default_factory=list)
     reason: str | None
     created_by_user_id: UUID | None
     created_at: datetime

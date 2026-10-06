@@ -46,6 +46,7 @@ class BlockFixture:
     other_branch_id: UUID
     other_block_id: UUID
     service_id: UUID
+    other_service_id: UUID
     doctor_id: UUID
     patient_id: UUID
     booking_date: date
@@ -71,24 +72,56 @@ def block_fixture() -> BlockFixture:
     weekday = booking_date.weekday()
     with SessionLocal() as db:
         user = User(email=f"availability-member-{suffix}@example.test", auth_user_id=uuid4())
-        workspace = Workspace(name="Availability Clinic", slug=f"availability-{suffix}", timezone="UTC", is_active=True)
-        other_workspace = Workspace(name="Other Clinic", slug=f"availability-other-{suffix}", timezone="UTC", is_active=True)
+        workspace = Workspace(
+            name="Availability Clinic",
+            slug=f"availability-{suffix}",
+            timezone="UTC",
+            is_active=True,
+        )
+        other_workspace = Workspace(
+            name="Other Clinic", slug=f"availability-other-{suffix}", timezone="UTC", is_active=True
+        )
         db.add_all([user, workspace, other_workspace])
         db.flush()
-        membership = WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role="member", is_active=True)
-        branch_a = Branch(workspace_id=workspace.id, name="Branch A", code=f"a-{suffix}", timezone="UTC")
-        branch_b = Branch(workspace_id=workspace.id, name="Branch B", code=f"b-{suffix}", timezone="UTC")
-        other_branch = Branch(workspace_id=other_workspace.id, name="Other Branch", code=f"other-{suffix}", timezone="UTC")
+        membership = WorkspaceMember(
+            workspace_id=workspace.id, user_id=user.id, role="member", is_active=True
+        )
+        branch_a = Branch(
+            workspace_id=workspace.id, name="Branch A", code=f"a-{suffix}", timezone="UTC"
+        )
+        branch_b = Branch(
+            workspace_id=workspace.id, name="Branch B", code=f"b-{suffix}", timezone="UTC"
+        )
+        other_branch = Branch(
+            workspace_id=other_workspace.id,
+            name="Other Branch",
+            code=f"other-{suffix}",
+            timezone="UTC",
+        )
         service = Service(
             workspace_id=workspace.id,
             name="Availability Service",
             slug=f"availability-service-{suffix}",
             category="dermatology",
-            duration_minutes=30,
+            duration_minutes=60,
             price_minor=100_000,
             currency="EGP",
         )
-        staff = Staff(workspace_id=workspace.id, first_name="Member", last_name="Doctor", email=f"doctor-{suffix}@example.test")
+        other_service = Service(
+            workspace_id=workspace.id,
+            name="Other Service",
+            slug=f"other-service-{suffix}",
+            category="dermatology",
+            duration_minutes=30,
+            price_minor=80_000,
+            currency="EGP",
+        )
+        staff = Staff(
+            workspace_id=workspace.id,
+            first_name="Member",
+            last_name="Doctor",
+            email=f"doctor-{suffix}@example.test",
+        )
         patient = Patient(
             workspace_id=workspace.id,
             first_name="Availability",
@@ -98,30 +131,86 @@ def block_fixture() -> BlockFixture:
             source="other",
             status="active",
         )
-        db.add_all([membership, branch_a, branch_b, other_branch, service, staff, patient])
+        db.add_all(
+            [membership, branch_a, branch_b, other_branch, service, other_service, staff, patient]
+        )
         db.flush()
-        doctor = Doctor(workspace_id=workspace.id, staff_id=staff.id, specialization="Dermatology", booking_enabled=True)
+        doctor = Doctor(
+            workspace_id=workspace.id,
+            staff_id=staff.id,
+            specialization="Dermatology",
+            booking_enabled=True,
+        )
         db.add(doctor)
         db.flush()
-        db.add_all([
-            DoctorBranch(workspace_id=workspace.id, doctor_id=doctor.id, branch_id=branch_a.id, is_primary=True),
-            DoctorBranch(workspace_id=workspace.id, doctor_id=doctor.id, branch_id=branch_b.id, is_primary=False),
-            DoctorService(workspace_id=workspace.id, doctor_id=doctor.id, service_id=service.id),
-            BranchWorkingHour(workspace_id=workspace.id, branch_id=branch_a.id, weekday=weekday, start_time=time(9), end_time=time(18)),
-            BranchWorkingHour(workspace_id=workspace.id, branch_id=branch_b.id, weekday=weekday, start_time=time(9), end_time=time(18)),
-            DoctorWorkingHour(workspace_id=workspace.id, doctor_id=doctor.id, branch_id=branch_a.id, weekday=weekday, start_time=time(9), end_time=time(18)),
-            DoctorWorkingHour(workspace_id=workspace.id, doctor_id=doctor.id, branch_id=branch_b.id, weekday=weekday, start_time=time(9), end_time=time(18)),
-            BookingSettings(
-                workspace_id=workspace.id,
-                slot_interval_minutes=30,
-                minimum_notice_minutes=0,
-                booking_horizon_days=90,
-                cancellation_notice_minutes=60,
-                allow_same_day_booking=True,
-                require_confirmation=False,
-            ),
-            ClinicIntegration(workspace_id=workspace.id, mode="tia_native", adapter_key="tia_database", status="active", config_json={}),
-        ])
+        db.add_all(
+            [
+                DoctorBranch(
+                    workspace_id=workspace.id,
+                    doctor_id=doctor.id,
+                    branch_id=branch_a.id,
+                    is_primary=True,
+                ),
+                DoctorBranch(
+                    workspace_id=workspace.id,
+                    doctor_id=doctor.id,
+                    branch_id=branch_b.id,
+                    is_primary=False,
+                ),
+                DoctorService(
+                    workspace_id=workspace.id, doctor_id=doctor.id, service_id=service.id
+                ),
+                DoctorService(
+                    workspace_id=workspace.id, doctor_id=doctor.id, service_id=other_service.id
+                ),
+                BranchWorkingHour(
+                    workspace_id=workspace.id,
+                    branch_id=branch_a.id,
+                    weekday=weekday,
+                    start_time=time(9),
+                    end_time=time(18),
+                ),
+                BranchWorkingHour(
+                    workspace_id=workspace.id,
+                    branch_id=branch_b.id,
+                    weekday=weekday,
+                    start_time=time(9),
+                    end_time=time(18),
+                ),
+                DoctorWorkingHour(
+                    workspace_id=workspace.id,
+                    doctor_id=doctor.id,
+                    branch_id=branch_a.id,
+                    weekday=weekday,
+                    start_time=time(9),
+                    end_time=time(18),
+                ),
+                DoctorWorkingHour(
+                    workspace_id=workspace.id,
+                    doctor_id=doctor.id,
+                    branch_id=branch_b.id,
+                    weekday=weekday,
+                    start_time=time(9),
+                    end_time=time(18),
+                ),
+                BookingSettings(
+                    workspace_id=workspace.id,
+                    slot_interval_minutes=30,
+                    minimum_notice_minutes=0,
+                    booking_horizon_days=90,
+                    cancellation_notice_minutes=60,
+                    allow_same_day_booking=True,
+                    require_confirmation=False,
+                ),
+                ClinicIntegration(
+                    workspace_id=workspace.id,
+                    mode="tia_native",
+                    adapter_key="tia_database",
+                    status="active",
+                    config_json={},
+                ),
+            ]
+        )
         other_block = AvailabilityBlock(
             workspace_id=other_workspace.id,
             branch_id=other_branch.id,
@@ -140,6 +229,7 @@ def block_fixture() -> BlockFixture:
             other_branch_id=other_branch.id,
             other_block_id=other_block.id,
             service_id=service.id,
+            other_service_id=other_service.id,
             doctor_id=doctor.id,
             patient_id=patient.id,
             booking_date=booking_date,
@@ -158,10 +248,12 @@ def _at(day: date, hour: int, minute: int = 0) -> datetime:
     return datetime.combine(day, time(hour, minute), tzinfo=UTC)
 
 
-def _starts(db, fixture: BlockFixture, branch_id: UUID) -> set[datetime]:
+def _starts(
+    db, fixture: BlockFixture, branch_id: UUID, service_id: UUID | None = None
+) -> set[datetime]:
     result = booking_routes.get_availability(
         branch_id=branch_id,
-        service_id=fixture.service_id,
+        service_id=service_id or fixture.service_id,
         booking_date=fixture.booking_date,
         access=_access(db, fixture),
         db=db,
@@ -171,14 +263,16 @@ def _starts(db, fixture: BlockFixture, branch_id: UUID) -> set[datetime]:
     return {slot.start_at for slot in result.slots}
 
 
-def _create_standard(db, fixture: BlockFixture, hour: int) -> Appointment:
+def _create_standard(
+    db, fixture: BlockFixture, hour: int, minute: int = 0, service_id: UUID | None = None
+) -> Appointment:
     return booking_routes.create_appointment(
         payload=AppointmentCreate(
             patient_id=fixture.patient_id,
             branch_id=fixture.branch_a_id,
             doctor_id=fixture.doctor_id,
-            service_id=fixture.service_id,
-            start_at=_at(fixture.booking_date, hour),
+            service_id=service_id or fixture.service_id,
+            start_at=_at(fixture.booking_date, hour, minute),
             source="staff",
         ),
         access=_access(db, fixture),
@@ -201,7 +295,9 @@ def _create_block(db, fixture: BlockFixture, start_hour: int, end_hour: int):
     )
 
 
-def test_member_appointment_role_can_create_and_reopen_blocks_but_not_cross_workspace(block_fixture: BlockFixture) -> None:
+def test_member_appointment_role_can_create_and_reopen_blocks_but_not_cross_workspace(
+    block_fixture: BlockFixture,
+) -> None:
     with SessionLocal() as db:
         access = _access(db, block_fixture)
         assert access.membership.role == "member"
@@ -229,11 +325,15 @@ def test_member_appointment_role_can_create_and_reopen_blocks_but_not_cross_work
         assert foreign_create.value.status_code == 404
 
         with pytest.raises(HTTPException) as foreign_delete:
-            booking_routes.delete_availability_block(block_id=block_fixture.other_block_id, access=access, db=db)
+            booking_routes.delete_availability_block(
+                block_id=block_fixture.other_block_id, access=access, db=db
+            )
         assert foreign_delete.value.status_code == 404
 
 
-def test_block_removes_availability_reopen_restores_it_and_other_branch_is_unaffected(block_fixture: BlockFixture) -> None:
+def test_block_removes_availability_reopen_restores_it_and_other_branch_is_unaffected(
+    block_fixture: BlockFixture,
+) -> None:
     with SessionLocal() as db:
         target = _at(block_fixture.booking_date, 14)
         assert target in _starts(db, block_fixture, block_fixture.branch_a_id)
@@ -241,13 +341,20 @@ def test_block_removes_availability_reopen_restores_it_and_other_branch_is_unaff
 
         block = _create_block(db, block_fixture, 14, 15)
         assert target not in _starts(db, block_fixture, block_fixture.branch_a_id)
+        assert target not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
         assert target in _starts(db, block_fixture, block_fixture.branch_b_id)
 
-        booking_routes.delete_availability_block(block_id=block.id, access=_access(db, block_fixture), db=db)
+        booking_routes.delete_availability_block(
+            block_id=block.id, access=_access(db, block_fixture), db=db
+        )
         assert target in _starts(db, block_fixture, block_fixture.branch_a_id)
 
 
-def test_stale_exact_write_quick_booking_and_reschedule_are_rejected_after_block(block_fixture: BlockFixture) -> None:
+def test_stale_exact_write_quick_booking_and_reschedule_are_rejected_after_block(
+    block_fixture: BlockFixture,
+) -> None:
     with SessionLocal() as db:
         target = _at(block_fixture.booking_date, 14)
         assert target in _starts(db, block_fixture, block_fixture.branch_a_id)
@@ -259,21 +366,19 @@ def test_stale_exact_write_quick_booking_and_reschedule_are_rejected_after_block
         assert standard_error.value.status_code == 409
         assert "no longer available" in str(standard_error.value.detail)
 
-        with pytest.raises(HTTPException) as quick_error:
-            booking_routes.create_quick_appointment(
-                payload=QuickAppointmentCreate(
-                    patient_id=block_fixture.patient_id,
-                    branch_id=block_fixture.branch_a_id,
-                    doctor_id=block_fixture.doctor_id,
-                    service_id=block_fixture.service_id,
-                    start_at=target,
-                ),
-                access=_access(db, block_fixture),
-                db=db,
-                idempotency_key=None,
-            )
-        assert quick_error.value.status_code == 409
-        assert "closed for new bookings" in str(quick_error.value.detail)
+        quick = booking_routes.create_quick_appointment(
+            payload=QuickAppointmentCreate(
+                patient_id=block_fixture.patient_id,
+                branch_id=block_fixture.branch_a_id,
+                doctor_id=block_fixture.doctor_id,
+                service_id=block_fixture.service_id,
+                start_at=target,
+            ),
+            access=_access(db, block_fixture),
+            db=db,
+            idempotency_key=None,
+        )
+        assert quick.is_quick_booking is True
 
         with pytest.raises(HTTPException) as reschedule_error:
             booking_routes.reschedule_appointment(
@@ -304,4 +409,254 @@ def test_existing_appointment_inside_new_block_is_unchanged(block_fixture: Block
         )
         assert block.overlapping_appointments == 1
         db.refresh(appointment)
-        assert (appointment.id, appointment.start_at, appointment.end_at, appointment.status) == original
+        assert (
+            appointment.id,
+            appointment.start_at,
+            appointment.end_at,
+            appointment.status,
+        ) == original
+
+
+def test_selected_service_scope_filters_canonical_availability_and_partial_overlap(
+    block_fixture: BlockFixture,
+) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        block = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(15),
+                scope="selected_services",
+                service_ids=[block_fixture.service_id],
+            ),
+            access=access,
+            db=db,
+        )
+        assert block.scope == "selected_services"
+        assert block.service_ids == [block_fixture.service_id]
+        assert _at(block_fixture.booking_date, 14) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id
+        )
+        assert _at(block_fixture.booking_date, 14) in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
+        # 60-minute service starting 13:30 overlaps the 14:00 block.
+        assert _at(block_fixture.booking_date, 13, 30) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id
+        )
+
+
+def test_selected_block_quick_booking_ignores_block(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(15),
+                end_time=time(16),
+                scope="selected_services",
+                service_ids=[block_fixture.service_id],
+            ),
+            access=access,
+            db=db,
+        )
+        quick = booking_routes.create_quick_appointment(
+            payload=QuickAppointmentCreate(
+                patient_id=block_fixture.patient_id,
+                branch_id=block_fixture.branch_a_id,
+                doctor_id=block_fixture.doctor_id,
+                service_id=block_fixture.service_id,
+                start_at=_at(block_fixture.booking_date, 15),
+            ),
+            access=access,
+            db=db,
+            idempotency_key=None,
+        )
+        assert quick.is_quick_booking is True
+
+
+def test_block_time_rules_and_empty_selected_scope(block_fixture: BlockFixture) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        AvailabilityBlockCreate(
+            branch_id=block_fixture.branch_a_id,
+            date=block_fixture.booking_date,
+            start_time=time(10, 17),
+            end_time=time(11),
+            scope="all_services",
+        )
+    with pytest.raises(ValidationError):
+        AvailabilityBlockCreate(
+            branch_id=block_fixture.branch_a_id,
+            date=block_fixture.booking_date,
+            start_time=time(10),
+            end_time=time(11),
+            scope="selected_services",
+            service_ids=[],
+        )
+    with SessionLocal() as db:
+        with pytest.raises(HTTPException) as past:
+            booking_routes.create_availability_block(
+                payload=AvailabilityBlockCreate(
+                    branch_id=block_fixture.branch_a_id,
+                    date=date.today() - timedelta(days=1),
+                    start_time=time(10),
+                    end_time=time(11),
+                ),
+                access=_access(db, block_fixture),
+                db=db,
+            )
+        assert past.value.status_code == 422
+
+
+def test_block_less_than_one_hour_from_now_is_accepted(
+    block_fixture: BlockFixture, monkeypatch
+) -> None:
+    frozen_now = datetime.combine(block_fixture.booking_date, time(10, 42), tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_now if tz is not None else frozen_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(booking_routes, "datetime", FrozenDateTime)
+    with SessionLocal() as db:
+        result = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(11),
+                end_time=time(11, 30),
+            ),
+            access=_access(db, block_fixture),
+            db=db,
+        )
+        assert result.start_at == _at(block_fixture.booking_date, 11)
+        assert result.start_at - frozen_now == timedelta(minutes=18)
+
+
+def test_legacy_default_scope_is_all_services_and_overlap_count_is_scope_aware(
+    block_fixture: BlockFixture,
+) -> None:
+    with SessionLocal() as db:
+        legacy = AvailabilityBlock(
+            workspace_id=block_fixture.workspace_id,
+            branch_id=block_fixture.branch_a_id,
+            start_at=_at(block_fixture.booking_date, 16),
+            end_at=_at(block_fixture.booking_date, 17),
+        )
+        db.add(legacy)
+        db.commit()
+        db.refresh(legacy)
+        assert legacy.scope == "all_services"
+        assert _at(block_fixture.booking_date, 16) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
+
+        _create_standard(db, block_fixture, 12, service_id=block_fixture.other_service_id)
+        selected = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(12),
+                end_time=time(13),
+                scope="selected_services",
+                service_ids=[block_fixture.service_id],
+            ),
+            access=_access(db, block_fixture),
+            db=db,
+        )
+        assert selected.overlapping_appointments == 0
+
+
+def test_selected_service_must_belong_to_workspace(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        foreign_service = Service(
+            workspace_id=db.get(Branch, block_fixture.other_branch_id).workspace_id,
+            name="Foreign Service",
+            slug=f"foreign-{uuid4().hex}",
+            category="dermatology",
+            duration_minutes=30,
+            price_minor=10_000,
+            currency="EGP",
+        )
+        db.add(foreign_service)
+        db.commit()
+        with pytest.raises(HTTPException) as error:
+            booking_routes.create_availability_block(
+                payload=AvailabilityBlockCreate(
+                    branch_id=block_fixture.branch_a_id,
+                    date=block_fixture.booking_date,
+                    start_time=time(13),
+                    end_time=time(13, 30),
+                    scope="selected_services",
+                    service_ids=[foreign_service.id],
+                ),
+                access=_access(db, block_fixture),
+                db=db,
+            )
+        assert error.value.status_code == 422
+
+
+def test_exact_duplicate_is_rejected_but_overlapping_service_scopes_are_allowed(
+    block_fixture: BlockFixture,
+) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        first = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(16),
+                scope="selected_services",
+                service_ids=[block_fixture.service_id],
+            ),
+            access=access,
+            db=db,
+        )
+        assert first.service_ids == [block_fixture.service_id]
+        with pytest.raises(HTTPException) as duplicate:
+            booking_routes.create_availability_block(
+                payload=AvailabilityBlockCreate(
+                    branch_id=block_fixture.branch_a_id,
+                    date=block_fixture.booking_date,
+                    start_time=time(14),
+                    end_time=time(16),
+                    scope="selected_services",
+                    service_ids=[block_fixture.service_id],
+                ),
+                access=access,
+                db=db,
+            )
+        assert duplicate.value.status_code == 409
+
+        second = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(15),
+                end_time=time(17),
+                scope="selected_services",
+                service_ids=[block_fixture.other_service_id],
+            ),
+            access=access,
+            db=db,
+        )
+        assert second.service_ids == [block_fixture.other_service_id]
+        assert _at(block_fixture.booking_date, 14) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id
+        )
+        assert _at(block_fixture.booking_date, 16) in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id
+        )
+        assert _at(block_fixture.booking_date, 14) in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )
+        assert _at(block_fixture.booking_date, 15) not in _starts(
+            db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
+        )

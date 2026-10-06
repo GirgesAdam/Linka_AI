@@ -3,14 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class AvailabilityBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """A branch-wide interval where new standard bookings are not allowed."""
+    """A branch interval restricting standard availability for all or selected services."""
 
     __tablename__ = "availability_blocks"
     __table_args__ = (
@@ -20,7 +28,11 @@ class AvailabilityBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ondelete="CASCADE",
             name="fk_availability_blocks_branch",
         ),
+        UniqueConstraint("workspace_id", "id", name="uq_availability_blocks_workspace_id_id"),
         CheckConstraint("end_at > start_at", name="availability_blocks_interval_valid"),
+        CheckConstraint(
+            "scope IN ('all_services', 'selected_services')", name="availability_blocks_scope_valid"
+        ),
         Index(
             "ix_availability_blocks_workspace_branch_time",
             "workspace_id",
@@ -34,6 +46,9 @@ class AvailabilityBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     branch_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="all_services", server_default="all_services"
+    )
     reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True

@@ -17,10 +17,12 @@ def test_availability_block_api_is_workspace_scoped_and_reopenable() -> None:
     source = Path("app/api/routes/booking.py").read_text(encoding="utf-8")
     assert 'AvailabilityBlock.workspace_id == access.workspace.id' in source
     assert '@router.delete("/availability-blocks/{block_id}"' in source
-    assert "This period overlaps an existing availability block." in source
+    assert "An identical availability block already exists." in source
+    assert "AvailabilityBlockService" in source
+    assert "Quick Booking is an explicit receptionist override path" in source
+    assert "The requested period is closed for new bookings." not in source
     assert "existing_count" in source
     assert ".with_for_update()" in source
-    assert "The requested period is closed for new bookings." in source
 
 
 def test_appointments_ui_can_create_display_and_reopen_blocks() -> None:
@@ -34,6 +36,12 @@ def test_appointments_ui_can_create_display_and_reopen_blocks() -> None:
     assert 'method: "DELETE"' in actions
     assert "تعذر تحميل الفترات غير المتاحة" in page
     assert "availabilityTruthAvailable" in page
+    assert 'type="time"' not in controls
+    assert "index * 30" in controls
+    assert "(Math.floor(now.minutes / 30) + 1) * 30" in controls
+    assert 'name="start_time"' in controls and 'name="end_time"' in controls
+    assert 'value="selected_services"' in controls
+    assert "invalidSelectedScope" in controls
     block_read = page[page.index("/booking/availability-blocks"):page.index("/booking/availability-blocks") + 360]
     assert ".catch(() => [])" not in block_read
 
@@ -177,7 +185,8 @@ def test_standard_create_and_reschedule_keep_exact_slot_reverification() -> None
     assert "slot = find_exact_slot(" in creation
     assert "find_exact_slot(" in operations
     assert "slot = find_exact_slot(" in routes
-    assert "The requested period is closed for new bookings." in routes
+    assert "AvailabilityBlockService" in routes
+    assert "The requested period is closed for new bookings." not in routes
 
 
 def test_timezone_local_day_and_branch_scope_are_server_side_contracts() -> None:

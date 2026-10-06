@@ -21,6 +21,7 @@ from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
 from app.models.availability_block import AvailabilityBlock
+from app.models.availability_block_service import AvailabilityBlockService
 from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.lead import Lead
@@ -279,6 +280,62 @@ def make_appointment(
 
 
 
+def _availability_block_read(
+    db: Session, block: AvailabilityBlock, *, overlapping_appointments: int = 0
+) -> AvailabilityBlockRead:
+    service_ids = list(
+        db.scalars(
+            select(AvailabilityBlockService.service_id).where(
+                AvailabilityBlockService.workspace_id == block.workspace_id,
+                AvailabilityBlockService.availability_block_id == block.id,
+            ).order_by(AvailabilityBlockService.service_id)
+        )
+    )
+    return AvailabilityBlockRead.model_validate(block).model_copy(
+        update={
+            "service_ids": service_ids,
+            "overlapping_appointments": overlapping_appointments,
+        }
+    )
+
+
+def _availability_block_duplicate_exists(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    branch_id: UUID,
+    start_at: datetime,
+    end_at: datetime,
+    scope: str,
+    service_ids: set[UUID],
+) -> bool:
+    candidates = list(
+        db.scalars(
+            select(AvailabilityBlock).where(
+                AvailabilityBlock.workspace_id == workspace_id,
+                AvailabilityBlock.branch_id == branch_id,
+                AvailabilityBlock.start_at == start_at,
+                AvailabilityBlock.end_at == end_at,
+                AvailabilityBlock.scope == scope,
+            )
+        )
+    )
+    if scope == "all_services":
+        return bool(candidates)
+    for candidate in candidates:
+        existing = set(
+            db.scalars(
+                select(AvailabilityBlockService.service_id).where(
+                    AvailabilityBlockService.workspace_id == workspace_id,
+                    AvailabilityBlockService.availability_block_id == candidate.id,
+                )
+            )
+        )
+        if existing == service_ids:
+            return True
+    return False
+
+
 @router.get("/availability-blocks", response_model=list[AvailabilityBlockRead])
 def list_availability_blocks(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
@@ -308,10 +365,14 @@ def list_availability_blocks(
             AvailabilityBlock.end_at > local_start,
         )
     rows = list(db.scalars(stmt.order_by(AvailabilityBlock.start_at)))
-    return [AvailabilityBlockRead.model_validate(row) for row in rows]
+    return [_availability_block_read(db, row) for row in rows]
 
 
-@router.post("/availability-blocks", response_model=AvailabilityBlockRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/availability-blocks",
+    response_model=AvailabilityBlockRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_availability_block(
     payload: AvailabilityBlockCreate,
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
@@ -319,11 +380,13 @@ def create_availability_block(
 ) -> AvailabilityBlockRead:
     require_local_appointment_write(db, access.workspace.id)
     branch = db.scalar(
-        select(Branch).where(
+        select(Branch)
+        .where(
             Branch.id == payload.branch_id,
             Branch.workspace_id == access.workspace.id,
             Branch.is_active.is_(True),
-        ).with_for_update()
+        )
+        .with_for_update()
     )
     if branch is None:
         raise not_found("Branch")
@@ -331,37 +394,80 @@ def create_availability_block(
     start_at = datetime.combine(payload.date, payload.start_time, tzinfo=tz).astimezone(UTC)
     end_at = datetime.combine(payload.date, payload.end_time, tzinfo=tz).astimezone(UTC)
     if end_at <= start_at:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Block end must be after start.")
-    overlap = db.scalar(
-        select(AvailabilityBlock).where(
-            AvailabilityBlock.workspace_id == access.workspace.id,
-            AvailabilityBlock.branch_id == branch.id,
-            AvailabilityBlock.start_at < end_at,
-            AvailabilityBlock.end_at > start_at,
-        ).limit(1)
-    )
-    if overlap is not None:
-        raise booking_conflict("This period overlaps an existing availability block.")
-    existing_count = len(list(db.scalars(select(Appointment.id).where(
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Block end must be after start.",
+        )
+    if start_at < datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Block start must not be in the past.",
+        )
+
+    selected_service_ids = set(payload.service_ids)
+    if payload.scope == "selected_services":
+        valid_service_ids = set(
+            db.scalars(
+                select(Service.id).where(
+                    Service.workspace_id == access.workspace.id,
+                    Service.id.in_(selected_service_ids),
+                    Service.is_active.is_(True),
+                )
+            )
+        )
+        if valid_service_ids != selected_service_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Selected services must be active services in this workspace.",
+            )
+
+    if _availability_block_duplicate_exists(
+        db,
+        workspace_id=access.workspace.id,
+        branch_id=branch.id,
+        start_at=start_at,
+        end_at=end_at,
+        scope=payload.scope,
+        service_ids=selected_service_ids,
+    ):
+        raise booking_conflict("An identical availability block already exists.")
+
+    appointment_stmt = select(Appointment.id).where(
         Appointment.workspace_id == access.workspace.id,
         Appointment.branch_id == branch.id,
         Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress")),
         Appointment.start_at < end_at,
         Appointment.end_at > start_at,
-    ))))
+    )
+    if payload.scope == "selected_services":
+        appointment_stmt = appointment_stmt.where(Appointment.service_id.in_(selected_service_ids))
+    existing_count = len(list(db.scalars(appointment_stmt)))
+
     block = AvailabilityBlock(
         workspace_id=access.workspace.id,
         branch_id=branch.id,
         start_at=start_at,
         end_at=end_at,
+        scope=payload.scope,
         reason=payload.reason,
         created_by_user_id=access.user.id,
     )
     db.add(block)
+    db.flush()
+    if payload.scope == "selected_services":
+        db.add_all(
+            [
+                AvailabilityBlockService(
+                    workspace_id=access.workspace.id,
+                    availability_block_id=block.id,
+                    service_id=service_id,
+                )
+                for service_id in sorted(selected_service_ids, key=str)
+            ]
+        )
     db.commit()
     db.refresh(block)
-    result = AvailabilityBlockRead.model_validate(block)
-    return result.model_copy(update={"overlapping_appointments": existing_count})
+    return _availability_block_read(db, block, overlapping_appointments=existing_count)
 
 
 @router.delete("/availability-blocks/{block_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -624,16 +730,7 @@ def create_quick_appointment(
 
     start_at = payload.start_at.astimezone(UTC)
     end_at = start_at + timedelta(minutes=duration_minutes)
-    blocked = db.scalar(
-        select(AvailabilityBlock.id).where(
-            AvailabilityBlock.workspace_id == access.workspace.id,
-            AvailabilityBlock.branch_id == branch.id,
-            AvailabilityBlock.start_at < end_at,
-            AvailabilityBlock.end_at > start_at,
-        ).limit(1)
-    )
-    if blocked is not None:
-        raise booking_conflict("The requested period is closed for new bookings.")
+    # Quick Booking is an explicit receptionist override path: availability blocks do not apply.
     if payload.patient_package_id is not None and payload.use_pulse_balance:
         raise booking_conflict("Choose either a session package or pulse balance, not both.")
     patient_package = None
@@ -1054,8 +1151,8 @@ def get_appointment_operations(
         cancellation_notice_minutes=settings.cancellation_notice_minutes,
         now=now,
     )
-    patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "العميل"
-    doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or "الدكتور"
+    patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "Ø§Ù„Ø¹Ù…ÙŠÙ„"
+    doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or "Ø§Ù„Ø¯ÙƒØªÙˆØ±"
 
     return AppointmentOperationsRead(
         appointment=AppointmentRead.model_validate(appointment),
