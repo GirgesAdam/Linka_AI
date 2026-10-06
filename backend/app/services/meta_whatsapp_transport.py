@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
@@ -39,6 +39,7 @@ from app.services.provider_credentials import (
     decrypt_provider_access_token,
 )
 from app.services.workspace_runtime_policy import (
+    DEMO_WHATSAPP_REPLY_TEST_FLAG,
     demo_whatsapp_reply_test_enabled,
     workspace_runtime_policy,
 )
@@ -148,6 +149,28 @@ def _parse_utc_timestamp(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _readiness_refresh_due_from_state(
+    *,
+    status: str,
+    transport_ready: bool,
+    waiting_for_template: bool,
+    last_checked_at: object,
+    now: datetime | None = None,
+) -> bool:
+    current = now or datetime.now(UTC)
+    last_checked = _parse_utc_timestamp(last_checked_at)
+    if last_checked is None:
+        return True
+
+    needs_fast_refresh = status != "active" or not transport_ready or waiting_for_template
+    interval = (
+        _PENDING_PROVIDER_REFRESH_INTERVAL
+        if needs_fast_refresh
+        else _PROVIDER_REFRESH_INTERVAL
+    )
+    return current - last_checked >= interval
+
+
 def _readiness_refresh_due(
     connection: ChannelConnection,
     *,
@@ -160,14 +183,9 @@ def _readiness_refresh_due(
     Connections waiting on a template or otherwise not ready refresh every 2 minutes.
     The transport tick itself may still run every few seconds for inbound/outbound work.
     """
-    current = now or datetime.now(UTC)
     config = connection.config_json or {}
     raw_health = config.get("provider_health")
     health = raw_health if isinstance(raw_health, dict) else {}
-    last_checked = _parse_utc_timestamp(health.get("last_checked_at"))
-    if last_checked is None:
-        return True
-
     raw_statuses = config.get("template_statuses")
     template_statuses = raw_statuses if isinstance(raw_statuses, dict) else {}
     waiting_for_template = any(
@@ -175,17 +193,13 @@ def _readiness_refresh_due(
         not in {"approved", "rejected", "disabled"}
         for name in required_templates
     )
-    needs_fast_refresh = (
-        connection.status != "active"
-        or not bool(config.get("transport_ready"))
-        or waiting_for_template
+    return _readiness_refresh_due_from_state(
+        status=connection.status,
+        transport_ready=bool(config.get("transport_ready")),
+        waiting_for_template=waiting_for_template,
+        last_checked_at=health.get("last_checked_at"),
+        now=now,
     )
-    interval = (
-        _PENDING_PROVIDER_REFRESH_INTERVAL
-        if needs_fast_refresh
-        else _PROVIDER_REFRESH_INTERVAL
-    )
-    return current - last_checked >= interval
 
 
 def _fetch_phone_info(token: str, phone_number_id: str) -> dict[str, Any]:
@@ -946,15 +960,76 @@ def _cancel_expired_automation_dispatches(
     return cancelled
 
 
-def run_meta_transport_tick(
+def _transport_preflight_rows(
     db: Session,
     *,
-    limit_per_connection: int = 10,
-    max_connections: int = 25,
-) -> dict[str, int]:
-    connections = list(
-        db.scalars(
-            select(ChannelConnection)
+    max_connections: int,
+    now: datetime | None = None,
+):
+    """Return compact transport state plus conservative pending-work flags.
+
+    The preflight intentionally allows false positives: any ambiguous/pending state
+    falls through to the existing full transport path. A completely idle tick does
+    not return full connection/workspace/credential/message rows.
+    """
+    current = now or datetime.now(UTC)
+    inbound_has_work = exists(
+        select(ChannelInboundEvent.id).where(
+            ChannelInboundEvent.workspace_id == ChannelConnection.workspace_id,
+            ChannelInboundEvent.channel_connection_id == ChannelConnection.id,
+            ChannelInboundEvent.status.in_(("received", "failed")),
+            or_(
+                ChannelInboundEvent.attempts < MAX_INBOUND_PROCESS_ATTEMPTS,
+                and_(
+                    ChannelInboundEvent.processing_token.is_not(None),
+                    or_(
+                        ChannelInboundEvent.processing_lease_expires_at.is_(None),
+                        ChannelInboundEvent.processing_lease_expires_at <= current,
+                    ),
+                ),
+            ),
+        )
+    )
+    # Any queued/processing dispatch is conservatively considered work. This also
+    # preserves retry, stale-lease, retry-budget and automation-expiry maintenance
+    # without duplicating those locking/business rules in the preflight.
+    dispatch_has_work = exists(
+        select(MessageDispatch.id).where(
+            MessageDispatch.workspace_id == ChannelConnection.workspace_id,
+            MessageDispatch.channel_connection_id == ChannelConnection.id,
+            MessageDispatch.status.in_(("queued", "processing")),
+        )
+    )
+
+    config = ChannelConnection.config_json
+    template_terminal_statuses = ("approved", "rejected", "disabled")
+    waiting_for_template = or_(
+        *(
+            func.lower(
+                func.coalesce(config["template_statuses"][template.name].as_string(), "")
+            ).not_in(template_terminal_statuses)
+            for template in STANDARD_WHATSAPP_TEMPLATES
+        )
+    )
+    return list(
+        db.execute(
+            select(
+                ChannelConnection.id.label("connection_id"),
+                ChannelConnection.workspace_id.label("workspace_id"),
+                ChannelConnection.status.label("status"),
+                Workspace.is_demo.label("workspace_is_demo"),
+                config["transport_ready"].as_boolean().label("transport_ready"),
+                config["provider_health"]["last_checked_at"].as_string().label(
+                    "provider_last_checked_at"
+                ),
+                waiting_for_template.label("waiting_for_template"),
+                config[DEMO_WHATSAPP_REPLY_TEST_FLAG].as_boolean().label(
+                    "demo_reply_test"
+                ),
+                inbound_has_work.label("inbound_has_work"),
+                dispatch_has_work.label("dispatch_has_work"),
+            )
+            .outerjoin(Workspace, Workspace.id == ChannelConnection.workspace_id)
             .where(
                 ChannelConnection.channel == "whatsapp",
                 ChannelConnection.provider == "meta_cloud",
@@ -964,17 +1039,81 @@ def run_meta_transport_tick(
             .limit(max_connections)
         )
     )
+
+
+def _preflight_row_requires_full_transport(row, *, now: datetime) -> bool:
+    if bool(row.inbound_has_work) or bool(row.dispatch_has_work):
+        return True
+    if row.workspace_is_demo is not False:
+        return False
+    return _readiness_refresh_due_from_state(
+        status=str(row.status),
+        transport_ready=bool(row.transport_ready),
+        waiting_for_template=bool(row.waiting_for_template),
+        last_checked_at=row.provider_last_checked_at,
+        now=now,
+    )
+
+
+def run_meta_transport_tick(
+    db: Session,
+    *,
+    limit_per_connection: int = 10,
+    max_connections: int = 25,
+) -> dict[str, int]:
+    now = datetime.now(UTC)
+    preflight_rows = _transport_preflight_rows(
+        db,
+        max_connections=max_connections,
+        now=now,
+    )
+    work_rows = [
+        row
+        for row in preflight_rows
+        if _preflight_row_requires_full_transport(row, now=now)
+    ]
+    work_connection_ids = {row.connection_id for row in work_rows}
+    skipped_preflight = len(preflight_rows) - len(work_rows)
+
+    # Preserve the useful ready-count signal for stable idle connections without
+    # fetching/decrypting credential material merely to report it. Connections that
+    # require real work use the original credential-backed readiness path below.
+    ready_connections = sum(
+        1
+        for row in preflight_rows
+        if row.connection_id not in work_connection_ids
+        and row.status == "active"
+        and bool(row.transport_ready)
+        and (row.workspace_is_demo is False or bool(row.demo_reply_test))
+    )
+
+    connections_by_id: dict[Any, ChannelConnection] = {}
+    workspaces_by_id: dict[Any, Workspace] = {}
+    if work_rows:
+        work_workspace_ids = {row.workspace_id for row in work_rows}
+        connections_by_id = {
+            connection.id: connection
+            for connection in db.scalars(
+                select(ChannelConnection).where(ChannelConnection.id.in_(work_connection_ids))
+            )
+        }
+        workspaces_by_id = {
+            workspace.id: workspace
+            for workspace in db.scalars(
+                select(Workspace).where(Workspace.id.in_(work_workspace_ids))
+            )
+        }
+
     sent = 0
     send_failed = 0
     inbound_processed = 0
     inbound_failed = 0
-    ready_connections = 0
-
     provider_refreshes = 0
 
-    for connection in connections:
-        workspace = db.get(Workspace, connection.workspace_id)
-        if workspace is None:
+    for preflight in work_rows:
+        connection = connections_by_id.get(preflight.connection_id)
+        workspace = workspaces_by_id.get(preflight.workspace_id)
+        if connection is None or workspace is None:
             continue
         policy = workspace_runtime_policy(workspace)
         demo_reply_test = demo_whatsapp_reply_test_enabled(workspace, connection)
@@ -988,6 +1127,7 @@ def run_meta_transport_tick(
             if _readiness_refresh_due(
                 connection,
                 required_templates=required_templates,
+                now=now,
             ):
                 ready = refresh_meta_connection_readiness(db, connection)
                 provider_refreshes += 1
@@ -1035,8 +1175,9 @@ def run_meta_transport_tick(
                 send_failed += 1
 
     return {
-        "connections_checked": len(connections),
+        "connections_checked": len(preflight_rows),
         "connections_ready": ready_connections,
+        "connections_skipped_preflight": skipped_preflight,
         "provider_refreshes": provider_refreshes,
         "inbound_processed": inbound_processed,
         "inbound_failed": inbound_failed,

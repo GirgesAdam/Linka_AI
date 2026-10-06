@@ -12,6 +12,7 @@ def test_transport_route_is_not_globally_disabled_by_legacy_demo_env(monkeypatch
     expected = {
         "connections_checked": 1,
         "connections_ready": 1,
+        "connections_skipped_preflight": 0,
         "provider_refreshes": 0,
         "inbound_processed": 0,
         "inbound_failed": 0,
@@ -42,7 +43,10 @@ class FakeDB:
         self.connections = connections
         self.workspaces = workspaces
 
-    def scalars(self, _statement):
+    def scalars(self, statement):
+        entity = statement.column_descriptions[0].get("entity")
+        if entity is Workspace:
+            return list(self.workspaces.values())
         return self.connections
 
     def get(self, model, key):
@@ -65,8 +69,8 @@ def test_native_worker_processes_demo_and_production_independently(monkeypatch):
     db = FakeDB(
         [demo_connection, prod_connection],
         {
-            demo_workspace_id: SimpleNamespace(is_demo=True),
-            prod_workspace_id: SimpleNamespace(is_demo=False),
+            demo_workspace_id: SimpleNamespace(id=demo_workspace_id, is_demo=True),
+            prod_workspace_id: SimpleNamespace(id=prod_workspace_id, is_demo=False),
         },
     )
     processed = []
@@ -75,6 +79,24 @@ def test_native_worker_processes_demo_and_production_independently(monkeypatch):
     claimed = []
     sent = []
 
+    monkeypatch.setattr(
+        transport,
+        "_transport_preflight_rows",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(
+                connection_id=demo_connection.id, workspace_id=demo_workspace_id,
+                status="active", workspace_is_demo=True, transport_ready=False,
+                provider_last_checked_at=None, waiting_for_template=False, demo_reply_test=False,
+                inbound_has_work=True, dispatch_has_work=False,
+            ),
+            SimpleNamespace(
+                connection_id=prod_connection.id, workspace_id=prod_workspace_id,
+                status="active", workspace_is_demo=False, transport_ready=True,
+                provider_last_checked_at=None, waiting_for_template=False, demo_reply_test=False,
+                inbound_has_work=True, dispatch_has_work=False,
+            ),
+        ],
+    )
     monkeypatch.setattr(transport, "_required_template_names", lambda db, c: [])
     monkeypatch.setattr(transport, "_readiness_refresh_due", lambda *a, **k: True)
     def refresh(db, connection):
@@ -113,7 +135,8 @@ def test_native_worker_processes_demo_and_production_independently(monkeypatch):
     assert claimed == [prod_connection.id]
     assert sent == [prod_connection.id]
     assert result == {
-        "connections_checked": 2, "connections_ready": 1, "provider_refreshes": 1,
+        "connections_checked": 2, "connections_ready": 1, "connections_skipped_preflight": 0,
+        "provider_refreshes": 1,
         "inbound_processed": 2, "inbound_failed": 0, "sent": 1, "send_failed": 0,
     }
 
@@ -161,13 +184,25 @@ def test_native_worker_allows_flagged_demo_reactive_replies(monkeypatch):
     )
     db = FakeDB(
         [connection],
-        {workspace_id: SimpleNamespace(is_demo=True)},
+        {workspace_id: SimpleNamespace(id=workspace_id, is_demo=True)},
     )
     processed = []
     refreshed = []
     claimed = []
     sent = []
 
+    monkeypatch.setattr(
+        transport,
+        "_transport_preflight_rows",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(
+                connection_id=connection.id, workspace_id=workspace_id,
+                status="active", workspace_is_demo=True, transport_ready=True,
+                provider_last_checked_at=None, waiting_for_template=False, demo_reply_test=True,
+                inbound_has_work=True, dispatch_has_work=False,
+            )
+        ],
+    )
     monkeypatch.setattr(
         transport,
         "_required_template_names",
@@ -248,6 +283,7 @@ def test_native_worker_allows_flagged_demo_reactive_replies(monkeypatch):
     assert result == {
         "connections_checked": 1,
         "connections_ready": 1,
+        "connections_skipped_preflight": 0,
         "provider_refreshes": 0,
         "inbound_processed": 1,
         "inbound_failed": 0,
