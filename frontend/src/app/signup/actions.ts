@@ -1,10 +1,19 @@
-"use server";
+﻿"use server";
 
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { authCallbackUrl, configuredAppOrigin } from "@/lib/production-domain";
+import { configuredAppOrigin } from "@/lib/production-domain";
 import { createClient } from "@/lib/supabase/server";
+import {
+  beginSignup,
+  resendSignupConfirmation,
+  restartSignup,
+  type PendingSignupStore,
+  type SignupAuthClient,
+} from "./signup-flow";
+
+const PENDING_EMAIL_COOKIE = "linka_pending_signup_email";
 
 async function requestOrigin() {
   const requestHeaders = await headers();
@@ -13,35 +22,56 @@ async function requestOrigin() {
   return host ? `${proto}://${host}` : undefined;
 }
 
-export async function signupAction(formData: FormData) {
-  const email = String(formData.get("email") || "").trim();
-  const password = String(formData.get("password") || "");
-  const confirmPassword = String(formData.get("confirm_password") || "");
-
-  if (password.length < 8) {
-    redirect(`/signup?error=${encodeURIComponent("كلمة المرور لازم تكون 8 حروف على الأقل.")}`);
-  }
-  if (password !== confirmPassword) {
-    redirect(`/signup?error=${encodeURIComponent("كلمتا المرور غير متطابقتين.")}`);
-  }
-
+async function flowDeps() {
   const supabase = await createClient();
-  const origin = configuredAppOrigin(await requestOrigin());
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: origin
-      ? { emailRedirectTo: authCallbackUrl(origin, "/onboarding") }
-      : undefined,
-  });
+  const cookieStore = await cookies();
+  const store: PendingSignupStore = {
+    get: async () => cookieStore.get(PENDING_EMAIL_COOKIE)?.value?.trim() || "",
+    set: async (email) => {
+      cookieStore.set(PENDING_EMAIL_COOKIE, email, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/signup",
+        maxAge: 60 * 60,
+      });
+    },
+    clear: async () => {
+      cookieStore.set(PENDING_EMAIL_COOKIE, "", {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/signup",
+        maxAge: 0,
+      });
+    },
+  };
+  const auth: SignupAuthClient = {
+    signUp: (input) => supabase.auth.signUp(input),
+    resend: (input) => supabase.auth.resend(input),
+  };
+  return { auth, store };
+}
 
-  if (error) {
-    redirect(`/signup?error=${encodeURIComponent(error.message || "تعذر إنشاء الحساب.")}`);
-  }
+export async function signupAction(formData: FormData) {
+  const result = await beginSignup(
+    {
+      email: String(formData.get("email") || ""),
+      password: String(formData.get("password") || ""),
+      confirmPassword: String(formData.get("confirm_password") || ""),
+      origin: configuredAppOrigin(await requestOrigin()),
+    },
+    await flowDeps(),
+  );
+  redirect(result.redirectTo);
+}
 
-  if (data.session) {
-    redirect("/onboarding");
-  }
+export async function resendSignupConfirmationAction() {
+  const result = await resendSignupConfirmation({ origin: configuredAppOrigin(await requestOrigin()) }, await flowDeps());
+  redirect(result.redirectTo);
+}
 
-  redirect(`/signup?success=${encodeURIComponent("تم إنشاء الحساب. افتح رسالة التأكيد في بريدك الإلكتروني، وبعدها هتدخل مباشرة لإعداد العيادة.")}`);
+export async function restartSignupAction() {
+  const result = await restartSignup(await flowDeps());
+  redirect(result.redirectTo);
 }

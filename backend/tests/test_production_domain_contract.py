@@ -23,7 +23,12 @@ def test_domain_migration_runtime_contract_is_explicit() -> None:
     production_domain = (ROOT / "frontend/src/lib/production-domain.ts").read_text(
         encoding="utf-8"
     )
-    signup = (ROOT / "frontend/src/app/signup/actions.ts").read_text(encoding="utf-8")
+    signup_actions = (ROOT / "frontend/src/app/signup/actions.ts").read_text(
+        encoding="utf-8"
+    )
+    signup_flow = (ROOT / "frontend/src/app/signup/signup-flow.ts").read_text(
+        encoding="utf-8"
+    )
     recovery = (ROOT / "frontend/src/app/forgot-password/actions.ts").read_text(
         encoding="utf-8"
     )
@@ -32,7 +37,14 @@ def test_domain_migration_runtime_contract_is_explicit() -> None:
     assert 'CANONICAL_APP_URL = "https://app.linkaai.online"' in production_domain
     assert 'CANONICAL_ROOT_URL = "https://linkaai.online"' in production_domain
     assert 'LEGACY_APP_HOST = "app.tiaai.online"' in production_domain
-    assert 'authCallbackUrl(origin, "/onboarding")' in signup
+
+    # Signup keeps the production-domain boundary after the OTP flow extraction:
+    # actions resolve the configured canonical origin, while signup-flow owns callback construction.
+    assert 'configuredAppOrigin' in signup_actions
+    assert 'origin: configuredAppOrigin(await requestOrigin())' in signup_actions
+    assert 'from "@/lib/production-domain"' in signup_flow
+    assert 'authCallbackUrl(origin, "/onboarding")' in signup_flow
+
     assert 'authCallbackUrl(origin, "/reset-password")' in recovery
     assert 'LINKA_LEGACY_DOMAIN_REDIRECT_ENABLED === "true"' in proxy
     assert 'current.pathname === "/auth/callback"' in production_domain
