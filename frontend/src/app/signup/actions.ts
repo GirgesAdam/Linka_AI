@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -7,11 +7,10 @@ import { configuredAppOrigin } from "@/lib/production-domain";
 import { createClient } from "@/lib/supabase/server";
 import {
   beginSignup,
-  resendSignupCode,
+  resendSignupConfirmation,
   restartSignup,
   type PendingSignupStore,
   type SignupAuthClient,
-  verifySignupCode,
 } from "./signup-flow";
 
 const PENDING_EMAIL_COOKIE = "linka_pending_signup_email";
@@ -49,7 +48,6 @@ async function flowDeps() {
   };
   const auth: SignupAuthClient = {
     signUp: (input) => supabase.auth.signUp(input),
-    verifyOtp: (input) => supabase.auth.verifyOtp(input),
     resend: (input) => supabase.auth.resend(input),
   };
   return { auth, store };
@@ -68,16 +66,8 @@ export async function signupAction(formData: FormData) {
   redirect(result.redirectTo);
 }
 
-export async function verifySignupCodeAction(formData: FormData) {
-  const result = await verifySignupCode(
-    { token: String(formData.get("token") || "") },
-    await flowDeps(),
-  );
-  redirect(result.redirectTo);
-}
-
-export async function resendSignupCodeAction() {
-  const result = await resendSignupCode({ origin: configuredAppOrigin(await requestOrigin()) }, await flowDeps());
+export async function resendSignupConfirmationAction() {
+  const result = await resendSignupConfirmation({ origin: configuredAppOrigin(await requestOrigin()) }, await flowDeps());
   redirect(result.redirectTo);
 }
 

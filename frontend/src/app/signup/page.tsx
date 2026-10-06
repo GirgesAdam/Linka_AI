@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { Bot, Building2, KeyRound, Mail } from "lucide-react";
+import { Bot, Building2, Mail } from "lucide-react";
 
 import { SubmitButton } from "@/components/submit-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { resendSignupCodeAction, restartSignupAction, signupAction, verifySignupCodeAction } from "./actions";
+import { resendSignupConfirmationAction, restartSignupAction, signupAction } from "./actions";
 
 const PENDING_EMAIL_COOKIE = "linka_pending_signup_email";
 
@@ -17,7 +17,7 @@ export default async function SignupPage({
   const { error, success, step } = await searchParams;
   const cookieStore = await cookies();
   const pendingEmail = cookieStore.get(PENDING_EMAIL_COOKIE)?.value || "";
-  const verifyStep = step === "verify" && Boolean(pendingEmail);
+  const checkEmailStep = step === "check-email" && Boolean(pendingEmail);
 
   return (
     <main className="grid min-h-screen place-items-center bg-[var(--bg)] p-5 sm:p-8" dir="rtl">
@@ -25,9 +25,9 @@ export default async function SignupPage({
         <div className="mb-7 flex items-start gap-3">
           <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-[var(--accent)] text-white"><Bot /></span>
           <div>
-            <h1 className="text-2xl font-black">{verifyStep ? "تأكيد البريد الإلكتروني" : "إنشاء حساب Linka"}</h1>
+            <h1 className="text-2xl font-black">{checkEmailStep ? "راجع بريدك الإلكتروني" : "إنشاء حساب Linka"}</h1>
             <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-              {verifyStep ? <>بعتنالك كود مكوّن من 6 أرقام على <span className="font-black text-slate-800" dir="ltr">{pendingEmail}</span></> : "أنشئ حسابك، وبعد التأكيد هنمشي معاك مباشرة في إعداد العيادة خطوة بخطوة."}
+              {checkEmailStep ? <>أرسلنا رسالة تأكيد إلى <span className="font-black text-slate-800" dir="ltr">{pendingEmail}</span>. افتح الرسالة واضغط «تأكيد البريد الإلكتروني» لإكمال إنشاء حسابك.</> : "أنشئ حسابك، وبعد التأكيد هنمشي معاك مباشرة في إعداد العيادة خطوة بخطوة."}
             </p>
           </div>
         </div>
@@ -35,42 +35,21 @@ export default async function SignupPage({
         {error && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
         {success && <div role="status" aria-live="polite" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</div>}
 
-        {verifyStep ? (
+        {checkEmailStep ? (
           <div className="space-y-5">
-            <form action={verifySignupCodeAction} className="space-y-4">
-              <label className="block space-y-2">
-                <span className="text-sm font-semibold">كود التأكيد</span>
-                <Input
-                  name="token"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="[0-9]{6}"
-                  minLength={6}
-                  maxLength={6}
-                  required
-                  autoFocus
-                  placeholder="123456"
-                  dir="ltr"
-                  className="h-14 text-center text-xl font-black tracking-[0.45em]"
-                  aria-describedby="signup-code-hint"
-                />
-                <span id="signup-code-hint" className="block text-xs font-normal text-[var(--muted)]">اكتب الـ6 أرقام الموجودة في رسالة Linka.</span>
-              </label>
-              <SubmitButton className="w-full" size="lg" pendingLabel="جارٍ التأكيد...">
-                <KeyRound size={18} /> تأكيد
-              </SubmitButton>
-            </form>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+              لا تحتاج لنسخ أي كود. اضغط رابط التأكيد داخل الرسالة، وLinka هتكمل تسجيل الدخول تلقائيًا.
+            </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <form action={resendSignupCodeAction}>
+              <form action={resendSignupConfirmationAction}>
                 <SubmitButton type="submit" variant="outline" className="w-full" pendingLabel="جارٍ الإرسال...">
-                  <Mail size={16} /> إعادة إرسال الكود
+                  <Mail size={16} /> إعادة إرسال رسالة التأكيد
                 </SubmitButton>
               </form>
               <form action={restartSignupAction}>
                 <Button type="submit" variant="ghost" className="w-full">تغيير البريد الإلكتروني</Button>
               </form>
             </div>
-            <p className="text-center text-xs leading-5 text-[var(--muted)]">لو طلبت كود جديد، استخدم أحدث كود وصلك. Supabase قد تمنع إعادة الإرسال المتكرر لفترة قصيرة.</p>
           </div>
         ) : (
           <form action={signupAction} className="space-y-4">

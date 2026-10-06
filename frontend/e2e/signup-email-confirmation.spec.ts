@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+﻿import { expect, test } from "@playwright/test";
 
 const pendingEmailCookie = {
   name: "linka_pending_signup_email",
@@ -19,21 +19,18 @@ test("signup keeps email and password as the first step", async ({ page }) => {
   await expect(page.getByRole("button", { name: /إنشاء الحساب/ })).toBeVisible();
 });
 
-test("verification step is refresh-safe and mobile usable", async ({ context, page }) => {
+test("check-email state is one-click only with no OTP input", async ({ context, page }) => {
   await context.addCookies([pendingEmailCookie]);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/signup?step=verify");
-  await expect(page.getByRole("heading", { name: "تأكيد البريد الإلكتروني" })).toBeVisible();
+  await page.goto("/signup?step=check-email");
+  await expect(page.getByRole("heading", { name: "راجع بريدك الإلكتروني" })).toBeVisible();
   await expect(page.getByText("signup-test@example.com")).toBeVisible();
-  const code = page.getByLabel("كود التأكيد");
-  await expect(code).toHaveAttribute("inputmode", "numeric");
-  await expect(code).toHaveAttribute("autocomplete", "one-time-code");
-  await expect(code).toHaveAttribute("maxlength", "6");
-  await expect(page.getByRole("button", { name: /^تأكيد$/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /إعادة إرسال الكود/ })).toBeVisible();
+  await expect(page.getByText(/لا تحتاج لنسخ أي كود/)).toBeVisible();
+  await expect(page.locator('input[name="token"]')).toHaveCount(0);
+  await expect(page.locator('[autocomplete="one-time-code"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /إعادة إرسال رسالة التأكيد/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "تغيير البريد الإلكتروني" })).toBeVisible();
-
   await page.reload();
-  await expect(page.getByRole("heading", { name: "تأكيد البريد الإلكتروني" })).toBeVisible();
-  await expect(code).toBeVisible();
+  await expect(page.getByRole("heading", { name: "راجع بريدك الإلكتروني" })).toBeVisible();
+  await expect(page.locator('input[name="token"]')).toHaveCount(0);
 });

@@ -1,15 +1,13 @@
-import { authCallbackUrl } from "@/lib/production-domain";
+﻿import { authCallbackUrl } from "@/lib/production-domain";
 
 export type SignupAuthError = { status?: number; code?: string } | null;
 
 type SignupUser = { identities?: unknown[] } | null;
 type AuthResult = { data: { session: unknown | null; user?: SignupUser }; error: SignupAuthError };
-type VerifyResult = { data: { session: unknown | null }; error: SignupAuthError };
 type ResendResult = { error: SignupAuthError };
 
 export type SignupAuthClient = {
   signUp(input: { email: string; password: string; options?: { emailRedirectTo: string } }): Promise<AuthResult>;
-  verifyOtp(input: { email: string; token: string; type: "email" }): Promise<VerifyResult>;
   resend(input: { type: "signup"; email: string; options?: { emailRedirectTo: string } }): Promise<ResendResult>;
 };
 
@@ -26,8 +24,8 @@ function signupUrl(message: string) {
   return `/signup?error=${encodeURIComponent(message)}`;
 }
 
-function verifyUrl(message: string, kind: "error" | "success" = "error") {
-  return `/signup?step=verify&${kind}=${encodeURIComponent(message)}`;
+function checkEmailUrl(message: string, kind: "error" | "success" = "error") {
+  return `/signup?step=check-email&${kind}=${encodeURIComponent(message)}`;
 }
 
 function isRateLimited(error: SignupAuthError) {
@@ -66,34 +64,15 @@ export async function beginSignup(
   }
 
   await deps.store.set(email);
-  return { redirectTo: "/signup?step=verify" };
+  return { redirectTo: "/signup?step=check-email" };
 }
 
-export async function verifySignupCode(
-  input: { token: string },
-  deps: SignupFlowDeps,
-): Promise<SignupFlowResult> {
-  const email = (await deps.store.get()).trim();
-  const token = input.token.replace(/\D/g, "");
-  if (!email) return { redirectTo: signupUrl("ابدأ إنشاء الحساب من جديد عشان نعرف البريد المطلوب تأكيده.") };
-  if (!/^\d{6}$/.test(token)) {
-    return { redirectTo: verifyUrl("اكتب كود التأكيد المكوّن من 6 أرقام.") };
-  }
-
-  const { data, error } = await deps.auth.verifyOtp({ email, token, type: "email" });
-  if (error || !data.session) {
-    return { redirectTo: verifyUrl("الكود غير صحيح أو انتهت صلاحيته. جرّب تاني أو اطلب كود جديد.") };
-  }
-  await deps.store.clear();
-  return { redirectTo: "/onboarding" };
-}
-
-export async function resendSignupCode(
+export async function resendSignupConfirmation(
   input: { origin?: string },
   deps: SignupFlowDeps,
 ): Promise<SignupFlowResult> {
   const email = (await deps.store.get()).trim();
-  if (!email) return { redirectTo: signupUrl("ابدأ إنشاء الحساب من جديد عشان نقدر نبعت كود تأكيد.") };
+  if (!email) return { redirectTo: signupUrl("ابدأ إنشاء الحساب من جديد عشان نعرف نبعت رسالة التأكيد.") };
 
   const { error } = await deps.auth.resend({
     type: "signup",
@@ -102,10 +81,10 @@ export async function resendSignupCode(
   });
   if (error) {
     return {
-      redirectTo: verifyUrl(isRateLimited(error) ? "استنى شوية قبل ما تطلب كود جديد." : "تعذر إرسال كود جديد الآن. جرّب مرة أخرى."),
+      redirectTo: checkEmailUrl(isRateLimited(error) ? "استنى شوية قبل ما تطلب رسالة تأكيد جديدة." : "تعذر إرسال رسالة التأكيد. جرّب مرة أخرى."),
     };
   }
-  return { redirectTo: verifyUrl("بعتنالك كود جديد على نفس البريد.", "success") };
+  return { redirectTo: checkEmailUrl("بعتنالك رسالة تأكيد جديدة.", "success") };
 }
 
 export async function restartSignup(deps: SignupFlowDeps): Promise<SignupFlowResult> {

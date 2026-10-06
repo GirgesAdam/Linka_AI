@@ -1,6 +1,8 @@
-<h2>كود تأكيد حساب Linka</h2>
-<p style="font-size:32px;font-weight:700;letter-spacing:6px">{{ .Token }}</p>
-<p>اكتب الكود داخل Linka لإكمال إنشاء حسابك.</p>
-<p>لو كنت تستخدم النسخة القديمة من Linka، يمكنك تأكيد البريد من الرابط التالي:</p>
-<p><a href="{{ .SiteURL }}/auth/callback?next=/onboarding&amp;token_hash={{ .TokenHash }}&amp;type=email">تأكيد البريد الإلكتروني</a></p>
-<p>الكود والرابط صالحان لفترة محدودة، ويمكن استخدام التأكيد مرة واحدة فقط.</p>
+﻿<h2>تأكيد حساب Linka</h2>
+<p>اضغط الزر التالي لتأكيد بريدك الإلكتروني وإكمال إنشاء حسابك.</p>
+<p>
+  <a href="{{ .SiteURL }}/auth/callback?next=/onboarding&amp;token_hash={{ .TokenHash }}&amp;type=email">
+    تأكيد البريد الإلكتروني
+  </a>
+</p>
+<p>الرابط صالح لفترة محدودة ويمكن استخدامه مرة واحدة فقط.</p>
