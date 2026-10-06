@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.config import settings
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.core.meta_whatsapp_templates import (
     STANDARD_WHATSAPP_TEMPLATES,
@@ -34,6 +35,7 @@ from app.services.channels import (
     record_dispatch_result,
     record_provider_status,
 )
+from app.services.conversation_ownership import DISPATCH_SEND_LEASE
 from app.services.provider_credentials import (
     ProviderCredentialError,
     decrypt_provider_access_token,
@@ -990,18 +992,90 @@ def _transport_preflight_rows(
             ),
         )
     )
-    # Any queued/processing dispatch is conservatively considered work. This also
-    # preserves retry, stale-lease, retry-budget and automation-expiry maintenance
-    # without duplicating those locking/business rules in the preflight.
-    dispatch_has_work = exists(
+    # Production stays deliberately conservative: any queued/processing dispatch
+    # keeps using the original full path. Demo connections are narrower because
+    # external dispatch is isolated; reply-test mode may claim reactive replies only.
+    # Local maintenance remains actionable even when a dispatch cannot be sent.
+    stale_before = current - DISPATCH_SEND_LEASE
+    any_dispatch_pending = exists(
         select(MessageDispatch.id).where(
             MessageDispatch.workspace_id == ChannelConnection.workspace_id,
             MessageDispatch.channel_connection_id == ChannelConnection.id,
             MessageDispatch.status.in_(("queued", "processing")),
         )
     )
+    demo_reactive_dispatch_due = exists(
+        select(MessageDispatch.id)
+        .join(Message, Message.id == MessageDispatch.message_id)
+        .where(
+            MessageDispatch.workspace_id == ChannelConnection.workspace_id,
+            MessageDispatch.channel_connection_id == ChannelConnection.id,
+            MessageDispatch.attempts < settings.channel_dispatch_max_attempts,
+            Message.in_reply_to_message_id.is_not(None),
+            or_(
+                and_(
+                    MessageDispatch.status == "queued",
+                    or_(
+                        MessageDispatch.next_attempt_at.is_(None),
+                        MessageDispatch.next_attempt_at <= current,
+                    ),
+                ),
+                and_(
+                    MessageDispatch.status == "processing",
+                    MessageDispatch.locked_at.is_not(None),
+                    MessageDispatch.locked_at <= stale_before,
+                ),
+            ),
+        )
+    )
+    demo_exhausted_maintenance_due = exists(
+        select(MessageDispatch.id).where(
+            MessageDispatch.workspace_id == ChannelConnection.workspace_id,
+            MessageDispatch.channel_connection_id == ChannelConnection.id,
+            MessageDispatch.attempts >= settings.channel_dispatch_max_attempts,
+            or_(
+                MessageDispatch.status == "queued",
+                and_(
+                    MessageDispatch.status == "processing",
+                    MessageDispatch.locked_at.is_not(None),
+                    MessageDispatch.locked_at <= stale_before,
+                ),
+            ),
+        )
+    )
+    automation_expiry_due = exists(
+        select(AutomationJob.id)
+        .join(AutomationRule, AutomationRule.id == AutomationJob.rule_id)
+        .join(MessageDispatch, MessageDispatch.id == AutomationJob.dispatch_id)
+        .join(Message, Message.id == AutomationJob.message_id)
+        .where(
+            AutomationJob.workspace_id == ChannelConnection.workspace_id,
+            AutomationJob.job_kind == "appointment_rule",
+            AutomationJob.status == "dispatched",
+            MessageDispatch.workspace_id == ChannelConnection.workspace_id,
+            MessageDispatch.channel_connection_id == ChannelConnection.id,
+            MessageDispatch.status == "queued",
+            AutomationJob.scheduled_for
+            + func.make_interval(
+                0, 0, 0, 0, 0, func.greatest(0, AutomationRule.max_lateness_minutes), 0
+            )
+            < current,
+        )
+    )
 
     config = ChannelConnection.config_json
+    demo_reply_test = config[DEMO_WHATSAPP_REPLY_TEST_FLAG].as_boolean()
+    dispatch_has_work = or_(
+        and_(Workspace.is_demo.is_(False), any_dispatch_pending),
+        and_(Workspace.is_demo.is_(True), demo_reply_test.is_(True), demo_reactive_dispatch_due),
+        and_(
+            Workspace.is_demo.is_(True),
+            demo_reply_test.is_(True),
+            demo_exhausted_maintenance_due,
+        ),
+        automation_expiry_due,
+    )
+
     template_terminal_statuses = ("approved", "rejected", "disabled")
     waiting_for_template = or_(
         *(

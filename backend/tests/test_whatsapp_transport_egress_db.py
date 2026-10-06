@@ -17,14 +17,21 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.meta_whatsapp_templates import STANDARD_WHATSAPP_TEMPLATES
+from app.models.appointment import Appointment
+from app.models.automation_job import AutomationJob
+from app.models.automation_rule import AutomationRule
+from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_identity import ChannelIdentity
 from app.models.channel_inbound_event import ChannelInboundEvent
 from app.models.channel_provider_credential import ChannelProviderCredential
 from app.models.conversation import Conversation
+from app.models.doctor import Doctor
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
+from app.models.service import Service
+from app.models.staff import Staff
 from app.models.workspace import Workspace
 from app.services import channels
 from app.services import meta_whatsapp_transport as transport
@@ -234,6 +241,171 @@ def _add_outbound_dispatch(
     case.db.add(dispatch)
     case.db.commit()
     return dispatch
+
+
+def _set_demo_mode(case, *, reply_test: bool) -> None:
+    case.workspace.is_demo = True
+    config = dict(case.channel.config_json or {})
+    config["demo_whatsapp_reply_test_enabled"] = reply_test
+    case.channel.config_json = config
+    case.db.commit()
+
+
+def _add_demo_dispatch(
+    case,
+    *,
+    reactive: bool,
+    status: str = "queued",
+    attempts: int = 0,
+    locked_at: datetime | None = None,
+    next_attempt_at: datetime | None = None,
+):
+    conversation = _add_conversation(case, suffix="demo-dispatch")
+    identity = case.db.scalar(
+        select(ChannelIdentity).where(
+            ChannelIdentity.workspace_id == case.workspace.id,
+            ChannelIdentity.channel_connection_id == case.channel.id,
+            ChannelIdentity.patient_id == case.patient.id,
+        )
+    )
+    if identity is None:
+        case.db.add(
+            ChannelIdentity(
+                workspace_id=case.workspace.id,
+                channel_connection_id=case.channel.id,
+                patient_id=case.patient.id,
+                external_user_id=f"2010{uuid4().int % 10**8:08d}",
+                metadata_json={},
+            )
+        )
+
+    inbound = None
+    if reactive:
+        inbound = Message(
+            workspace_id=case.workspace.id,
+            conversation_id=conversation.id,
+            channel_connection_id=case.channel.id,
+            sender_type="patient",
+            direction="inbound",
+            message_type="text",
+            content="customer reply",
+            external_message_id=f"wamid.{uuid4()}",
+            delivery_status="received",
+            metadata_json={},
+        )
+        case.db.add(inbound)
+        case.db.flush()
+
+    outbound = Message(
+        workspace_id=case.workspace.id,
+        conversation_id=conversation.id,
+        channel_connection_id=case.channel.id,
+        sender_type="ai",
+        direction="outbound",
+        message_type="text" if reactive else "template",
+        content="reactive reply" if reactive else "proactive follow-up",
+        delivery_status="queued",
+        in_reply_to_message_id=inbound.id if inbound is not None else None,
+        metadata_json=(
+            {}
+            if reactive
+            else {
+                "source": "ai_followup",
+                "whatsapp_template": {
+                    "name": "tia_ai_followup_ar",
+                    "language_code": "ar_EG",
+                },
+            }
+        ),
+    )
+    case.db.add(outbound)
+    case.db.flush()
+    dispatch = MessageDispatch(
+        workspace_id=case.workspace.id,
+        channel_connection_id=case.channel.id,
+        message_id=outbound.id,
+        status=status,
+        attempts=attempts,
+        locked_at=locked_at,
+        next_attempt_at=next_attempt_at,
+        metadata_json={},
+    )
+    case.db.add(dispatch)
+    case.db.commit()
+    return SimpleNamespace(dispatch=dispatch, message=outbound, inbound=inbound)
+
+
+def _add_expired_automation_dispatch(case):
+    created = _add_demo_dispatch(case, reactive=False)
+    branch = Branch(
+        workspace_id=case.workspace.id,
+        name="P11 branch",
+        code=f"p11-{uuid4().hex[:8]}",
+        timezone="UTC",
+    )
+    staff = Staff(
+        workspace_id=case.workspace.id,
+        first_name="P11",
+        last_name="Doctor",
+    )
+    service = Service(
+        workspace_id=case.workspace.id,
+        name="P11 service",
+        slug=f"p11-{uuid4().hex[:8]}",
+        duration_minutes=30,
+    )
+    case.db.add_all([branch, staff, service])
+    case.db.flush()
+    doctor = Doctor(workspace_id=case.workspace.id, staff_id=staff.id)
+    case.db.add(doctor)
+    case.db.flush()
+    appointment = Appointment(
+        workspace_id=case.workspace.id,
+        patient_id=case.patient.id,
+        branch_id=branch.id,
+        doctor_id=doctor.id,
+        service_id=service.id,
+        status="confirmed",
+        source="staff",
+        start_at=case.now + timedelta(hours=1),
+        end_at=case.now + timedelta(hours=1, minutes=30),
+        busy_start_at=case.now + timedelta(hours=1),
+        busy_end_at=case.now + timedelta(hours=1, minutes=30),
+        duration_minutes=30,
+    )
+    rule = AutomationRule(
+        workspace_id=case.workspace.id,
+        key=f"p11-expiry-{uuid4().hex[:8]}",
+        name="P11 expiry",
+        enabled=True,
+        trigger_kind="before_appointment",
+        offset_minutes=-60,
+        channel="whatsapp",
+        template_name="appointment_reminder",
+        template_language="ar",
+        max_lateness_minutes=30,
+        config_json={},
+    )
+    case.db.add_all([appointment, rule])
+    case.db.flush()
+    job = AutomationJob(
+        workspace_id=case.workspace.id,
+        rule_id=rule.id,
+        appointment_id=appointment.id,
+        patient_id=case.patient.id,
+        job_kind="appointment_rule",
+        status="dispatched",
+        scheduled_for=case.now - timedelta(minutes=31),
+        dedupe_key=f"p11-expiry:{uuid4()}",
+        attempts=1,
+        message_id=created.message.id,
+        dispatch_id=created.dispatch.id,
+        payload_json={},
+        result_json={},
+    )
+    case.db.add(job)
+    case.db.commit()
+    return SimpleNamespace(**created.__dict__, job=job)
 
 
 def _mock_full_path(monkeypatch, *, inbound=(0, 0), claimed=None, refresh=None):
@@ -634,3 +806,207 @@ def test_two_workers_cannot_claim_same_dispatch():
                 db.execute(delete(Workspace).where(Workspace.id == workspace_id))
                 db.commit()
         engine.dispose()
+
+def test_demo_proactive_dispatch_without_reply_test_is_cheap_skip(transport_case, monkeypatch):
+    _set_demo_mode(transport_case, reply_test=False)
+    _add_demo_dispatch(transport_case, reactive=False)
+    monkeypatch.setattr(
+        transport,
+        "_decrypt_connection_token",
+        lambda *_a, **_k: pytest.fail("unactionable demo dispatch must not load credentials"),
+    )
+    result = transport.run_meta_transport_tick(transport_case.db)
+    assert result == {
+        "connections_checked": 1,
+        "connections_ready": 0,
+        "connections_skipped_preflight": 1,
+        "provider_refreshes": 0,
+        "inbound_processed": 0,
+        "inbound_failed": 0,
+        "sent": 0,
+        "send_failed": 0,
+    }
+
+
+def test_demo_reply_test_proactive_dispatch_is_cheap_skip(transport_case, monkeypatch):
+    _set_demo_mode(transport_case, reply_test=True)
+    created = _add_demo_dispatch(transport_case, reactive=False)
+    monkeypatch.setattr(
+        transport,
+        "_decrypt_connection_token",
+        lambda *_a, **_k: pytest.fail("proactive demo dispatch must stay on preflight"),
+    )
+    result = transport.run_meta_transport_tick(transport_case.db)
+    transport_case.db.refresh(created.dispatch)
+    assert result["connections_skipped_preflight"] == 1
+    assert result["connections_ready"] == 1
+    assert result["sent"] == 0
+    assert created.dispatch.status == "queued"
+    assert created.dispatch.attempts == 0
+
+
+def test_demo_reply_test_reactive_dispatch_enters_real_claim_path(transport_case, monkeypatch):
+    _set_demo_mode(transport_case, reply_test=True)
+    created = _add_demo_dispatch(transport_case, reactive=True)
+    sent_ids = []
+    monkeypatch.setattr(transport, "_decrypt_connection_token", lambda *_a, **_k: ("token", None))
+    monkeypatch.setattr(
+        transport,
+        "_send_claimed_dispatch",
+        lambda _db, *, connection, token, item: sent_ids.append(item.dispatch_id) or True,
+    )
+    result = transport.run_meta_transport_tick(transport_case.db)
+    transport_case.db.refresh(created.dispatch)
+    assert result["connections_skipped_preflight"] == 0
+    assert result["sent"] == 1
+    assert sent_ids == [created.dispatch.id]
+    assert created.dispatch.status == "processing"
+    assert created.dispatch.attempts == 1
+
+
+def test_demo_expired_automation_dispatch_still_runs_expiry_maintenance(
+    transport_case, monkeypatch
+):
+    _set_demo_mode(transport_case, reply_test=False)
+    created = _add_expired_automation_dispatch(transport_case)
+    monkeypatch.setattr(
+        transport,
+        "_decrypt_connection_token",
+        lambda *_a, **_k: pytest.fail("isolated demo expiry maintenance must not decrypt"),
+    )
+    rows = transport._transport_preflight_rows(
+        transport_case.db, max_connections=25, now=transport_case.now
+    )
+    row = next(row for row in rows if row.connection_id == transport_case.channel.id)
+    assert row.dispatch_has_work is True
+
+    result = transport.run_meta_transport_tick(transport_case.db)
+    transport_case.db.refresh(created.dispatch)
+    transport_case.db.refresh(created.message)
+    transport_case.db.refresh(created.job)
+    assert result["connections_skipped_preflight"] == 0
+    assert result["sent"] == 0
+    assert created.dispatch.status == "cancelled"
+    assert created.message.delivery_status == "cancelled"
+    assert created.job.status == "cancelled"
+
+
+def test_demo_proactive_exhausted_dispatch_still_runs_failure_maintenance(
+    transport_case, monkeypatch
+):
+    _set_demo_mode(transport_case, reply_test=True)
+    created = _add_demo_dispatch(
+        transport_case,
+        reactive=False,
+        attempts=settings.channel_dispatch_max_attempts,
+    )
+    monkeypatch.setattr(transport, "_decrypt_connection_token", lambda *_a, **_k: ("token", None))
+    monkeypatch.setattr(
+        transport,
+        "_send_claimed_dispatch",
+        lambda *_a, **_k: pytest.fail("exhausted proactive demo dispatch must not send"),
+    )
+    result = transport.run_meta_transport_tick(transport_case.db)
+    transport_case.db.refresh(created.dispatch)
+    transport_case.db.refresh(created.message)
+    assert result["connections_skipped_preflight"] == 0
+    assert result["sent"] == 0
+    assert created.dispatch.status == "failed"
+    assert created.message.delivery_status == "failed"
+
+
+def test_demo_inbound_pending_overrides_unactionable_proactive_dispatch(
+    transport_case, monkeypatch
+):
+    _set_demo_mode(transport_case, reply_test=True)
+    _add_demo_dispatch(transport_case, reactive=False)
+    _add_inbound_marker(transport_case)
+    monkeypatch.setattr(
+        transport, "_process_pending_inbound", lambda *_a, **_k: (1, 0)
+    )
+    monkeypatch.setattr(transport, "_cancel_expired_automation_dispatches", lambda *_a, **_k: 0)
+    monkeypatch.setattr(transport, "_decrypt_connection_token", lambda *_a, **_k: ("token", None))
+    monkeypatch.setattr(transport, "_send_claimed_dispatch", lambda *_a, **_k: True)
+    result = transport.run_meta_transport_tick(transport_case.db)
+    assert result["connections_skipped_preflight"] == 0
+    assert result["inbound_processed"] == 1
+    assert result["sent"] == 0
+
+
+def test_unactionable_demo_dispatch_does_not_activate_other_connection(
+    transport_case, monkeypatch
+):
+    _set_demo_mode(transport_case, reply_test=True)
+    _add_demo_dispatch(transport_case, reactive=False)
+    other_workspace = Workspace(
+        name="Unrelated production",
+        slug=f"unrelated-{uuid4()}",
+        timezone="UTC",
+    )
+    transport_case.db.add(other_workspace)
+    transport_case.db.flush()
+    other_connection = ChannelConnection(
+        workspace_id=other_workspace.id,
+        channel="whatsapp",
+        provider="meta_cloud",
+        display_name="Other",
+        status="active",
+        external_account_id=f"phone-{uuid4()}",
+        adapter_token_hash=uuid4().hex + uuid4().hex,
+        config_json=_ready_config(transport_case.now),
+    )
+    transport_case.db.add(other_connection)
+    transport_case.db.commit()
+    monkeypatch.setattr(
+        transport,
+        "_process_pending_inbound",
+        lambda *_a, **_k: pytest.fail("neither connection should enter the full path"),
+    )
+    result = transport.run_meta_transport_tick(transport_case.db)
+    assert result["connections_checked"] == 2
+    assert result["connections_skipped_preflight"] == 2
+
+
+def test_demo_idle_then_reactive_reply_is_seen_on_next_tick(transport_case, monkeypatch):
+    _set_demo_mode(transport_case, reply_test=True)
+    first = transport.run_meta_transport_tick(transport_case.db)
+    assert first["connections_skipped_preflight"] == 1
+    created = _add_demo_dispatch(transport_case, reactive=True)
+    sent_ids = []
+    monkeypatch.setattr(transport, "_decrypt_connection_token", lambda *_a, **_k: ("token", None))
+    monkeypatch.setattr(
+        transport,
+        "_send_claimed_dispatch",
+        lambda _db, *, connection, token, item: sent_ids.append(item.dispatch_id) or True,
+    )
+    second = transport.run_meta_transport_tick(transport_case.db)
+    assert second["connections_skipped_preflight"] == 0
+    assert second["sent"] == 1
+    assert sent_ids == [created.dispatch.id]
+
+
+def test_persistent_unactionable_demo_dispatch_100_tick_benchmark(
+    transport_case, monkeypatch
+):
+    _set_demo_mode(transport_case, reply_test=True)
+    _add_demo_dispatch(transport_case, reactive=False)
+    monkeypatch.setattr(
+        transport,
+        "_decrypt_connection_token",
+        lambda *_a, **_k: pytest.fail("benchmark blocker must never load credentials"),
+    )
+
+    def optimized_100():
+        for _ in range(100):
+            with _fresh_session(transport_case) as db:
+                result = transport.run_meta_transport_tick(db)
+                assert result["connections_skipped_preflight"] == 1
+                assert result["sent"] == 0
+
+    after = _capture_select_metrics(transport_case.connection, optimized_100)
+    print(
+        "whatsapp_transport_p11_demo_blocker_benchmark "
+        "current_p1_before_queries=800 current_p1_before_rows=400 "
+        f"p11_after_queries={after['queries']} p11_after_rows={after['rows']}"
+    )
+    assert after == {"queries": 100, "rows": 100}
