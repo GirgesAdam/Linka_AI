@@ -1151,8 +1151,8 @@ def get_appointment_operations(
         cancellation_notice_minutes=settings.cancellation_notice_minutes,
         now=now,
     )
-    patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "Ø§Ù„Ø¹Ù…ÙŠÙ„"
-    doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or "Ø§Ù„Ø¯ÙƒØªÙˆØ±"
+    patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "العميل"
+    doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or "الدكتور"
 
     return AppointmentOperationsRead(
         appointment=AppointmentRead.model_validate(appointment),
