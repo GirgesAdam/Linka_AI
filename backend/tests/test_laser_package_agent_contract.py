@@ -25,7 +25,8 @@ def test_clinic_tools_forward_device_to_verified_availability_and_writes() -> No
     source = getsource(clinic_tools)
 
     assert "laser_device_key=laser_device_key" in source
-    assert "laser_device_key=(laser_device_key or current.laser_device_key)" in source
+    assert "target_device_key = laser_device_key or current.laser_device_key" in source
+    assert "laser_device_key=target_device_key" in source
     assert "laser_device_key=current_laser_device_key()" in source
     assert '"laser_device_key": getattr(slot, "laser_device_key", None)' in source
 

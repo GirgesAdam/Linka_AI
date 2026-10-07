@@ -154,7 +154,7 @@ def test_native_adapter_owns_lifecycle_policy_and_native_history() -> None:
     assert "def cancel_appointment(" in adapter_source
     assert "def reschedule_appointment(" in adapter_source
     assert "find_exact_slot(" in adapter_source
-    assert "get_effective_booking_settings(" in adapter_source
+    assert "initial_confirmation_decision(" in adapter_source
     assert "AppointmentStatusHistory(" in adapter_source
     assert "Lead.status.notin_" in adapter_source
     assert "ClinicActionRequiresHuman(" in adapter_source

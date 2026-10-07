@@ -1,5 +1,5 @@
 export const appointmentLabels: Record<string, string> = {
-  pending: "قيد الانتظار",
+  pending: "محجوز",
   confirmed: "مؤكد",
   checked_in: "وصل",
   in_progress: "داخل الجلسة",
@@ -92,7 +92,7 @@ function status(label: string, intent: StatusIntent, icon: StatusIconKey): Statu
 }
 
 const appointmentStatus: Record<string, StatusPresentation> = {
-  pending: status("قيد الانتظار", "warning", "clock"),
+  pending: status("محجوز", "warning", "clock"),
   confirmed: status("مؤكد", "success", "check"),
   checked_in: status("وصل", "info", "user-check"),
   in_progress: status("داخل الجلسة", "info", "activity"),

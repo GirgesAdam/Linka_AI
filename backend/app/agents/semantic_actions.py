@@ -84,9 +84,9 @@ def format_booking_success(appointment: dict[str, Any]) -> str:
 
     status = appointment.get("status")
     if status == "pending":
-        opening = "تمام، الحجز اتسجل ومستني التأكيد"
+        opening = "تمام، تم حجز موعدك"
     elif status == "confirmed":
-        opening = "تمام، الحجز اتأكد"
+        opening = "تمام، تم تأكيد موعدك"
     else:
         opening = "تمام، الحجز اتسجل"
 

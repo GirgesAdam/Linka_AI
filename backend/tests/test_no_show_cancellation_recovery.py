@@ -13,7 +13,7 @@ def test_cancellation_recovery_covers_no_show_and_retires_legacy_rule() -> None:
     root = Path(__file__).resolve().parents[2]
     service = (root / "backend/app/services/automations.py").read_text(encoding="utf-8")
     assert 'RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})' in service
-    assert 'appointment.status == "no_show" and appointment.no_show_at is not None' in service
+    assert 'status == "no_show" and no_show_at is not None' in service
     assert "appointment.cancelled_at or appointment.no_show_at" in service
     assert 'AutomationRule.key.notin_(RETIRED_AUTOMATION_RULE_KEYS | {"booking_confirmation"})' in service
 

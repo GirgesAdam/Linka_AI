@@ -33,6 +33,10 @@ from app.models.workspace import Workspace
 from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOverview
 from app.schemas.crm import normalize_patient_identity_phone
 from app.services.activity import record_activity_event
+from app.services.appointment_confirmation import (
+    clamp_confirmation_delivery_time,
+    clamp_confirmation_delivery_time_for_timezones,
+)
 from app.services.conversation_ownership import record_outbound_activity, return_to_ai
 from app.services.crm_tasks import create_crm_task, sync_lead_next_follow_up
 
@@ -51,7 +55,14 @@ RETIRED_AUTOMATION_RULE_KEYS = frozenset({"no_show_followup"})
 
 LEGACY_DEFAULT_TEMPLATE_NAMES: dict[str, frozenset[str]] = {
     "appointment_reminder_6h": frozenset(
-        {"tia_appointment_reminder_ar", "tia_appointment_reminder_6h_ar", "tia_reminder_6h_01"}
+        {
+            "tia_appointment_reminder_ar",
+            "tia_appointment_reminder_6h_ar",
+            "tia_reminder_6h_01",
+            "tia_reminder_01",
+            "tia_reminder_02",
+            "tia_reminder_03",
+        }
     ),
     "post_visit_followup": frozenset({"tia_post_visit_followup_ar"}),
 }
@@ -109,7 +120,18 @@ def ensure_default_rules(
         if definition.key in existing:
             row = existing[definition.key]
             legacy_names = LEGACY_DEFAULT_TEMPLATE_NAMES.get(definition.key, frozenset())
-            if row.template_name in legacy_names and row.template_name != definition.template_name:
+            if definition.key == "appointment_reminder_6h":
+                # Confirmation tickets are system-owned: every workspace must use the
+                # versioned two-button template. A custom/legacy no-button reminder
+                # would violate the confirmation lifecycle and Meta approval contract.
+                if (
+                    row.template_name != definition.template_name
+                    or row.template_language != definition.template_language
+                ):
+                    row.template_name = definition.template_name
+                    row.template_language = definition.template_language
+                    changed = True
+            elif row.template_name in legacy_names and row.template_name != definition.template_name:
                 row.template_name = definition.template_name
                 row.template_language = definition.template_language
                 changed = True
@@ -118,6 +140,9 @@ def ensure_default_rules(
                 and row.template_language != definition.template_language
             ):
                 row.template_language = definition.template_language
+                changed = True
+            if definition.key == "appointment_reminder_6h" and row.name == "Appointment reminder":
+                row.name = definition.name
                 changed = True
             if definition.key == "booking_confirmation" and not row.enabled:
                 row.enabled = True
@@ -186,19 +211,38 @@ def _cancelled_job_can_be_replanned(job: AutomationJob) -> bool:
     return job.status == "cancelled" and reason in REPLANNABLE_CANCELLATION_REASONS
 
 
-def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
+def _eligible_state_for_rule(
+    *,
+    rule: AutomationRule,
+    status: str,
+    completed_at: datetime | None,
+    no_show_at: datetime | None,
+    cancelled_at: datetime | None,
+) -> bool:
+    if rule.key == "appointment_reminder_6h":
+        return status == "pending"
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
-        return appointment.status in {"pending", "confirmed"}
+        return status in {"pending", "confirmed"}
     if rule.trigger_kind == "after_completed":
-        return appointment.status == "completed" and appointment.completed_at is not None
+        return status == "completed" and completed_at is not None
     if rule.trigger_kind == "after_no_show":
-        return appointment.status == "no_show" and appointment.no_show_at is not None
+        return status == "no_show" and no_show_at is not None
     if rule.trigger_kind == "after_cancelled":
         return (
-            (appointment.status == "cancelled" and appointment.cancelled_at is not None)
-            or (appointment.status == "no_show" and appointment.no_show_at is not None)
+            (status == "cancelled" and cancelled_at is not None)
+            or (status == "no_show" and no_show_at is not None)
         )
     return False
+
+
+def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
+    return _eligible_state_for_rule(
+        rule=rule,
+        status=appointment.status,
+        completed_at=appointment.completed_at,
+        no_show_at=appointment.no_show_at,
+        cancelled_at=appointment.cancelled_at,
+    )
 
 
 def _candidate_appointment_states(
@@ -211,19 +255,39 @@ def _candidate_appointment_states(
 ):
     columns = (
         Appointment.id,
+        Appointment.status,
+        Appointment.branch_id,
         Appointment.created_at,
         Appointment.start_at,
         Appointment.completed_at,
         Appointment.no_show_at,
         Appointment.cancelled_at,
+        Branch.timezone.label("branch_timezone"),
+        Workspace.timezone.label("workspace_timezone"),
+    )
+    base_stmt = (
+        select(*columns)
+        .join(
+            Branch,
+            and_(
+                Branch.workspace_id == Appointment.workspace_id,
+                Branch.id == Appointment.branch_id,
+            ),
+        )
+        .join(Workspace, Workspace.id == Appointment.workspace_id)
     )
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
         appointment_horizon = horizon
         if rule.trigger_kind == "before_appointment" and rule.offset_minutes < 0:
             appointment_horizon = horizon + timedelta(minutes=abs(rule.offset_minutes))
-        stmt = select(*columns).where(
+        eligible_statuses = (
+            ("pending",)
+            if rule.key == "appointment_reminder_6h"
+            else ("pending", "confirmed")
+        )
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
-            Appointment.status.in_(("pending", "confirmed")),
+            Appointment.status.in_(eligible_statuses),
             Appointment.start_at > now,
             Appointment.start_at <= appointment_horizon,
         )
@@ -232,7 +296,7 @@ def _candidate_appointment_states(
             timedelta(days=14),
             timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
         )
-        stmt = select(*columns).where(
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
             Appointment.status == "completed",
             Appointment.completed_at.is_not(None),
@@ -243,7 +307,7 @@ def _candidate_appointment_states(
             timedelta(days=7),
             timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
         )
-        stmt = select(*columns).where(
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
             Appointment.status == "no_show",
             Appointment.no_show_at.is_not(None),
@@ -254,7 +318,7 @@ def _candidate_appointment_states(
             timedelta(days=7),
             timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
         )
-        stmt = select(*columns).where(
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
             or_(
                 and_(
@@ -284,7 +348,17 @@ def _scheduled_for_candidate_state(rule: AutomationRule, state) -> datetime | No
         no_show_at=state.no_show_at,
         cancelled_at=state.cancelled_at or state.no_show_at,
     )
-    return when.astimezone(UTC) if when is not None else None
+    if when is None:
+        return None
+    when = when.astimezone(UTC)
+    if rule.key == "appointment_reminder_6h":
+        when = clamp_confirmation_delivery_time_for_timezones(
+            branch_timezone=state.branch_timezone,
+            workspace_timezone=state.workspace_timezone,
+            start_at=state.start_at,
+            scheduled_for=when,
+        )
+    return when
 
 
 def automation_planning_may_have_work(
@@ -330,19 +404,13 @@ def automation_planning_may_have_work(
         rule = rule_by_id.get(state.rule_id)
         if rule is None or not rule.enabled:
             return True
-        if rule.trigger_kind in {"appointment_created", "before_appointment"}:
-            eligible = state.appointment_status in {"pending", "confirmed"}
-        elif rule.trigger_kind == "after_completed":
-            eligible = state.appointment_status == "completed" and state.completed_at is not None
-        elif rule.trigger_kind == "after_no_show":
-            eligible = state.appointment_status == "no_show" and state.no_show_at is not None
-        elif rule.trigger_kind == "after_cancelled":
-            eligible = (
-                (state.appointment_status == "cancelled" and state.cancelled_at is not None)
-                or (state.appointment_status == "no_show" and state.no_show_at is not None)
-            )
-        else:
-            eligible = False
+        eligible = _eligible_state_for_rule(
+            rule=rule,
+            status=state.appointment_status,
+            completed_at=state.completed_at,
+            no_show_at=state.no_show_at,
+            cancelled_at=state.cancelled_at,
+        )
         if not eligible:
             return True
 
@@ -451,11 +519,12 @@ def _candidate_appointments(
         appointment_horizon = horizon
         if rule.trigger_kind == "before_appointment" and rule.offset_minutes < 0:
             appointment_horizon = horizon + timedelta(minutes=abs(rule.offset_minutes))
+        eligible_statuses = ("pending",) if rule.key == "appointment_reminder_6h" else ("pending", "confirmed")
         return list(
             db.scalars(
                 select(Appointment).where(
                     Appointment.workspace_id == workspace_id,
-                    Appointment.status.in_(("pending", "confirmed")),
+                    Appointment.status.in_(eligible_statuses),
                     Appointment.start_at > now,
                     Appointment.start_at <= appointment_horizon,
                 )
@@ -850,6 +919,14 @@ def plan_automation_jobs(
             if when is None:
                 continue
             when = when.astimezone(UTC)
+            if rule.key == "appointment_reminder_6h":
+                when = clamp_confirmation_delivery_time(
+                    db,
+                    workspace_id=workspace_id,
+                    branch_id=appointment.branch_id,
+                    start_at=appointment.start_at,
+                    scheduled_for=when,
+                )
             if when + timedelta(minutes=rule.max_lateness_minutes) < now:
                 continue
             candidates.append((appointment, when, _job_dedupe_key(appointment.id, rule.key)))
@@ -995,17 +1072,13 @@ def plan_automation_jobs(
         rule = active_rule_by_id.get(state.rule_id)
         eligible = False
         if rule is not None:
-            if rule.trigger_kind in {"appointment_created", "before_appointment"}:
-                eligible = state.appointment_status in {"pending", "confirmed"}
-            elif rule.trigger_kind == "after_completed":
-                eligible = state.appointment_status == "completed" and state.completed_at is not None
-            elif rule.trigger_kind == "after_no_show":
-                eligible = state.appointment_status == "no_show" and state.no_show_at is not None
-            elif rule.trigger_kind == "after_cancelled":
-                eligible = (
-                    (state.appointment_status == "cancelled" and state.cancelled_at is not None)
-                    or (state.appointment_status == "no_show" and state.no_show_at is not None)
-                )
+            eligible = _eligible_state_for_rule(
+                rule=rule,
+                status=state.appointment_status,
+                completed_at=state.completed_at,
+                no_show_at=state.no_show_at,
+                cancelled_at=state.cancelled_at,
+            )
         if not eligible:
             stale_job_ids.append(state.id)
 
@@ -1183,8 +1256,9 @@ def _fallback_text(rule_key: str, data: dict) -> str:
         )
     if rule_key == "appointment_reminder_6h":
         return (
-            f"أهلًا {data['patient_name']} 👋 بفكرك إن عندك جلسة {data['service_name']} "
-            f"الساعة {data['time']}. مستنيينك 💛"
+            f"أهلًا {data['patient_name']} 👋 ميعاد {data['service_name']} بتاعك يوم "
+            f"{data['date']} الساعة {data['time']}. ياريت تأكد حضورك من الزر تحت، "
+            "ولو محتاج تغيّر الميعاد اختار تغيير الميعاد 💛"
         )
     # Legacy rules are kept readable for already-stored audit/history rows, but
     # v0.31.3 disables them and new workspaces no longer materialize them.
@@ -1221,7 +1295,10 @@ def _fallback_text(rule_key: str, data: dict) -> str:
 
 
 def _rule_template_candidates(rule: AutomationRule) -> list[tuple[str, str]]:
-    """Return de-duplicated approved templates that share the rule's variable contract."""
+    """Return de-duplicated templates that share the rule's variable contract."""
+    if rule.key == "appointment_reminder_6h":
+        # The confirmation ticket must never silently rotate to a legacy reminder without buttons.
+        return [(rule.template_name, rule.template_language)]
     candidates: list[tuple[str, str]] = [(rule.template_name, rule.template_language)]
     raw_variants = (rule.config_json or {}).get("template_variants")
     if isinstance(raw_variants, list):
@@ -1264,11 +1341,7 @@ def _appointment_template_body_parameters(
     branch_name = str(data.get("branch_name") or "العيادة")[:256]
 
     if rule_key == "appointment_reminder_6h":
-        # Temporary compatibility for the already-approved Meta template while
-        # the timing-neutral 3-variable replacement is still under review.
-        if template_name == "tia_reminder_6h_01":
-            return [patient_name, service_name, time, branch_name]
-        return [patient_name, service_name, time]
+        return [patient_name, service_name, date, time]
     if rule_key == "cancellation_recovery":
         return [patient_name, service_name, date, time]
     if rule_key == "post_visit_followup":
@@ -2540,6 +2613,23 @@ def execute_job(
         db.commit()
         return ExecutionResult(job=job, reason=job.result_json["reason"])
 
+    if rule.key == "appointment_reminder_6h":
+        safe_scheduled_for = clamp_confirmation_delivery_time(
+            db,
+            workspace_id=workspace_id,
+            branch_id=appointment.branch_id,
+            start_at=appointment.start_at,
+            scheduled_for=job.scheduled_for,
+        )
+        if now < safe_scheduled_for:
+            job.status = "queued"
+            job.scheduled_for = safe_scheduled_for
+            job.next_attempt_at = None
+            job.locked_at = None
+            job.result_json = {"reason": "confirmation_window_not_open"}
+            db.commit()
+            return ExecutionResult(job=job, reason="confirmation_window_not_open")
+
     if patient.status != "active":
         job.status = "skipped"
         job.completed_at = now
@@ -2595,6 +2685,14 @@ def execute_job(
                 rule.key, display, template_name=template_name
             ),
             "variant_count": template_variant_count,
+            "button_payloads": (
+                [
+                    f"tia.booking.confirm:{appointment.id}",
+                    f"tia.booking.reschedule:{appointment.id}",
+                ]
+                if rule.key == "appointment_reminder_6h"
+                else []
+            ),
         },
         "appointment": display,
     }

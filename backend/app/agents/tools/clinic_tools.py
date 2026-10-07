@@ -42,6 +42,7 @@ from app.models.staff import Staff
 from app.models.workspace import Workspace
 from app.services.booking import BookingRuleError
 from app.services.campaign_attribution import record_direct_campaign_booking_conversion
+from app.services.conversation_flows import get_active_flow
 from app.services.crm_tasks import CRMTaskError, create_crm_task
 from app.services.handoffs import create_handoff
 from app.services.laser_booking_context import current_laser_device_key
@@ -68,6 +69,24 @@ def _uuid(value: str, field_name: str) -> UUID:
         return UUID(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be a valid UUID from a tool result.") from exc
+
+
+def _confirmation_ticket_reschedule_state(ctx: AgentToolContext) -> dict | None:
+    flow = get_active_flow(
+        ctx.db,
+        workspace_id=ctx.workspace.id,
+        conversation_id=ctx.conversation.id,
+        patient_id=ctx.patient.id,
+        run_id=ctx.run_id,
+    )
+    if flow is None or flow.flow_type != "appointment_reschedule":
+        return None
+    state = dict(flow.entity_state or {})
+    if state.get("reschedule_origin") != "confirmation_ticket":
+        return None
+    if not state.get("appointment_id") or not state.get("locked_service_id"):
+        return None
+    return state
 
 
 def _money(price_minor: int, currency: str) -> str:
@@ -1292,6 +1311,14 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         Appointment reads and replacement availability both cross the ClinicAdapter
         boundary, so the tool never depends on the native Appointment table.
         """
+        ticket_state = _confirmation_ticket_reschedule_state(ctx)
+        if ticket_state is not None:
+            appointment_id = str(ticket_state["appointment_id"])
+            service_id = str(ticket_state["locked_service_id"])
+            locked_device = ticket_state.get("locked_laser_device_key")
+            laser_device_key = str(locked_device) if locked_device is not None else ""
+            service_search = ""
+
         inputs = {
             "booking_date": booking_date,
             "appointment_id": appointment_id or None,
@@ -1385,6 +1412,11 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
 
             current = appointments[0]
             target_service_id = service_id or current.service_id
+            if ticket_state is not None and target_service_id != str(current.service_id):
+                raise BookingRuleError("The confirmation-ticket reschedule must keep the original service.")
+            target_device_key = laser_device_key or current.laser_device_key
+            if ticket_state is not None:
+                target_device_key = ticket_state.get("locked_laser_device_key")
             availability = _availability_payload(
                 ctx,
                 branch_id=current.branch_id,
@@ -1395,7 +1427,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
                 exclude_appointment_id=current.appointment_id,
-                laser_device_key=(laser_device_key or current.laser_device_key),
+                laser_device_key=target_device_key,
             )
 
             payload = {
@@ -1817,6 +1849,13 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
         reason: str = "",
     ) -> str:
         """Reschedule the customer's pending/confirmed appointment to an exact slot."""
+        ticket_state = _confirmation_ticket_reschedule_state(ctx)
+        if ticket_state is not None:
+            appointment_id = str(ticket_state["appointment_id"])
+            service_id = str(ticket_state["locked_service_id"])
+            locked_device_key = ticket_state.get("locked_laser_device_key")
+        else:
+            locked_device_key = current_laser_device_key()
         inputs = {
             "appointment_id": appointment_id,
             "start_at": start_at,
@@ -1843,7 +1882,7 @@ def build_clinic_tools(ctx: AgentToolContext) -> list[BaseTool]:
                     branch_id=branch_id or None,
                     doctor_id=doctor_id or None,
                     service_id=service_id or None,
-                    laser_device_key=current_laser_device_key(),
+                    laser_device_key=locked_device_key,
                     reason=reason,
                 )
             )

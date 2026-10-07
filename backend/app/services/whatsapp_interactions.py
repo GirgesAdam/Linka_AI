@@ -8,14 +8,21 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agents.semantic_actions import format_booking_success
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
-from app.models.agent_action import AgentAction
+from app.models.appointment import Appointment
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatResponse
+from app.services.appointment_confirmation import (
+    can_customer_confirm_appointment,
+    confirmation_timezone,
+)
+from app.services.appointment_operations import (
+    AppointmentOperationError,
+    confirm_appointment_operation,
+)
 from app.services.conversation_flows import start_flow
 from app.services.conversation_ownership import OWNER_HUMAN, agent_can_reply
 from app.services.handoffs import get_active_handoff
@@ -153,6 +160,47 @@ def _persist_reply(
     )
 
 
+def _action_appointment(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    appointment_ref: str,
+) -> Appointment | None:
+    appointment_id = _uuid(appointment_ref)
+    if appointment_id is None:
+        return None
+    return db.scalar(
+        select(Appointment).where(
+            Appointment.id == appointment_id,
+            Appointment.workspace_id == workspace_id,
+            Appointment.patient_id == patient_id,
+        )
+    )
+
+
+def _confirmation_reply(
+    db: Session,
+    *,
+    workspace: Workspace,
+    patient: Patient,
+    appointment: Appointment,
+) -> str:
+    timezone = confirmation_timezone(
+        db,
+        workspace_id=workspace.id,
+        branch_id=appointment.branch_id,
+    )
+    local_start = appointment.start_at.astimezone(timezone)
+    customer_name = (patient.first_name or "").strip()
+    greeting = f"تمام يا {customer_name} 💛" if customer_name else "تمام 💛"
+    return (
+        f"{greeting}\nأكدنا حضورك.\n"
+        f"مستنيينك يوم {local_start.strftime('%d/%m/%Y')} "
+        f"الساعة {local_start.strftime('%H:%M')}، وهتنورنا ✨"
+    )
+
+
 def process_whatsapp_booking_action(
     db: Session,
     *,
@@ -161,7 +209,7 @@ def process_whatsapp_booking_action(
     conversation: Conversation,
     inbound: Message,
 ) -> AgentChatResponse | None:
-    """Execute a trusted structured WhatsApp booking action without text/keyword routing."""
+    """Execute trusted appointment-specific WhatsApp quick replies only."""
     action = parse_whatsapp_booking_action(inbound.metadata_json or {})
     if action is None:
         return None
@@ -188,25 +236,59 @@ def process_whatsapp_booking_action(
     if recovered is not None:
         return recovered
 
-    ctx = AgentToolContext(
-        db=db,
-        workspace=workspace,
-        patient=patient,
-        conversation=conversation,
-        run_id=run_id,
+    appointment = _action_appointment(
+        db,
+        workspace_id=workspace.id,
+        patient_id=patient.id,
+        appointment_ref=action.appointment_id,
     )
+    now = datetime.now(UTC)
+    if appointment is None:
+        return _persist_reply(
+            db,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            reply="مش لاقي الموعد ده ضمن مواعيدك الحالية. ممكن أراجعلك المواعيد القادمة.",
+            action=action.action,
+        )
 
     if action.action == "confirm":
-        result = _invoke_tool(
-            ctx,
-            "confirm_appointment",
-            {"appointment_id": action.appointment_id},
-        )
-        appointment = result.get("appointment") if isinstance(result, dict) else None
-        if isinstance(appointment, dict) and result.get("ok") is True:
-            reply = format_booking_success(appointment)
+        if appointment.status == "confirmed" and appointment.start_at > now:
+            reply = "تمام 💛 موعدك متأكد بالفعل، ومستنيينك في ميعادك."
+        elif appointment.status != "pending" or appointment.start_at <= now:
+            reply = "الطلب ده لم يعد صالحًا للموعد الحالي. ممكن أراجعلك حالة موعدك الحالية."
+        elif not can_customer_confirm_appointment(
+            db,
+            workspace_id=workspace.id,
+            branch_id=appointment.branch_id,
+            start_at=appointment.start_at,
+            now=now,
+        ):
+            reply = "لسه بدري على تأكيد الحضور 💛 هنطلب منك التأكيد لما يقرب موعدك."
         else:
-            reply = "معلش، مقدرتش أأكد الحجز ده دلوقتي. ممكن أراجعلك مواعيدك الحالية."
+            try:
+                appointment = confirm_appointment_operation(
+                    db,
+                    workspace_id=workspace.id,
+                    appointment_id=appointment.id,
+                    patient_id=patient.id,
+                    changed_by_user_id=None,
+                    reason="customer_confirmed_from_whatsapp_ticket",
+                    actor_type="ai",
+                    now=now,
+                    enforce_customer_window=True,
+                )
+            except AppointmentOperationError:
+                db.rollback()
+                reply = "الطلب ده لم يعد صالحًا للموعد الحالي. ممكن أراجعلك حالة موعدك الحالية."
+            else:
+                reply = _confirmation_reply(
+                    db,
+                    workspace=workspace,
+                    patient=patient,
+                    appointment=appointment,
+                )
         return _persist_reply(
             db,
             conversation=conversation,
@@ -216,32 +298,25 @@ def process_whatsapp_booking_action(
             action="confirm",
         )
 
-    appointments_result = _invoke_tool(ctx, "get_customer_appointments", {"include_past": False})
-    appointments = (
-        appointments_result.get("appointments")
-        if isinstance(appointments_result, dict) and appointments_result.get("ok") is True
-        else None
-    )
-    current = next(
-        (
-            item
-            for item in appointments or []
-            if isinstance(item, dict)
-            and str(item.get("appointment_id") or "") == action.appointment_id
-            and str(item.get("status") or "") in {"pending", "confirmed"}
-        ),
-        None,
-    )
-    if current is None:
+    if appointment.status not in {"pending", "confirmed"} or appointment.start_at <= now:
         return _persist_reply(
             db,
             conversation=conversation,
             inbound=inbound,
             run_id=run_id,
-            reply="مش لاقي الحجز ده ضمن مواعيدك القادمة. ممكن أراجعلك المواعيد الحالية.",
+            reply="الطلب ده لم يعد صالحًا للموعد الحالي. ممكن أراجعلك المواعيد القادمة.",
             action="reschedule",
         )
 
+    current = {
+        "appointment_id": str(appointment.id),
+        "branch_id": str(appointment.branch_id),
+        "doctor_id": str(appointment.doctor_id),
+        "service_id": str(appointment.service_id),
+        "laser_device_key": appointment.laser_device_key,
+        "start_at": appointment.start_at.isoformat(),
+        "status": appointment.status,
+    }
     start_flow(
         db,
         workspace_id=workspace.id,
@@ -250,14 +325,17 @@ def process_whatsapp_booking_action(
         flow_type="appointment_reschedule",
         capabilities=["appointment_reschedule"],
         entity_state={
-            "appointment_id": action.appointment_id,
+            "appointment_id": str(appointment.id),
+            "locked_service_id": str(appointment.service_id),
+            "locked_laser_device_key": appointment.laser_device_key,
             "current_appointment": current,
+            "reschedule_origin": "confirmation_ticket",
         },
         missing_information=["requested_date"],
         last_decision={
-            "source": "whatsapp_interactive",
+            "source": "whatsapp_confirmation_ticket",
             "action": "reschedule",
-            "appointment_id": action.appointment_id,
+            "appointment_id": str(appointment.id),
         },
         run_id=run_id,
     )
@@ -276,44 +354,6 @@ def whatsapp_booking_dispatch_metadata(
     *,
     message: Message,
 ) -> dict:
-    """Offer only pending-booking confirmation; rescheduling stays natural-text only."""
-    metadata = dict(message.metadata_json or {})
-    run_id = _uuid(metadata.get("agent_run_id"))
-    if run_id is None or message.sender_type != "ai":
-        return metadata
-
-    action = db.scalar(
-        select(AgentAction)
-        .where(
-            AgentAction.workspace_id == message.workspace_id,
-            AgentAction.conversation_id == message.conversation_id,
-            AgentAction.run_id == run_id,
-            AgentAction.tool_name == "book_appointment",
-            AgentAction.status == "success",
-        )
-        .order_by(AgentAction.created_at.desc())
-        .limit(1)
-    )
-    output = action.output_json if action is not None else None
-    appointment = output.get("appointment") if isinstance(output, dict) else None
-    if not isinstance(appointment, dict):
-        return metadata
-    appointment_id = str(appointment.get("appointment_id") or "").strip()
-    if not appointment_id or len(appointment_id) > _MAX_APPOINTMENT_REF_LENGTH:
-        return metadata
-
-    buttons: list[dict[str, str]] = []
-    if str(appointment.get("status") or "") == "pending":
-        buttons.append(
-            {
-                "id": f"{_CONFIRM_PREFIX}{appointment_id}",
-                "title": "تأكيد الحجز",
-            }
-        )
-    if not buttons:
-        return metadata
-    metadata["whatsapp_interactive"] = {
-        "type": "button",
-        "buttons": buttons,
-    }
-    return metadata
+    """Do not attach immediate confirmation buttons to booking success replies."""
+    del db
+    return dict(message.metadata_json or {})

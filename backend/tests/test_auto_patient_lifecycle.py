@@ -66,8 +66,8 @@ def test_appointment_templates_use_rule_specific_db_owned_parameters() -> None:
     assert "def _appointment_template_body_parameters(" in service
     assert "template_name: str | None = None" in service
     assert 'rule_key == "appointment_reminder_6h"' in service
-    assert 'return [patient_name, service_name, time]' in service
-    assert 'return [patient_name, service_name, time, branch_name]' in service
+    assert 'return [patient_name, service_name, date, time]' in service
+    assert 'return [patient_name, service_name, time, branch_name]' not in service
     assert 'rule_key == "post_visit_followup"' in service
     assert 'return [patient_name, service_name, date]' in service
     assert 'template_name=template_name' in service
@@ -83,9 +83,9 @@ def test_lifecycle_message_copy_matches_configurable_product_spec() -> None:
     )[0]
 
     assert "فاضل حوالي 6 ساعات" not in reminder
-    assert "إن عندك جلسة" in reminder
-    assert "مستنيينك" in reminder
-    assert "{data['date']}" not in reminder
+    assert "تأكد حضورك" in reminder
+    assert "تغيير الميعاد" in reminder
+    assert "{data['date']}" in reminder
     assert "{data['branch_name']}" not in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
     assert "كل حاجة تمام؟" in post_visit

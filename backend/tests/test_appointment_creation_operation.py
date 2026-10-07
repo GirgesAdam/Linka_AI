@@ -31,8 +31,8 @@ def test_create_appointment_operation_keeps_transaction_with_caller(monkeypatch)
     monkeypatch.setattr(appointment_creation, "find_exact_slot", MagicMock(return_value=slot))
     monkeypatch.setattr(
         appointment_creation,
-        "get_effective_booking_settings",
-        MagicMock(return_value=SimpleNamespace(require_confirmation=False)),
+        "initial_confirmation_decision",
+        MagicMock(return_value=SimpleNamespace(status="confirmed", confirmed_at=datetime.now(UTC))),
     )
     activity = MagicMock()
     monkeypatch.setattr(appointment_creation, "record_activity_event", activity)

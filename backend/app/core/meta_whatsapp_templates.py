@@ -15,11 +15,25 @@ class StandardWhatsAppTemplate:
     category: TemplateCategory
     body_text: str
     example_body_parameters: tuple[str, ...]
+    quick_reply_buttons: tuple[str, ...] = ()
 
 
 STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
     StandardWhatsAppTemplate(
         rule_key="appointment_reminder_6h",
+        label_ar="تأكيد الحضور قبل الموعد",
+        name="tia_appointment_confirmation_01",
+        language="ar_EG",
+        category="UTILITY",
+        body_text=(
+            "أهلًا {{1}} 👋 ميعاد {{2}} بتاعك يوم {{3}} الساعة {{4}}. "
+            "ياريت تأكد حضورك من الزر تحت، ولو محتاج تغيّر الميعاد اختار تغيير الميعاد 💛"
+        ),
+        example_body_parameters=("مريم", "ليزر", "15/10/2026", "18:00"),
+        quick_reply_buttons=("تأكيد الحضور", "تغيير الميعاد"),
+    ),
+    StandardWhatsAppTemplate(
+        rule_key="appointment_reminder_legacy",
         label_ar="تذكير قبل الموعد",
         name="tia_reminder_01",
         language="ar_EG",
@@ -28,7 +42,7 @@ STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
         example_body_parameters=("مريم", "ليزر", "17:00"),
     ),
     StandardWhatsAppTemplate(
-        rule_key="appointment_reminder_6h",
+        rule_key="appointment_reminder_legacy",
         label_ar="تذكير قبل الموعد",
         name="tia_reminder_02",
         language="ar_EG",
@@ -37,7 +51,7 @@ STANDARD_WHATSAPP_TEMPLATES: tuple[StandardWhatsAppTemplate, ...] = (
         example_body_parameters=("مريم", "ليزر", "17:00"),
     ),
     StandardWhatsAppTemplate(
-        rule_key="appointment_reminder_6h",
+        rule_key="appointment_reminder_legacy",
         label_ar="تذكير قبل الموعد",
         name="tia_reminder_03",
         language="ar_EG",
@@ -184,15 +198,26 @@ def approved_template_refs_for_rule(
 
 
 def template_create_payload(template: StandardWhatsAppTemplate) -> dict[str, object]:
+    components: list[dict[str, object]] = [
+        {
+            "type": "BODY",
+            "text": template.body_text,
+            "example": {"body_text": [list(template.example_body_parameters)]},
+        }
+    ]
+    if template.quick_reply_buttons:
+        components.append(
+            {
+                "type": "BUTTONS",
+                "buttons": [
+                    {"type": "QUICK_REPLY", "text": title}
+                    for title in template.quick_reply_buttons
+                ],
+            }
+        )
     return {
         "name": template.name,
         "language": template.language,
         "category": template.category,
-        "components": [
-            {
-                "type": "BODY",
-                "text": template.body_text,
-                "example": {"body_text": [list(template.example_body_parameters)]},
-            }
-        ],
+        "components": components,
     }

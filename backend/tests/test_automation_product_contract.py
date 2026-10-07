@@ -19,10 +19,10 @@ def test_current_product_keeps_only_followup_automations() -> None:
     assert "booking_confirmation" not in rules
 
     reminder = rules["appointment_reminder_6h"]
-    assert reminder.name == "Appointment reminder"
+    assert reminder.name == "Appointment confirmation"
     assert reminder.trigger_kind == "before_appointment"
     assert reminder.offset_minutes == -360
-    assert reminder.template_name == "tia_reminder_01"
+    assert reminder.template_name == "tia_appointment_confirmation_01"
     assert reminder.enabled_by_default is True
 
     assert rules["post_visit_followup"].enabled_by_default is False

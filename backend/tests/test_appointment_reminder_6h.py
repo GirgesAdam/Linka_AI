@@ -18,8 +18,8 @@ def test_default_lifecycle_has_one_configurable_appointment_reminder() -> None:
     assert reminder.enabled_by_default is True
     assert reminder.trigger_kind == "before_appointment"
     assert reminder.offset_minutes == -360
-    assert reminder.name == "Appointment reminder"
-    assert reminder.template_name == "tia_reminder_01"
+    assert reminder.name == "Appointment confirmation"
+    assert reminder.template_name == "tia_appointment_confirmation_01"
 
     assert rules["post_visit_followup"].enabled_by_default is False
 
@@ -79,12 +79,12 @@ def test_configurable_reminder_copy_is_timing_neutral_and_post_visit_matches_met
     )[0]
 
     assert "فاضل حوالي 6 ساعات" not in reminder
-    assert "{data['date']}" not in reminder
+    assert "{data['date']}" in reminder
     assert "{data['branch_name']}" not in reminder
     assert "{data['time']}" in reminder
     assert "النهارده" not in reminder
-    assert "إن عندك جلسة" in reminder
-    assert "مستنيينك" in reminder
+    assert "تأكد حضورك" in reminder
+    assert "تغيير الميعاد" in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post_visit
     assert "كل حاجة تمام؟" in post_visit
 
