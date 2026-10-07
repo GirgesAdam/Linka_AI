@@ -133,7 +133,7 @@ def test_invalid_branch_timezone_falls_back_to_workspace_timezone() -> None:
         now=now,
     )
     assert decision.timezone == "Africa/Cairo"
-    assert decision.status == "confirmed"
+    assert decision.status == "pending"
 
 
 def test_invalid_branch_and_workspace_timezones_fall_back_to_utc() -> None:

@@ -95,7 +95,9 @@ def test_reconciliation_migration_is_future_only_and_uses_branch_workspace_timez
         _root() / "alembic/versions/0092_appointment_confirmation_lifecycle.py"
     ).read_text(encoding="utf-8")
     assert "a.start_at > now()" in migration
-    assert "COALESCE(NULLIF(b.timezone, ''), w.timezone)" in migration
+    assert "COALESCE(branch_tz.name, workspace_tz.name, 'UTC')" in migration
+    assert "LEFT JOIN pg_timezone_names AS branch_tz" in migration
+    assert "LEFT JOIN pg_timezone_names AS workspace_tz" in migration
     assert "SET status = 'pending'" in migration
     assert "SET status = 'confirmed'" in migration
     assert "Africa/Cairo" not in migration
