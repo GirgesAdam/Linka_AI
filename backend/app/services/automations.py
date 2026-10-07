@@ -33,7 +33,10 @@ from app.models.workspace import Workspace
 from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOverview
 from app.schemas.crm import normalize_patient_identity_phone
 from app.services.activity import record_activity_event
-from app.services.appointment_confirmation import clamp_confirmation_delivery_time
+from app.services.appointment_confirmation import (
+    clamp_confirmation_delivery_time,
+    clamp_confirmation_delivery_time_for_timezones,
+)
 from app.services.conversation_ownership import record_outbound_activity, return_to_ai
 from app.services.crm_tasks import create_crm_task, sync_lead_next_follow_up
 
@@ -208,21 +211,38 @@ def _cancelled_job_can_be_replanned(job: AutomationJob) -> bool:
     return job.status == "cancelled" and reason in REPLANNABLE_CANCELLATION_REASONS
 
 
-def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
+def _eligible_state_for_rule(
+    *,
+    rule: AutomationRule,
+    status: str,
+    completed_at: datetime | None,
+    no_show_at: datetime | None,
+    cancelled_at: datetime | None,
+) -> bool:
     if rule.key == "appointment_reminder_6h":
-        return appointment.status == "pending"
+        return status == "pending"
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
-        return appointment.status in {"pending", "confirmed"}
+        return status in {"pending", "confirmed"}
     if rule.trigger_kind == "after_completed":
-        return appointment.status == "completed" and appointment.completed_at is not None
+        return status == "completed" and completed_at is not None
     if rule.trigger_kind == "after_no_show":
-        return appointment.status == "no_show" and appointment.no_show_at is not None
+        return status == "no_show" and no_show_at is not None
     if rule.trigger_kind == "after_cancelled":
         return (
-            (appointment.status == "cancelled" and appointment.cancelled_at is not None)
-            or (appointment.status == "no_show" and appointment.no_show_at is not None)
+            (status == "cancelled" and cancelled_at is not None)
+            or (status == "no_show" and no_show_at is not None)
         )
     return False
+
+
+def _eligible_for_rule(appointment: Appointment, rule: AutomationRule) -> bool:
+    return _eligible_state_for_rule(
+        rule=rule,
+        status=appointment.status,
+        completed_at=appointment.completed_at,
+        no_show_at=appointment.no_show_at,
+        cancelled_at=appointment.cancelled_at,
+    )
 
 
 def _candidate_appointment_states(
@@ -235,19 +255,39 @@ def _candidate_appointment_states(
 ):
     columns = (
         Appointment.id,
+        Appointment.status,
+        Appointment.branch_id,
         Appointment.created_at,
         Appointment.start_at,
         Appointment.completed_at,
         Appointment.no_show_at,
         Appointment.cancelled_at,
+        Branch.timezone.label("branch_timezone"),
+        Workspace.timezone.label("workspace_timezone"),
+    )
+    base_stmt = (
+        select(*columns)
+        .join(
+            Branch,
+            and_(
+                Branch.workspace_id == Appointment.workspace_id,
+                Branch.id == Appointment.branch_id,
+            ),
+        )
+        .join(Workspace, Workspace.id == Appointment.workspace_id)
     )
     if rule.trigger_kind in {"appointment_created", "before_appointment"}:
         appointment_horizon = horizon
         if rule.trigger_kind == "before_appointment" and rule.offset_minutes < 0:
             appointment_horizon = horizon + timedelta(minutes=abs(rule.offset_minutes))
-        stmt = select(*columns).where(
+        eligible_statuses = (
+            ("pending",)
+            if rule.key == "appointment_reminder_6h"
+            else ("pending", "confirmed")
+        )
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
-            Appointment.status.in_(("pending", "confirmed")),
+            Appointment.status.in_(eligible_statuses),
             Appointment.start_at > now,
             Appointment.start_at <= appointment_horizon,
         )
@@ -256,7 +296,7 @@ def _candidate_appointment_states(
             timedelta(days=14),
             timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
         )
-        stmt = select(*columns).where(
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
             Appointment.status == "completed",
             Appointment.completed_at.is_not(None),
@@ -267,7 +307,7 @@ def _candidate_appointment_states(
             timedelta(days=7),
             timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
         )
-        stmt = select(*columns).where(
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
             Appointment.status == "no_show",
             Appointment.no_show_at.is_not(None),
@@ -278,7 +318,7 @@ def _candidate_appointment_states(
             timedelta(days=7),
             timedelta(minutes=max(0, rule.offset_minutes) + rule.max_lateness_minutes),
         )
-        stmt = select(*columns).where(
+        stmt = base_stmt.where(
             Appointment.workspace_id == workspace_id,
             or_(
                 and_(
@@ -308,7 +348,17 @@ def _scheduled_for_candidate_state(rule: AutomationRule, state) -> datetime | No
         no_show_at=state.no_show_at,
         cancelled_at=state.cancelled_at or state.no_show_at,
     )
-    return when.astimezone(UTC) if when is not None else None
+    if when is None:
+        return None
+    when = when.astimezone(UTC)
+    if rule.key == "appointment_reminder_6h":
+        when = clamp_confirmation_delivery_time_for_timezones(
+            branch_timezone=state.branch_timezone,
+            workspace_timezone=state.workspace_timezone,
+            start_at=state.start_at,
+            scheduled_for=when,
+        )
+    return when
 
 
 def automation_planning_may_have_work(
@@ -354,19 +404,13 @@ def automation_planning_may_have_work(
         rule = rule_by_id.get(state.rule_id)
         if rule is None or not rule.enabled:
             return True
-        if rule.trigger_kind in {"appointment_created", "before_appointment"}:
-            eligible = state.appointment_status in {"pending", "confirmed"}
-        elif rule.trigger_kind == "after_completed":
-            eligible = state.appointment_status == "completed" and state.completed_at is not None
-        elif rule.trigger_kind == "after_no_show":
-            eligible = state.appointment_status == "no_show" and state.no_show_at is not None
-        elif rule.trigger_kind == "after_cancelled":
-            eligible = (
-                (state.appointment_status == "cancelled" and state.cancelled_at is not None)
-                or (state.appointment_status == "no_show" and state.no_show_at is not None)
-            )
-        else:
-            eligible = False
+        eligible = _eligible_state_for_rule(
+            rule=rule,
+            status=state.appointment_status,
+            completed_at=state.completed_at,
+            no_show_at=state.no_show_at,
+            cancelled_at=state.cancelled_at,
+        )
         if not eligible:
             return True
 
@@ -1028,17 +1072,13 @@ def plan_automation_jobs(
         rule = active_rule_by_id.get(state.rule_id)
         eligible = False
         if rule is not None:
-            if rule.trigger_kind in {"appointment_created", "before_appointment"}:
-                eligible = state.appointment_status in {"pending", "confirmed"}
-            elif rule.trigger_kind == "after_completed":
-                eligible = state.appointment_status == "completed" and state.completed_at is not None
-            elif rule.trigger_kind == "after_no_show":
-                eligible = state.appointment_status == "no_show" and state.no_show_at is not None
-            elif rule.trigger_kind == "after_cancelled":
-                eligible = (
-                    (state.appointment_status == "cancelled" and state.cancelled_at is not None)
-                    or (state.appointment_status == "no_show" and state.no_show_at is not None)
-                )
+            eligible = _eligible_state_for_rule(
+                rule=rule,
+                status=state.appointment_status,
+                completed_at=state.completed_at,
+                no_show_at=state.no_show_at,
+                cancelled_at=state.cancelled_at,
+            )
         if not eligible:
             stale_job_ids.append(state.id)
 

@@ -119,3 +119,30 @@ def test_confirmation_delivery_is_clamped_to_previous_local_midnight() -> None:
         scheduled_for=datetime(2026, 10, 8, 16, 0, tzinfo=UTC),
     )
     assert clamped == datetime(2026, 10, 8, 21, 0, tzinfo=UTC)  # Oct 9 00:00 Cairo
+
+
+def test_invalid_branch_timezone_falls_back_to_workspace_timezone() -> None:
+    db = _db(branch_timezone="Invalid/Zone", workspace_timezone="Africa/Cairo")
+    now = datetime(2026, 10, 9, 20, 30, tzinfo=UTC)
+    start = datetime(2026, 10, 10, 22, 30, tzinfo=UTC)  # Oct 11 00:30 Cairo
+    decision = initial_confirmation_decision(
+        db,
+        workspace_id=uuid4(),
+        branch_id=uuid4(),
+        start_at=start,
+        now=now,
+    )
+    assert decision.timezone == "Africa/Cairo"
+    assert decision.status == "confirmed"
+
+
+def test_invalid_branch_and_workspace_timezones_fall_back_to_utc() -> None:
+    db = _db(branch_timezone="Invalid/Branch", workspace_timezone="Invalid/Workspace")
+    decision = initial_confirmation_decision(
+        db,
+        workspace_id=uuid4(),
+        branch_id=uuid4(),
+        start_at=datetime(2026, 10, 10, 22, 30, tzinfo=UTC),
+        now=datetime(2026, 10, 9, 20, 30, tzinfo=UTC),
+    )
+    assert decision.timezone == "UTC"

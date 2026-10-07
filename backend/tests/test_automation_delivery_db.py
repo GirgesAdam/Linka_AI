@@ -1002,3 +1002,130 @@ def test_concurrent_planning_keeps_single_dedupe_job(case):
                 if workspace is not None:
                     cleanup.delete(workspace)
                     cleanup.commit()
+
+
+def test_scheduler_preflight_skips_confirmed_confirmation_candidate(case):
+    case.appointment.status = "confirmed"
+    case.db.commit()
+
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is False
+
+
+def test_scheduler_preflight_uses_clamped_confirmation_schedule(case):
+    case.rule.offset_minutes = -(48 * 60)
+    start = case.now + timedelta(days=3, hours=6)
+    case.appointment.start_at = start
+    case.appointment.end_at = start + timedelta(minutes=30)
+    case.appointment.busy_start_at = start
+    case.appointment.busy_end_at = start + timedelta(minutes=30)
+    case.db.commit()
+
+    job = plan(case)
+    assert job is not None
+    assert job.scheduled_for > start - timedelta(hours=48)
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is False
+
+
+def test_scheduler_preflight_detects_and_repairs_wrong_confirmation_schedule(case):
+    case.rule.offset_minutes = -(48 * 60)
+    start = case.now + timedelta(days=3, hours=6)
+    case.appointment.start_at = start
+    case.appointment.end_at = start + timedelta(minutes=30)
+    case.appointment.busy_start_at = start
+    case.appointment.busy_end_at = start + timedelta(minutes=30)
+    case.db.commit()
+
+    job = plan(case)
+    expected = job.scheduled_for
+    job.scheduled_for = expected - timedelta(hours=1)
+    case.db.commit()
+
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is True
+
+    result = automations.plan_automation_jobs(
+        case.db,
+        workspace_id=case.workspace.id,
+        now=case.now,
+        rules=case.rules,
+    )
+    assert result.planned == 0
+    case.db.refresh(job)
+    assert job.scheduled_for == expected
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is False
+
+
+def test_confirmation_job_cancelled_once_after_appointment_becomes_confirmed(case):
+    job = plan(case)
+    assert job.status == "queued"
+    case.appointment.status = "confirmed"
+    case.appointment.confirmed_at = case.now
+    case.db.commit()
+
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is True
+
+    result = automations.plan_automation_jobs(
+        case.db,
+        workspace_id=case.workspace.id,
+        now=case.now,
+        rules=case.rules,
+    )
+    assert result.cancelled == 1
+    case.db.refresh(job)
+    assert job.status == "cancelled"
+
+    second = automations.plan_automation_jobs(
+        case.db,
+        workspace_id=case.workspace.id,
+        now=case.now,
+        rules=case.rules,
+    )
+    assert second.cancelled == 0
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is False
+
+
+def test_scheduler_preflight_skips_stable_confirmation_job(case):
+    job = plan(case)
+    assert job is not None
+    assert automations.automation_planning_may_have_work(
+        case.db,
+        workspace_id=case.workspace.id,
+        rules=case.rules,
+        planning_horizon_days=14,
+        now=case.now,
+    ) is False

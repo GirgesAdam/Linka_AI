@@ -21,6 +21,21 @@ class AppointmentConfirmationDecision:
     appointment_date: date
 
 
+def resolve_confirmation_timezone(
+    *,
+    branch_timezone: str | None,
+    workspace_timezone: str | None,
+) -> ZoneInfo:
+    for timezone_name in (branch_timezone, workspace_timezone, "UTC"):
+        if not timezone_name:
+            continue
+        try:
+            return ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return ZoneInfo("UTC")
+
+
 def confirmation_timezone(
     db: Session,
     *,
@@ -34,15 +49,10 @@ def confirmation_timezone(
         )
     )
     workspace = db.get(Workspace, workspace_id)
-    timezone_name = (
-        (branch.timezone if branch is not None else None)
-        or (workspace.timezone if workspace is not None else None)
-        or "UTC"
+    return resolve_confirmation_timezone(
+        branch_timezone=branch.timezone if branch is not None else None,
+        workspace_timezone=workspace.timezone if workspace is not None else None,
     )
-    try:
-        return ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo("UTC")
 
 
 def confirmation_window_dates(*, start_at: datetime, timezone: ZoneInfo) -> tuple[date, date]:
@@ -119,6 +129,24 @@ def can_customer_confirm_appointment(
     )
 
 
+def clamp_confirmation_delivery_time_for_timezones(
+    *,
+    branch_timezone: str | None,
+    workspace_timezone: str | None,
+    start_at: datetime,
+    scheduled_for: datetime,
+) -> datetime:
+    timezone = resolve_confirmation_timezone(
+        branch_timezone=branch_timezone,
+        workspace_timezone=workspace_timezone,
+    )
+    opens_on, _ = confirmation_window_dates(start_at=start_at, timezone=timezone)
+    window_open_local = datetime.combine(opens_on, datetime.min.time(), tzinfo=timezone)
+    window_open_utc = window_open_local.astimezone(UTC)
+    scheduled_utc = scheduled_for.astimezone(UTC)
+    return max(scheduled_utc, window_open_utc)
+
+
 def clamp_confirmation_delivery_time(
     db: Session,
     *,
@@ -127,13 +155,16 @@ def clamp_confirmation_delivery_time(
     start_at: datetime,
     scheduled_for: datetime,
 ) -> datetime:
-    timezone = confirmation_timezone(
-        db,
-        workspace_id=workspace_id,
-        branch_id=branch_id,
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.workspace_id == workspace_id,
+            Branch.id == branch_id,
+        )
     )
-    opens_on, _ = confirmation_window_dates(start_at=start_at, timezone=timezone)
-    window_open_local = datetime.combine(opens_on, datetime.min.time(), tzinfo=timezone)
-    window_open_utc = window_open_local.astimezone(UTC)
-    scheduled_utc = scheduled_for.astimezone(UTC)
-    return max(scheduled_utc, window_open_utc)
+    workspace = db.get(Workspace, workspace_id)
+    return clamp_confirmation_delivery_time_for_timezones(
+        branch_timezone=branch.timezone if branch is not None else None,
+        workspace_timezone=workspace.timezone if workspace is not None else None,
+        start_at=start_at,
+        scheduled_for=scheduled_for,
+    )

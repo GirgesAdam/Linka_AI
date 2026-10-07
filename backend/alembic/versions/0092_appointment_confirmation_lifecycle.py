@@ -32,11 +32,15 @@ def upgrade() -> None:
                 a.created_at,
                 a.confirmed_at,
                 a.start_at,
-                COALESCE(NULLIF(b.timezone, ''), w.timezone) AS timezone_name
+                COALESCE(branch_tz.name, workspace_tz.name, 'UTC') AS timezone_name
             FROM appointments AS a
             JOIN branches AS b
               ON b.id = a.branch_id AND b.workspace_id = a.workspace_id
             JOIN workspaces AS w ON w.id = a.workspace_id
+            LEFT JOIN pg_timezone_names AS branch_tz
+              ON branch_tz.name = NULLIF(b.timezone, '')
+            LEFT JOIN pg_timezone_names AS workspace_tz
+              ON workspace_tz.name = NULLIF(w.timezone, '')
             WHERE a.start_at > now()
               AND a.status IN ('pending', 'confirmed')
         )
@@ -64,11 +68,15 @@ def upgrade() -> None:
                 a.status,
                 a.created_at,
                 a.start_at,
-                COALESCE(NULLIF(b.timezone, ''), w.timezone) AS timezone_name
+                COALESCE(branch_tz.name, workspace_tz.name, 'UTC') AS timezone_name
             FROM appointments AS a
             JOIN branches AS b
               ON b.id = a.branch_id AND b.workspace_id = a.workspace_id
             JOIN workspaces AS w ON w.id = a.workspace_id
+            LEFT JOIN pg_timezone_names AS branch_tz
+              ON branch_tz.name = NULLIF(b.timezone, '')
+            LEFT JOIN pg_timezone_names AS workspace_tz
+              ON workspace_tz.name = NULLIF(w.timezone, '')
             WHERE a.start_at > now()
               AND a.status = 'pending'
         )
