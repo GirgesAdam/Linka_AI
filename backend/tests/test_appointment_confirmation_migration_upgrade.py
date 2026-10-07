@@ -1,17 +1,17 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from alembic import command
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.branch import Branch
@@ -174,4 +174,3 @@ def test_0092_invalid_timezone_strings_use_safe_workspace_then_utc_fallback(
             assert utc_fallback.confirmed_at == datetime(2026, 10, 9, 20, 0, tzinfo=UTC)
     finally:
         engine.dispose()
-
