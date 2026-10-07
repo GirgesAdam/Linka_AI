@@ -40,7 +40,7 @@ def require_timezone_aware(value: datetime) -> datetime:
     return value
 
 
-AvailabilityBlockScope = Literal["all_services", "selected_services"]
+AvailabilityBlockScope = Literal["all_services", "selected_services", "selected_resources"]
 
 
 class AvailabilityBlockCreate(BaseModel):
@@ -50,6 +50,7 @@ class AvailabilityBlockCreate(BaseModel):
     end_time: time
     scope: AvailabilityBlockScope = "all_services"
     service_ids: list[UUID] = Field(default_factory=list)
+    target_keys: list[str] = Field(default_factory=list)
     reason: str | None = Field(default=None, max_length=500)
 
     @field_validator("start_time", "end_time")
@@ -68,13 +69,25 @@ class AvailabilityBlockCreate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_scope_services(self):
+    def validate_scope_targets(self):
         unique_ids = list(dict.fromkeys(self.service_ids))
+        unique_targets = list(
+            dict.fromkeys(key.strip() for key in self.target_keys if key and key.strip())
+        )
         self.service_ids = unique_ids
-        if self.scope == "selected_services" and not unique_ids:
-            raise ValueError("Select at least one service for a selected-services block.")
-        if self.scope == "all_services" and unique_ids:
-            raise ValueError("All-services blocks must not include service IDs.")
+        self.target_keys = unique_targets
+        if self.scope == "selected_services":
+            if not unique_ids:
+                raise ValueError("Select at least one service for a selected-services block.")
+            if unique_targets:
+                raise ValueError("Legacy selected-services blocks must not include resource targets.")
+        elif self.scope == "selected_resources":
+            if not unique_targets:
+                raise ValueError("Select at least one schedule resource.")
+            if unique_ids:
+                raise ValueError("Resource-scoped blocks must not include service IDs.")
+        elif unique_ids or unique_targets:
+            raise ValueError("All-resources blocks must not include explicit selections.")
         return self
 
 
@@ -86,6 +99,7 @@ class AvailabilityBlockRead(BaseModel):
     end_at: datetime
     scope: AvailabilityBlockScope
     service_ids: list[UUID] = Field(default_factory=list)
+    target_keys: list[str] = Field(default_factory=list)
     reason: str | None
     created_by_user_id: UUID | None
     created_at: datetime

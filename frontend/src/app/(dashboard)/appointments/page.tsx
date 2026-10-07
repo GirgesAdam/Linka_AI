@@ -21,8 +21,10 @@ import type {
 } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 import { QuickAppointmentDialog } from "./quick-appointment-dialog";
-import { AvailabilityBlockControls } from "./availability-block-controls";
-import { reopenAvailabilityBlock } from "./actions";
+import {
+  AvailabilityBlockControls,
+  ReopenAvailabilityBlockButton,
+} from "./availability-block-controls";
 
 type SearchParams = {
   patient_id?: string;
@@ -42,8 +44,9 @@ type AvailabilityBlock = {
   branch_id: string;
   start_at: string;
   end_at: string;
-  scope: "all_services" | "selected_services";
+  scope: "all_services" | "selected_services" | "selected_resources";
   service_ids: string[];
+  target_keys: string[];
   reason: string | null;
 };
 
@@ -284,11 +287,33 @@ type SchedulePeriod = {
   block: AvailabilityBlock | null;
 };
 
-function availabilityBlockScopeLabel(block: AvailabilityBlock, serviceById: Map<string, Service>) {
-  if (block.scope === "all_services") return "كل الخدمات";
-  const names = block.service_ids.map((id) => serviceById.get(id)?.name).filter(Boolean) as string[];
-  if (names.length <= 2) return names.join(" + ") || "خدمات محددة";
-  return `${names.length.toLocaleString("ar-EG")} خدمات`;
+function availabilityBlockScopeLabel(
+  block: AvailabilityBlock,
+  serviceById: Map<string, Service>,
+  scheduleColumns: ScheduleColumn[],
+) {
+  if (block.scope === "all_services") return "كل التخصصات";
+  if (block.scope === "selected_services") {
+    const names = block.service_ids.map((id) => serviceById.get(id)?.name).filter(Boolean) as string[];
+    if (names.length <= 2 && names.length) return `قفل قديم: ${names.join(" + ")}`;
+    return `قفل قديم: ${block.service_ids.length.toLocaleString("ar-EG")} خدمات`;
+  }
+  const labels = block.target_keys.map(
+    (key) => scheduleColumns.find((column) => column.id === key)?.label || key,
+  );
+  if (labels.length <= 2) return labels.join(" + ") || "تخصصات محددة";
+  return `${labels.length.toLocaleString("ar-EG")} تخصصات`;
+}
+
+function blocksForColumn(blocks: AvailabilityBlock[], column: ScheduleColumnId) {
+  if (column === "quick") return [];
+  return blocks.filter((block) => {
+    if (block.scope === "all_services") return true;
+    if (block.scope === "selected_resources") return block.target_keys.includes(column);
+    // Legacy selected-service scopes remain enforced by canonical availability, but a
+    // partial service scope must not be painted as if the whole resource column is closed.
+    return false;
+  });
 }
 
 function buildSchedulePeriods(
@@ -379,19 +404,33 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
     .filter((appointment) => visibleColumns.includes(appointmentColumn(appointment, serviceById)))
     .slice()
     .sort((a, b) => a.start_at.localeCompare(b.start_at));
-
-  const freePeriods = visibleColumns.flatMap((column) =>
-    hours.flatMap((interval) => buildSchedulePeriods(appointmentsForColumn(appointments, column, serviceById), interval, timezone, []).filter((period) => period.appointments.length === 0).map((period) => ({ column, ...period }))),
-  ).sort((a, b) => a.start - b.start);
+  const quickVisible = visibleColumns.includes("quick");
+  const quickIntervals = hours
+    .slice()
+    .sort((a, b) => a.start_time.localeCompare(b.start_time))
+    .map((hour) => ({ start: toMinutes(hour.start_time), end: toMinutes(hour.end_time) }));
 
   return (
     <div className="space-y-4 lg:hidden" aria-label="mobile appointment agenda">
-      {allowQuickBooking && freePeriods.length > 0 && <section aria-label="available appointment times">
-        <div className="mb-2 flex items-center justify-between gap-2"><div className="text-xs font-black text-slate-700">????? ?????</div><div className="text-[11px] font-semibold text-slate-400">???? ????? ??????</div></div>
-        <div className="grid gap-2 sm:grid-cols-2">{freePeriods.slice(0, 8).map((period) => { const resource = scheduleColumns.find((item) => item.id === period.column); return <Link key={`${period.column}-${period.start}-${period.end}`} href={quickBookingHref(currentParams, selectedDate, branchId, period.column, period.start, period.end)} className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm transition hover:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"><span className="font-black text-[var(--accent-strong)]">{minuteLabel(period.start)} ? {minuteLabel(period.end)}</span><span className="text-xs font-bold text-slate-600">{resource?.label}</span></Link>; })}</div>
-      </section>}
-      {blocks.map((block) => <div key={block.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black text-rose-950">فترة غير متاحة</div><div className="mt-1 text-xs font-bold text-rose-800">{appointmentTime(block.start_at, timezone)} – {appointmentTime(block.end_at, timezone)}{block.reason ? ` · ${block.reason}` : ""}</div><div className="mt-1 text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(block, serviceById)}</div></div><form action={reopenAvailabilityBlock}><input type="hidden" name="block_id" value={block.id} /><Button type="submit" size="sm" variant="outline">فتح الفترة</Button></form></div></div>)}
-      {!visible.length && <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-semibold text-slate-500">?? ???? ?????? ?????? ??? ??????? ????????. ??????? ??????? ????? ??????? ????? ??????.</div>}
+      {allowQuickBooking && quickVisible && quickIntervals.length > 0 && (
+        <section aria-label="exception quick booking" className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-black text-amber-950">الحجز السريع الاستثنائي <span className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] font-black text-amber-800">استثناء</span></div>
+              <div className="mt-1 text-[11px] font-semibold text-amber-800">للحالات الضرورية فقط. يمكن إضافة موعد حتى لو الوقت مشغول.</div>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {quickIntervals.map((period) => (
+              <Link key={`${period.start}-${period.end}`} href={quickBookingHref(currentParams, selectedDate, branchId, "quick", period.start, period.end)} className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm font-black text-amber-900 transition hover:border-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-200">
+                <span>حجز سريع</span><span className="text-xs font-bold text-amber-700">{minuteLabel(period.start)} – {minuteLabel(period.end)}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+      {blocks.map((block) => <div key={block.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black text-rose-950">فترة غير متاحة</div><div className="mt-1 text-xs font-bold text-rose-800">{appointmentTime(block.start_at, timezone)} – {appointmentTime(block.end_at, timezone)}{block.reason ? ` · ${block.reason}` : ""}</div><div className="mt-1 text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(block, serviceById, scheduleColumns)}</div></div><ReopenAvailabilityBlockButton blockId={block.id} /></div></div>)}
+      {!visible.length && <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-semibold text-slate-500">لا توجد مواعيد مسجلة في الأعمدة الظاهرة لهذا اليوم.</div>}
       {visible.map((appointment) => {
         const service = serviceById.get(appointment.service_id);
         const resource = scheduleColumns.find((item) => item.id === appointmentColumn(appointment, serviceById));
@@ -404,12 +443,12 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
             <div className="min-w-0">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "\u0639\u0645\u064a\u0644"}</div>
-                  <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "\u062e\u062f\u0645\u0629"}</div>
+                  <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div>
+                  <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div>
                 </div>
                 <StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" />
               </div>
-              <div className="mt-2 text-[11px] font-bold text-[var(--accent-strong)]">{resource?.label || "\u0645\u0648\u0639\u062f"}</div>
+              <div className="mt-2 text-[11px] font-bold text-[var(--accent-strong)]">{resource?.label || "موعد"}</div>
             </div>
           </Link>
         );
@@ -480,29 +519,36 @@ function DailySchedule({
                       column.id,
                       serviceById,
                     );
-                    const periods = buildSchedulePeriods(columnAppointments, interval, timezone, blocks);
+                    const periods = buildSchedulePeriods(
+                      columnAppointments,
+                      interval,
+                      timezone,
+                      blocksForColumn(blocks, column.id),
+                    );
                     periods.forEach((period) => period.appointments.forEach((appointment) => rendered.add(appointment.id)));
 
                     return (
-                      <div key={column.id} className="w-[260px] border-l border-slate-200 first:border-l-0 lg:w-auto">
-                        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white px-3 py-3 text-center text-sm font-black text-slate-900">
+                      <div key={column.id} className={`w-[260px] border-l first:border-l-0 lg:w-auto ${column.id === "quick" ? "border-amber-200 bg-amber-50/20" : "border-slate-200"}`}>
+                        <div className={`sticky top-0 z-10 border-b px-3 py-3 text-center text-sm font-black ${column.id === "quick" ? "border-amber-200 bg-amber-50 text-amber-950" : "border-slate-200 bg-white text-slate-900"}`}>
                           <div className="flex items-center justify-center gap-2">
                             <span>
                               {column.label}
-                              <span className="mr-2 text-[11px] font-bold text-slate-400">
+                              <span className={`mr-2 text-[11px] font-bold ${column.id === "quick" ? "text-amber-700" : "text-slate-400"}`}>
                                 {columnAppointments.length.toLocaleString("ar-EG")}
                               </span>
                             </span>
-                            {allowQuickBooking && column.id === "quick" && (
-                              <Link
-                                href={quickBookingHref(currentParams, selectedDate, branchId, "quick", start, end)}
-                                className="inline-flex items-center gap-1 rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-black text-[var(--accent-strong)] transition hover:bg-[var(--accent-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
-                              >
-                                <Plus size={13} />
-                                حجز سريع
-                              </Link>
-                            )}
+                            {column.id === "quick" && <span className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[10px] font-black text-amber-800">استثناء</span>}
                           </div>
+                          {column.id === "quick" && <div className="mt-1 text-[10px] font-semibold text-amber-700">للحالات الضرورية فقط · يسمح بالتداخل المقصود</div>}
+                          {allowQuickBooking && column.id === "quick" && (
+                            <Link
+                              href={quickBookingHref(currentParams, selectedDate, branchId, "quick", start, end)}
+                              className="mt-2 inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-black text-amber-900 transition hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                            >
+                              <Plus size={13} />
+                              حجز سريع
+                            </Link>
+                          )}
                         </div>
                         <div className="divide-y divide-slate-100">
                           {periods.map((period, periodIndex) => {
@@ -519,12 +565,7 @@ function DailySchedule({
                                 {isBlocked ? (
                                   <div className="space-y-2">
                                     <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-900">{period.block?.reason || "الفترة مقفولة للحجوزات الجديدة"}{period.appointments.length ? " · المواعيد الموجودة بالفعل لم تتغير" : ""}</div>
-                                    {period.block && <div className="text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(period.block, serviceById)}</div>}
-                                    {allowQuickBooking && column.id !== "quick" && period.appointments.length === 0 && (
-                                      <Link href={quickBookingHref(currentParams, selectedDate, branchId, column.id, period.start, period.end)} className="flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[var(--accent-border)] bg-white text-xs font-black text-[var(--accent-strong)]">
-                                        <Plus size={15} /> حجز سريع
-                                      </Link>
-                                    )}
+                                    {period.block && <div className="flex items-center justify-between gap-2"><div className="text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(period.block, serviceById, scheduleColumns)}</div><ReopenAvailabilityBlockButton blockId={period.block.id} compact /></div>}
                                     {period.appointments.map((appointment) => {
                                       const service = serviceById.get(appointment.service_id);
                                       return <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div><div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div></div><StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" /></div><div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">{appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}</div></Link>;
@@ -532,24 +573,6 @@ function DailySchedule({
                                   </div>
                                 ) : isAvailable ? (
                                   <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
-                                    {allowQuickBooking && column.id !== "quick" && (
-                                      <Link
-                                        href={quickBookingHref(
-                                          currentParams,
-                                          selectedDate,
-                                          branchId,
-                                          column.id,
-                                          period.start,
-                                          period.end,
-                                        )}
-                                        aria-label={`إضافة موعد في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)}`}
-                                        className="absolute inset-0 grid place-items-center rounded-xl text-[var(--accent-strong)] outline-none transition hover:bg-[var(--accent-soft)] focus:bg-[var(--accent-soft)] focus:ring-2 focus:ring-[var(--accent-ring)]"
-                                      >
-                                        <span className="grid size-8 place-items-center rounded-full border border-[var(--accent-border)] bg-white shadow-sm opacity-60 transition group-hover:scale-105 group-hover:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-                                          <Plus size={17} />
-                                        </span>
-                                      </Link>
-                                    )}
                                   </div>
                                 ) : (
                                   <div className="space-y-2">
@@ -635,7 +658,8 @@ export default async function AppointmentsPage({
   const quickStart = Number(raw.quick_start);
   const quickEnd = Number(raw.quick_end);
   const quickWindow =
-    quickColumn &&
+    quickColumn?.id === "quick" &&
+    visibleColumns.includes("quick") &&
     Number.isInteger(quickStart) &&
     Number.isInteger(quickEnd) &&
     quickStart >= 0 &&
@@ -836,7 +860,15 @@ export default async function AppointmentsPage({
                 {new Intl.DateTimeFormat("ar-EG", { dateStyle: "full", timeZone: "UTC" }).format(new Date(`${selectedDate}T12:00:00Z`))}
               </div>
             </div>
-            <div className="flex items-center gap-2">{selectedBranch && <AvailabilityBlockControls branchId={selectedBranch.id} date={selectedDate} timezone={timezone} services={services} />}<div className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-700">{appointments.length.toLocaleString("ar-EG")} موعد</div></div>
+            <div className="flex items-center gap-2">{selectedBranch && <AvailabilityBlockControls
+              branchId={selectedBranch.id}
+              date={selectedDate}
+              timezone={timezone}
+              workingHours={selectedBranch.working_hours}
+              targets={scheduleColumns.filter((column) => column.id !== "quick").map((column) => ({ key: column.id, label: column.label }))}
+              services={services}
+              blocks={availabilityBlocks}
+            />}<div className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-700">{appointments.length.toLocaleString("ar-EG")} موعد</div></div>
           </div>
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
@@ -934,8 +966,6 @@ export default async function AppointmentsPage({
           packages={quickPackages}
           pulseBalances={quickPulseBalances}
           devicePrices={devicePrices}
-          fixedLaserDeviceKey={scheduleColumns.find((item) => item.id === quickWindow.column)?.deviceKey}
-          allowedOperationalCategory={scheduleColumns.find((item) => item.id === quickWindow.column)?.operationalCategory}
           services={services}
           doctors={doctors}
           staff={staff}

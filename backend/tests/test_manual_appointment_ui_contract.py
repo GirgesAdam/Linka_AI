@@ -23,7 +23,7 @@ def test_manual_booking_uses_verified_availability_before_doctor_selection() -> 
     assert 'name="start_at" value={startAt}' in form
 
 
-def test_schedule_empty_periods_offer_contextual_quick_booking_dialog() -> None:
+def test_quick_exception_column_offers_contextual_quick_booking_dialog() -> None:
     root = _root()
     page = (
         root / "frontend/src/app/(dashboard)/appointments/page.tsx"
@@ -34,7 +34,9 @@ def test_schedule_empty_periods_offer_contextual_quick_booking_dialog() -> None:
 
     assert "quickBookingHref" in page
     assert "allowQuickBooking" in page
-    assert "إضافة موعد في الفترة" in page
+    assert "الحجز السريع الاستثنائي" in page
+    assert 'quickBookingHref(currentParams, selectedDate, branchId, "quick"' in page
+    assert 'quickBookingHref(currentParams, selectedDate, branchId, column.id' not in page
     assert "QuickAppointmentDialog" in page
     assert 'role="dialog"' in dialog
     assert "windowStartMinutes" in dialog
