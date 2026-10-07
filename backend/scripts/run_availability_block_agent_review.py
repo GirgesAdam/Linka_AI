@@ -260,8 +260,6 @@ def main() -> None:
     )
     assert_no_write(failures, "AB6", ab6)
 
-    # Full booking wording with complete commercial fixture. 19:00 is not in canonical
-    # availability, so a direct customer booking request must not reach a write.
     ab7 = run_sequence(
         "AB7 exact customer booking request into blocked slot: no booking write",
         ["احجزلي ليزر إبط بكرة الساعة 7 مساءً على كانديلا مع د. مريم"],
@@ -281,12 +279,17 @@ def main() -> None:
         )
     ])
     ab8 = run_sequence(
-        "AB8 reopened interval: exact customer booking may proceed",
-        ["احجزلي ليزر إبط بكرة الساعة 7 مساءً على كانديلا مع د. مريم"],
+        "AB8 reopened interval: exact customer booking proceeds after confirmation",
+        [
+            "احجزلي ليزر إبط بكرة الساعة 7 مساءً على كانديلا مع د. مريم",
+            "أيوه احجز",
+        ],
         reopened_env,
     )
-    if "booking" not in writes(ab8[0]):
-        failures.append(f"AB8 reopened exact booking did not reach simulated booking write: {writes(ab8[0])}")
+    if "booking" not in writes(ab8[-1]):
+        failures.append(
+            f"AB8 reopened exact booking did not reach simulated booking write after confirmation: {writes(ab8[-1])}"
+        )
 
     no_availability_env = env_with_slots([])
     ab9 = run_sequence(
@@ -306,7 +309,7 @@ def main() -> None:
             print("FAIL:", failure)
         raise SystemExit(1)
     print("PASS: blocked/no-availability scenarios produced no simulated booking/reschedule write")
-    print("PASS: reopened exact verified slot reached a simulated booking write")
+    print("PASS: reopened exact verified slot reached a simulated booking write after customer confirmation")
     print("NOTE: conversational correctness and wording require human review of AGENT_REPLY lines above")
 
 
