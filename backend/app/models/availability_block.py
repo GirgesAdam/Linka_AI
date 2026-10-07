@@ -18,7 +18,7 @@ from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class AvailabilityBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """A branch interval restricting standard availability for all or selected services."""
+    """A branch interval restricting standard availability by legacy or resource scope."""
 
     __tablename__ = "availability_blocks"
     __table_args__ = (
@@ -31,7 +31,8 @@ class AvailabilityBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint("workspace_id", "id", name="uq_availability_blocks_workspace_id_id"),
         CheckConstraint("end_at > start_at", name="availability_blocks_interval_valid"),
         CheckConstraint(
-            "scope IN ('all_services', 'selected_services')", name="availability_blocks_scope_valid"
+            "scope IN ('all_services', 'selected_services', 'selected_resources')",
+            name="availability_blocks_scope_valid",
         ),
         Index(
             "ix_availability_blocks_workspace_branch_time",

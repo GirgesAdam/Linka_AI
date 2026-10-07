@@ -6,7 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,13 +22,16 @@ from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
 from app.models.availability_block import AvailabilityBlock
 from app.models.availability_block_service import AvailabilityBlockService
+from app.models.availability_block_target import AvailabilityBlockTarget
 from app.models.branch import Branch
+from app.models.clinic_inventory import ClinicLaserDevice
 from app.models.doctor import Doctor
 from app.models.lead import Lead
 from app.models.patient import Patient
 from app.models.patient_package import PatientPackage
 from app.models.service import Service
 from app.models.staff import Staff
+from app.models.working_hours import BranchWorkingHour
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
 from app.schemas.booking import (
     AppointmentAutomationRead,
@@ -292,9 +295,18 @@ def _availability_block_read(
             ).order_by(AvailabilityBlockService.service_id)
         )
     )
+    target_keys = list(
+        db.scalars(
+            select(AvailabilityBlockTarget.target_key).where(
+                AvailabilityBlockTarget.workspace_id == block.workspace_id,
+                AvailabilityBlockTarget.availability_block_id == block.id,
+            ).order_by(AvailabilityBlockTarget.target_key)
+        )
+    )
     return AvailabilityBlockRead.model_validate(block).model_copy(
         update={
             "service_ids": service_ids,
+            "target_keys": target_keys,
             "overlapping_appointments": overlapping_appointments,
         }
     )
@@ -309,6 +321,7 @@ def _availability_block_duplicate_exists(
     end_at: datetime,
     scope: str,
     service_ids: set[UUID],
+    target_keys: set[str],
 ) -> bool:
     candidates = list(
         db.scalars(
@@ -324,16 +337,28 @@ def _availability_block_duplicate_exists(
     if scope == "all_services":
         return bool(candidates)
     for candidate in candidates:
-        existing = set(
-            db.scalars(
-                select(AvailabilityBlockService.service_id).where(
-                    AvailabilityBlockService.workspace_id == workspace_id,
-                    AvailabilityBlockService.availability_block_id == candidate.id,
+        if scope == "selected_services":
+            existing = set(
+                db.scalars(
+                    select(AvailabilityBlockService.service_id).where(
+                        AvailabilityBlockService.workspace_id == workspace_id,
+                        AvailabilityBlockService.availability_block_id == candidate.id,
+                    )
                 )
             )
-        )
-        if existing == service_ids:
-            return True
+            if existing == service_ids:
+                return True
+        elif scope == "selected_resources":
+            existing_targets = set(
+                db.scalars(
+                    select(AvailabilityBlockTarget.target_key).where(
+                        AvailabilityBlockTarget.workspace_id == workspace_id,
+                        AvailabilityBlockTarget.availability_block_id == candidate.id,
+                    )
+                )
+            )
+            if existing_targets == target_keys:
+                return True
     return False
 
 
@@ -405,7 +430,26 @@ def create_availability_block(
             detail="Block start must not be in the past.",
         )
 
+    working_hours = list(
+        db.scalars(
+            select(BranchWorkingHour).where(
+                BranchWorkingHour.workspace_id == access.workspace.id,
+                BranchWorkingHour.branch_id == branch.id,
+                BranchWorkingHour.weekday == payload.date.weekday(),
+            )
+        )
+    )
+    if not any(
+        payload.start_time >= interval.start_time and payload.end_time <= interval.end_time
+        for interval in working_hours
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Availability block must be fully within one branch working-hours interval.",
+        )
+
     selected_service_ids = set(payload.service_ids)
+    selected_target_keys = set(payload.target_keys)
     if payload.scope == "selected_services":
         valid_service_ids = set(
             db.scalars(
@@ -422,6 +466,38 @@ def create_availability_block(
                 detail="Selected services must be active services in this workspace.",
             )
 
+    if payload.scope == "selected_resources":
+        static_targets = {"dermatology", "slimming"}
+        requested_device_keys = {
+            key.removeprefix("device:")
+            for key in selected_target_keys
+            if key.startswith("device:") and key.removeprefix("device:")
+        }
+        active_device_keys = (
+            set(
+                db.scalars(
+                    select(ClinicLaserDevice.device_key).where(
+                        ClinicLaserDevice.workspace_id == access.workspace.id,
+                        ClinicLaserDevice.is_active.is_(True),
+                        ClinicLaserDevice.device_key.in_(requested_device_keys),
+                    )
+                )
+            )
+            if requested_device_keys
+            else set()
+        )
+        valid_target_keys = (selected_target_keys & static_targets) | {
+            f"device:{key}" for key in active_device_keys
+        }
+        if valid_target_keys != selected_target_keys:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Availability block targets must be active schedule resources; "
+                    "quick booking cannot be blocked."
+                ),
+            )
+
     if _availability_block_duplicate_exists(
         db,
         workspace_id=access.workspace.id,
@@ -430,18 +506,37 @@ def create_availability_block(
         end_at=end_at,
         scope=payload.scope,
         service_ids=selected_service_ids,
+        target_keys=selected_target_keys,
     ):
         raise booking_conflict("An identical availability block already exists.")
 
     appointment_stmt = select(Appointment.id).where(
         Appointment.workspace_id == access.workspace.id,
         Appointment.branch_id == branch.id,
+        Appointment.is_quick_booking.is_(False),
         Appointment.status.in_(("pending", "confirmed", "checked_in", "in_progress")),
         Appointment.start_at < end_at,
         Appointment.end_at > start_at,
     )
     if payload.scope == "selected_services":
         appointment_stmt = appointment_stmt.where(Appointment.service_id.in_(selected_service_ids))
+    elif payload.scope == "selected_resources":
+        resource_conditions = []
+        device_keys = [
+            key.removeprefix("device:")
+            for key in selected_target_keys
+            if key.startswith("device:")
+        ]
+        if device_keys:
+            resource_conditions.append(Appointment.laser_device_key.in_(device_keys))
+        categories = list(selected_target_keys & {"dermatology", "slimming"})
+        if categories:
+            category_service_ids = select(Service.id).where(
+                Service.workspace_id == access.workspace.id,
+                Service.operational_category.in_(categories),
+            )
+            resource_conditions.append(Appointment.service_id.in_(category_service_ids))
+        appointment_stmt = appointment_stmt.where(or_(*resource_conditions))
     existing_count = len(list(db.scalars(appointment_stmt)))
 
     block = AvailabilityBlock(
@@ -464,6 +559,17 @@ def create_availability_block(
                     service_id=service_id,
                 )
                 for service_id in sorted(selected_service_ids, key=str)
+            ]
+        )
+    elif payload.scope == "selected_resources":
+        db.add_all(
+            [
+                AvailabilityBlockTarget(
+                    workspace_id=access.workspace.id,
+                    availability_block_id=block.id,
+                    target_key=target_key,
+                )
+                for target_key in sorted(selected_target_keys)
             ]
         )
     db.commit()

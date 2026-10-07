@@ -17,16 +17,27 @@ export async function createAvailabilityBlock(previous: AvailabilityBlockActionS
   const reason = String(formData.get("reason") || "").trim();
   const scope = String(formData.get("scope") || "all_services").trim();
   const serviceIds = formData.getAll("service_ids").map((value) => String(value).trim()).filter(Boolean);
+  const targetKeys = formData.getAll("target_keys").map((value) => String(value).trim()).filter(Boolean);
   const halfHour = /^(?:[01]\d|2[0-3]):(?:00|30)$/;
   if (!branchId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !halfHour.test(startTime) || !halfHour.test(endTime)) {
     return { ok: false, message: "اختر التاريخ ووقت البداية والنهاية بنصف ساعة." };
   }
-  if (scope !== "all_services" && scope !== "selected_services") return { ok: false, message: "اختر نطاق قفل صحيح." };
+  if (!["all_services", "selected_services", "selected_resources"].includes(scope)) return { ok: false, message: "اختر نطاق قفل صحيح." };
   if (scope === "selected_services" && serviceIds.length === 0) return { ok: false, message: "اختر خدمة واحدة على الأقل." };
+  if (scope === "selected_resources" && targetKeys.length === 0) return { ok: false, message: "اختر تخصص أو جهاز واحد على الأقل." };
   try {
     const result = await tiaRequest<{ overlapping_appointments: number }>("/booking/availability-blocks", {
       method: "POST",
-      body: JSON.stringify({ branch_id: branchId, date, start_time: startTime, end_time: endTime, scope, service_ids: scope === "selected_services" ? serviceIds : [], reason: reason || null }),
+      body: JSON.stringify({
+        branch_id: branchId,
+        date,
+        start_time: startTime,
+        end_time: endTime,
+        scope,
+        service_ids: scope === "selected_services" ? serviceIds : [],
+        target_keys: scope === "selected_resources" ? targetKeys : [],
+        reason: reason || null,
+      }),
     });
     revalidatePath("/appointments");
     return {
@@ -43,11 +54,20 @@ export async function createAvailabilityBlock(previous: AvailabilityBlockActionS
   }
 }
 
-export async function reopenAvailabilityBlock(formData: FormData) {
+export async function reopenAvailabilityBlock(
+  previous: AvailabilityBlockActionState,
+  formData: FormData,
+): Promise<AvailabilityBlockActionState> {
+  void previous;
   const blockId = String(formData.get("block_id") || "").trim();
-  if (!blockId) return;
-  await tiaRequest(`/booking/availability-blocks/${blockId}`, { method: "DELETE" });
-  revalidatePath("/appointments");
+  if (!blockId) return { ok: false, message: "تعذر تحديد الفترة المطلوب فتحها." };
+  try {
+    await tiaRequest(`/booking/availability-blocks/${blockId}`, { method: "DELETE" });
+    revalidatePath("/appointments");
+    return { ok: true, message: "تم فتح الفترة وتحديث الجدول." };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "تعذر فتح الفترة." };
+  }
 }
 
 export type ManualAvailabilitySlot = {

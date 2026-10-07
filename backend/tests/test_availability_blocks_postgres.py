@@ -18,6 +18,7 @@ from app.models.availability_block import AvailabilityBlock
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.clinic_integration import ClinicIntegration
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -47,6 +48,10 @@ class BlockFixture:
     other_block_id: UUID
     service_id: UUID
     other_service_id: UUID
+    slimming_service_id: UUID
+    laser_service_id: UUID
+    device_a_key: str
+    device_b_key: str
     doctor_id: UUID
     patient_id: UUID
     booking_date: date
@@ -103,6 +108,7 @@ def block_fixture() -> BlockFixture:
             name="Availability Service",
             slug=f"availability-service-{suffix}",
             category="dermatology",
+            operational_category="dermatology",
             duration_minutes=60,
             price_minor=100_000,
             currency="EGP",
@@ -112,9 +118,37 @@ def block_fixture() -> BlockFixture:
             name="Other Service",
             slug=f"other-service-{suffix}",
             category="dermatology",
+            operational_category="dermatology",
             duration_minutes=30,
             price_minor=80_000,
             currency="EGP",
+        )
+        slimming_service = Service(
+            workspace_id=workspace.id,
+            name="Slimming Service",
+            slug=f"slimming-service-{suffix}",
+            category="slimming",
+            operational_category="slimming",
+            duration_minutes=30,
+            price_minor=90_000,
+            currency="EGP",
+        )
+        laser_service = Service(
+            workspace_id=workspace.id,
+            name="Laser Service",
+            slug=f"laser-service-{suffix}",
+            category="laser",
+            operational_category="laser",
+            duration_minutes=60,
+            price_minor=120_000,
+            currency="EGP",
+            requires_laser_device=True,
+        )
+        device_a = ClinicLaserDevice(
+            workspace_id=workspace.id, device_key=f"device-a-{suffix[:8]}", name="Device A"
+        )
+        device_b = ClinicLaserDevice(
+            workspace_id=workspace.id, device_key=f"device-b-{suffix[:8]}", name="Device B"
         )
         staff = Staff(
             workspace_id=workspace.id,
@@ -132,7 +166,20 @@ def block_fixture() -> BlockFixture:
             status="active",
         )
         db.add_all(
-            [membership, branch_a, branch_b, other_branch, service, other_service, staff, patient]
+            [
+                membership,
+                branch_a,
+                branch_b,
+                other_branch,
+                service,
+                other_service,
+                slimming_service,
+                laser_service,
+                device_a,
+                device_b,
+                staff,
+                patient,
+            ]
         )
         db.flush()
         doctor = Doctor(
@@ -162,6 +209,30 @@ def block_fixture() -> BlockFixture:
                 ),
                 DoctorService(
                     workspace_id=workspace.id, doctor_id=doctor.id, service_id=other_service.id
+                ),
+                DoctorService(
+                    workspace_id=workspace.id, doctor_id=doctor.id, service_id=slimming_service.id
+                ),
+                DoctorService(
+                    workspace_id=workspace.id, doctor_id=doctor.id, service_id=laser_service.id
+                ),
+                ServiceDevicePrice(
+                    workspace_id=workspace.id,
+                    service_id=laser_service.id,
+                    device_key=device_a.device_key,
+                    device_name=device_a.name,
+                    price_minor=120_000,
+                    duration_minutes=60,
+                    currency="EGP",
+                ),
+                ServiceDevicePrice(
+                    workspace_id=workspace.id,
+                    service_id=laser_service.id,
+                    device_key=device_b.device_key,
+                    device_name=device_b.name,
+                    price_minor=125_000,
+                    duration_minutes=60,
+                    currency="EGP",
                 ),
                 BranchWorkingHour(
                     workspace_id=workspace.id,
@@ -230,6 +301,10 @@ def block_fixture() -> BlockFixture:
             other_block_id=other_block.id,
             service_id=service.id,
             other_service_id=other_service.id,
+            slimming_service_id=slimming_service.id,
+            laser_service_id=laser_service.id,
+            device_a_key=device_a.device_key,
+            device_b_key=device_b.device_key,
             doctor_id=doctor.id,
             patient_id=patient.id,
             booking_date=booking_date,
@@ -249,7 +324,11 @@ def _at(day: date, hour: int, minute: int = 0) -> datetime:
 
 
 def _starts(
-    db, fixture: BlockFixture, branch_id: UUID, service_id: UUID | None = None
+    db,
+    fixture: BlockFixture,
+    branch_id: UUID,
+    service_id: UUID | None = None,
+    laser_device_key: str | None = None,
 ) -> set[datetime]:
     result = booking_routes.get_availability(
         branch_id=branch_id,
@@ -258,6 +337,7 @@ def _starts(
         access=_access(db, fixture),
         db=db,
         doctor_id=fixture.doctor_id,
+        laser_device_key=laser_device_key,
         allow_immediate=True,
     )
     return {slot.start_at for slot in result.slots}
@@ -689,3 +769,242 @@ def test_exact_duplicate_is_rejected_but_overlapping_service_scopes_are_allowed(
         assert _at(block_fixture.booking_date, 15) not in _starts(
             db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id
         )
+
+
+
+def test_resource_scope_dermatology_and_slimming_are_independent(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        target = _at(block_fixture.booking_date, 14)
+        derm = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(15),
+                scope="selected_resources",
+                target_keys=["dermatology"],
+            ),
+            access=access,
+            db=db,
+        )
+        assert derm.target_keys == ["dermatology"]
+        assert target not in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id)
+        assert target not in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.other_service_id)
+        assert target in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.slimming_service_id)
+        booking_routes.delete_availability_block(block_id=derm.id, access=access, db=db)
+
+        slimming = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(15),
+                scope="selected_resources",
+                target_keys=["slimming"],
+            ),
+            access=access,
+            db=db,
+        )
+        assert target not in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.slimming_service_id)
+        assert target in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id)
+        booking_routes.delete_availability_block(block_id=slimming.id, access=access, db=db)
+
+
+def test_resource_scope_laser_device_is_device_specific(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        target = _at(block_fixture.booking_date, 14)
+        block = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(15),
+                scope="selected_resources",
+                target_keys=[f"device:{block_fixture.device_a_key}"],
+            ),
+            access=access,
+            db=db,
+        )
+        assert target not in _starts(
+            db,
+            block_fixture,
+            block_fixture.branch_a_id,
+            block_fixture.laser_service_id,
+            block_fixture.device_a_key,
+        )
+        assert target in _starts(
+            db,
+            block_fixture,
+            block_fixture.branch_a_id,
+            block_fixture.laser_service_id,
+            block_fixture.device_b_key,
+        )
+        booking_routes.delete_availability_block(block_id=block.id, access=access, db=db)
+
+
+def test_resource_scope_multiple_targets_form_union(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        target = _at(block_fixture.booking_date, 15)
+        block = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(15),
+                end_time=time(16),
+                scope="selected_resources",
+                target_keys=[f"device:{block_fixture.device_a_key}", "slimming"],
+            ),
+            access=access,
+            db=db,
+        )
+        assert target not in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.slimming_service_id)
+        assert target not in _starts(
+            db,
+            block_fixture,
+            block_fixture.branch_a_id,
+            block_fixture.laser_service_id,
+            block_fixture.device_a_key,
+        )
+        assert target in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id)
+        booking_routes.delete_availability_block(block_id=block.id, access=access, db=db)
+
+
+def test_resource_scope_rejects_quick_random_and_inactive_device_targets(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        inactive = ClinicLaserDevice(
+            workspace_id=block_fixture.workspace_id,
+            device_key=f"inactive-{uuid4().hex[:8]}",
+            name="Inactive Device",
+            is_active=False,
+        )
+        db.add(inactive)
+        db.commit()
+        access = _access(db, block_fixture)
+        for target_key in ("quick", "random-value", "device:nonexistent", f"device:{inactive.device_key}"):
+            with pytest.raises(HTTPException) as error:
+                booking_routes.create_availability_block(
+                    payload=AvailabilityBlockCreate(
+                        branch_id=block_fixture.branch_a_id,
+                        date=block_fixture.booking_date,
+                        start_time=time(13),
+                        end_time=time(13, 30),
+                        scope="selected_resources",
+                        target_keys=[target_key],
+                    ),
+                    access=access,
+                    db=db,
+                )
+            assert error.value.status_code == 422
+
+
+def test_reopening_one_overlapping_block_keeps_other_active(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        access = _access(db, block_fixture)
+        target = _at(block_fixture.booking_date, 14, 30)
+        first = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14),
+                end_time=time(15),
+                scope="selected_resources",
+                target_keys=["dermatology"],
+            ), access=access, db=db,
+        )
+        second = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(14, 30),
+                end_time=time(15, 30),
+                scope="selected_resources",
+                target_keys=["dermatology"],
+            ), access=access, db=db,
+        )
+        booking_routes.delete_availability_block(block_id=first.id, access=access, db=db)
+        assert db.get(AvailabilityBlock, second.id) is not None
+        assert target not in _starts(db, block_fixture, block_fixture.branch_a_id, block_fixture.service_id)
+
+
+def test_block_must_fit_inside_one_branch_working_interval(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        db.query(BranchWorkingHour).filter(
+            BranchWorkingHour.workspace_id == block_fixture.workspace_id,
+            BranchWorkingHour.branch_id == block_fixture.branch_a_id,
+            BranchWorkingHour.weekday == block_fixture.booking_date.weekday(),
+        ).delete(synchronize_session=False)
+        db.add_all([
+            BranchWorkingHour(
+                workspace_id=block_fixture.workspace_id,
+                branch_id=block_fixture.branch_a_id,
+                weekday=block_fixture.booking_date.weekday(),
+                start_time=time(10),
+                end_time=time(14),
+            ),
+            BranchWorkingHour(
+                workspace_id=block_fixture.workspace_id,
+                branch_id=block_fixture.branch_a_id,
+                weekday=block_fixture.booking_date.weekday(),
+                start_time=time(17),
+                end_time=time(22),
+            ),
+        ])
+        db.commit()
+        access = _access(db, block_fixture)
+        with pytest.raises(HTTPException) as outside:
+            booking_routes.create_availability_block(
+                payload=AvailabilityBlockCreate(
+                    branch_id=block_fixture.branch_a_id,
+                    date=block_fixture.booking_date,
+                    start_time=time(9),
+                    end_time=time(10),
+                ), access=access, db=db,
+            )
+        assert outside.value.status_code == 422
+        with pytest.raises(HTTPException) as gap:
+            booking_routes.create_availability_block(
+                payload=AvailabilityBlockCreate(
+                    branch_id=block_fixture.branch_a_id,
+                    date=block_fixture.booking_date,
+                    start_time=time(13),
+                    end_time=time(18),
+                ), access=access, db=db,
+            )
+        assert gap.value.status_code == 422
+        valid = booking_routes.create_availability_block(
+            payload=AvailabilityBlockCreate(
+                branch_id=block_fixture.branch_a_id,
+                date=block_fixture.booking_date,
+                start_time=time(17),
+                end_time=time(18),
+            ), access=access, db=db,
+        )
+        assert valid.start_at == _at(block_fixture.booking_date, 17)
+
+
+
+def test_closed_branch_day_rejects_direct_block_creation(block_fixture: BlockFixture) -> None:
+    with SessionLocal() as db:
+        db.query(BranchWorkingHour).filter(
+            BranchWorkingHour.workspace_id == block_fixture.workspace_id,
+            BranchWorkingHour.branch_id == block_fixture.branch_a_id,
+            BranchWorkingHour.weekday == block_fixture.booking_date.weekday(),
+        ).delete(synchronize_session=False)
+        db.commit()
+        access = _access(db, block_fixture)
+        with pytest.raises(HTTPException) as error:
+            booking_routes.create_availability_block(
+                payload=AvailabilityBlockCreate(
+                    branch_id=block_fixture.branch_a_id,
+                    date=block_fixture.booking_date,
+                    start_time=time(10),
+                    end_time=time(11),
+                ),
+                access=access,
+                db=db,
+            )
+        assert error.value.status_code == 422
+        assert "working-hours interval" in str(error.value.detail)

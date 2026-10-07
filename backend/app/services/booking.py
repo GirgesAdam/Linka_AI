@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.availability_block import AvailabilityBlock
 from app.models.availability_block_service import AvailabilityBlockService
+from app.models.availability_block_target import AvailabilityBlockTarget
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.doctor import Doctor
@@ -344,10 +345,27 @@ def calculate_availability(
             Appointment.id.notin_(tuple(excluded_appointment_ids))
         )
     existing = list(db.scalars(appointment_stmt))
-    relevant_block_ids = select(AvailabilityBlockService.availability_block_id).where(
+    relevant_legacy_block_ids = select(AvailabilityBlockService.availability_block_id).where(
         AvailabilityBlockService.workspace_id == workspace.id,
         AvailabilityBlockService.service_id == service.id,
     )
+    resource_key = (
+        f"device:{laser_device_key}"
+        if requires_device and laser_device_key
+        else getattr(service, "operational_category", None)
+        if getattr(service, "operational_category", None) in {"dermatology", "slimming"}
+        else None
+    )
+    block_scope_filters = [
+        AvailabilityBlock.scope == "all_services",
+        AvailabilityBlock.id.in_(relevant_legacy_block_ids),
+    ]
+    if resource_key is not None:
+        relevant_resource_block_ids = select(AvailabilityBlockTarget.availability_block_id).where(
+            AvailabilityBlockTarget.workspace_id == workspace.id,
+            AvailabilityBlockTarget.target_key == resource_key,
+        )
+        block_scope_filters.append(AvailabilityBlock.id.in_(relevant_resource_block_ids))
     availability_blocks = list(
         db.scalars(
             select(AvailabilityBlock).where(
@@ -355,10 +373,7 @@ def calculate_availability(
                 AvailabilityBlock.branch_id == branch.id,
                 AvailabilityBlock.start_at < conflict_end_utc,
                 AvailabilityBlock.end_at > conflict_start_utc,
-                or_(
-                    AvailabilityBlock.scope == "all_services",
-                    AvailabilityBlock.id.in_(relevant_block_ids),
-                ),
+                or_(*block_scope_filters),
             )
         )
     )
