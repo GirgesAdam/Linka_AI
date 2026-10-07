@@ -8,6 +8,11 @@ Only future pending/confirmed rows are touched. The effective timezone is the
 appointment branch timezone with workspace timezone fallback. Historical and
 terminal appointment states are deliberately preserved.
 
+Confirmed rows are downgraded only when history proves they were created in a
+legacy confirmed state and there is no explicit staff pending -> confirmed
+transition. Rows whose historical intent cannot be established are preserved
+conservatively rather than risking removal of a legitimate confirmation.
+
 Downgrade is intentionally a no-op: the old pending/confirmed meaning cannot be
 reconstructed safely after reconciliation without inventing historical intent.
 """
@@ -28,6 +33,7 @@ def upgrade() -> None:
         WITH future AS (
             SELECT
                 a.id,
+                a.workspace_id,
                 a.status,
                 a.created_at,
                 a.confirmed_at,
@@ -57,6 +63,23 @@ def upgrade() -> None:
               f.confirmed_at IS NULL
               OR (timezone(f.timezone_name, f.confirmed_at))::date
                    < (timezone(f.timezone_name, f.start_at))::date - 1
+          )
+          AND EXISTS (
+              SELECT 1
+              FROM appointment_status_history AS created_history
+              WHERE created_history.workspace_id = f.workspace_id
+                AND created_history.appointment_id = f.id
+                AND created_history.from_status IS NULL
+                AND created_history.to_status = 'confirmed'
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM appointment_status_history AS staff_confirmation
+              WHERE staff_confirmation.workspace_id = f.workspace_id
+                AND staff_confirmation.appointment_id = f.id
+                AND staff_confirmation.from_status = 'pending'
+                AND staff_confirmation.to_status = 'confirmed'
+                AND staff_confirmation.changed_by_user_id IS NOT NULL
           )
         """
     )
