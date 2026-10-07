@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -174,3 +174,4 @@ def test_0092_invalid_timezone_strings_use_safe_workspace_then_utc_fallback(
             assert utc_fallback.confirmed_at == datetime(2026, 10, 9, 20, 0, tzinfo=UTC)
     finally:
         engine.dispose()
+
