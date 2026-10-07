@@ -5,13 +5,13 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from alembic import command
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
