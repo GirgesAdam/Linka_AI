@@ -113,7 +113,7 @@ def case(monkeypatch):
             branch_id=branch.id,
             doctor_id=doctor.id,
             service_id=service.id,
-            status="confirmed",
+            status="pending",
             start_at=start,
             end_at=start + timedelta(minutes=30),
             busy_start_at=start,
@@ -245,9 +245,16 @@ def test_reminder_plan_claim_execute_payload_and_dedupe(case):
     expected_time = case.appointment.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M")
     body = transport.build_meta_message_payload(item)
     assert body["to"] == "201001112223"
-    assert body["template"]["name"] == "tia_reminder_01"
-    params = body["template"]["components"][0]["parameters"]
-    assert [p["text"] for p in params] == ["Gate", "Gate service", expected_time]
+    assert body["template"]["name"] == "tia_appointment_confirmation_01"
+    components = body["template"]["components"]
+    params = components[0]["parameters"]
+    expected_date = case.appointment.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%d/%m/%Y")
+    assert [p["text"] for p in params] == ["Gate", "Gate service", expected_date, expected_time]
+    buttons = [component for component in components if component["type"] == "button"]
+    assert [button["parameters"][0]["payload"] for button in buttons] == [
+        f"tia.booking.confirm:{case.appointment.id}",
+        f"tia.booking.reschedule:{case.appointment.id}",
+    ]
     assert claim(case) == []
 
 
@@ -610,7 +617,7 @@ def test_planner_batches_mixed_existing_and_new_candidates_idempotently(case):
         branch_id=case.appointment.branch_id,
         doctor_id=case.appointment.doctor_id,
         service_id=case.appointment.service_id,
-        status="confirmed",
+        status="pending",
         start_at=second_start,
         end_at=second_start + timedelta(minutes=30),
         busy_start_at=second_start,
@@ -707,7 +714,7 @@ def _add_scheduler_benchmark_workspace(case, index: int, *, appointment_count: i
                 branch_id=branch.id,
                 doctor_id=doctor.id,
                 service_id=service.id,
-                status="confirmed",
+                status="pending",
                 start_at=start,
                 end_at=start + timedelta(minutes=30),
                 busy_start_at=start,
@@ -951,7 +958,7 @@ def test_concurrent_planning_keeps_single_dedupe_job(case):
                     branch_id=branch.id,
                     doctor_id=doctor.id,
                     service_id=service.id,
-                    status="confirmed",
+                    status="pending",
                     start_at=start,
                     end_at=start + timedelta(minutes=30),
                     busy_start_at=start,
