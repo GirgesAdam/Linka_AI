@@ -29,8 +29,8 @@ jobs:
       ENVIRONMENT: staging
       DEBUG: "false"
       DOCS_ENABLED: "false"
-      DATABASE_URL: postgresql://unused:unused@127.0.0.1:5432/unused
-      MIGRATION_DATABASE_URL: postgresql://unused:unused@127.0.0.1:5432/unused
+      DATABASE_URL: postgresql+psycopg://unused:unused@127.0.0.1:5432/unused
+      MIGRATION_DATABASE_URL: postgresql+psycopg://unused:unused@127.0.0.1:5432/unused
       SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_agent_review_unused
       SUPABASE_SECRET_KEY: sb_secret_agent_review_unused
