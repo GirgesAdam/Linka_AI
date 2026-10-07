@@ -11,7 +11,7 @@ from app.services import automations
 
 
 EXPECTED_PARAMETER_COUNT = {
-    "appointment_reminder_6h": 3,
+    "appointment_reminder_6h": 4,
     "post_visit_followup": 3,
     "cancellation_recovery": 4,
     "lead_not_booked_followup": 5,
@@ -22,24 +22,14 @@ def _root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2]
 
 
-def test_standard_catalog_has_three_friendly_variants_per_automation() -> None:
-    assert len(meta_whatsapp_templates.STANDARD_WHATSAPP_TEMPLATES) == 12
-    assert set(meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY) == set(
-        EXPECTED_PARAMETER_COUNT
-    )
-    assert (
-        len(
-            {
-                template.name
-                for template in meta_whatsapp_templates.STANDARD_WHATSAPP_TEMPLATES
-            }
-        )
-        == 12
-    )
+def test_standard_catalog_keeps_confirmation_ticket_separate_from_legacy_rotation() -> None:
+    current = meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY["appointment_reminder_6h"]
+    assert [template.name for template in current] == ["tia_appointment_confirmation_01"]
+    assert current[0].quick_reply_buttons == ("تأكيد الحضور", "تغيير الميعاد")
+    assert len(meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY["appointment_reminder_legacy"]) == 3
 
     for rule_key, parameter_count in EXPECTED_PARAMETER_COUNT.items():
         templates = meta_whatsapp_templates.STANDARD_TEMPLATES_BY_RULE_KEY[rule_key]
-        assert len(templates) == 3
         assert meta_whatsapp_templates.STANDARD_TEMPLATE_BY_RULE_KEY[rule_key] == templates[0]
         expected_placeholders = [str(index) for index in range(1, parameter_count + 1)]
         for template in templates:
@@ -49,9 +39,8 @@ def test_standard_catalog_has_three_friendly_variants_per_automation() -> None:
 
 def test_rotation_pool_contains_only_meta_approved_variants() -> None:
     statuses = {
-        "tia_reminder_01": "pending",
+        "tia_appointment_confirmation_01": "approved",
         "tia_reminder_02": "approved",
-        "tia_reminder_03": "rejected",
     }
     approved = meta_whatsapp_templates.approved_standard_templates(
         "appointment_reminder_6h", statuses
@@ -60,8 +49,8 @@ def test_rotation_pool_contains_only_meta_approved_variants() -> None:
         "appointment_reminder_6h", statuses
     )
 
-    assert [template.name for template in approved] == ["tia_reminder_02"]
-    assert refs == [{"name": "tia_reminder_02", "language_code": "ar_EG"}]
+    assert [template.name for template in approved] == ["tia_appointment_confirmation_01"]
+    assert refs == [{"name": "tia_appointment_confirmation_01", "language_code": "ar_EG"}]
 
 
 def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
@@ -74,7 +63,7 @@ def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
     rule = types.SimpleNamespace(
         key="appointment_reminder_6h",
         id=uuid.UUID("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"),
-        template_name="tia_reminder_01",
+        template_name="tia_appointment_confirmation_01",
         template_language="ar_EG",
         config_json={"template_variants": refs, "template_rotation": "automatic"},
     )
@@ -84,7 +73,7 @@ def test_appointment_rotation_is_automatic_and_stable_for_retries() -> None:
     second = automations._select_rule_template(rule, appointment_id)
 
     assert first == second
-    assert first[0] in {item["name"] for item in refs}
+    assert first == ("tia_appointment_confirmation_01", "ar_EG", 1)
 
 
 def test_lead_rotation_is_automatic_and_stable_for_retries() -> None:

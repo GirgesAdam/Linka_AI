@@ -58,6 +58,7 @@ from app.schemas.patient_packages import (
     PatientPackageRead,
 )
 from app.services.activity import record_activity_event
+from app.services.appointment_confirmation import initial_confirmation_decision
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
@@ -611,8 +612,13 @@ def create_appointment(
         except PulseBillingError as exc:
             raise booking_conflict(str(exc)) from exc
 
-    settings = get_effective_booking_settings(db, access.workspace.id)
-    initial_status = "pending" if settings.require_confirmation else "confirmed"
+    confirmation = initial_confirmation_decision(
+        db,
+        workspace_id=access.workspace.id,
+        branch_id=payload.branch_id,
+        start_at=slot.start_at,
+    )
+    initial_status = confirmation.status
     appointment = make_appointment(
         access=access,
         payload=payload,
@@ -758,17 +764,23 @@ def create_quick_appointment(
         except PulseBillingError as exc:
             raise booking_conflict(str(exc)) from exc
 
+    quick_confirmation = initial_confirmation_decision(
+        db,
+        workspace_id=access.workspace.id,
+        branch_id=branch.id,
+        start_at=start_at,
+    )
     appointment = Appointment(
         workspace_id=access.workspace.id, patient_id=payload.patient_id, branch_id=branch.id,
         doctor_id=doctor.id, doctor_assignment_known=True, is_quick_booking=True,
         service_id=service.id, patient_package_id=payload.patient_package_id,
-        created_by_user_id=access.user.id, status="confirmed", source="staff",
+        created_by_user_id=access.user.id, status=quick_confirmation.status, source="staff",
         start_at=start_at, end_at=end_at, busy_start_at=start_at, busy_end_at=end_at,
         duration_minutes=duration_minutes, price_minor=price_minor, currency=currency,
         laser_device_key=laser_device_key, laser_device_name=laser_device_name,
         billing_context="pulse_prepaid" if payload.use_pulse_balance else "standard",
         customer_note=payload.customer_note, idempotency_key=idempotency_key,
-        confirmed_at=datetime.now(UTC),
+        confirmed_at=quick_confirmation.confirmed_at,
     )
     try:
         db.add(appointment)
@@ -780,7 +792,7 @@ def create_quick_appointment(
             )
         add_history(
             db, appointment, changed_by_user_id=access.user.id, from_status=None,
-            to_status="confirmed", reason="quick_appointment_created",
+            to_status=appointment.status, reason="quick_appointment_created",
             metadata={"scheduling_override": True},
         )
         record_activity_event(

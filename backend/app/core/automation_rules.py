@@ -21,11 +21,11 @@ DEFAULT_AUTOMATION_RULES: tuple[DefaultAutomationRule, ...] = (
     DefaultAutomationRule(
         # Keep the historical key for database compatibility. Timing is admin-configurable.
         key="appointment_reminder_6h",
-        name="Appointment reminder",
+        name="Appointment confirmation",
         trigger_kind="before_appointment",
         offset_minutes=-360,
         channel="whatsapp",
-        template_name="tia_reminder_01",
+        template_name="tia_appointment_confirmation_01",
         template_language="ar_EG",
         max_lateness_minutes=30,
         enabled_by_default=True,

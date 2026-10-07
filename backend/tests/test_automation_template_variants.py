@@ -12,7 +12,7 @@ from app.services.automations import (
 def _rule(*, key: str = "appointment_reminder_6h") -> SimpleNamespace:
     return SimpleNamespace(
         key=key,
-        template_name="tia_reminder_01",
+        template_name="tia_appointment_confirmation_01",
         template_language="ar",
         config_json={
             "template_variants": [
@@ -26,9 +26,7 @@ def _rule(*, key: str = "appointment_reminder_6h") -> SimpleNamespace:
 
 def test_template_pool_deduplicates_primary_and_variants() -> None:
     assert _rule_template_candidates(_rule()) == [
-        ("tia_reminder_01", "ar"),
-        ("tia_reminder_02", "ar"),
-        ("tia_reminder_03", "ar"),
+        ("tia_appointment_confirmation_01", "ar"),
     ]
 
 
@@ -38,7 +36,7 @@ def test_template_selection_is_stable_for_same_appointment() -> None:
     first = _select_rule_template(rule, appointment_id)
     second = _select_rule_template(rule, appointment_id)
     assert first == second
-    assert first[2] == 3
+    assert first[2] == 1
     assert first[:2] in _rule_template_candidates(rule)
 
 
@@ -63,7 +61,7 @@ def test_template_variants_keep_same_variable_contract() -> None:
             "date": "25/08/2026",
         },
     )
-    assert reminder == ["سارة", "ليزر", "18:00"]
+    assert reminder == ["سارة", "ليزر", "25/08/2026", "18:00"]
     assert post_visit == ["سارة", "ليزر", "25/08/2026"]
 
 

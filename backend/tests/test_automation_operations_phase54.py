@@ -116,11 +116,11 @@ def test_reminder_and_post_visit_fallback_copy_match_current_template_contract()
 
     reminder = service.split('if rule_key == "appointment_reminder_6h":', 1)[1].split('if rule_key == "appointment_reminder_24h":', 1)[0]
     post = service.split('if rule_key == "post_visit_followup":', 1)[1].split('if rule_key == "no_show_followup":', 1)[0]
-    assert "إن عندك جلسة" in reminder
+    assert "تأكد حضورك" in reminder
     assert "فاضل حوالي 6 ساعات" not in reminder
-    assert "{data['date']}" not in reminder
+    assert "{data['date']}" in reminder
     assert "{data['branch_name']}" not in reminder
-    assert "مستنيينك" in reminder
+    assert "تغيير الميعاد" in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post
     assert "كل حاجة تمام؟" in post
     assert "جلسة {{2}}" in setup

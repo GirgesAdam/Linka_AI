@@ -51,6 +51,7 @@ from app.models.staff import Staff
 from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from app.models.workspace import Workspace
 from app.services.activity import record_activity_event
+from app.services.appointment_confirmation import initial_confirmation_decision
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
@@ -64,7 +65,6 @@ from app.services.booking import (
     BookingRuleError,
     calculate_availability,
     find_exact_slot,
-    get_effective_booking_settings,
 )
 from app.services.patient_packages import (
     PackageOperationError,
@@ -457,8 +457,15 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             except PackageOperationError as exc:
                 raise BookingRuleError(str(exc)) from exc
 
-        settings = get_effective_booking_settings(self.db, self.workspace.id)
-        initial_status = "pending" if settings.require_confirmation else "confirmed"
+        occurred_at = datetime.now(UTC)
+        confirmation = initial_confirmation_decision(
+            self.db,
+            workspace_id=self.workspace.id,
+            branch_id=branch_id,
+            start_at=slot.start_at,
+            now=occurred_at,
+        )
+        initial_status = confirmation.status
 
         lead = self.db.scalar(
             select(Lead)
@@ -498,7 +505,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 f"{request.operation_id}:book:{patient_id}:{doctor_id}:"
                 f"{slot.start_at.isoformat()}"
             )[:128],
-            confirmed_at=datetime.now(UTC) if initial_status == "confirmed" else None,
+            confirmed_at=confirmation.confirmed_at,
         )
         self.db.add(appointment)
         self.db.flush()
@@ -555,6 +562,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                 changed_by_user_id=None,
                 reason="appointment_confirmed_by_ai",
                 actor_type="ai",
+                enforce_customer_window=True,
             )
         except AppointmentOperationNotFound as exc:
             raise ValueError("Appointment not found for this customer.") from exc

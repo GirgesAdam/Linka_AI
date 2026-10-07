@@ -454,6 +454,7 @@ def _template_payload(item: DispatchClaimItem) -> dict[str, Any] | None:
     name = str(raw.get("name") or "").strip()
     language = str(raw.get("language_code") or "").strip()
     params = raw.get("body_parameters")
+    button_payloads = raw.get("button_payloads")
     if not name or not language or not isinstance(params, list):
         return None
     components: list[dict[str, Any]] = []
@@ -465,6 +466,18 @@ def _template_payload(item: DispatchClaimItem) -> dict[str, Any] | None:
                     {"type": "text", "text": str(value)}
                     for value in params
                 ],
+            }
+        )
+    for index, payload in enumerate(button_payloads if isinstance(button_payloads, list) else []):
+        payload_value = str(payload or "").strip()
+        if not payload_value:
+            continue
+        components.append(
+            {
+                "type": "button",
+                "sub_type": "quick_reply",
+                "index": str(index),
+                "parameters": [{"type": "payload", "payload": payload_value}],
             }
         )
     return {
@@ -679,6 +692,16 @@ def _normalize_inbound(value: dict[str, Any]) -> list[NormalizedInboundMessage]:
             ):
                 button_reply = interactive["button_reply"]
                 text = str(button_reply.get("title") or "").strip()
+        elif message_type == "button" and isinstance(message.get("button"), dict):
+            # Template quick-reply clicks arrive from Meta as `type=button` with
+            # the dynamic server-provided payload. Normalize them into the same
+            # trusted structured shape used by interactive button replies.
+            template_button = message["button"]
+            payload = str(template_button.get("payload") or "").strip()
+            title = str(template_button.get("text") or "").strip()
+            if payload and title:
+                button_reply = {"id": payload, "title": title}
+                text = title
         if not message_id or not sender or not text:
             continue
         display_name = None

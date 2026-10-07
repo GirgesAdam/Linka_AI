@@ -38,7 +38,7 @@ def _booking_message(run_id):
     )
 
 
-def test_pending_booking_dispatch_gets_confirm_button_only() -> None:
+def test_pending_booking_dispatch_does_not_get_immediate_confirm_button() -> None:
     run_id = uuid4()
     appointment_id = str(uuid4())
     db = SimpleNamespace(
@@ -54,14 +54,7 @@ def test_pending_booking_dispatch_gets_confirm_button_only() -> None:
     )
 
     metadata = whatsapp_booking_dispatch_metadata(db, message=_booking_message(run_id))
-    buttons = metadata["whatsapp_interactive"]["buttons"]
-
-    assert buttons == [
-        {
-            "id": f"tia.booking.confirm:{appointment_id}",
-            "title": "تأكيد الحجز",
-        }
-    ]
+    assert "whatsapp_interactive" not in metadata
 
 
 def test_confirmed_booking_dispatch_uses_plain_text_without_buttons() -> None:

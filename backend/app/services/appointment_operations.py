@@ -14,6 +14,10 @@ from app.models.payment_transaction import PaymentAllocation
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
+from app.services.appointment_confirmation import (
+    can_customer_confirm_appointment,
+    initial_confirmation_decision,
+)
 from app.services.booking import BookingRuleError, find_exact_slot, get_effective_booking_settings
 from app.services.campaign_attribution import transfer_campaign_booking_conversion
 from app.services.patient_packages import (
@@ -174,15 +178,22 @@ def cancel_pending_appointment_jobs(
     appointment: Appointment,
     reason: str,
     now: datetime,
+    rule_keys: set[str] | None = None,
 ) -> None:
-    jobs = db.scalars(
-        select(AutomationJob).where(
-            AutomationJob.workspace_id == appointment.workspace_id,
-            AutomationJob.appointment_id == appointment.id,
-            AutomationJob.job_kind == "appointment_rule",
-            AutomationJob.status.in_(("queued", "failed")),
-        )
+    stmt = select(AutomationJob).where(
+        AutomationJob.workspace_id == appointment.workspace_id,
+        AutomationJob.appointment_id == appointment.id,
+        AutomationJob.job_kind == "appointment_rule",
+        AutomationJob.status.in_(("queued", "failed")),
     )
+    if rule_keys:
+        from app.models.automation_rule import AutomationRule
+
+        stmt = stmt.join(AutomationRule, AutomationRule.id == AutomationJob.rule_id).where(
+            AutomationRule.workspace_id == appointment.workspace_id,
+            AutomationRule.key.in_(tuple(rule_keys)),
+        )
+    jobs = db.scalars(stmt)
     for job in jobs:
         job.status = "cancelled"
         job.completed_at = now
@@ -201,6 +212,7 @@ def confirm_appointment_operation(
     reason: str = "appointment_confirmed",
     actor_type: ActivityActorType = "staff",
     now: datetime | None = None,
+    enforce_customer_window: bool = False,
 ) -> Appointment:
     appointment = _locked_appointment(
         db,
@@ -216,6 +228,16 @@ def confirm_appointment_operation(
         )
 
     now = (now or datetime.now(UTC)).astimezone(UTC)
+    if enforce_customer_window and not can_customer_confirm_appointment(
+        db,
+        workspace_id=appointment.workspace_id,
+        branch_id=appointment.branch_id,
+        start_at=appointment.start_at,
+        now=now,
+    ):
+        raise AppointmentOperationError(
+            "This appointment can only be confirmed on the previous calendar day or the appointment day."
+        )
     old_status = appointment.status
     appointment.status = "confirmed"
     appointment.confirmed_at = now
@@ -226,6 +248,13 @@ def confirm_appointment_operation(
         from_status=old_status,
         to_status="confirmed",
         reason=reason,
+    )
+    cancel_pending_appointment_jobs(
+        db,
+        appointment=appointment,
+        reason="appointment_confirmed",
+        now=now,
+        rule_keys={"appointment_reminder_6h"},
     )
     record_activity_event(
         db,
@@ -458,6 +487,13 @@ def reschedule_appointment_operation(
     old_status = current.status
     old_start = current.start_at
     old_end = current.end_at
+    replacement_confirmation = initial_confirmation_decision(
+        db,
+        workspace_id=workspace.id,
+        branch_id=new_branch_id,
+        start_at=slot.start_at,
+        now=now,
+    )
 
     replacement = Appointment(
         workspace_id=workspace.id,
@@ -470,7 +506,7 @@ def reschedule_appointment_operation(
         lead_id=current.lead_id,
         created_by_user_id=changed_by_user_id,
         rescheduled_from_appointment_id=current.id,
-        status=old_status,
+        status=replacement_confirmation.status,
         source=current.source,
         start_at=slot.start_at,
         end_at=slot.end_at,
@@ -488,7 +524,7 @@ def reschedule_appointment_operation(
         package_external_id=current.package_external_id,
         customer_note=current.customer_note,
         idempotency_key=idempotency_key,
-        confirmed_at=now if old_status == "confirmed" else None,
+        confirmed_at=replacement_confirmation.confirmed_at,
     )
 
     current.status = "rescheduled"
@@ -548,7 +584,7 @@ def reschedule_appointment_operation(
         appointment=replacement,
         changed_by_user_id=changed_by_user_id,
         from_status=None,
-        to_status=old_status,
+        to_status=replacement_confirmation.status,
         reason="rescheduled_from_previous_appointment",
         metadata={"previous_appointment_id": str(current.id)},
     )

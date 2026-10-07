@@ -11,8 +11,9 @@ from app.models.appointment import Appointment
 from app.models.lead import Lead
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
+from app.services.appointment_confirmation import initial_confirmation_decision
 from app.services.appointment_operations import AppointmentOperationError, add_appointment_history
-from app.services.booking import BookingRuleError, find_exact_slot, get_effective_booking_settings
+from app.services.booking import BookingRuleError, find_exact_slot
 from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.patient_packages import (
     PackageOperationError,
@@ -107,9 +108,15 @@ def create_appointment_operation(
         except PulseBillingError as exc:
             raise AppointmentOperationError(str(exc)) from exc
 
-    settings = get_effective_booking_settings(db, workspace.id)
-    initial_status = "pending" if settings.require_confirmation else "confirmed"
     occurred_at = (now or datetime.now(UTC)).astimezone(UTC)
+    confirmation = initial_confirmation_decision(
+        db,
+        workspace_id=workspace.id,
+        branch_id=branch_id,
+        start_at=slot.start_at,
+        now=occurred_at,
+    )
+    initial_status = confirmation.status
     appointment = Appointment(
         workspace_id=workspace.id,
         patient_id=patient_id,
@@ -134,7 +141,7 @@ def create_appointment_operation(
         billing_context="pulse_prepaid" if use_pulse_balance else "standard",
         customer_note=customer_note,
         idempotency_key=idempotency_key,
-        confirmed_at=occurred_at if initial_status == "confirmed" else None,
+        confirmed_at=confirmation.confirmed_at,
     )
 
     db.add(appointment)

@@ -11,12 +11,14 @@ from app.services import meta_whatsapp_transport as transport
 
 
 def test_every_product_whatsapp_template_has_a_canonical_meta_contract() -> None:
-    assert {template.rule_key for template in STANDARD_WHATSAPP_TEMPLATES} == {
+    rule_keys = {template.rule_key for template in STANDARD_WHATSAPP_TEMPLATES}
+    assert {
         "appointment_reminder_6h",
         "post_visit_followup",
         "cancellation_recovery",
         "lead_not_booked_followup",
-    }
+    }.issubset(rule_keys)
+    assert "appointment_reminder_legacy" in rule_keys
     assert "booking_confirmation" not in STANDARD_TEMPLATE_BY_RULE_KEY
     assert len({template.name for template in STANDARD_WHATSAPP_TEMPLATES}) == len(
         STANDARD_WHATSAPP_TEMPLATES
