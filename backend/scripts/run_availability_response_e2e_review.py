@@ -536,6 +536,7 @@ def critical_main() -> None:
         "AB5 reschedule into blocked exact time",
         [
             "غيري ميعاد ليزر الإبط بتاعي يوم 12 سبتمبر 2026 الساعة 7 مساءً مع د. مريم ليوم 13 سبتمبر 2026 الساعة 7 مساءً",
+            "الأول",
         ],
         reschedule_env,
     )
