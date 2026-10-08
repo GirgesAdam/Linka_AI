@@ -849,6 +849,11 @@ def _render_present(
     return "\n".join(parts)
 
 
+def _finish_customer_sentence(text: str) -> str:
+    cleaned = text.rstrip(" .")
+    return cleaned if cleaned.endswith(("؟", "?", "!")) else cleaned + "."
+
+
 def _render_requested_miss(
     unit: CustomerResponseUnit,
     draft: AvailabilityComposerUnitDraft,
@@ -892,7 +897,7 @@ def _render_requested_miss(
             if arabic
             else ". There isn’t another available time here. Would you like me to check the next day?"
         )
-    return text.rstrip(" .") + "."
+    return _finish_customer_sentence(text)
 
 
 def _render_no_availability(
@@ -916,7 +921,7 @@ def _render_no_availability(
             text += f" {context}"
         if draft.closing_action == "offer_other_scope":
             text += ". Would you like me to check another day or time?"
-    return text.rstrip(" .") + "."
+    return _finish_customer_sentence(text)
 
 
 def _render_unit(

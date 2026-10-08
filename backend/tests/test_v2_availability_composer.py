@@ -539,6 +539,7 @@ def test_exact_unavailable_with_no_same_scope_alternative_offers_next_day() -> N
 
     assert "مفيش وقت تاني متاح هنا" in text
     assert "أقرب يوم بعده" in text
+    assert "؟." not in text
 
 
 def test_device_specific_exact_miss_keeps_verified_device_label() -> None:
@@ -604,6 +605,7 @@ def test_no_availability_preserves_human_time_scope_without_system_terms() -> No
     text = _render([outcome])
 
     assert "بعد الساعة 6 مساءً" in text
+    assert "؟." not in text
     for banned in ("نطاق البحث", "النطاق اللي اتفحص", "تم التحقق", "fallback", "validation"):
         assert banned not in text
 
