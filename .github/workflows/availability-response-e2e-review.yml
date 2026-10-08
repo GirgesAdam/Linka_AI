@@ -1,4 +1,4 @@
-﻿name: Availability Response E2E Review
+name: Availability Response E2E Review
 
 on:
   push:
@@ -62,4 +62,3 @@ jobs:
         run: test -n "$OPENAI_API_KEY"
       - name: Run availability-block Agent review
         run: python scripts/run_availability_response_e2e_review.py
-
