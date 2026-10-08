@@ -626,6 +626,7 @@ def test_availability_customer_output_contains_no_system_phrases(
         "البيانات المتاحة",
         "حسب البيانات",
         "تم التحقق",
+        "تعذر",
         "search scope",
         "availability window",
         "validation",
@@ -792,6 +793,9 @@ def test_invalid_model_draft_falls_back_without_legacy_guard(
     assert "5 مساءً" in text
     assert any("validation_reason=invalid_window_refs" in line for line in log_lines)
     assert all("17:00" not in line for line in log_lines)
+    assert all("إيه المتاح؟" not in line for line in log_lines)
+    for banned in ("نطاق البحث", "النطاق اللي اتفحص", "تعذر", "validation", "fallback", "contract"):
+        assert banned not in text
 
 
 def test_valid_availability_path_never_calls_legacy_responder_or_guard(
