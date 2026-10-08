@@ -532,11 +532,15 @@ def critical_main() -> None:
             end="2026-09-13T20:30:00+03:00",
         )
     ])
+    reschedule_env.catalog["appointments"] = [
+        row
+        for row in reschedule_env.catalog.get("appointments", [])
+        if isinstance(row, dict) and row.get("appointment_id") == "apt-underarm-sat"
+    ]
     ab5 = run_sequence(
         "AB5 reschedule into blocked exact time",
         [
             "غيري ميعاد ليزر الإبط بتاعي يوم 12 سبتمبر 2026 الساعة 7 مساءً مع د. مريم ليوم 13 سبتمبر 2026 الساعة 7 مساءً",
-            "الأول",
         ],
         reschedule_env,
     )
