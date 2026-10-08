@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
+from app.integrations.clinic.base import AppointmentReadResult, AppointmentRecord, AvailabilityResult, AvailabilitySlot
+from app.services.agent_v2 import stateful_test_harness as stateful_harness
+from app.services.agent_v2.read_executor import ReadExecutionContext, execute_step_reads
 from app.services.agent_v2.state import ActiveTaskState
 from app.services.agent_v2.stateful_test_harness import run_v2_stateful_fixture_turn
 from app.services.agent_v2.test_harness import DEFAULT_CATALOG, V2FixtureEnvironment
@@ -44,6 +48,126 @@ def slot(
 
 def env_with_slots(slots: list[dict[str, object]]) -> V2FixtureEnvironment:
     return V2FixtureEnvironment(catalog=deepcopy(DEFAULT_CATALOG), slots=deepcopy(slots))
+
+
+class ProductionFixtureAdapter:
+    def __init__(self, env: V2FixtureEnvironment) -> None:
+        self.env = env
+
+    def require_capability(self, _capability) -> None:
+        return None
+
+    def get_availability(self, request) -> AvailabilityResult:
+        service = next(
+            (dict(row) for row in self.env.catalog.get("services", []) if isinstance(row, dict) and row.get("id") == request.service_id),
+            {},
+        )
+        rows: list[AvailabilitySlot] = []
+        for raw in self.env.slots:
+            row = dict(raw)
+            if row.get("branch_id") != request.branch_id or row.get("service_id") != request.service_id:
+                continue
+            if request.doctor_id and row.get("doctor_id") != request.doctor_id:
+                continue
+            if request.laser_device_key and row.get("laser_device_key") != request.laser_device_key:
+                continue
+            start = datetime.fromisoformat(str(row["start_at"]))
+            if start.astimezone(ZoneInfo(TZ)).date() != request.booking_date:
+                continue
+            end_raw = row.get("end_local") or row.get("end_at")
+            end = datetime.fromisoformat(str(end_raw)) if end_raw else start + timedelta(minutes=30)
+            rows.append(
+                AvailabilitySlot(
+                    branch_id=str(row.get("branch_id") or request.branch_id),
+                    branch_name="Linka Test Clinic",
+                    doctor_id=str(row.get("doctor_id") or ""),
+                    doctor_name=str(row.get("doctor_name") or ""),
+                    service_id=str(row.get("service_id") or request.service_id),
+                    service_name=str(service.get("name") or ""),
+                    start_at=start,
+                    end_at=end,
+                    duration_minutes=max(1, int((end - start).total_seconds() // 60)),
+                    price_minor=int(row.get("price_minor") or service.get("price_minor") or 0),
+                    currency=str(row.get("currency") or service.get("currency") or "EGP"),
+                    laser_device_key=str(row.get("laser_device_key") or "") or None,
+                    laser_device_name=str(row.get("laser_device_name") or "") or None,
+                )
+            )
+        return AvailabilityResult(
+            timezone=TZ,
+            branch_id=request.branch_id,
+            branch_name="Linka Test Clinic",
+            service_id=request.service_id,
+            service_name=str(service.get("name") or ""),
+            service_duration_minutes=30,
+            service_price_minor=int(service.get("price_minor") or 0),
+            service_currency=str(service.get("currency") or "EGP"),
+            slots=tuple(rows),
+        )
+
+    def get_patient_appointments(self, _request) -> AppointmentReadResult:
+        appointments: list[AppointmentRecord] = []
+        for raw in self.env.catalog.get("appointments", []):
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            start = datetime.fromisoformat(str(row["start_local"]))
+            end = start + timedelta(minutes=30)
+            appointments.append(
+                AppointmentRecord(
+                    appointment_id=str(row.get("appointment_id") or ""),
+                    patient_id="fixture-patient",
+                    status=str(row.get("status") or "confirmed"),
+                    service_id=str(row.get("service_id") or ""),
+                    service_name=str(row.get("service_name") or ""),
+                    branch_id=str(row.get("branch_id") or "single-location"),
+                    branch_name="Linka Test Clinic",
+                    doctor_id=str(row.get("doctor_id") or ""),
+                    doctor_name=str(row.get("doctor_name") or ""),
+                    start_at=start,
+                    end_at=end,
+                    timezone=TZ,
+                    price_minor=50_000,
+                    currency="EGP",
+                    payment_status="unpaid",
+                    billing_context="standard",
+                    laser_device_key=str(row.get("laser_device_key") or "") or None,
+                    laser_device_name=str(row.get("laser_device_name") or "") or None,
+                )
+            )
+        return AppointmentReadResult(appointments=tuple(appointments))
+
+
+def _production_fixture_reads(step, env: V2FixtureEnvironment):
+    workspace = SimpleNamespace(
+        id="fixture-workspace",
+        name="Linka Test Clinic",
+        timezone=TZ,
+        primary_branch_id="single-location",
+    )
+    patient = SimpleNamespace(
+        id="fixture-patient",
+        first_name="Mona",
+        last_name="Ali",
+        phone="01000000000",
+        preferred_language="ar",
+        status="active",
+    )
+    return execute_step_reads(
+        step,
+        ReadExecutionContext(
+            db=SimpleNamespace(),
+            workspace=workspace,
+            patient=patient,
+            now=NOW,
+            catalog=env.catalog,
+            adapter=ProductionFixtureAdapter(env),
+        ),
+    )
+
+
+def install_production_read_executor() -> None:
+    stateful_harness.execute_fixture_reads = _production_fixture_reads
 
 
 def print_result(case: str, turn: int, message: str, result) -> None:
@@ -324,6 +448,7 @@ def main() -> None:
 
 
 def critical_main() -> None:
+    install_production_read_executor()
     failures: list[str] = []
 
     blocked_candela_env = env_with_slots([
