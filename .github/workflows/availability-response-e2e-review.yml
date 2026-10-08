@@ -1,0 +1,64 @@
+name: Availability Response E2E Review
+
+on:
+  push:
+    branches:
+      - test/availability-response-e2e-20261008
+    paths:
+      - .github/workflows/availability-block-agent-review.yml
+      - backend/scripts/run_availability_response_e2e_review.py
+      - backend/app/agents/v2/**
+      - backend/app/services/agent_v2/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: Run blocked-period customer conversation review
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql://unused:unused@127.0.0.1:5432/unused
+      MIGRATION_DATABASE_URL: postgresql://unused:unused@127.0.0.1:5432/unused
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_agent_review_unused
+      SUPABASE_SECRET_KEY: sb_secret_agent_review_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify staging LLM secret
+        shell: bash
+        run: test -n "$OPENAI_API_KEY"
+      - name: Run availability-block Agent review
+        run: python scripts/run_availability_response_e2e_review.py
