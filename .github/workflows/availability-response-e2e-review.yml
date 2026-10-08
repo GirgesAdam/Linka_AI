@@ -5,7 +5,7 @@ on:
     branches:
       - test/availability-response-e2e-20261008
     paths:
-      - .github/workflows/availability-block-agent-review.yml
+      - .github/workflows/availability-response-e2e-review.yml
       - backend/scripts/run_availability_response_e2e_review.py
       - backend/app/agents/v2/**
       - backend/app/services/agent_v2/**
