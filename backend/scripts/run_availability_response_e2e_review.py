@@ -153,7 +153,7 @@ def _production_fixture_reads(step, env: V2FixtureEnvironment):
         preferred_language="ar",
         status="active",
     )
-    return execute_step_reads(
+    bundle = execute_step_reads(
         step,
         ReadExecutionContext(
             db=SimpleNamespace(),
@@ -164,6 +164,24 @@ def _production_fixture_reads(step, env: V2FixtureEnvironment):
             adapter=ProductionFixtureAdapter(env),
         ),
     )
+    for result in bundle.results:
+        if result.kind != "availability":
+            continue
+        alternatives = result.payload.get("nearest_alternative_slots")
+        alt_times = [
+            str(row.get("start_time_24h") or row.get("start_local") or "")
+            for row in alternatives
+            if isinstance(row, dict)
+        ] if isinstance(alternatives, list) else []
+        print(
+            "PRODUCTION_AVAILABILITY_READ:",
+            {
+                "matching_slot_count": result.payload.get("matching_slot_count"),
+                "exact_slot_match_count": bundle.verification.exact_slot_match_count,
+                "nearest_alternatives": alt_times,
+            },
+        )
+    return bundle
 
 
 def install_production_read_executor() -> None:
@@ -339,7 +357,7 @@ def main() -> None:
     ab5 = run_sequence(
         "AB5 reschedule target then blocked replacement: no reschedule write",
         [
-            "عايزة أغير ميعاد ليزر الإبط اللي عندي بكرة، لسه هحدد الوقت الجديد",
+            "عايزة أغير ميعاد ليزر الإبط بتاعي بكرة الساعة 7 مساءً مع د. مريم، لسه هحدد الوقت الجديد",
             "خليه بعد بكرة الساعة 7 مساءً",
         ],
         reschedule_env,
