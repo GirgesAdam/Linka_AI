@@ -323,5 +323,113 @@ def main() -> None:
     print("NOTE: conversational correctness and wording require human review of AGENT_REPLY lines above")
 
 
+def critical_main() -> None:
+    failures: list[str] = []
+
+    blocked_candela_env = env_with_slots([
+        slot(
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            doctor_name="د. مريم",
+            device_key="candela_gentle",
+            device_name="Candela Gentle",
+            start="2026-09-12T20:00:00+03:00",
+            end="2026-09-12T20:30:00+03:00",
+        ),
+    ])
+    ab2 = run_sequence(
+        "AB2 exact blocked Candela slot",
+        ["هل كانديلا متاحة بكرة الساعة 7 مساءً لليزر الإبط؟"],
+        blocked_candela_env,
+    )
+    assert_no_write(failures, "AB2", ab2)
+
+    device_specific_env = env_with_slots([
+        slot(
+            service_id="svc-underarm",
+            doctor_id="doc-sarah",
+            doctor_name="د. سارة",
+            device_key="prime_lase",
+            device_name="Prime Lase",
+            start="2026-09-12T19:00:00+03:00",
+            end="2026-09-12T19:30:00+03:00",
+        ),
+        slot(
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            doctor_name="د. مريم",
+            device_key="candela_gentle",
+            device_name="Candela Gentle",
+            start="2026-09-12T20:00:00+03:00",
+            end="2026-09-12T20:30:00+03:00",
+        ),
+    ])
+    ab3 = run_sequence(
+        "AB3 device-specific exact miss",
+        ["كانديلا بكرة الساعة 7 مساءً لليزر الإبط متاحة؟"],
+        device_specific_env,
+    )
+    assert_no_write(failures, "AB3", ab3)
+
+    ab3_doctor = run_sequence(
+        "AB3D doctor-specific exact miss",
+        ["هل كانديلا متاحة بكرة الساعة 7 مساءً لليزر الإبط مع د. مريم؟"],
+        device_specific_env,
+    )
+    assert_no_write(failures, "AB3D", ab3_doctor)
+
+    reschedule_env = env_with_slots([
+        slot(
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            doctor_name="د. مريم",
+            device_key="candela_gentle",
+            device_name="Candela Gentle",
+            start="2026-09-13T20:00:00+03:00",
+            end="2026-09-13T20:30:00+03:00",
+        )
+    ])
+    ab5 = run_sequence(
+        "AB5 reschedule into blocked exact time",
+        [
+            "عايزة أغير ميعاد ليزر الإبط اللي عندي بكرة، لسه هحدد الوقت الجديد",
+            "خليه بعد بكرة الساعة 7 مساءً",
+        ],
+        reschedule_env,
+    )
+    assert_no_write(failures, "AB5", ab5)
+
+    ab9 = run_sequence(
+        "AB9 no availability",
+        ["إيه المواعيد المتاحة لليزر الإبط بكرة بعد 6؟"],
+        env_with_slots([]),
+    )
+    assert_no_write(failures, "AB9", ab9)
+
+    banned_phrases = (
+        "النطاق اللي اتفحص", "نطاق البحث", "البيانات المتاحة", "حسب البيانات",
+        "تم التحقق", "تعذر", "search scope", "checked scope",
+        "availability window", "validation", "fallback", "contract",
+    )
+    all_results = [*ab2, *ab3, *ab3_doctor, *ab5, *ab9]
+    for result in all_results:
+        lowered = result.reply.lower()
+        for phrase in banned_phrases:
+            if phrase.lower() in lowered:
+                failures.append(f"customer reply leaked technical phrase: {phrase!r} -> {result.reply!r}")
+        if "د. د." in result.reply or "Dr. Dr." in result.reply:
+            failures.append(f"duplicate doctor prefix in reply: {result.reply!r}")
+
+    print("\n" + "#" * 110)
+    print("CRITICAL E2E SAFETY CHECKS")
+    if failures:
+        for failure in failures:
+            print("FAIL:", failure)
+        raise SystemExit(1)
+    print("PASS: critical E2E cases produced no simulated booking/reschedule writes")
+    print("PASS: tested customer replies contain no banned technical phrases")
+    print("PASS: tested customer replies contain no duplicate doctor prefix")
+
+
 if __name__ == "__main__":
-    main()
+    critical_main()
