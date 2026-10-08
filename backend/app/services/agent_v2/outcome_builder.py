@@ -180,22 +180,29 @@ def _availability_facts(result: ReadResult) -> dict[str, object]:
     payload = result.payload
     raw_slots = payload.get("slots")
     slots = raw_slots if isinstance(raw_slots, list) else []
-    windows = availability_windows_from_slots(slots)
-    visible_windows = [
-        {
-            key: window.get(key)
-            for key in (
-                "doctor_name",
-                "laser_device_name",
-                "start_local",
-                "end_local",
-                "start_time_24h",
-                "end_time_24h",
-            )
-            if window.get(key) not in (None, "")
-        }
-        for window in windows
-    ]
+    raw_alternatives = payload.get("nearest_alternative_slots")
+    alternative_slots = raw_alternatives if isinstance(raw_alternatives, list) else []
+
+    def visible_windows(source_slots: list[object]) -> list[dict[str, object]]:
+        windows = availability_windows_from_slots(source_slots)
+        return [
+            {
+                key: window.get(key)
+                for key in (
+                    "doctor_name",
+                    "laser_device_name",
+                    "start_local",
+                    "end_local",
+                    "start_time_24h",
+                    "end_time_24h",
+                )
+                if window.get(key) not in (None, "")
+            }
+            for window in windows
+        ]
+
+    windows = visible_windows(slots)
+    alternative_windows = visible_windows(alternative_slots)
     laser_device_options, device_price_conflicts = _availability_device_price_facts(slots)
     prices = {
         str(_money(slot.get("price_minor"), slot.get("currency")))
@@ -205,7 +212,8 @@ def _availability_facts(result: ReadResult) -> dict[str, object]:
     facts: dict[str, object] = {
         "service_name": payload.get("service_name"),
         "checked_dates": payload.get("checked_dates") or [],
-        "availability_windows": visible_windows,
+        "availability_windows": windows,
+        "nearest_alternative_windows": alternative_windows,
         "available_option_count": len(slots),
         "search_truncated": bool(payload.get("search_truncated")),
     }

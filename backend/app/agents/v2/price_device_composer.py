@@ -9,6 +9,7 @@ from typing import Literal
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict
 
+from app.agents.doctor_names import format_doctor_name
 from app.agents.llm_runtime import LLMProviderError, invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_composer_fallback_model,
@@ -18,6 +19,7 @@ from app.agents.model_provider import (
 from app.agents.structured_output import StructuredOutputError, invoke_typed_structured_output
 from app.agents.v2.availability_composer import (
     render_embedded_no_availability,
+    render_embedded_requested_time_unavailable,
     render_embedded_verified_availability_options,
 )
 from app.core.config import settings
@@ -295,10 +297,11 @@ def _render_option_list(
                         if isinstance(windows, list) and len(windows) == 1 and isinstance(windows[0], dict):
                             doctor_name = str(windows[0].get("doctor_name") or "").strip() or None
                         if doctor_name:
+                            visible_doctor = format_doctor_name(doctor_name, arabic=arabic)
                             return rendered + (
-                                f" الوقت المطلوب متاح مع د. {doctor_name}. تحب أحجز؟"
+                                f" الوقت المطلوب متاح مع {visible_doctor}. تحب أحجز؟"
                                 if arabic
-                                else f" The requested time is available with Dr. {doctor_name}. Shall I book it?"
+                                else f" The requested time is available with {visible_doctor}. Shall I book it?"
                             )
                         return rendered + (" الوقت المطلوب متاح. تحب أحجز؟" if arabic else " The requested time is available. Shall I book it?")
                     options_text = render_embedded_verified_availability_options(
@@ -311,10 +314,10 @@ def _render_option_list(
                     return rendered + (" وفي مواعيد متاحة في اليوم المطلوب." if arabic else " There is verified availability on the requested day.")
                 if count == 0:
                     if exact_time:
-                        return rendered + (
-                            " الوقت المطلوب مش متاح."
-                            if arabic
-                            else " The requested time is unavailable."
+                        return rendered + "\n\n" + render_embedded_requested_time_unavailable(
+                            availability,
+                            arabic=arabic,
+                            reference_date=reference_date,
                         )
                     return rendered + "\n\n" + render_embedded_no_availability(
                         availability,

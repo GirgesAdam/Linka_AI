@@ -447,7 +447,25 @@ def test_empty_exact_availability_becomes_requested_time_unavailable() -> None:
             ReadResult(
                 kind="availability",
                 ok=True,
-                payload={"slots": [], "checked_dates": ["2026-09-17"]},
+                payload={
+                    "service_name": "ليزر إبط",
+                    "slots": [],
+                    "checked_dates": ["2026-09-17"],
+                    "nearest_alternative_slots": [
+                        {
+                            "doctor_id": "doctor-1",
+                            "doctor_name": "مريم",
+                            "service_id": "service-1",
+                            "service_name": "ليزر إبط",
+                            "start_local": "2026-09-17T20:00:00+03:00",
+                            "end_local": "2026-09-17T20:30:00+03:00",
+                            "start_time_24h": "20:00",
+                            "end_time_24h": "20:30",
+                            "laser_device_key": "candela_gentle",
+                            "laser_device_name": "Candela Gentle",
+                        }
+                    ],
+                },
             )
         ]
     )
@@ -460,6 +478,14 @@ def test_empty_exact_availability_becomes_requested_time_unavailable() -> None:
     )
     assert outcome.status == "blocked"
     assert outcome.response_goal == "requested_time_unavailable"
+    availability = outcome.facts["availability"]
+    assert availability["available_option_count"] == 0
+    assert availability["nearest_alternative_windows"][0]["start_time_24h"] == "20:00"
+
+    contract = build_customer_response_contract([outcome])
+    contract_facts = {fact.key: fact for fact in contract.units[0].facts}
+    assert contract_facts["nearest_alternative_windows"].complete_set is True
+    assert contract_facts["nearest_alternative_windows"].value[0]["start_time_24h"] == "20:00"
 
 
 def test_ambiguous_verified_appointments_become_customer_choices() -> None:

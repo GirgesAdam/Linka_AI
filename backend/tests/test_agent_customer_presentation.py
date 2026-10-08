@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.agents.availability_presentation import format_availability_windows_reply
+from app.agents.doctor_names import format_doctor_name
 from app.agents.semantic_actions import format_reschedule_success
 
 
@@ -21,8 +22,35 @@ def test_availability_uses_neutral_doctor_wording() -> None:
     )
 
     assert reply is not None
-    assert "المتاح مع مريم حسن من 3 م لـ6 م." in reply
+    assert "المتاح مع د. مريم حسن من 3 م لـ6 م." in reply
+    assert "د. د. مريم" not in reply
     assert "مريم حسن متاح" not in reply
+
+
+def test_doctor_name_normalizer_never_duplicates_known_prefixes() -> None:
+    assert format_doctor_name("مريم", arabic=True) == "د. مريم"
+    assert format_doctor_name("د. مريم", arabic=True) == "د. مريم"
+    assert format_doctor_name("دكتور مريم", arabic=True) == "دكتور مريم"
+    assert format_doctor_name("دكتورة مريم", arabic=True) == "دكتورة مريم"
+    assert format_doctor_name("Dr. Maryam", arabic=True) == "Dr. Maryam"
+
+
+def test_legacy_unavailable_renderer_contains_no_system_language() -> None:
+    reply = format_availability_windows_reply(
+        {
+            "ok": True,
+            "date": "2026-09-05",
+            "requested_time_unavailable": True,
+            "requested_start_time": "19:00",
+            "availability_windows": [],
+            "slots": [],
+        },
+        booking_authorized=False,
+    )
+
+    assert reply is not None
+    for phrase in ("نطاق البحث", "النطاق اللي اتفحص", "البيانات", "تم التحقق", "fallback", "validation"):
+        assert phrase not in reply
 
 
 def test_reschedule_confirmation_uses_verified_details() -> None:

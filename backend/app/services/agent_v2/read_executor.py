@@ -295,6 +295,61 @@ def _nearest_payloads(
     ]
 
 
+def _nearest_alternative_payloads(
+    slots: list[dict[str, object]],
+    *,
+    anchor: time | None,
+    max_start_times: int = 2,
+) -> list[dict[str, object]]:
+    """Rank already-verified same-scope slots by clock distance from an exact request."""
+    if not slots or anchor is None or max_start_times <= 0:
+        return []
+
+    parsed: list[tuple[dict[str, object], datetime]] = []
+    for slot in slots:
+        try:
+            local = datetime.fromisoformat(str(slot["start_local"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        parsed.append((slot, local))
+    if not parsed:
+        return []
+
+    anchor_minutes = _minutes_of_day(anchor)
+    ranked = sorted(
+        parsed,
+        key=lambda item: (
+            abs(_minutes_of_day(item[1].time()) - anchor_minutes),
+            item[1],
+            str(item[0].get("doctor_id") or ""),
+            str(item[0].get("laser_device_key") or ""),
+        ),
+    )
+    selected_starts: list[str] = []
+    for _slot, local in ranked:
+        key = local.isoformat()
+        if key in selected_starts:
+            continue
+        selected_starts.append(key)
+        if len(selected_starts) >= max_start_times:
+            break
+
+    by_start = {key: index for index, key in enumerate(selected_starts)}
+    selected = [
+        (slot, local)
+        for slot, local in parsed
+        if local.isoformat() in by_start
+    ]
+    selected.sort(
+        key=lambda item: (
+            by_start[item[1].isoformat()],
+            str(item[0].get("doctor_name") or ""),
+            str(item[0].get("laser_device_name") or ""),
+        )
+    )
+    return [slot for slot, _local in selected]
+
+
 def _slot_payload(slot: AvailabilitySlot, *, timezone_name: str) -> dict[str, object]:
     tz = ZoneInfo(timezone_name)
     local_start = slot.start_at.astimezone(tz)
@@ -678,8 +733,10 @@ def _read_availability(
     adapter.require_capability(ClinicCapability.AVAILABILITY_READ)
 
     slots: list[dict[str, object]] = []
+    alternative_candidates: list[dict[str, object]] = []
     checked_dates: list[str] = []
     service_meta: dict[str, object] = {}
+    time_mode, _requested_time, _requested_end = _time_constraint(params.get("time"))
     for booking_date in date_values:
         checked_dates.append(booking_date.isoformat())
         date_matches: list[dict[str, object]] = []
@@ -731,6 +788,23 @@ def _read_availability(
                     "branch_name": availability.branch_name,
                     "timezone": availability.timezone,
                 }
+            if time_mode == "exact":
+                availability_tz = ZoneInfo(availability.timezone)
+                alternative_candidates.extend(
+                    _slot_payload(slot, timezone_name=availability.timezone)
+                    for slot in availability.slots
+                    if str(slot.branch_id) == branch_id
+                    and str(slot.service_id) == str(service_id)
+                    and (
+                        requested_doctor is None
+                        or str(slot.doctor_id) == requested_doctor
+                    )
+                    and (
+                        device_key is None
+                        or str(slot.laser_device_key or "") == device_key
+                    )
+                    and slot.start_at.astimezone(availability_tz).date() == booking_date
+                )
             matches = [
                 slot
                 for slot in availability.slots
@@ -761,6 +835,20 @@ def _read_availability(
     if mode == "nearest":
         slots = _nearest_payloads(slots, anchor=start)
     exact_count = len(slots) if mode == "exact" else None
+    nearest_alternatives: list[dict[str, object]] = []
+    if mode == "exact" and exact_count == 0:
+        unique_alternatives: dict[tuple[str, str, str], dict[str, object]] = {}
+        for slot in alternative_candidates:
+            key = (
+                str(slot.get("doctor_id") or ""),
+                str(slot.get("start_at") or ""),
+                str(slot.get("laser_device_key") or ""),
+            )
+            unique_alternatives[key] = slot
+        nearest_alternatives = _nearest_alternative_payloads(
+            list(unique_alternatives.values()),
+            anchor=start,
+        )
     verified: dict[str, object] = {}
     if exact_count == 1:
         slot = slots[0]
@@ -784,6 +872,7 @@ def _read_availability(
                 "checked_dates": checked_dates,
                 "slots": slots,
                 "matching_slot_count": len(slots),
+                "nearest_alternative_slots": nearest_alternatives,
                 "search_truncated": truncated,
             },
         ),

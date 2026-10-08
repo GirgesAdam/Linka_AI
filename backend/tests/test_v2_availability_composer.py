@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 from app.agents.v2 import availability_composer, responder
 from app.agents.v2.availability_composer import (
     AvailabilityComposerDraft,
+    AvailabilityComposerPresentationDraft,
     AvailabilityComposerUnitDraft,
     AvailabilityComposerValidationError,
     _build_availability_composer_messages,
@@ -74,6 +75,8 @@ def _exact_miss(
     *,
     time: str = "19:00",
     checked_dates: list[str] | None = None,
+    alternatives: list[dict[str, object]] | None = None,
+    service: str = "Hydrafacial",
     search_truncated: bool = False,
 ) -> TurnOutcome:
     return TurnOutcome(
@@ -82,9 +85,10 @@ def _exact_miss(
         facts={
             "time": {"mode": "exact", "start_time": time, "end_time": None},
             "availability": {
-                "service_name": "Hydrafacial",
+                "service_name": service,
                 "checked_dates": checked_dates or ["2026-10-01"],
                 "availability_windows": [],
+                "nearest_alternative_windows": alternatives or [],
                 "available_option_count": 0,
                 "search_truncated": search_truncated,
             },
@@ -475,12 +479,12 @@ def test_exact_miss_plus_separate_verified_alternative_unit_keeps_both_semantics
         (
             ["2026-10-01", "2026-10-03"],
             False,
-            "في الأيام اللي اتفحصت",
+            "في الأيام دي",
         ),
         (
             ["2026-10-01", "2026-10-02"],
             True,
-            "بس نطاق البحث اللي اتفحص",
+            "من الخميس 1 أكتوبر لحد الجمعة 2 أكتوبر",
         ),
     ],
 )
@@ -503,14 +507,169 @@ def test_next_available_bounded_zero_search_stays_scoped() -> None:
     text = _render([_no_availability(dates, search_truncated=True)])
 
     assert "من الخميس 1 أكتوبر لحد الأربعاء 14 أكتوبر" in text
-    assert "بس نطاق البحث اللي اتفحص" in text
+    assert "نطاق البحث" not in text
+
+
+def test_exact_unavailable_renders_nearest_verified_before_and_after() -> None:
+    text = _render(
+        [
+            _exact_miss(
+                time="19:00",
+                alternatives=[_window("18:30"), _window("20:00")],
+            )
+        ]
+    )
+
+    assert "الساعة 7 مساءً مش متاحة" in text
+    assert "6:30 مساءً" in text
+    assert "8 مساءً" in text
+    assert "أنهي وقت أنسب لك؟" in text
+
+
+def test_exact_unavailable_with_only_later_verified_alternative() -> None:
+    text = _render([_exact_miss(time="19:00", alternatives=[_window("20:00")])])
+
+    assert "الساعة 7 مساءً مش متاحة" in text
+    assert "8 مساءً" in text
+    assert "6 مساءً" not in text
+
+
+def test_exact_unavailable_with_no_same_scope_alternative_offers_next_day() -> None:
+    text = _render([_exact_miss(time="19:00")])
+
+    assert "مفيش وقت تاني متاح هنا" in text
+    assert "أقرب يوم بعده" in text
+
+
+def test_device_specific_exact_miss_keeps_verified_device_label() -> None:
+    text = _render(
+        [
+            _exact_miss(
+                alternatives=[_window("20:00", device="Candela Gentle")],
+                service="ليزر",
+            )
+        ]
+    )
+
+    assert "Candela Gentle" in text
+    assert "8 مساءً" in text
+
+
+def test_doctor_specific_exact_miss_has_single_doctor_prefix() -> None:
+    text = _render(
+        [_exact_miss(alternatives=[_window("20:00", doctor="د. مريم")])]
+    )
+
+    assert "مع د. مريم" in text
+    assert "د. د. مريم" not in text
+
+
+def test_requested_date_fact_survives_when_checked_dates_are_absent() -> None:
+    outcome = TurnOutcome(
+        status="blocked",
+        response_goal="no_availability",
+        facts={
+            "date": {"mode": "exact", "start_date": "2026-10-01", "end_date": None},
+            "availability": {
+                "service_name": "Hydrafacial",
+                "checked_dates": [],
+                "availability_windows": [],
+                "available_option_count": 0,
+            },
+        },
+    )
+    contract = build_customer_response_contract([outcome])
+    facts = {fact.key: fact for fact in contract.units[0].facts}
+    text = deterministic_availability_fallback(contract, arabic=True)
+
+    assert facts["date_constraint"].value["start_date"] == "2026-10-01"
+    assert "يوم الخميس 1 أكتوبر" in text
+    assert "اليوم المطلوب" not in text
+
+
+def test_no_availability_preserves_human_time_scope_without_system_terms() -> None:
+    outcome = TurnOutcome(
+        status="blocked",
+        response_goal="no_availability",
+        facts={
+            "time": {"mode": "after", "start_time": "18:00", "end_time": None},
+            "availability": {
+                "service_name": "Hydrafacial",
+                "checked_dates": ["2026-10-01"],
+                "availability_windows": [],
+                "available_option_count": 0,
+            },
+        },
+    )
+    text = _render([outcome])
+
+    assert "بعد الساعة 6 مساءً" in text
+    for banned in ("نطاق البحث", "النطاق اللي اتفحص", "تم التحقق", "fallback", "validation"):
+        assert banned not in text
 
 
 @pytest.mark.parametrize(
-    "mutation",
-    ["unknown", "duplicate", "cross_unit", "wrong_unit", "unknown_fact"],
+    "outcome",
+    [
+        _present([_window("17:00")]),
+        _exact_miss(time="19:00", alternatives=[_window("20:00")]),
+        _no_availability(["2026-10-01"]),
+    ],
 )
-def test_invalid_symbolic_references_fail_structural_validation(mutation: str) -> None:
+def test_availability_customer_output_contains_no_system_phrases(
+    outcome: TurnOutcome,
+) -> None:
+    text = _render([outcome]).casefold()
+    banned = (
+        "النطاق اللي اتفحص",
+        "نطاق البحث",
+        "البيانات المتاحة",
+        "حسب البيانات",
+        "تم التحقق",
+        "search scope",
+        "availability window",
+        "validation",
+        "fallback",
+        "contract",
+    )
+
+    assert all(phrase.casefold() not in text for phrase in banned)
+
+
+def test_model_schema_owns_only_safe_presentation_choices() -> None:
+    schema = AvailabilityComposerPresentationDraft.model_json_schema()
+
+    assert set(schema["properties"]) == {"style", "presentation_mode"}
+    assert "closing_action" not in schema["properties"]
+    assert "transition" not in schema["properties"]
+    assert "window_refs" not in schema["properties"]
+
+
+def test_validation_failure_has_safe_reason_code() -> None:
+    contract = build_customer_response_contract([_present([_window("17:00")])])
+    draft = _draft(contract)
+    draft.units[0].closing_action = "offer_other_scope"
+
+    with pytest.raises(AvailabilityComposerValidationError) as caught:
+        validate_availability_composer_draft(contract, draft)
+
+    assert caught.value.reason == "invalid_closing_action"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("unknown", "invalid_window_refs"),
+        ("duplicate", "invalid_window_refs"),
+        ("cross_unit", "invalid_window_refs"),
+        ("wrong_unit", "invalid_transition"),
+        ("unknown_fact", "invalid_optional_fact"),
+    ],
+)
+def test_invalid_symbolic_references_fail_structural_validation(
+    mutation: str,
+    expected_reason: str,
+) -> None:
     contract = build_customer_response_contract(
         [
             _present([_window("17:00")]),
@@ -530,8 +689,10 @@ def test_invalid_symbolic_references_fail_structural_validation(mutation: str) -
     else:
         draft.units[0].optional_fact_keys = ["doctor_name"]
 
-    with pytest.raises(AvailabilityComposerValidationError):
+    with pytest.raises(AvailabilityComposerValidationError) as caught:
         validate_availability_composer_draft(contract, draft)
+
+    assert caught.value.reason == expected_reason
 
 
 def test_composer_contract_view_contains_no_exact_availability_values() -> None:
@@ -560,7 +721,8 @@ def test_composer_contract_view_contains_no_exact_availability_values() -> None:
     )
     payload = "\n".join(str(message.content) for message in messages)
 
-    assert "unit_0_window_0" in payload
+    assert '"window_count":1' in payload
+    assert "unit_0_window_0" not in payload
     assert "17:00" not in payload
     assert "2026-10-01" not in payload
     assert "Dr Mary" not in payload
@@ -586,22 +748,29 @@ def test_invalid_model_draft_falls_back_without_legacy_guard(
         availability_composer,
         "invoke_with_model_chain",
         lambda **_kwargs: SimpleNamespace(
-            value=AvailabilityComposerDraft(
-                units=[
-                    AvailabilityComposerUnitDraft(
-                        unit_index=0,
-                        availability_ref="unit_availability",
-                        style="warm",
-                        window_refs=["unit_0_window_99"],
-                        optional_fact_keys=[],
-                        presentation_mode="compact",
-                        closing_action="ask_selection",
-                        transition="sentence",
-                    )
-                ]
+            value=AvailabilityComposerPresentationDraft(
+                style="warm", presentation_mode="compact"
             ),
             model_name="test-model",
         ),
+    )
+    original_materialize = availability_composer._materialize_availability_composer_draft
+
+    def invalid_materialize(contract, presentation):
+        draft = original_materialize(contract, presentation)
+        draft.units[0].window_refs = ["unit_0_window_99"]
+        return draft
+
+    monkeypatch.setattr(
+        availability_composer,
+        "_materialize_availability_composer_draft",
+        invalid_materialize,
+    )
+    log_lines: list[str] = []
+    monkeypatch.setattr(
+        availability_composer.logger,
+        "warning",
+        lambda message, *args: log_lines.append(message % args),
     )
     monkeypatch.setattr(
         responder,
@@ -621,14 +790,14 @@ def test_invalid_model_draft_falls_back_without_legacy_guard(
 
     assert source == "deterministic:availability-contract-fallback"
     assert "5 مساءً" in text
+    assert any("validation_reason=invalid_window_refs" in line for line in log_lines)
+    assert all("17:00" not in line for line in log_lines)
 
 
 def test_valid_availability_path_never_calls_legacy_responder_or_guard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcome = _present([_window("17:00")])
-    contract = build_customer_response_contract([outcome])
-    draft = _draft(contract)
     monkeypatch.setattr(
         availability_composer,
         "build_realtime_composer_model",
@@ -642,7 +811,12 @@ def test_valid_availability_path_never_calls_legacy_responder_or_guard(
     monkeypatch.setattr(
         availability_composer,
         "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(value=draft, model_name="test-model"),
+        lambda **_kwargs: SimpleNamespace(
+            value=AvailabilityComposerPresentationDraft(
+                style="warm", presentation_mode="compact"
+            ),
+            model_name="test-model",
+        ),
     )
     monkeypatch.setattr(
         responder,

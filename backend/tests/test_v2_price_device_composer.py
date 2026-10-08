@@ -437,8 +437,8 @@ def test_booking_price_with_date_renders_verified_windows_and_one_selection_ques
 
     assert "650 جنيه" in text
     assert "المتاح يوم الخميس 8 أكتوبر" in text
-    assert "مع مريم حسن" in text
-    assert "مع يوسف سمير" in text
+    assert "مع د. مريم حسن" in text
+    assert "مع د. يوسف سمير" in text
     assert "أنهي وقت أنسب لك؟" in text
     assert "في مواعيد متاحة في اليوم المطلوب" not in text
     assert text.count("Candela Gentle") == 1
@@ -502,17 +502,32 @@ def test_booking_price_with_date_and_no_availability_names_verified_date_and_off
     assert "أقدر أدورلك في يوم تاني لو تحب" in text
 
 
-def test_booking_price_with_exact_time_unavailable_keeps_existing_exact_time_behavior() -> None:
+def test_booking_price_with_exact_time_unavailable_renders_verified_alternatives() -> None:
     outcome = _selected_device_price()
     outcome.facts.update(
         {
             "booking_next_field": "booking",
             "exact_time_requested": True,
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
             "availability": {
                 "service_name": "Laser Underarm",
                 "checked_dates": ["2026-10-04"],
                 "available_option_count": 0,
                 "availability_windows": [],
+                "nearest_alternative_windows": [
+                    {
+                        "doctor_name": "د. مريم",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-04T18:30:00+03:00",
+                        "end_local": "2026-10-04T18:30:00+03:00",
+                    },
+                    {
+                        "doctor_name": "د. مريم",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-04T20:00:00+03:00",
+                        "end_local": "2026-10-04T20:00:00+03:00",
+                    },
+                ],
             },
         }
     )
@@ -523,8 +538,10 @@ def test_booking_price_with_exact_time_unavailable_keeps_existing_exact_time_beh
     )
 
     assert "650 جنيه" in text
-    assert "الوقت المطلوب مش متاح" in text
-    assert "أقدر أدورلك" not in text
+    assert "الساعة 7 مساءً مش متاحة" in text
+    assert "6:30 مساءً" in text
+    assert "8 مساءً" in text
+    assert "د. د. مريم" not in text
 
 
 def test_multi_device_service_price_stays_zero_llm_calls_and_not_swapped(
