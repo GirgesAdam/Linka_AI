@@ -65,6 +65,12 @@ export default async function ConversationPage({
   searchParams: Promise<{ followup?: string }>;
 }) {
   const [{ conversationId }, query] = await Promise.all([params, searchParams]);
+  // Read the revision before the detail data so a concurrent message,
+  // ownership, handoff, or delivery update cannot be absorbed into the
+  // revision while leaving this render stale.
+  const revision = await tiaRequest<{ revision: string }>(
+    `/inbox/revision?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
   const [conversation, ctx] = await Promise.all([
     tiaRequest<InboxConversation>(`/inbox/conversations/${conversationId}`),
     getAppContext(),
@@ -88,7 +94,10 @@ export default async function ConversationPage({
 
   return (
     <>
-      <LiveRouteRefresh />
+      <LiveRouteRefresh
+        initialRevision={revision.revision}
+        watchUrl={`/api/inbox/revision?conversation_id=${encodeURIComponent(conversationId)}`}
+      />
       <ConversationReadMarker
         conversationId={conversation.id}
         unreadCount={conversation.unread_count}

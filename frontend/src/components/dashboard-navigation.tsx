@@ -71,30 +71,57 @@ function activeFor(pathname: string, href: string) {
 }
 
 function useInboxUnreadCount(mediaQuery: string) {
+  const pathname = usePathname();
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     const media = window.matchMedia(mediaQuery);
     let cancelled = false;
+    let inFlight = false;
+    let controller: AbortController | null = null;
 
     const refresh = async () => {
-      if (cancelled || !media.matches || document.visibilityState !== "visible") return;
+      if (
+        cancelled ||
+        inFlight ||
+        !media.matches ||
+        document.visibilityState !== "visible" ||
+        pathname.startsWith("/inbox")
+      ) return;
 
+      inFlight = true;
+      controller = new AbortController();
       try {
-        const response = await fetch("/api/inbox/summary", { cache: "no-store" });
+        const response = await fetch("/api/inbox/summary", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
         if (!response.ok) return;
 
         const summary = (await response.json()) as InboxSummary;
         if (!cancelled && Number.isFinite(summary.unread_conversations)) {
           setUnreadCount(Math.max(0, Math.trunc(summary.unread_conversations)));
         }
-      } catch {
-        // Keep the last known count when the lightweight status refresh fails.
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          // Keep the last known count when the lightweight status refresh fails.
+        }
+      } finally {
+        inFlight = false;
+        controller = null;
       }
     };
 
     const refreshWhenRelevant = () => {
-      if (media.matches && document.visibilityState === "visible") void refresh();
+      if (
+        !media.matches ||
+        document.visibilityState !== "visible" ||
+        pathname.startsWith("/inbox")
+      ) {
+        controller?.abort();
+        return;
+      }
+      void refresh();
     };
 
     void refresh();
@@ -104,11 +131,12 @@ function useInboxUnreadCount(mediaQuery: string) {
 
     return () => {
       cancelled = true;
+      controller?.abort();
       window.clearInterval(intervalId);
       media.removeEventListener("change", refreshWhenRelevant);
       document.removeEventListener("visibilitychange", refreshWhenRelevant);
     };
-  }, [mediaQuery]);
+  }, [mediaQuery, pathname]);
 
   return unreadCount;
 }

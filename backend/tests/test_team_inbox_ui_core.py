@@ -149,3 +149,64 @@ def test_conversation_detail_exposes_takeover_claim_assign_reply_and_read_paths(
     assert "router.refresh()" in marker
     assert "setInterval" in live_refresh
     assert "router.refresh()" in live_refresh
+
+
+def test_inbox_idle_refresh_uses_lightweight_revision_and_count_paths() -> None:
+    root = _root()
+    list_page = (root / "frontend/src/app/(dashboard)/inbox/page.tsx").read_text(encoding="utf-8")
+    detail_page = (root / "frontend/src/app/(dashboard)/inbox/[conversationId]/page.tsx").read_text(encoding="utf-8")
+    live_refresh = (root / "frontend/src/components/live-route-refresh.tsx").read_text(encoding="utf-8")
+    summary_route = (root / "frontend/src/app/api/inbox/summary/route.ts").read_text(encoding="utf-8")
+    navigation = (root / "frontend/src/components/dashboard-navigation.tsx").read_text(encoding="utf-8")
+
+    assert 'tiaRequest<{ revision: string }>("/inbox/revision")' in list_page
+    assert 'conversation_id=' in detail_page and '/inbox/revision?' in detail_page
+    assert 'fetch(watchUrl' in live_refresh
+    assert 'payload.revision !== currentRevision' in live_refresh
+    assert 'document.visibilityState === "hidden"' in live_refresh
+    assert 'controller?.abort()' in live_refresh
+    assert 'router.refresh()' in live_refresh
+    assert 'tiaRequest<InboxSummary>("/inbox/summary")' in summary_route
+    assert 'unread_only=true' not in summary_route
+    assert 'pathname.startsWith("/inbox")' in navigation
+    assert 'inFlight' in navigation
+    assert 'signal: controller.signal' in navigation
+    assert 'controller?.abort()' in navigation
+
+
+def test_inbox_revision_is_captured_before_page_data_to_avoid_stale_acceptance() -> None:
+    root = _root()
+    list_page = (root / "frontend/src/app/(dashboard)/inbox/page.tsx").read_text(encoding="utf-8")
+    detail_page = (root / "frontend/src/app/(dashboard)/inbox/[conversationId]/page.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    list_revision = list_page.index(
+        'const revision = await tiaRequest<{ revision: string }>("/inbox/revision")'
+    )
+    list_data = list_page.index("const [conversationPage, channelConnections] = await Promise.all")
+    assert list_revision < list_data
+
+    detail_revision = detail_page.index(
+        "const revision = await tiaRequest<{ revision: string }>("
+    )
+    detail_data = detail_page.index("const [conversation, ctx] = await Promise.all")
+    assert detail_revision < detail_data
+
+
+def test_inbox_revision_covers_visible_list_delivery_patient_and_assignee_state() -> None:
+    root = _root()
+    backend = (root / "backend/app/api/routes/inbox.py").read_text(encoding="utf-8")
+    list_page = (root / "frontend/src/app/(dashboard)/inbox/page.tsx").read_text(encoding="utf-8")
+
+    start = backend.index("def inbox_revision(")
+    end = backend.index('@router.get("/conversations"', start)
+    revision_block = backend[start:end]
+
+    assert 'conversation.last_message.delivery_status === "failed"' in list_page
+    assert "conversation.patient.first_name" in list_page
+    assert "conversation.assigned_user" in list_page
+    assert "func.max(Message.updated_at)" in revision_block
+    assert "func.max(Patient.updated_at)" in revision_block
+    assert "func.max(User.updated_at)" in revision_block
+    assert "func.max(ChannelConnection.updated_at)" in revision_block

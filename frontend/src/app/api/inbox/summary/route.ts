@@ -4,22 +4,19 @@ import { tiaRequest } from "@/lib/tia/api";
 
 export const dynamic = "force-dynamic";
 
-type InboxConversationListItem = Record<string, unknown>;
+type InboxSummary = {
+  unread_conversations: number;
+};
 
 export async function GET() {
-  const conversations = await tiaRequest<InboxConversationListItem[]>(
-    "/inbox/conversations?status=open&unread_only=true&limit=100&offset=0",
-  ).catch(() => null);
+  const summary = await tiaRequest<InboxSummary>("/inbox/summary").catch(() => null);
 
-  if (!conversations) {
+  if (!summary) {
     return NextResponse.json(
       { error: "Unable to load inbox summary." },
       { status: 502 },
     );
   }
 
-  return NextResponse.json(
-    { unread_conversations: conversations.length },
-    { headers: { "Cache-Control": "no-store" } },
-  );
+  return NextResponse.json(summary, { headers: { "Cache-Control": "no-store" } });
 }
