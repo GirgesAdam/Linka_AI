@@ -479,6 +479,7 @@ class CRMTaskRead(BaseModel):
     due_at: datetime
     completed_at: datetime | None
     patient_name: str
+    patient_phone: str | None = None
     assigned_user_name: str | None = None
     assigned_user_email: str | None = None
     is_overdue: bool

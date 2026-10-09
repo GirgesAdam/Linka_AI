@@ -112,7 +112,12 @@ function FollowUpRow({
     <div className="grid min-h-16 gap-3 px-1 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-3">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-[15px] font-semibold text-slate-950">{task.patient_name}</span>
+          <div className="min-w-0">
+            <div className="truncate text-[15px] font-semibold text-slate-950">{task.patient_name}</div>
+            {task.patient_phone && (
+              <div dir="ltr" className="mt-0.5 w-fit text-xs font-medium text-slate-500">{task.patient_phone}</div>
+            )}
+          </div>
           <StatusBadge domain="priority" status={task.priority} showIcon={false} />
           {task.is_overdue && (
             <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-700">متأخرة</span>

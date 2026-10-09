@@ -153,7 +153,7 @@ export interface CRMTask {
   assigned_user_id:string|null; created_by_user_id:string|null; completed_by_user_id:string|null;
   task_type:"follow_up"|"general"; source:"manual"|"ai"|"system"; execution_mode:"human"|"ai";
   status:"pending"|"in_progress"|"completed"|"cancelled"; priority:"low"|"normal"|"high"|"urgent";
-  title:string; description:string|null; due_at:string; completed_at:string|null; patient_name:string;
+  title:string; description:string|null; due_at:string; completed_at:string|null; patient_name:string; patient_phone:string|null;
   assigned_user_name:string|null; assigned_user_email:string|null; is_overdue:boolean; created_at:string; updated_at:string;
 }
 
