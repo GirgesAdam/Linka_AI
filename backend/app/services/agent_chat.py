@@ -23,6 +23,7 @@ from app.agents.clinic_grounding import (
     choice_snapshot_from_grounded_facts,
     grounded_catalog_facts,
 )
+from app.agents.explicit_time import extract_single_explicit_hhmm
 from app.agents.grounded_response import compose_grounded_customer_reply
 from app.agents.llm_runtime import LLMProviderError
 from app.agents.response_guard import sanitize_customer_reply
@@ -455,6 +456,74 @@ def _invoke_authorized_tool(
         tool_name=tool_name,
         arguments=arguments,
     )
+
+_EXPLICIT_TIME_AUTHORITY_KEY = "_explicit_requested_start_time"
+
+
+def _explicit_exact_time_for_turn(
+    *,
+    latest_customer_text: str | None,
+    decision: SemanticCapabilityDecision,
+    flow_turn: FlowTurnDecision | None,
+) -> str | None:
+    explicit = extract_single_explicit_hhmm(latest_customer_text or "")
+    if explicit is None:
+        return None
+    requested = str(decision.entity_hints.requested_start_time or "").strip()
+    selected = str(flow_turn.selection_time or "").strip() if flow_turn is not None else ""
+    if requested == explicit or selected == explicit:
+        return explicit
+    return None
+
+
+def _apply_explicit_time_authority(
+    state: dict[str, object],
+    *,
+    turn: FlowTurnDecision | None,
+    explicit_exact_time: str | None,
+) -> dict[str, object]:
+    updated = dict(state)
+    if turn is not None:
+        clear_fields = set(turn.clear_entity_fields)
+        hints = turn.entity_hints
+        if (
+            "requested_start_time" in clear_fields
+            or hints.not_before_time is not None
+            or hints.not_after_time is not None
+        ):
+            updated.pop(_EXPLICIT_TIME_AUTHORITY_KEY, None)
+    if explicit_exact_time is not None:
+        updated[_EXPLICIT_TIME_AUTHORITY_KEY] = explicit_exact_time
+    return updated
+
+
+def _write_respects_explicit_time_authority(
+    *,
+    flow: ConversationFlowState,
+    turn: FlowTurnDecision,
+    slot: dict[str, object],
+) -> bool:
+    expected = str((flow.entity_state or {}).get(_EXPLICIT_TIME_AUTHORITY_KEY) or "").strip()
+    if not expected:
+        return True
+    actual = str(slot.get("start_time_24h") or "").strip()[:5]
+    if not actual:
+        start_local = slot.get("start_local")
+        if isinstance(start_local, str):
+            try:
+                actual = datetime.fromisoformat(start_local).strftime("%H:%M")
+            except ValueError:
+                return False
+    if actual == expected:
+        return True
+    current_exact = str(turn.entity_hints.requested_start_time or "").strip()
+    if turn.selection_index is not None and not current_exact:
+        return True
+    selected_time = str(turn.selection_time or "").strip()[:5]
+    if selected_time and selected_time == actual and selected_time != expected:
+        return True
+    return False
+
 
 def _merge_flow_entity_state(
     existing_state: dict | None,
@@ -2411,6 +2480,11 @@ def _structured_flow_write(
             )
     if slot is None:
         return None
+    if not _write_respects_explicit_time_authority(flow=flow, turn=turn, slot=slot):
+        return (
+            "\u0645\u0639\u0644\u0634\u060c \u0647\u0631\u0627\u062c\u0639 \u0646\u0641\u0633 \u0627\u0644\u0648\u0642\u062a \u0627\u0644\u0644\u064a \u0637\u0644\u0628\u062a\u0647 \u0642\u0628\u0644 \u0645\u0627 \u0623\u0623\u0643\u062f \u0627\u0644\u062d\u062c\u0632.",
+            "flow-interpreter:deterministic-explicit-time-guard",
+        )
     if flow.flow_type == "booking":
         tool_name = "book_appointment"
         arguments = booking_tool_args(slot)
@@ -2856,6 +2930,11 @@ def _run_after_inbound(
     if str(semantic_decision.package_intent) == "purchase":
         inherited_capabilities = []
         turn_local_side_read = False
+    explicit_exact_time = _explicit_exact_time_for_turn(
+        latest_customer_text=_latest_customer_text(history),
+        decision=semantic_decision,
+        flow_turn=flow_turn,
+    )
     policy = resolve_capability_policy(
         semantic_decision, inherited_capabilities=inherited_capabilities,
     )
@@ -2912,6 +2991,9 @@ def _run_after_inbound(
                 ),
             }
             initial_entity_state.pop("requested_items", None)
+            initial_entity_state = _apply_explicit_time_authority(
+                initial_entity_state, turn=flow_turn, explicit_exact_time=explicit_exact_time
+            )
             if compound_first_item is not None:
                 initial_entity_state = _compound_initial_entity_state(
                     decision=semantic_decision,
@@ -2919,6 +3001,9 @@ def _run_after_inbound(
                     remaining=compound_remaining_items,
                     total=compound_total_appointments,
                     clinic_catalog=clinic_catalog,
+                )
+                initial_entity_state = _apply_explicit_time_authority(
+                    initial_entity_state, turn=flow_turn, explicit_exact_time=explicit_exact_time
                 )
             flow = start_flow(
                 db,
@@ -2950,6 +3035,9 @@ def _run_after_inbound(
         and not turn_local_side_read
     ):
         merged_flow_state = _merge_flow_entity_state(flow.entity_state, flow_turn)
+        merged_flow_state = _apply_explicit_time_authority(
+            merged_flow_state, turn=flow_turn, explicit_exact_time=explicit_exact_time
+        )
         if str(flow_turn.package_intent) in {"use_existing", "avoid_existing"}:
             merged_flow_state["package_intent"] = str(flow_turn.package_intent)
         flow = transition_flow(

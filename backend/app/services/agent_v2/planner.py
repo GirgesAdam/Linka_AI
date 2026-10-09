@@ -126,6 +126,7 @@ class PlannerContext:
     active_task: ActiveTaskState | None
     now: datetime
     pending_choice: OptionSnapshot | None = None
+    explicit_user_time: str | None = None
 
 
 def _canonical_entity(
@@ -191,6 +192,58 @@ def _base_parameters(
         values["follow_up_at_local"] = operation.entities.follow_up_at_local
     values["package_usage"] = operation.package_usage
     return values, ambiguous
+
+
+_EXPLICIT_TIME_AUTHORITY_PARAM = "_explicit_user_time_24h"
+
+
+def _active_task_exact_time(context: PlannerContext) -> str | None:
+    task = context.active_task
+    if isinstance(task, BookingTaskState):
+        constraint = task.constraints.time
+    elif isinstance(task, RescheduleTaskState):
+        constraint = task.replacement.time
+    else:
+        constraint = None
+    if constraint is None or constraint.mode != "exact" or not constraint.start_time:
+        return None
+    return str(constraint.start_time).strip()[:5] or None
+
+
+def _explicit_time_authority_parameters(
+    operation: TurnOperation,
+    context: PlannerContext,
+) -> dict[str, object]:
+    explicit = str(context.explicit_user_time or "").strip()[:5]
+    constraint = operation.entities.time
+    operation_exact = (
+        str(constraint.start_time or "").strip()[:5]
+        if constraint is not None and constraint.mode == "exact"
+        else ""
+    )
+    selection = operation.selection
+    selection_time = (
+        str(selection.time or "").strip()[:5]
+        if selection is not None and selection.kind == "time"
+        else ""
+    )
+
+    if explicit:
+        if operation_exact == explicit or selection_time == explicit:
+            return {_EXPLICIT_TIME_AUTHORITY_PARAM: explicit}
+        return {}
+
+    persisted_exact = _active_task_exact_time(context)
+    if not persisted_exact:
+        return {}
+    # A confirmation/continuation turn may omit the time entirely. Preserve the
+    # prior exact task constraint as the write authority. If this turn explicitly
+    # carries a different semantic time, let state progression own that change.
+    if operation_exact and operation_exact != persisted_exact:
+        return {}
+    if selection_time and selection_time != persisted_exact:
+        return {}
+    return {_EXPLICIT_TIME_AUTHORITY_PARAM: persisted_exact}
 
 
 def _source_appointment_parameters(
@@ -522,7 +575,10 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
             write_intent=WriteIntent(
                 kind="booking",
                 authorized=True,
-                parameters=dict(selected.payload),
+                parameters={
+                    **dict(selected.payload),
+                    **_explicit_time_authority_parameters(operation, context),
+                },
                 requires_verification=True,
             ),
             response_goal="booking_completed",
@@ -557,7 +613,10 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
                 },
             )
 
-        parameters = dict(selected.payload)
+        parameters = {
+            **dict(selected.payload),
+            **_explicit_time_authority_parameters(operation, context),
+        }
         parameters["appointment_id"] = target_appointment_id
         return PlanStep(
             operation_index=index,
@@ -928,7 +987,10 @@ def _plan_operation(
             write_intent=WriteIntent(
                 kind="booking",
                 authorized=True,
-                parameters=params,
+                parameters={
+                    **params,
+                    **_explicit_time_authority_parameters(operation, context),
+                },
                 requires_verification=True,
             ),
             state_action="start_booking",
@@ -1040,7 +1102,10 @@ def _plan_operation(
             write_intent=WriteIntent(
                 kind="reschedule",
                 authorized=True,
-                parameters=replacement_params,
+                parameters={
+                    **replacement_params,
+                    **_explicit_time_authority_parameters(operation, context),
+                },
             ),
             state_action="start_reschedule",
             response_goal="present_availability",

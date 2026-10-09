@@ -324,3 +324,91 @@ def test_write_failure_rolls_back_without_retry(monkeypatch) -> None:
     create.assert_called_once()
     db.rollback.assert_called_once_with()
     db.commit.assert_not_called()
+
+
+def test_explicit_time_mismatch_blocks_booking_before_write(monkeypatch) -> None:
+    db, workspace, patient = _context()
+    create = MagicMock()
+    monkeypatch.setattr(write_executor, "create_appointment_operation", create)
+    monkeypatch.setattr(write_executor, "require_tia_workspace_domain_write", MagicMock())
+    parameters = _booking_parameters()
+    parameters["start_at"] = "2026-10-10T15:00:00+03:00"
+    parameters["_explicit_user_time_24h"] = "03:00"
+
+    result = write_executor.execute_write_ready_step(
+        db, workspace=workspace, patient=patient, step=_step("booking", parameters)
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "explicit_time_mismatch"
+    create.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_explicit_time_match_allows_booking(monkeypatch) -> None:
+    db, workspace, patient = _context()
+    appointment = SimpleNamespace(id=uuid4(), status="confirmed")
+    create = MagicMock(return_value=appointment)
+    monkeypatch.setattr(write_executor, "create_appointment_operation", create)
+    monkeypatch.setattr(write_executor, "require_tia_workspace_domain_write", MagicMock())
+    monkeypatch.setattr(
+        write_executor,
+        "resolve_booking_package",
+        MagicMock(return_value=SimpleNamespace(package_id=None, package_used=False, package_name=None)),
+    )
+    parameters = _booking_parameters()
+    parameters["start_at"] = "2026-10-10T15:00:00+03:00"
+    parameters["_explicit_user_time_24h"] = "15:00"
+
+    result = write_executor.execute_write_ready_step(
+        db, workspace=workspace, patient=patient, step=_step("booking", parameters)
+    )
+
+    assert result["ok"] is True
+    create.assert_called_once()
+
+
+def test_explicit_time_mismatch_blocks_reschedule_before_write(monkeypatch) -> None:
+    db, workspace, patient = _context()
+    reschedule = MagicMock()
+    monkeypatch.setattr(write_executor, "reschedule_appointment_operation", reschedule)
+    monkeypatch.setattr(write_executor, "require_tia_workspace_domain_write", MagicMock())
+    parameters = {
+        **_booking_parameters(),
+        "appointment_id": str(uuid4()),
+        "start_at": "2026-10-10T15:00:00+03:00",
+        "_explicit_user_time_24h": "03:00",
+    }
+
+    result = write_executor.execute_write_ready_step(
+        db, workspace=workspace, patient=patient, step=_step("reschedule", parameters)
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "explicit_time_mismatch"
+    reschedule.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_explicit_time_match_uses_workspace_local_clock_for_utc_start(monkeypatch) -> None:
+    db, workspace, patient = _context()
+    workspace.timezone = "Africa/Cairo"
+    appointment = SimpleNamespace(id=uuid4(), status="confirmed")
+    create = MagicMock(return_value=appointment)
+    monkeypatch.setattr(write_executor, "create_appointment_operation", create)
+    monkeypatch.setattr(write_executor, "require_tia_workspace_domain_write", MagicMock())
+    monkeypatch.setattr(
+        write_executor,
+        "resolve_booking_package",
+        MagicMock(return_value=SimpleNamespace(package_id=None, package_used=False, package_name=None)),
+    )
+    parameters = _booking_parameters()
+    parameters["start_at"] = "2026-10-10T12:00:00+00:00"
+    parameters["_explicit_user_time_24h"] = "15:00"
+
+    result = write_executor.execute_write_ready_step(
+        db, workspace=workspace, patient=patient, step=_step("booking", parameters)
+    )
+
+    assert result["ok"] is True
+    create.assert_called_once()

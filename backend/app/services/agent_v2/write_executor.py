@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,7 +24,7 @@ from app.services.agent_v2.package_booking_policy import (
     BookingPackagePolicyError,
     resolve_booking_package,
 )
-from app.services.agent_v2.planner import PlanStep
+from app.services.agent_v2.planner import _EXPLICIT_TIME_AUTHORITY_PARAM, PlanStep
 from app.services.appointment_creation import create_appointment_operation
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
@@ -108,6 +109,22 @@ def _datetime(parameters: dict[str, object], key: str) -> datetime:
     return parsed
 
 
+def _explicit_time_mismatch(
+    parameters: dict[str, object],
+    *,
+    start_at: datetime,
+    timezone_name: str,
+) -> bool:
+    expected = str(parameters.get(_EXPLICIT_TIME_AUTHORITY_PARAM) or "").strip()[:5]
+    if not expected:
+        return False
+    try:
+        clinic_start = start_at.astimezone(ZoneInfo(timezone_name))
+    except (ValueError, TypeError):
+        return True
+    return clinic_start.strftime("%H:%M") != expected
+
+
 def _failure(
     *,
     write_kind: str,
@@ -172,6 +189,14 @@ def execute_write_ready_step(
                     )
                 service_id = _uuid(parameters, "service_id")
                 start_at = _datetime(parameters, "start_at")
+                if _explicit_time_mismatch(
+                    parameters, start_at=start_at, timezone_name=getattr(workspace, "timezone", "Africa/Cairo")
+                ):
+                    return _failure(
+                        write_kind=intent.kind,
+                        code="explicit_time_mismatch",
+                        detail="Verified appointment time does not match the customer's explicit HH:MM request.",
+                    )
                 device_key = (
                     str(parameters["device_key"]) if parameters.get("device_key") else None
                 )
@@ -306,11 +331,22 @@ def execute_write_ready_step(
                         "status": moved[0][0].status if moved else "rescheduled",
                     }
                 else:
+                    requested_start_at = _datetime(parameters, "start_at")
+                    if _explicit_time_mismatch(
+                        parameters,
+                        start_at=requested_start_at,
+                        timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
+                    ):
+                        return _failure(
+                            write_kind=intent.kind,
+                            code="explicit_time_mismatch",
+                            detail="Verified reschedule time does not match the customer's explicit HH:MM request.",
+                        )
                     replacement, previous = reschedule_appointment_operation(
                         db,
                         workspace=workspace,
                         appointment_id=_uuid(parameters, "appointment_id"),
-                        requested_start_at=_datetime(parameters, "start_at"),
+                        requested_start_at=requested_start_at,
                         changed_by_user_id=None,
                         branch_id=_uuid(parameters, "branch_id"),
                         doctor_id=_uuid(parameters, "doctor_id"),
