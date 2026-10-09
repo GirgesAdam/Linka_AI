@@ -36,6 +36,9 @@ type SearchParams = {
   quick_column?: string;
   quick_start?: string;
   quick_end?: string;
+  book_time?: string;
+  book_column?: string;
+  booking_date?: string;
   column?: string | string[];
 };
 
@@ -280,6 +283,46 @@ function quickBookingHref(
   return `/appointments?${query.toString()}`;
 }
 
+function manualBookingHref(
+  current: SearchParams,
+  date: string,
+  branchId: string,
+  column?: ScheduleColumnId,
+  start?: number,
+) {
+  const query = new URLSearchParams({ date, branch_id: branchId, book: "1", booking_date: date });
+  if (current.patient_id) query.set("patient_id", current.patient_id);
+  const columns = Array.isArray(current.column) ? current.column : current.column ? [current.column] : [];
+  columns.forEach((value) => query.append("column", value));
+  if (column) query.set("book_column", column);
+  if (typeof start === "number") query.set("book_time", String(start));
+  return `/appointments?${query.toString()}`;
+}
+
+function bookingStartsForPeriod(
+  period: SchedulePeriod,
+  slotIntervalMinutes: number,
+  includePeriodStart: boolean,
+) {
+  const step = Number.isInteger(slotIntervalMinutes) && slotIntervalMinutes > 0 ? slotIntervalMinutes : 30;
+  const starts = new Set<number>();
+  if (includePeriodStart) starts.add(period.start);
+  let minute = Math.ceil(period.start / step) * step;
+  while (minute < period.end) {
+    starts.add(minute);
+    minute += step;
+  }
+  return [...starts].sort((left, right) => left - right);
+}
+
+function isAppointmentReleaseMinute(
+  minute: number,
+  appointments: Appointment[],
+  timezone: string,
+) {
+  return appointments.some((appointment) => minuteInTimezone(appointment.end_at, timezone) === minute);
+}
+
 type SchedulePeriod = {
   start: number;
   end: number;
@@ -386,7 +429,7 @@ function buildSchedulePeriods(
   });
 }
 
-function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking }: {
+function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable, slotIntervalMinutes }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
   hours: KnowledgeHour[];
@@ -399,6 +442,8 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
   branchId: string;
   currentParams: SearchParams;
   allowQuickBooking: boolean;
+  availabilityTruthAvailable: boolean;
+  slotIntervalMinutes: number;
 }) {
   const visible = appointments
     .filter((appointment) => visibleColumns.includes(appointmentColumn(appointment, serviceById)))
@@ -409,6 +454,35 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
     .slice()
     .sort((a, b) => a.start_time.localeCompare(b.start_time))
     .map((hour) => ({ start: toMinutes(hour.start_time), end: toMinutes(hour.end_time) }));
+  const inlineBookingColumns = availabilityTruthAvailable
+    ? scheduleColumns
+        .filter((column) => column.id !== "quick" && visibleColumns.includes(column.id))
+        .map((column) => ({
+          column,
+          starts: hours
+            .slice()
+            .sort((a, b) => a.start_time.localeCompare(b.start_time))
+            .flatMap((interval) => {
+              const columnAppointments = appointmentsForColumn(appointments, column.id, serviceById);
+              const intervalStart = toMinutes(interval.start_time);
+              return buildSchedulePeriods(
+                columnAppointments,
+                interval,
+                timezone,
+                blocksForColumn(blocks, column.id),
+              )
+                .filter((period) => period.appointments.length === 0 && !period.block)
+                .flatMap((period) =>
+                  bookingStartsForPeriod(
+                    period,
+                    slotIntervalMinutes,
+                    period.start === intervalStart || isAppointmentReleaseMinute(period.start, columnAppointments, timezone),
+                  ),
+                );
+            }),
+        }))
+        .filter((item) => item.starts.length > 0)
+    : [];
 
   return (
     <div className="space-y-4 lg:hidden" aria-label="mobile appointment agenda">
@@ -430,6 +504,32 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
         </section>
       )}
       {blocks.map((block) => <div key={block.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black text-rose-950">فترة غير متاحة</div><div className="mt-1 text-xs font-bold text-rose-800">{appointmentTime(block.start_at, timezone)} – {appointmentTime(block.end_at, timezone)}{block.reason ? ` · ${block.reason}` : ""}</div><div className="mt-1 text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(block, serviceById, scheduleColumns)}</div></div><ReopenAvailabilityBlockButton blockId={block.id} /></div></div>)}
+      {inlineBookingColumns.length > 0 && (
+        <section aria-label="inline appointment booking" className="rounded-2xl border border-slate-200 bg-white p-3">
+          <div className="text-sm font-black text-slate-900">حجز من الجدول</div>
+          <div className="mt-1 text-[11px] font-semibold text-slate-500">اضغط على وقت فاضي لبدء نفس نموذج الحجز، والتوفر النهائي بيتأكد قبل التسجيل.</div>
+          <div className="mt-3 space-y-3">
+            {inlineBookingColumns.map(({ column, starts }) => (
+              <div key={column.id}>
+                <div className="mb-1.5 text-[11px] font-black text-slate-600">{column.label}</div>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {starts.map((start) => (
+                    <Link
+                      key={`${column.id}-${start}`}
+                      href={manualBookingHref(currentParams, selectedDate, branchId, column.id, start)}
+                      className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-black text-slate-700 transition active:bg-[var(--accent-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
+                      aria-label={`حجز في ${minuteLabel(start)} - ${column.label}`}
+                    >
+                      <Plus size={13} />
+                      {minuteLabel(start)}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       {!visible.length && <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-semibold text-slate-500">لا توجد مواعيد مسجلة في الأعمدة الظاهرة لهذا اليوم.</div>}
       {visible.map((appointment) => {
         const service = serviceById.get(appointment.service_id);
@@ -471,6 +571,7 @@ function DailySchedule({
   currentParams,
   allowQuickBooking,
   availabilityTruthAvailable,
+  slotIntervalMinutes,
 }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
@@ -485,6 +586,7 @@ function DailySchedule({
   currentParams: SearchParams;
   allowQuickBooking: boolean;
   availabilityTruthAvailable: boolean;
+  slotIntervalMinutes: number;
 }) {
   if (!hours.length) {
     return (
@@ -501,7 +603,7 @@ function DailySchedule({
 
   return (
     <>
-      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} />
+      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} availabilityTruthAvailable={availabilityTruthAvailable} slotIntervalMinutes={slotIntervalMinutes} />
       <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
@@ -572,8 +674,27 @@ function DailySchedule({
                                     })}
                                   </div>
                                 ) : isAvailable ? (
-                                  <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
-                                  </div>
+                                  column.id === "quick" || availabilityUnknown ? (
+                                    <div className="min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80" />
+                                  ) : (
+                                    <div className="space-y-1 rounded-xl border border-dashed border-slate-200 bg-white/80 p-1.5">
+                                      {bookingStartsForPeriod(
+                                        period,
+                                        slotIntervalMinutes,
+                                        period.start === start || isAppointmentReleaseMinute(period.start, columnAppointments, timezone),
+                                      ).map((start) => (
+                                        <Link
+                                          key={`${column.id}-${start}`}
+                                          href={manualBookingHref(currentParams, selectedDate, branchId, column.id, start)}
+                                          className="group/slot flex min-h-9 items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 text-[11px] font-bold text-slate-400 transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent-strong)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
+                                          aria-label={`حجز في ${minuteLabel(start)} - ${column.label}`}
+                                        >
+                                          <span>{minuteLabel(start)}</span>
+                                          <span className="inline-flex items-center gap-1 opacity-60 transition group-hover/slot:opacity-100 group-focus-visible/slot:opacity-100"><Plus size={12} /> حجز</span>
+                                        </Link>
+                                      ))}
+                                    </div>
+                                  )
                                 ) : (
                                   <div className="space-y-2">
                                     {period.appointments.map((appointment) => {
@@ -676,6 +797,19 @@ export default async function AppointmentsPage({
   const timezone = selectedBranch?.timezone || knowledge.workspace_timezone || "Africa/Cairo";
   const today = dateInTimezone(timezone);
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(raw.date || "") ? raw.date! : today;
+  const bookingDateForForm = /^\d{4}-\d{2}-\d{2}$/.test(raw.booking_date || "")
+    ? raw.booking_date!
+    : selectedDate;
+  const slotIntervalMinutes = Number.isInteger(knowledge.booking_settings?.slot_interval_minutes) && Number(knowledge.booking_settings?.slot_interval_minutes) > 0
+    ? Number(knowledge.booking_settings?.slot_interval_minutes)
+    : 30;
+  const inlineBookingColumn = raw.book === "1"
+    ? scheduleColumns.find((column) => column.id !== "quick" && column.id === raw.book_column) || null
+    : null;
+  const rawInlineStart = Number(raw.book_time);
+  const inlineBookingStartMinutes = raw.book === "1" && bookingDateForForm === selectedDate && Number.isInteger(rawInlineStart) && rawInlineStart >= 0 && rawInlineStart < 24 * 60
+    ? rawInlineStart
+    : undefined;
   const weekday = weekdayFor(selectedDate);
   const workingHours = (selectedBranch?.working_hours || []).filter((hour) => hour.weekday === weekday);
 
@@ -771,9 +905,10 @@ export default async function AppointmentsPage({
           </summary>
           <div className="border-t border-slate-100 p-4">
             <ManualAppointmentForm
+              key={`patient-booking-${selectedBranch.id}-${bookingDateForForm}-${inlineBookingColumn?.id || "any"}-${inlineBookingStartMinutes ?? "none"}`}
               mode="existing"
               phone={selectedPatient.phone || ""}
-              bookingDate={selectedDate}
+              bookingDate={bookingDateForForm}
               branchId={selectedBranch.id}
               patientId={selectedPatient.id}
               patientName={`${selectedPatient.first_name} ${selectedPatient.last_name || ""}`.trim()}
@@ -784,25 +919,36 @@ export default async function AppointmentsPage({
               pulseBalances={selectedPulseBalances}
               devicePrices={devicePrices}
               timezone={timezone}
+              preferredStartMinutes={inlineBookingStartMinutes}
+              fixedLaserDeviceKey={inlineBookingColumn?.deviceKey}
+              allowedOperationalCategory={inlineBookingColumn?.operationalCategory}
             />
           </div>
         </details>
       )}
 
       {!selectedPatient && (
-        <details open={Boolean(manualPhone)} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-md:[&_summary]:min-h-12">
+        <details open={raw.book === "1" || Boolean(manualPhone)} className="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm max-md:[&_summary]:min-h-12">
           <summary className="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm font-black text-slate-900">
             <Plus size={17} /> إضافة موعد
           </summary>
           <div className="border-t border-slate-100 p-4">
-            <form method="get" className="flex max-w-xl gap-2">
+            <form method="get" className="grid max-w-2xl gap-2 sm:grid-cols-[minmax(150px,0.8fr)_minmax(220px,1fr)_auto]">
               <input type="hidden" name="date" value={selectedDate} />
               {selectedBranch && <input type="hidden" name="branch_id" value={selectedBranch.id} />}
-              <label className="min-w-0 flex-1">
+              {raw.book === "1" && <input type="hidden" name="book" value="1" />}
+              {typeof inlineBookingStartMinutes === "number" && <input type="hidden" name="book_time" value={String(inlineBookingStartMinutes)} />}
+              {inlineBookingColumn && <input type="hidden" name="book_column" value={inlineBookingColumn.id} />}
+              {visibleColumns.map((column) => <input key={`booking-${column}`} type="hidden" name="column" value={column} />)}
+              <label className="min-w-0">
+                <span className="mb-1.5 block text-xs font-bold text-slate-600">تاريخ الموعد</span>
+                <Input name="booking_date" type="date" defaultValue={bookingDateForForm} required />
+              </label>
+              <label className="min-w-0">
                 <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم هاتف العميل</span>
                 <Input name="manual_phone" defaultValue={manualPhone} required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />
               </label>
-              <Button type="submit" variant="outline" className="mt-6"><Search size={16} /> بحث</Button>
+              <Button type="submit" variant="outline" className="sm:self-end"><Search size={16} /> بحث</Button>
             </form>
 
             {manualPhone && (
@@ -831,9 +977,10 @@ export default async function AppointmentsPage({
                 )}
 
                 <ManualAppointmentForm
+                  key={`manual-booking-${defaultBranchId || "none"}-${bookingDateForForm}-${manualPhone}-${inlineBookingColumn?.id || "any"}-${inlineBookingStartMinutes ?? "none"}`}
                   mode={manualPatient ? "existing" : "new"}
                   phone={manualPhone}
-                  bookingDate={selectedDate}
+                  bookingDate={bookingDateForForm}
                   branchId={defaultBranchId || ""}
                   patientId={manualPatient?.id}
                   patientName={manualPatient ? `${manualPatient.first_name} ${manualPatient.last_name || ""}`.trim() : undefined}
@@ -844,6 +991,9 @@ export default async function AppointmentsPage({
                   pulseBalances={manualPulseBalances}
                   devicePrices={devicePrices}
                   timezone={timezone}
+                  preferredStartMinutes={inlineBookingStartMinutes}
+                  fixedLaserDeviceKey={inlineBookingColumn?.deviceKey}
+                  allowedOperationalCategory={inlineBookingColumn?.operationalCategory}
                 />
               </div>
             )}
@@ -946,6 +1096,7 @@ export default async function AppointmentsPage({
               currentParams={currentParams}
               allowQuickBooking={!patientId}
               availabilityTruthAvailable={availabilityTruthAvailable}
+              slotIntervalMinutes={slotIntervalMinutes}
             />
           ) : (
             <div className="py-12 text-center text-sm font-semibold text-[var(--muted)]">لا يوجد فرع نشط لعرض جدول المواعيد.</div>
