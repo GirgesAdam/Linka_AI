@@ -50,7 +50,7 @@ def test_phone_search_keeps_manual_booking_panel_open_and_copy_is_short() -> Non
         root / "frontend/src/app/(dashboard)/appointments/page.tsx"
     ).read_text(encoding="utf-8")
 
-    assert "open={Boolean(manualPhone)}" in page
+    assert 'open={raw.book === "1" || Boolean(manualPhone)}' in page
     assert "إضافة موعد يدوي" not in page
     assert "<Plus size={17} /> إضافة موعد" in page
 

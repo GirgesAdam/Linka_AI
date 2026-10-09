@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,28 @@ function timeLabel(value: string, timezone: string) {
   }).format(new Date(value));
 }
 
+function minuteInTimezone(value: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(values.hour) * 60 + Number(values.minute);
+}
+
+function minuteLabel(total: number) {
+  const hour = Math.floor(total / 60);
+  const minute = total % 60;
+  return new Intl.DateTimeFormat("ar-EG", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(2026, 0, 1, hour, minute)));
+}
+
 export function ManualAppointmentForm({
   mode,
   phone,
@@ -59,6 +81,7 @@ export function ManualAppointmentForm({
   timezone,
   schedulingMode = "standard",
   successHref,
+  preferredStartMinutes,
 }: {
   mode: "existing" | "new";
   phone: string;
@@ -79,6 +102,7 @@ export function ManualAppointmentForm({
   timezone: string;
   schedulingMode?: "standard" | "quick";
   successHref?: string;
+  preferredStartMinutes?: number;
 }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, initialState);
@@ -93,6 +117,11 @@ export function ManualAppointmentForm({
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [availabilityMessage, setAvailabilityMessage] = useState("");
   const [quickTime, setQuickTime] = useState("");
+  const [selectedBookingDate, setSelectedBookingDate] = useState(bookingDate);
+  const [preferredStartActive, setPreferredStartActive] = useState(
+    schedulingMode === "standard" && typeof preferredStartMinutes === "number",
+  );
+  const availabilityRequestRef = useRef(0);
 
   useEffect(() => {
     if (!state.ok || !successHref) return;
@@ -166,12 +195,20 @@ export function ManualAppointmentForm({
     return doctors.filter((doctor) => doctor.is_active && ids.has(doctor.id));
   }, [doctors, schedulingMode, slots, startAt]);
 
-  async function loadAvailability(nextServiceId: string, nextDeviceKey: string) {
+  async function loadAvailability(
+    nextServiceId: string,
+    nextDeviceKey: string,
+    date = selectedBookingDate,
+    applyPreferredStart = preferredStartActive,
+  ) {
     if (schedulingMode === "quick") return;
+    const requestId = availabilityRequestRef.current + 1;
+    availabilityRequestRef.current = requestId;
     setStartAt("");
     setDoctorId("");
     setSlots([]);
     setAvailabilityMessage("");
+    setAvailabilityLoading(false);
     if (!nextServiceId) return;
 
     const service = services.find((item) => item.id === nextServiceId);
@@ -185,14 +222,32 @@ export function ManualAppointmentForm({
     const result = await getManualAppointmentAvailability({
       branchId,
       serviceId: nextServiceId,
-      date: bookingDate,
+      date,
       laserDeviceKey: nextDeviceKey || undefined,
       windowStartMinutes,
       windowEndMinutes,
     });
+    if (availabilityRequestRef.current !== requestId) return;
     setAvailabilityLoading(false);
     setAvailabilityTimezone(result.timezone);
     setSlots(result.slots);
+
+    if (applyPreferredStart && date === bookingDate && typeof preferredStartMinutes === "number") {
+      const preferredSlot = result.slots.find(
+        (slot) => minuteInTimezone(slot.start_at, result.timezone) === preferredStartMinutes,
+      );
+      if (preferredSlot) {
+        setPreferredStartActive(false);
+        setStartAt(preferredSlot.start_at);
+        setAvailabilityMessage(result.message);
+        return;
+      }
+      if (result.ok) {
+        setPreferredStartActive(false);
+        setAvailabilityMessage("الميعاد ده مبقاش متاح. اختار ميعاد تاني.");
+        return;
+      }
+    }
     setAvailabilityMessage(result.message);
   }
 
@@ -233,6 +288,31 @@ export function ManualAppointmentForm({
         </div>
       )}
 
+      {schedulingMode === "standard" && (
+        <label className="block max-w-sm">
+          <span className="mb-1.5 block text-xs font-bold text-slate-600">تاريخ الموعد</span>
+          <Input
+            type="date"
+            name="booking_date"
+            required
+            value={selectedBookingDate}
+            onChange={(event) => {
+              const nextDate = event.target.value;
+              setSelectedBookingDate(nextDate);
+              setPreferredStartActive(false);
+              setStartAt("");
+              setDoctorId("");
+              setSlots([]);
+              setAvailabilityMessage("");
+              if (serviceId && nextDate) {
+                void loadAvailability(serviceId, requiresLaserDevice ? laserDeviceKey : "", nextDate, false);
+              }
+            }}
+          />
+          <span className="mt-1 block text-[11px] text-[var(--muted)]">تقدر تغيّر اليوم، وساعتها بنحمّل التوفر من جديد لليوم المختار.</span>
+        </label>
+      )}
+
       <div className="grid gap-3 md:grid-cols-2">
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">الخدمة</span>
@@ -248,7 +328,7 @@ export function ManualAppointmentForm({
               setLaserDeviceKey(nextDeviceKey);
               setPackageId("");
               setUsePulseBalance(false);
-              if (schedulingMode === "standard") void loadAvailability(nextServiceId, nextDeviceKey);
+              if (schedulingMode === "standard") void loadAvailability(nextServiceId, nextDeviceKey, selectedBookingDate);
             }}
           >
             <option value="" disabled>اختار الخدمة</option>
@@ -276,7 +356,7 @@ export function ManualAppointmentForm({
                   setLaserDeviceKey(next);
                   setPackageId("");
                   setUsePulseBalance(false);
-                  if (schedulingMode === "standard") void loadAvailability(serviceId, next);
+                  if (schedulingMode === "standard") void loadAvailability(serviceId, next, selectedBookingDate);
                 }}
               >
                 <option value="" disabled>اختار الجهاز</option>
@@ -307,7 +387,7 @@ export function ManualAppointmentForm({
               onChange={(event) => {
                 const next = event.target.value;
                 setQuickTime(next);
-                setStartAt(next ? `${bookingDate}T${next}` : "");
+                setStartAt(next ? `${selectedBookingDate}T${next}` : "");
               }}
             />
           ) : (
@@ -316,6 +396,7 @@ export function ManualAppointmentForm({
               value={startAt}
               disabled={!serviceId || availabilityLoading || timeOptions.length === 0}
               onChange={(event) => {
+                setPreferredStartActive(false);
                 setStartAt(event.target.value);
                 setDoctorId("");
               }}
@@ -331,7 +412,7 @@ export function ManualAppointmentForm({
           <span className="mt-1 block text-[11px] text-[var(--muted)]">
             {schedulingMode === "quick"
               ? "اختار وقت الموعد داخل ساعات العمل. الحجز السريع يسمح بالتداخل الزمني عند الحاجة، لكنه يظل يتحقق من العميل والخدمة والباكدج."
-              : `بنعرض فقط الأوقات المسموح حجزها يوم ${bookingDate}.`}
+              : `بنعرض فقط الأوقات المسموح حجزها يوم ${selectedBookingDate}.`}
           </span>
         </label>
         <label>
@@ -357,6 +438,12 @@ export function ManualAppointmentForm({
           </span>
         </label>
       </div>
+
+      {schedulingMode === "standard" && preferredStartActive && typeof preferredStartMinutes === "number" && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
+          اخترت {minuteLabel(preferredStartMinutes)} من الجدول. بعد اختيار الخدمة بنأكد إن نفس الوقت متاح فعلًا قبل التسجيل.
+        </div>
+      )}
 
       {schedulingMode === "standard" && availabilityMessage && (
         <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700">
