@@ -444,6 +444,11 @@ def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[R
     if isinstance(availability, dict) and next_field == "booking":
         safe_availability = _safe_value(availability)
         if isinstance(safe_availability, dict):
+            time_constraint = facts.get("time")
+            if isinstance(time_constraint, dict) and time_constraint.get("mode") == "exact":
+                requested = time_constraint.get("start_time")
+                if requested not in (None, ""):
+                    safe_availability = {**safe_availability, "requested_time": requested}
             result.append(
                 _make_fact(
                     goal=goal,
@@ -1421,6 +1426,12 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
         ):
             if safe.get(key) not in (None, "", [], {}):
                 result.append(_make_fact(goal=goal, key=key, value=safe[key]))
+        date_constraint = facts.get("date")
+        if isinstance(date_constraint, dict) and date_constraint:
+            result.append(_make_fact(goal=goal, key="date_constraint", value=date_constraint))
+        time_constraint = facts.get("time")
+        if isinstance(time_constraint, dict) and time_constraint:
+            result.append(_make_fact(goal=goal, key="time_constraint", value=time_constraint))
         return result
 
     marker = (
@@ -1429,6 +1440,13 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
         else "no_availability"
     )
     result.append(_make_fact(goal=goal, key=marker, value=True, required=True))
+
+    date_constraint = facts.get("date")
+    if isinstance(date_constraint, dict) and date_constraint:
+        result.append(_make_fact(goal=goal, key="date_constraint", value=date_constraint))
+    time_constraint = facts.get("time")
+    if isinstance(time_constraint, dict) and time_constraint:
+        result.append(_make_fact(goal=goal, key="time_constraint", value=time_constraint))
 
     if goal == "requested_time_unavailable":
         requested_time = facts.get("time")
@@ -1439,6 +1457,16 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
                     key="requested_time",
                     value=requested_time,
                     required=True,
+                )
+            )
+        alternatives = safe.get("nearest_alternative_windows")
+        if isinstance(alternatives, list) and alternatives:
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="nearest_alternative_windows",
+                    value=alternatives,
+                    complete_set=True,
                 )
             )
 
@@ -1636,6 +1664,14 @@ def is_pure_supported_availability_contract(
                 marker is None
                 or marker.value is not True
                 or requested_time is None
+            ):
+                return False
+            alternatives = facts.get("nearest_alternative_windows")
+            if alternatives is not None and (
+                alternatives.complete_set is not True
+                or not isinstance(alternatives.value, list)
+                or not alternatives.value
+                or any(not isinstance(value, dict) for value in alternatives.value)
             ):
                 return False
         elif unit.response_goal == "no_availability":

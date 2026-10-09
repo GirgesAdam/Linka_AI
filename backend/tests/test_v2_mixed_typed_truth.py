@@ -404,7 +404,9 @@ def test_unavailable_availability_unit_gets_scoped_fallback_next_to_clinic_truth
 
     assert source == "deterministic:mixed-typed-contract"
     assert "01012345678" in text
-    assert "مش قادر أعرض مواعيد متاحة مؤكدة" in text
+    assert "مش قادر أحدد المواعيد المتاحة دلوقتي" in text
+    assert "البيانات" not in text
+    assert "مؤكدة" not in text
 
 
 def test_multiple_missing_requested_units_get_bounded_deterministic_coverage(

@@ -636,22 +636,22 @@ def _deterministic_availability_guard_reply(
         if rendered:
             return rendered
         return (
-            "فيه مواعيد متاحة مؤكدة، لكن تفاصيل الفترة مش متاحة للعرض هنا."
+            "فيه مواعيد متاحة، بس تفاصيلها مش ظاهرة دلوقتي. تحب أجربلك وقت تاني؟"
             if arabic
-            else "Verified appointment options are available, but the time window cannot be displayed here."
+            else "There are available appointment times, but I can’t show the details right now. Would you like another time?"
         )
 
     if verified_claim == "requested_time_unavailable":
         return (
-            "الوقت اللي طلبته مش متاح حسب المواعيد المؤكدة. ممكن أشوفلك بديل."
+            "الوقت اللي طلبته مش متاح للأسف. ممكن أشوفلك أقرب وقت تاني."
             if arabic
-            else "The time you requested is not available in the verified schedule. I can check an alternative."
+            else "The time you requested isn’t available. I can check the nearest alternative."
         )
 
     return (
-        "مفيش مواعيد متاحة في البحث المؤكد الحالي."
+        "مفيش مواعيد متاحة للطلب ده دلوقتي. تحب أشوفلك يوم أو وقت تاني؟"
         if arabic
-        else "There are no available appointments in the current verified search."
+        else "There are no available appointments for that request right now. Would you like another day or time?"
     )
 
 
@@ -691,6 +691,9 @@ RULES
   duration from availability timestamps.
 - Availability windows are verified ranges of bookable START times; the end is the latest verified
   start. Do not fill gaps or expand a summarized window into invented slots.
+- Availability replies must sound like normal clinic conversation. Never expose implementation wording
+  such as search scope/window, checked data, verification, validation, fallback, contract, or similar
+  system mechanics. State only the customer-facing date/time result and the natural next step.
 - availability_claim must follow the current TURN_OUTCOME response semantics, not mere fact presence.
   Use options_available for response_goal=present_availability (or verified alternatives attached to an
   availability-facing outcome); requested_time_unavailable only for that explicit response goal when no
@@ -1031,9 +1034,9 @@ def _deterministic_missing_requested_unit_fallback(
             "answer_clinic_info": "معلومة العيادة المطلوبة مش ظاهرة بشكل مؤكد في البيانات الحالية.",
             "answer_customer_profile": "المعلومة المطلوبة من ملفك مش ظاهرة في البيانات المؤكدة الحالية.",
             "answer_customer_history": "المعلومة المطلوبة من سجلك مش ظاهرة في البيانات المؤكدة الحالية.",
-            "present_availability": "مش قادر أعرض مواعيد متاحة مؤكدة من البيانات الحالية.",
-            "requested_time_unavailable": "مش قادر أأكد حالة الوقت المطلوب من البيانات الحالية.",
-            "no_availability": "مش قادر أأكد عدم وجود مواعيد من البيانات الحالية.",
+            "present_availability": "مش قادر أحدد المواعيد المتاحة دلوقتي. تحب نجرب يوم أو وقت تاني؟",
+            "requested_time_unavailable": "مش قادر أحدد إذا الوقت ده متاح دلوقتي. تحب أجربلك وقت تاني؟",
+            "no_availability": "مش قادر أحدد المواعيد للطلب ده دلوقتي. تحب نجرب يوم أو وقت تاني؟",
             "package_information": "معلومات الباكدج المطلوبة مش ظاهرة في البيانات المؤكدة الحالية.",
         }[goal]
 
@@ -1044,9 +1047,9 @@ def _deterministic_missing_requested_unit_fallback(
         "answer_clinic_info": "The requested clinic information is not available in the current verified data.",
         "answer_customer_profile": "The requested profile information is not available in your current verified record.",
         "answer_customer_history": "The requested history information is not available in your current verified record.",
-        "present_availability": "I cannot show verified appointment availability from the current data.",
-        "requested_time_unavailable": "I cannot verify the requested time status from the current data.",
-        "no_availability": "I cannot verify that there is no availability from the current data.",
+        "present_availability": "I can’t determine the available times right now. Would you like to try another day or time?",
+        "requested_time_unavailable": "I can’t determine whether that time is available right now. Would you like another time?",
+        "no_availability": "I can’t determine the available times for that request right now. Would you like another day or time?",
         "package_information": "The requested package information is not available in the current verified data.",
     }[goal]
 

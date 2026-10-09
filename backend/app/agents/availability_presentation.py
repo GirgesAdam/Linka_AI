@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Any
 
+from app.agents.doctor_names import format_doctor_name
 from app.agents.v2.customer_datetime import format_customer_date
 from app.services.laser_slot_metadata import decode_laser_slot_branch
 
@@ -179,7 +180,7 @@ def _legacy_slot_reply(
         start = str(raw_slot.get("start_time_24h") or "").strip()
         if not start:
             continue
-        doctor = str(raw_slot.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        doctor = format_doctor_name(raw_slot.get("doctor_name"), arabic=True) or "الدكتور المتاح"
         _device_key, device = _device_from_slot(raw_slot)
         has_devices = has_devices or bool(device)
         if start not in grouped[(doctor, device)]:
@@ -252,7 +253,7 @@ def format_availability_windows_reply(
     for window in windows:
         if not isinstance(window, dict):
             continue
-        doctor = str(window.get("doctor_name") or "الدكتور المتاح").strip() or "الدكتور المتاح"
+        doctor = format_doctor_name(window.get("doctor_name"), arabic=True) or "الدكتور المتاح"
         device = str(window.get("laser_device_name") or "").strip()
         has_devices = has_devices or bool(device)
         grouped[(doctor, device)].append(window)

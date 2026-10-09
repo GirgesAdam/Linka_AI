@@ -168,7 +168,8 @@ def test_show_more_pagination_progresses_three_pages_then_exhausts() -> None:
     assert len({value for page in pages for value in page}) == 12
     assert exhausted_keys == []
     assert exhausted_more == {0: False}
-    assert "مفيش فترات إضافية في نطاق البحث الحالي" in exhausted_text
+    assert "مفيش مواعيد إضافية متاحة في الأيام دي" in exhausted_text
+    assert "نطاق البحث" not in exhausted_text
 
 
 def test_scope_narrowing_still_resets_cursor_under_f5() -> None:

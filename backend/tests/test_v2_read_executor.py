@@ -128,8 +128,15 @@ def _context(adapter: FakeAdapter | None = None):
     )
 
 
-def _slot(*, doctor_id: str, start_hour_utc: int) -> AvailabilitySlot:
-    start = datetime(2026, 9, 17, start_hour_utc, 0, tzinfo=UTC)
+def _slot(
+    *,
+    doctor_id: str,
+    start_hour_utc: int,
+    start_minute_utc: int = 0,
+    device_key: str = "candela_gentle",
+    device_name: str = "Candela Gentle",
+) -> AvailabilitySlot:
+    start = datetime(2026, 9, 17, start_hour_utc, start_minute_utc, tzinfo=UTC)
     return AvailabilitySlot(
         branch_id=str(BRANCH_ID),
         branch_name="Linka Clinic",
@@ -142,8 +149,8 @@ def _slot(*, doctor_id: str, start_hour_utc: int) -> AvailabilitySlot:
         duration_minutes=30,
         price_minor=50000,
         currency="EGP",
-        laser_device_key="candela_gentle",
-        laser_device_name="Candela Gentle",
+        laser_device_key=device_key,
+        laser_device_name=device_name,
     )
 
 
@@ -297,6 +304,178 @@ def test_exact_availability_returns_one_verified_slot_without_writing() -> None:
     assert bundle.verification.verified_parameters["doctor_id"] == "doctor-maryam"
     assert len(adapter.availability_requests) == 1
     assert adapter.availability_requests[0].branch_id == str(BRANCH_ID)
+
+
+def test_exact_unavailable_returns_nearest_verified_alternatives_before_and_after() -> None:
+    adapter = FakeAdapter(
+        availability=_availability(
+            [
+                _slot(doctor_id="doctor-maryam", start_hour_utc=15, start_minute_utc=30),
+                _slot(doctor_id="doctor-maryam", start_hour_utc=17),
+                _slot(doctor_id="doctor-maryam", start_hour_utc=14),
+            ]
+        )
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters={
+            "service_id": str(SERVICE_ID),
+            "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+        })],
+        response_goal="present_availability",
+    )
+
+    bundle = execute_step_reads(step, _context(adapter))
+    payload = bundle.results[0].payload
+    assert payload["matching_slot_count"] == 0
+    assert bundle.verification.exact_slot_match_count == 0
+    assert [row["start_time_24h"] for row in payload["nearest_alternative_slots"]] == ["18:30", "20:00"]
+
+
+def test_exact_unavailable_returns_only_later_verified_alternative() -> None:
+    adapter = FakeAdapter(availability=_availability([_slot(doctor_id="doctor-maryam", start_hour_utc=17)]))
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters={
+            "service_id": str(SERVICE_ID),
+            "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+        })],
+        response_goal="present_availability",
+    )
+
+    payload = execute_step_reads(step, _context(adapter)).results[0].payload
+    assert [row["start_time_24h"] for row in payload["nearest_alternative_slots"]] == ["20:00"]
+
+
+def test_exact_unavailable_has_no_invented_alternative_when_scope_is_empty() -> None:
+    adapter = FakeAdapter(availability=_availability([]))
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters={
+            "service_id": str(SERVICE_ID),
+            "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+        })],
+        response_goal="present_availability",
+    )
+
+    payload = execute_step_reads(step, _context(adapter)).results[0].payload
+    assert payload["matching_slot_count"] == 0
+    assert payload["nearest_alternative_slots"] == []
+
+
+def test_device_specific_exact_miss_keeps_same_device_scope_for_alternatives() -> None:
+    adapter = FakeAdapter(availability=_availability([_slot(doctor_id="doctor-maryam", start_hour_utc=17)]))
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters={
+            "service_id": str(SERVICE_ID),
+            "device_key": "candela_gentle",
+            "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+        })],
+        response_goal="present_availability",
+    )
+
+    payload = execute_step_reads(step, _context(adapter)).results[0].payload
+    assert adapter.availability_requests[0].laser_device_key == "candela_gentle"
+    assert {row["laser_device_key"] for row in payload["nearest_alternative_slots"]} == {"candela_gentle"}
+
+
+def test_doctor_specific_exact_miss_keeps_same_doctor_scope_for_alternatives() -> None:
+    adapter = FakeAdapter(availability=_availability([_slot(doctor_id="doctor-maryam", start_hour_utc=17)]))
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters={
+            "service_id": str(SERVICE_ID),
+            "doctor_id": "doctor-maryam",
+            "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+        })],
+        response_goal="present_availability",
+    )
+
+    payload = execute_step_reads(step, _context(adapter)).results[0].payload
+    assert adapter.availability_requests[0].doctor_id == "doctor-maryam"
+    assert {row["doctor_id"] for row in payload["nearest_alternative_slots"]} == {"doctor-maryam"}
+
+
+def test_nearest_alternatives_do_not_leak_outside_doctor_or_device_scope() -> None:
+    adapter = FakeAdapter(
+        availability=_availability(
+            [
+                _slot(doctor_id="doctor-maryam", start_hour_utc=17),
+                _slot(
+                    doctor_id="doctor-other",
+                    start_hour_utc=15,
+                    start_minute_utc=30,
+                    device_key="prime_lase",
+                    device_name="Prime Lase",
+                ),
+            ]
+        )
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters={
+            "service_id": str(SERVICE_ID),
+            "doctor_id": "doctor-maryam",
+            "device_key": "candela_gentle",
+            "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+            "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+        })],
+        response_goal="present_availability",
+    )
+
+    payload = execute_step_reads(step, _context(adapter)).results[0].payload
+    alternatives = payload["nearest_alternative_slots"]
+    assert len(alternatives) == 1
+    assert alternatives[0]["doctor_id"] == "doctor-maryam"
+    assert alternatives[0]["laser_device_key"] == "candela_gentle"
+    assert alternatives[0]["start_time_24h"] == "20:00"
+
+
+def test_reschedule_exact_miss_returns_verified_alternative_without_write() -> None:
+    adapter = FakeAdapter(
+        appointments=[_appointment(appointment_id="appointment-1", status="confirmed")],
+        availability=_availability([_slot(doctor_id="doctor-maryam", start_hour_utc=17)]),
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="reschedule",
+        disposition="read",
+        reads=[
+            ReadRequest(kind="appointments", parameters={"appointment_id": "appointment-1"}),
+            ReadRequest(kind="availability", parameters={
+                "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+                "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+                "reschedule": True,
+            }),
+        ],
+        write_intent=WriteIntent(kind="reschedule", authorized=True, parameters={}),
+        response_goal="present_availability",
+    )
+
+    bundle = execute_step_reads(step, _context(adapter))
+    availability = next(result for result in bundle.results if result.kind == "availability")
+    assert bundle.verification.exact_slot_match_count == 0
+    assert availability.payload["matching_slot_count"] == 0
+    assert [row["start_time_24h"] for row in availability.payload["nearest_alternative_slots"]] == ["20:00"]
+    assert adapter.availability_requests[0].exclude_appointment_id == "appointment-1"
 
 
 def test_normal_availability_uses_single_catalog_branch_without_primary() -> None:

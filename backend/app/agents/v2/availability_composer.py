@@ -9,6 +9,7 @@ from typing import Literal
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict
 
+from app.agents.doctor_names import format_doctor_name
 from app.agents.llm_runtime import LLMProviderError, invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_composer_fallback_model,
@@ -59,8 +60,17 @@ class AvailabilityComposerDraft(StrictAvailabilityComposerModel):
     units: list[AvailabilityComposerUnitDraft]
 
 
+class AvailabilityComposerPresentationDraft(StrictAvailabilityComposerModel):
+    """LLM-owned presentation choices only; all structural truth stays backend-owned."""
+
+    style: AvailabilityStyle
+    presentation_mode: AvailabilityPresentationMode
+
+
 class AvailabilityComposerValidationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, reason: str = "invalid_contract") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 _OPTIONAL_FACT_KEYS = frozenset({"service_name"})
@@ -157,13 +167,10 @@ def _contract_view(contract: CustomerResponseContract) -> list[dict[str, object]
                 "unit_index": index,
                 "response_goal": unit.response_goal,
                 "availability_state": truth.state if truth is not None else None,
-                "verified_window_refs": refs,
                 "window_count": len(refs),
-                "available_optional_fact_keys": [
-                    fact.key
-                    for fact in unit.facts
-                    if fact.key in _OPTIONAL_FACT_KEYS
-                ],
+                "has_optional_service_name": any(
+                    fact.key == "service_name" for fact in unit.facts
+                ),
             }
         )
     return units
@@ -177,7 +184,8 @@ def _build_availability_composer_messages(
     latest_index = _latest_customer_index(history)
     if latest_index is None:
         raise AvailabilityComposerValidationError(
-            "Availability composer requires a customer message."
+            "Availability composer requires a customer message.",
+            reason="missing_customer_message",
         )
     arabic = _latest_customer_is_arabic(history)
     language = "Egyptian Arabic" if arabic else "English"
@@ -186,11 +194,10 @@ def _build_availability_composer_messages(
             "You select presentation structure for verified clinic availability. "
             "You never write customer prose and you never return any slot/date/time/"
             "doctor/device value. The backend owns availability state and every exact value.\n"
-            "Return one draft unit per CONTRACT unit in identical order. "
-            "availability_ref must be unit_availability. For options_available, "
-            "window_refs must contain every verified_window_ref exactly once and in the "
-            "same order. For other states window_refs must be empty. Choose only optional "
-            "fact keys listed for the same unit. Keep the presentation concise and natural. "
+            "The schema intentionally lets you choose only two presentation properties: "
+            "style and presentation_mode. Do not return unit indexes, refs, facts, transitions, "
+            "closing actions, availability states, or any business value; the backend derives "
+            "all of those from the contract. Keep the presentation concise and natural. "
             "Do not infer, merge, invent, or rewrite windows.\n"
             f"Customer reply language: {language}."
         )
@@ -212,13 +219,44 @@ def _build_availability_composer_messages(
     ]
 
 
+def _materialize_availability_composer_draft(
+    contract: CustomerResponseContract,
+    presentation: AvailabilityComposerPresentationDraft,
+) -> AvailabilityComposerDraft:
+    """Bind model-owned style choices to backend-owned structure with no LLM validation gap."""
+    units: list[AvailabilityComposerUnitDraft] = []
+    for index, unit in enumerate(contract.units):
+        truth = unit.availability_truth
+        if truth is None or truth.state not in _ALLOWED_CLOSING_BY_STATE:
+            raise AvailabilityComposerValidationError(
+                "Availability composer received invalid backend availability truth.",
+                reason="invalid_backend_truth",
+            )
+        units.append(
+            AvailabilityComposerUnitDraft(
+                unit_index=index,
+                availability_ref="unit_availability",
+                style=presentation.style,
+                window_refs=_window_refs(index, unit),
+                optional_fact_keys=[
+                    key for key in ("service_name",) if key in _fact_map(unit)
+                ],
+                presentation_mode=presentation.presentation_mode,
+                closing_action=_fallback_closing(truth.state),
+                transition="sentence" if index == 0 else "and",
+            )
+        )
+    return AvailabilityComposerDraft(units=units)
+
+
 def validate_availability_composer_draft(
     contract: CustomerResponseContract,
     draft: AvailabilityComposerDraft,
 ) -> None:
     if len(draft.units) != len(contract.units):
         raise AvailabilityComposerValidationError(
-            "Availability composer must represent every contract unit exactly once."
+            "Availability composer must represent every contract unit exactly once.",
+            reason="invalid_transition",
         )
 
     for expected_index, (unit, draft_unit) in enumerate(
@@ -226,55 +264,65 @@ def validate_availability_composer_draft(
     ):
         if draft_unit.unit_index != expected_index:
             raise AvailabilityComposerValidationError(
-                "Availability composer changed compound unit ordering."
+                "Availability composer changed compound unit ordering.",
+                reason="invalid_transition",
             )
         truth = unit.availability_truth
         expected_state = AVAILABILITY_STATE_BY_GOAL.get(unit.response_goal)
         if truth is None or expected_state is None or truth.state != expected_state:
             raise AvailabilityComposerValidationError(
-                "Availability composer received mismatched backend availability truth."
+                "Availability composer received mismatched backend availability truth.",
+                reason="invalid_backend_truth",
             )
 
         expected_refs = _window_refs(expected_index, unit)
         if len(draft_unit.window_refs) != len(set(draft_unit.window_refs)):
             raise AvailabilityComposerValidationError(
-                "Availability composer repeated a window reference."
+                "Availability composer repeated a window reference.",
+                reason="invalid_window_refs",
             )
         if truth.state == "options_available":
             fact = _window_fact(unit)
             if fact is None or fact.complete_set is not True:
                 raise AvailabilityComposerValidationError(
-                    "Available options require a complete verified window set."
+                    "Available options require a complete verified window set.",
+                    reason="invalid_window_refs",
                 )
             if draft_unit.window_refs != expected_refs:
                 raise AvailabilityComposerValidationError(
-                    "Availability composer must preserve the complete verified window set."
+                    "Availability composer must preserve the complete verified window set.",
+                    reason="invalid_window_refs",
                 )
         elif draft_unit.window_refs:
             raise AvailabilityComposerValidationError(
-                "Unavailable states cannot reference availability windows."
+                "Unavailable states cannot reference availability windows.",
+                reason="invalid_window_refs",
             )
 
         if len(draft_unit.optional_fact_keys) != len(set(draft_unit.optional_fact_keys)):
             raise AvailabilityComposerValidationError(
-                "Availability composer repeated an optional fact reference."
+                "Availability composer repeated an optional fact reference.",
+                reason="invalid_optional_fact",
             )
         available_optional = {
             fact.key for fact in unit.facts if fact.key in _OPTIONAL_FACT_KEYS
         }
         if any(key not in available_optional for key in draft_unit.optional_fact_keys):
             raise AvailabilityComposerValidationError(
-                "Availability composer referenced an unavailable optional fact."
+                "Availability composer referenced an unavailable optional fact.",
+                reason="invalid_optional_fact",
             )
 
         allowed_closings = _ALLOWED_CLOSING_BY_STATE[truth.state]
         if draft_unit.closing_action not in allowed_closings:
             raise AvailabilityComposerValidationError(
-                "Availability composer selected an invalid closing action for this state."
+                "Availability composer selected an invalid closing action for this state.",
+                reason="invalid_closing_action",
             )
         if expected_index == 0 and draft_unit.transition != "sentence":
             raise AvailabilityComposerValidationError(
-                "The first availability unit must start a sentence."
+                "The first availability unit must start a sentence.",
+                reason="invalid_transition",
             )
 
 
@@ -361,7 +409,20 @@ def _date_scope_text(
 ) -> str:
     raw_dates = _checked_dates(unit)
     if not raw_dates:
-        return "النطاق اللي اتفحص" if arabic else "the checked search scope"
+        date_fact = _fact_map(unit).get("date_constraint")
+        constraint = date_fact.value if date_fact is not None else None
+        if isinstance(constraint, dict):
+            mode = str(constraint.get("mode") or "").strip()
+            start = constraint.get("start_date")
+            end = constraint.get("end_date")
+            if mode == "exact" and start:
+                label = _date_text(start, arabic=arabic, reference_date=reference_date)
+                return _arabic_day_phrase(label) if arabic else f"on {label}"
+            if mode == "range" and start and end:
+                first = _date_text(start, arabic=arabic, reference_date=reference_date)
+                last = _date_text(end, arabic=arabic, reference_date=reference_date)
+                return f"من {first} لحد {last}" if arabic else f"from {first} through {last}"
+        return "في اليوم المطلوب" if arabic else "on the requested day"
     parsed: list[date] = []
     for raw in raw_dates:
         try:
@@ -385,15 +446,56 @@ def _date_scope_text(
         return (_arabic_day_phrase(labels[0]) if arabic else f"on {labels[0]}")
     joined = "، ".join(labels)
     return (
-        f"في الأيام اللي اتفحصت: {joined}"
+        f"في الأيام دي: {joined}"
         if arabic
-        else f"on the checked dates: {joined}"
+        else f"on these dates: {joined}"
     )
+
+
+def _time_scope_text(unit: CustomerResponseUnit, *, arabic: bool) -> str:
+    fact = _fact_map(unit).get("time_constraint")
+    value = fact.value if fact is not None else None
+    if not isinstance(value, dict):
+        return ""
+    mode = str(value.get("mode") or "").strip()
+    start = value.get("start_time")
+    end = value.get("end_time")
+    if mode == "after" and start:
+        clock = _clock(start, arabic=arabic)
+        return f"بعد الساعة {clock}" if arabic else f"after {clock}"
+    if mode == "before" and start:
+        clock = _clock(start, arabic=arabic)
+        return f"قبل الساعة {clock}" if arabic else f"before {clock}"
+    if mode == "range" and start and end:
+        first = _clock(start, arabic=arabic)
+        last = _clock(end, arabic=arabic)
+        return f"من الساعة {first} لحد {last}" if arabic else f"from {first} to {last}"
+    return ""
+
+
+def _availability_scope_text(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+    reference_date: date | None = None,
+) -> str:
+    date_scope = _date_scope_text(
+        unit, arabic=arabic, reference_date=reference_date
+    )
+    time_scope = _time_scope_text(unit, arabic=arabic)
+    return f"{date_scope} {time_scope}".strip()
 
 
 def _window_values(unit: CustomerResponseUnit) -> list[dict[str, object]]:
     fact = _window_fact(unit)
     if fact is None:
+        return []
+    return [dict(value) for value in fact.value if isinstance(value, dict)]
+
+
+def _alternative_window_values(unit: CustomerResponseUnit) -> list[dict[str, object]]:
+    fact = _fact_map(unit).get("nearest_alternative_windows")
+    if fact is None or not isinstance(fact.value, list):
         return []
     return [dict(value) for value in fact.value if isinstance(value, dict)]
 
@@ -476,7 +578,7 @@ def _window_time_text(
 
 
 def _window_label(window: dict[str, object], *, arabic: bool) -> str:
-    doctor = str(window.get("doctor_name") or "").strip()
+    doctor = format_doctor_name(window.get("doctor_name"), arabic=arabic)
     device = str(window.get("laser_device_name") or "").strip()
     if arabic:
         if doctor and device:
@@ -491,14 +593,13 @@ def _window_label(window: dict[str, object], *, arabic: bool) -> str:
     return device
 
 
-def _render_windows(
-    unit: CustomerResponseUnit,
+def _render_window_rows(
+    windows: list[dict[str, object]],
     *,
     arabic: bool,
     mode: AvailabilityPresentationMode,
     reference_date: date | None = None,
 ) -> list[str]:
-    windows = _window_values(unit)
     if mode == "detailed":
         rows: list[str] = []
         for window in windows:
@@ -533,6 +634,21 @@ def _render_windows(
     return rows
 
 
+def _render_windows(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+    mode: AvailabilityPresentationMode,
+    reference_date: date | None = None,
+) -> list[str]:
+    return _render_window_rows(
+        _window_values(unit),
+        arabic=arabic,
+        mode=mode,
+        reference_date=reference_date,
+    )
+
+
 def render_embedded_verified_availability_options(
     availability: dict[str, object],
     *,
@@ -562,7 +678,7 @@ def render_embedded_verified_availability_options(
     grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
     ordered_days: list[str] = []
     for window in selected:
-        doctor = str(window.get("doctor_name") or "").strip()
+        doctor = format_doctor_name(window.get("doctor_name"), arabic=arabic)
         day, time_text = _window_time_text(window, arabic=arabic, reference_date=reference_date)
         if day and day not in ordered_days:
             ordered_days.append(day)
@@ -593,6 +709,41 @@ def render_embedded_verified_availability_options(
         return None
     closing = "أنهي وقت أنسب لك؟" if arabic else "Which time works best for you?"
     return "\n".join([f"{intro}:", *[f"• {row}" for row in rows], closing])
+
+
+def render_embedded_requested_time_unavailable(
+    availability: dict[str, object],
+    *,
+    arabic: bool,
+    reference_date: date | None = None,
+) -> str:
+    raw = availability.get("nearest_alternative_windows")
+    alternatives = (
+        [dict(item) for item in raw if isinstance(item, dict)]
+        if isinstance(raw, list)
+        else []
+    )
+    requested = availability.get("requested_time") or availability.get("requested_start_time")
+    requested_text = _clock(requested, arabic=arabic) if requested else ""
+    if arabic:
+        first = f"الساعة {requested_text} مش متاحة للأسف." if requested_text else "الوقت اللي طلبته مش متاح للأسف."
+    else:
+        first = f"{requested_text} isn’t available." if requested_text else "The time you requested isn’t available."
+    rows = _render_window_rows(
+        alternatives,
+        arabic=arabic,
+        mode="compact",
+        reference_date=reference_date,
+    )
+    if not rows:
+        return first + (
+            " مفيش وقت تاني متاح هنا. تحب أشوفلك أقرب يوم بعده؟"
+            if arabic
+            else " There isn’t another available time here. Would you like me to check the next day?"
+        )
+    intro = "أقرب مواعيد متاحة:" if arabic else "Nearest available times:"
+    closing = "أنهي وقت أنسب لك؟" if arabic else "Which time works best for you?"
+    return "\n".join([first, intro, *[f"• {row}" for row in rows], closing])
 
 
 def render_embedded_no_availability(
@@ -680,12 +831,13 @@ def _render_present(
     if not rows:
         if continuation:
             return (
-                "مفيش فترات إضافية في نطاق البحث الحالي."
+                "مفيش مواعيد إضافية متاحة في الأيام دي."
                 if arabic
-                else "There are no additional verified ranges in the current search scope."
+                else "There are no more available times on these dates."
             )
         raise AvailabilityComposerValidationError(
-            "options_available requires renderable verified windows."
+            "options_available requires renderable verified windows.",
+            reason="invalid_window_refs",
         )
     parts = [f"{intro}:", *[f"• {row}" for row in rows]]
     if draft.closing_action == "ask_selection":
@@ -695,6 +847,11 @@ def _render_present(
             else "Which time works best for you?"
         )
     return "\n".join(parts)
+
+
+def _finish_customer_sentence(text: str) -> str:
+    cleaned = text.rstrip(" .")
+    return cleaned if cleaned.endswith(("؟", "?", "!")) else cleaned + "."
 
 
 def _render_requested_miss(
@@ -709,21 +866,38 @@ def _render_requested_miss(
     requested_text = _clock(requested.value, arabic=arabic) if requested else ""
     scope = _date_scope_text(unit, arabic=arabic, reference_date=reference_date)
     context = _optional_context(unit, draft.optional_fact_keys, arabic=arabic)
+    alternatives = _alternative_window_values(unit)
+
     if arabic:
-        target = f"ميعاد الساعة {requested_text}" if requested_text else "الوقت المطلوب"
-        text = f"{target} مش متاح {scope}"
+        target = f"الساعة {requested_text}" if requested_text else "الوقت اللي طلبته"
+        text = f"{target} مش متاحة للأسف {scope}"
         if context:
             text += f" {context}"
-        if draft.closing_action == "offer_other_time":
-            text += ". أقدر أشوفلك وقت تاني في نفس النطاق"
     else:
-        target = f"{requested_text}" if requested_text else "The requested time"
+        target = requested_text or "The time you requested"
         text = f"{target} isn’t available {scope}"
         if context:
             text += f" {context}"
-        if draft.closing_action == "offer_other_time":
-            text += ". I can check another time in the same scope"
-    return text.rstrip(" .") + "."
+
+    if alternatives:
+        rows = _render_window_rows(
+            alternatives,
+            arabic=arabic,
+            mode="compact",
+            reference_date=reference_date,
+        )
+        if rows:
+            intro = "أقرب مواعيد متاحة:" if arabic else "Nearest available times:"
+            closing = "أنهي وقت أنسب لك؟" if arabic else "Which time works best for you?"
+            return "\n".join([text.rstrip(" .") + ".", intro, *[f"• {row}" for row in rows], closing])
+
+    if draft.closing_action == "offer_other_time":
+        text += (
+            ". مفيش وقت تاني متاح هنا. تحب أشوفلك أقرب يوم بعده؟"
+            if arabic
+            else ". There isn’t another available time here. Would you like me to check the next day?"
+        )
+    return _finish_customer_sentence(text)
 
 
 def _render_no_availability(
@@ -733,27 +907,21 @@ def _render_no_availability(
     arabic: bool,
     reference_date: date | None = None,
 ) -> str:
-    scope = _date_scope_text(unit, arabic=arabic, reference_date=reference_date)
+    scope = _availability_scope_text(unit, arabic=arabic, reference_date=reference_date)
     context = _optional_context(unit, draft.optional_fact_keys, arabic=arabic)
-    truncated_fact = _fact_map(unit).get("search_truncated")
-    truncated = truncated_fact is not None and truncated_fact.value is True
     if arabic:
-        text = f"مفيش مواعيد متاحة {scope}"
+        text = f"للأسف مفيش مواعيد متاحة {scope}"
         if context:
             text += f" {context}"
-        if truncated:
-            text += "، وده بس نطاق البحث اللي اتفحص"
         if draft.closing_action == "offer_other_scope":
-            text += ". أقدر أدورلك في نطاق تاني لو تحب"
+            text += ". تحب أشوفلك يوم أو وقت تاني؟"
     else:
-        text = f"There are no available times {scope}"
+        text = f"Unfortunately, there are no available times {scope}"
         if context:
             text += f" {context}"
-        if truncated:
-            text += ", and that is only the scope that was checked"
         if draft.closing_action == "offer_other_scope":
-            text += ". I can check another date range if you’d like"
-    return text.rstrip(" .") + "."
+            text += ". Would you like me to check another day or time?"
+    return _finish_customer_sentence(text)
 
 
 def _render_unit(
@@ -768,7 +936,8 @@ def _render_unit(
     truth = unit.availability_truth
     if truth is None:
         raise AvailabilityComposerValidationError(
-            "Availability unit is missing backend truth."
+            "Availability unit is missing backend truth.",
+            reason="invalid_backend_truth",
         )
     if truth.state == "options_available":
         return _render_present(
@@ -787,7 +956,9 @@ def _render_unit(
         return _render_no_availability(
             unit, draft, arabic=arabic, reference_date=reference_date
         )
-    raise AvailabilityComposerValidationError("Unsupported availability state.")
+    raise AvailabilityComposerValidationError(
+        "Unsupported availability state.", reason="invalid_backend_truth"
+    )
 
 
 def resolve_availability_composer_draft(
@@ -862,7 +1033,8 @@ def deterministic_availability_fallback(
         truth = unit.availability_truth
         if truth is None:
             raise AvailabilityComposerValidationError(
-                "Availability fallback requires backend truth."
+                "Availability fallback requires backend truth.",
+                reason="invalid_backend_truth",
             )
         optional = [
             key
@@ -923,17 +1095,17 @@ def compose_availability_contract_reply(
         primary = build_realtime_composer_model()
         fallback_model = None
 
-        def invoke_structured(model) -> AvailabilityComposerDraft:
+        def invoke_structured(model) -> AvailabilityComposerPresentationDraft:
             return invoke_typed_structured_output(
                 model=model,
-                schema=AvailabilityComposerDraft,
+                schema=AvailabilityComposerPresentationDraft,
                 messages=messages,
             )
 
-        def primary_call() -> AvailabilityComposerDraft:
+        def primary_call() -> AvailabilityComposerPresentationDraft:
             return invoke_structured(primary)
 
-        def fallback_call() -> AvailabilityComposerDraft:
+        def fallback_call() -> AvailabilityComposerPresentationDraft:
             nonlocal fallback_model
             if fallback_model is None:
                 fallback_model = build_realtime_composer_fallback_model()
@@ -954,9 +1126,12 @@ def compose_availability_contract_reply(
                 settings.llm_realtime_circuit_breaker_cooldown_seconds
             ),
         )
+        resolved_draft = _materialize_availability_composer_draft(
+            contract, invocation.value
+        )
         text = resolve_availability_composer_draft(
             contract,
-            invocation.value,
+            resolved_draft,
             arabic=arabic,
             has_more_by_unit=has_more_by_unit,
             continuation=continuation,
@@ -969,8 +1144,14 @@ def compose_availability_contract_reply(
         AvailabilityComposerValidationError,
         RuntimeError,
     ) as exc:
+        validation_reason = (
+            exc.reason
+            if isinstance(exc, AvailabilityComposerValidationError)
+            else type(exc).__name__
+        )
         logger.warning(
-            "Availability contract composer used deterministic fallback reason=%s",
+            "Availability contract composer used deterministic fallback reason=%s validation_reason=%s",
             type(exc).__name__,
+            validation_reason,
         )
         return fallback_text, "deterministic:availability-contract-fallback"
