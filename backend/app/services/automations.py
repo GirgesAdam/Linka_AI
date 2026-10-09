@@ -8,7 +8,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.automation_rules import DEFAULT_AUTOMATION_RULES, scheduled_for
@@ -174,6 +174,42 @@ def ensure_default_rules(
 
 def _job_dedupe_key(appointment_id: UUID, rule_key: str) -> str:
     return f"appointment:{appointment_id}:rule:{rule_key}"
+
+
+def _insert_appointment_job_if_absent(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    rule: AutomationRule,
+    appointment: Appointment,
+    scheduled_for: datetime,
+    dedupe_key: str,
+) -> bool:
+    table = AutomationJob.__table__
+    statement = (
+        pg_insert(table)
+        .values(
+            workspace_id=workspace_id,
+            rule_id=rule.id,
+            appointment_id=appointment.id,
+            patient_id=appointment.patient_id,
+            job_kind="appointment_rule",
+            status="queued",
+            scheduled_for=scheduled_for,
+            dedupe_key=dedupe_key,
+            attempts=0,
+            payload={
+                "rule_key": rule.key,
+                "appointment_status_at_plan": appointment.status,
+            },
+            result={},
+        )
+        .on_conflict_do_nothing(
+            index_elements=[table.c.workspace_id, table.c.dedupe_key],
+        )
+        .returning(table.c.id)
+    )
+    return db.scalar(statement) is not None
 
 
 def _cancel_pending_job_dispatch(
@@ -1025,24 +1061,15 @@ def plan_automation_jobs(
                 # Stable jobs need no full-row read. Manual job cancellations stay terminal.
                 continue
 
-            db.add(
-                AutomationJob(
-                    workspace_id=workspace_id,
-                    rule_id=rule.id,
-                    appointment_id=appointment.id,
-                    patient_id=appointment.patient_id,
-                    status="queued",
-                    scheduled_for=when,
-                    dedupe_key=dedupe_key,
-                    attempts=0,
-                    payload_json={
-                        "rule_key": rule.key,
-                        "appointment_status_at_plan": appointment.status,
-                    },
-                    result_json={},
-                )
-            )
-            planned += 1
+            if _insert_appointment_job_if_absent(
+                db,
+                workspace_id=workspace_id,
+                rule=rule,
+                appointment=appointment,
+                scheduled_for=when,
+                dedupe_key=dedupe_key,
+            ):
+                planned += 1
 
     active_rule_by_id = {rule.id: rule for rule in enabled_rules}
     stale_stmt = (
@@ -1109,12 +1136,7 @@ def plan_automation_jobs(
         job.result_json = {"reason": "rule_disabled_or_appointment_no_longer_eligible"}
         cancelled += 1
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        # Another planner may have inserted the same dedupe key concurrently.
-        # A retry on the next scheduler tick is safe.
+    db.commit()
     return PlanningResult(planned=planned, cancelled=cancelled)
 
 
