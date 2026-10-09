@@ -21,14 +21,18 @@ def test_appointments_mobile_uses_chronological_agenda_without_financial_data() 
     assert "price_minor" not in mobile
 
 
-def test_appointments_schedule_keeps_quick_booking_only_in_exception_column() -> None:
-    page = (_root() / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+def test_appointments_schedule_keeps_exceptional_quick_mode_isolated_from_normal_period_dialogs() -> None:
+    root = _root()
+    page = (root / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+    dialog = (root / "frontend/src/app/(dashboard)/appointments/quick-appointment-dialog.tsx").read_text(encoding="utf-8")
+    actions = (root / "frontend/src/app/(dashboard)/appointments/actions.ts").read_text(encoding="utf-8")
 
     assert "quickBookingHref" in page
     assert "allowQuickBooking" in page
     assert 'quickBookingHref(currentParams, selectedDate, branchId, "quick"' in page
-    assert 'allowQuickBooking && column.id !== "quick"' not in page
-    assert 'quickBookingHref(currentParams, selectedDate, branchId, column.id' not in page
+    assert 'quickBookingHref(currentParams, selectedDate, branchId, column.id' in page
+    assert 'schedulingMode={column === "quick" ? "quick" : "standard"}' in dialog
+    assert 'bookingMode === "quick" ? "/booking/appointments/quick" : "/booking/appointments"' in actions
     assert "QuickAppointmentDialog" in page
     assert "mobile resource filter" in page
     assert "resourceFilterHref" in page

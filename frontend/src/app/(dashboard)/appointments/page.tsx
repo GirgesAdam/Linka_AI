@@ -286,26 +286,6 @@ function quickBookingHref(
   return `/appointments?${query.toString()}`;
 }
 
-function manualBookingHref(
-  current: SearchParams,
-  date: string,
-  branchId: string,
-  column: ScheduleColumnId,
-  periodStart: number,
-  periodEnd: number,
-  preferredStart?: number,
-) {
-  const query = new URLSearchParams({ date, branch_id: branchId, book: "1", booking_date: date });
-  if (current.patient_id) query.set("patient_id", current.patient_id);
-  const columns = Array.isArray(current.column) ? current.column : current.column ? [current.column] : [];
-  columns.forEach((value) => query.append("column", value));
-  query.set("book_column", column);
-  query.set("book_start", String(periodStart));
-  query.set("book_end", String(periodEnd));
-  if (typeof preferredStart === "number") query.set("book_time", String(preferredStart));
-  return `/appointments?${query.toString()}`;
-}
-
 function availabilityBlockScopeLabel(
   block: AvailabilityBlock,
   serviceById: Map<string, Service>,
@@ -400,7 +380,7 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
         </section>
       )}
       {blocks.map((block) => <div key={block.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><div className="flex items-center justify-between gap-3"><div><div className="text-sm font-black text-rose-950">فترة غير متاحة</div><div className="mt-1 text-xs font-bold text-rose-800">{appointmentTime(block.start_at, timezone)} – {appointmentTime(block.end_at, timezone)}{block.reason ? ` · ${block.reason}` : ""}</div><div className="mt-1 text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(block, serviceById, scheduleColumns)}</div></div><ReopenAvailabilityBlockButton blockId={block.id} /></div></div>)}
-      {inlineBookingColumns.length > 0 && (
+      {allowQuickBooking && inlineBookingColumns.length > 0 && (
         <section aria-label="inline appointment booking" className="rounded-2xl border border-slate-200 bg-white p-3">
           <div className="text-sm font-black text-slate-900">الفترات المتاحة</div>
           <div className="mt-1 text-[11px] font-semibold text-slate-500">كل فترة فاضية لها نقطة حجز واحدة. اختيار الوقت النهائي يتم من التوفر الفعلي داخل نموذج الحجز.</div>
@@ -410,13 +390,10 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
                 <div className="mb-1.5 text-[11px] font-black text-slate-600">{column.label}</div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {periods.map((period) => {
-                    const preferredStart = minimumInlineStartMinutes === undefined || period.start >= minimumInlineStartMinutes
-                      ? period.start
-                      : undefined;
                     return (
                       <Link
                         key={`${column.id}-${period.start}-${period.end}`}
-                        href={manualBookingHref(currentParams, selectedDate, branchId, column.id, period.start, period.end, preferredStart)}
+                        href={quickBookingHref(currentParams, selectedDate, branchId, column.id, period.start, period.end)}
                         className="group flex min-h-12 items-center justify-between gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-3 py-2 text-xs font-black text-slate-700 transition active:bg-[var(--accent-soft)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-ring)]"
                         aria-label={`حجز في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)} - ${column.label}`}
                       >
@@ -577,19 +554,18 @@ function DailySchedule({
                                     })}
                                   </div>
                                 ) : isAvailable ? (
-                                  column.id === "quick" || availabilityUnknown || !isBookableFreePeriod(period, minimumInlineStartMinutes) ? (
+                                  !allowQuickBooking || column.id === "quick" || availabilityUnknown || !isBookableFreePeriod(period, minimumInlineStartMinutes) ? (
                                     <div className="min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80" />
                                   ) : (
                                     <div className="group relative min-h-12 rounded-xl border border-dashed border-slate-200 bg-white/80">
                                       <Link
-                                        href={manualBookingHref(
+                                        href={quickBookingHref(
                                           currentParams,
                                           selectedDate,
                                           branchId,
                                           column.id,
                                           period.start,
                                           period.end,
-                                          minimumInlineStartMinutes === undefined || period.start >= minimumInlineStartMinutes ? period.start : undefined,
                                         )}
                                         aria-label={`حجز في الفترة من ${minuteLabel(period.start)} إلى ${minuteLabel(period.end)} - ${column.label}`}
                                         className="absolute inset-0 grid place-items-center rounded-xl text-[var(--accent-strong)] outline-none transition hover:bg-[var(--accent-soft)] focus:bg-[var(--accent-soft)] focus:ring-2 focus:ring-[var(--accent-ring)]"
@@ -684,8 +660,8 @@ export default async function AppointmentsPage({
   const quickStart = Number(raw.quick_start);
   const quickEnd = Number(raw.quick_end);
   const quickWindow =
-    quickColumn?.id === "quick" &&
-    visibleColumns.includes("quick") &&
+    quickColumn &&
+    visibleColumns.includes(quickColumn.id) &&
     Number.isInteger(quickStart) &&
     Number.isInteger(quickEnd) &&
     quickStart >= 0 &&
@@ -1044,6 +1020,8 @@ export default async function AppointmentsPage({
           packages={quickPackages}
           pulseBalances={quickPulseBalances}
           devicePrices={devicePrices}
+          fixedLaserDeviceKey={scheduleColumns.find((item) => item.id === quickWindow.column)?.deviceKey}
+          allowedOperationalCategory={scheduleColumns.find((item) => item.id === quickWindow.column)?.operationalCategory}
           services={services}
           doctors={doctors}
           staff={staff}
