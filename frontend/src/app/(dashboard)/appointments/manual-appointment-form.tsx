@@ -219,13 +219,14 @@ export function ManualAppointmentForm({
     }
 
     setAvailabilityLoading(true);
+    const applyWindow = date === bookingDate;
     const result = await getManualAppointmentAvailability({
       branchId,
       serviceId: nextServiceId,
       date,
       laserDeviceKey: nextDeviceKey || undefined,
-      windowStartMinutes,
-      windowEndMinutes,
+      windowStartMinutes: applyWindow ? windowStartMinutes : undefined,
+      windowEndMinutes: applyWindow ? windowEndMinutes : undefined,
     });
     if (availabilityRequestRef.current !== requestId) return;
     setAvailabilityLoading(false);

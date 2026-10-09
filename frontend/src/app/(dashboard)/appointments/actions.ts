@@ -131,8 +131,13 @@ export async function getManualAppointmentAvailability(input: {
       Number(input.windowEndMinutes) > Number(input.windowStartMinutes);
     const slots = hasWindow
       ? response.slots.filter((slot) => {
-          const minute = minuteInTimezone(slot.start_at, response.timezone);
-          return minute >= Number(input.windowStartMinutes) && minute < Number(input.windowEndMinutes);
+          const startMinute = minuteInTimezone(slot.start_at, response.timezone);
+          let endMinute = minuteInTimezone(slot.end_at, response.timezone);
+          if (endMinute <= startMinute) endMinute += 24 * 60;
+          return (
+            startMinute >= Number(input.windowStartMinutes) &&
+            endMinute <= Number(input.windowEndMinutes)
+          );
         })
       : response.slots;
     return {
