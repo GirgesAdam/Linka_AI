@@ -30,7 +30,8 @@ def test_patient_workspace_prioritizes_current_context_before_history() -> None:
     assert "Date.parse(taskAt) <= Date.parse(appointmentAt)" in page
     assert 'nextAction?.kind === "task"' in page
     assert 'nextAction?.kind === "appointment"' in page
-    assert "/tasks?scope=all&patient_id=" in page
+    assert "/tasks?view=all&patient_id=" in page
+    assert "/tasks?view=pending&patient_id=" in page
     assert "/appointments?patient_id=" in page
     assert "stats.overdue_tasks > 0" in page
     assert "stats.active_handoffs > 0" in page
@@ -45,6 +46,10 @@ def test_patient_workspace_preserves_crm_and_entitlement_actions() -> None:
 
     for capability in ("createPatientTask", "addPatientNote", "PatientPackagePanel", "PatientPulsePanel"):
         assert capability in page
+    assert 'name="note_type"' not in page
+    assert "note_type" not in actions
+    crm_schema = (_root() / "backend/app/schemas/crm.py").read_text(encoding="utf-8")
+    assert 'note_type: PatientNoteType = "general"' in crm_schema
     assert "setPatientWhatsappOptIn" not in page
     assert "موافقة تواصل واتساب" not in page
     for capability in ("purchasePatientPackage", "recordPatientPackagePayment"):
@@ -94,3 +99,18 @@ def test_patient_list_does_not_explain_active_status_inline() -> None:
 
     assert "«نشط» لا تعني تلقائيًا" not in page
     assert "آخر تواصل ظاهر في عمود منفصل" not in page
+
+
+def test_dashboard_patient_names_link_to_profile_without_nested_appointment_links() -> None:
+    dashboard = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(
+        encoding="utf-8"
+    )
+    agenda = (_root() / "frontend/src/app/(dashboard)/dashboard/today-agenda.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'href={`/patients/${task.patient_id}`}' in dashboard
+    assert 'href={`/patients/${appointment.patient_id}`}' in agenda
+    assert 'href={`/appointments/${appointment.id}`}' in agenda
+    assert 'className={`group relative grid' in agenda
+    assert 'className="absolute inset-0 rounded-2xl"' in agenda

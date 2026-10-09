@@ -212,7 +212,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
               : "لا يوجد إجراء مجدول"}
           </div>
           {nextAction?.kind === "task" ? (
-            <Link href={`/tasks?scope=all&patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-[var(--interactive)]">فتح متابعة العميل</Link>
+            <Link href={`/tasks?view=all&patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-[var(--interactive)]">فتح متابعة العميل</Link>
           ) : nextAction?.kind === "appointment" ? (
             <Link href={`/appointments?patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-[var(--interactive)]">عرض مواعيد العميل</Link>
           ) : (
@@ -228,7 +228,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
             {!stats.overdue_tasks && !stats.active_handoffs && <div>لا توجد متابعة متأخرة أو تصعيد نشط</div>}
           </div>
           {stats.overdue_tasks > 0 && (
-            <Link href={`/tasks?scope=overdue&patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-amber-800 underline underline-offset-2">فتح المتابعات المتأخرة</Link>
+            <Link href={`/tasks?view=pending&patient_id=${patient.id}`} className="mt-2 inline-flex text-xs font-bold text-amber-800 underline underline-offset-2">فتح المتابعات المتأخرة</Link>
           )}
         </div>
         <div className="rounded-xl border border-[var(--border)] p-4">
@@ -291,13 +291,6 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                     موعد المتابعة
                     <Input name="due_at" type="datetime-local" required className="mt-1" />
                   </label>
-                  <label className="block text-xs font-bold text-slate-700">
-                    المسؤول عن المتابعة
-                    <select name="execution_mode" defaultValue="ai" className="form-control mt-1 h-10 min-h-10">
-                      <option value="ai">Linka — متابعة تلقائية عبر WhatsApp</option>
-                      <option value="human">الفريق — متابعة يدوية</option>
-                    </select>
-                  </label>
 
                   <Button className="w-full"><ListTodo size={15} /> حفظ المتابعة</Button>
                 </form>
@@ -307,12 +300,6 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                 <summary className="flex min-h-10 cursor-pointer items-center text-sm font-bold text-slate-800">إضافة ملاحظة</summary>
                 <form action={addPatientNote} className="mt-4 space-y-3">
                   <input type="hidden" name="patient_id" value={patient.id} />
-                  <select name="note_type" defaultValue="general" className="form-control h-10 min-h-10">
-                    <option value="general">ملاحظة عامة</option>
-                    <option value="preference">تفضيل</option>
-                    <option value="customer_service">خدمة عملاء</option>
-                    <option value="follow_up">متابعة</option>
-                  </select>
                   <Textarea name="content" required placeholder="اكتب المعلومة المهمة للفريق..." />
                   <Button variant="secondary" className="w-full"><StickyNote size={15} /> حفظ الملاحظة</Button>
                 </form>

@@ -43,22 +43,28 @@ function AppointmentRow({
   const cancelled = appointment.status === "cancelled" || appointment.status === "no_show";
 
   return (
-    <Link
-      href={`/appointments/${appointment.id}`}
-      className={`group grid min-h-16 grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-2xl px-2 py-3 transition sm:grid-cols-[82px_minmax(0,1fr)] sm:px-3 ${
+    <div
+      className={`group relative grid min-h-16 grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-2xl px-2 py-3 transition sm:grid-cols-[82px_minmax(0,1fr)] sm:px-3 ${
         isNext
           ? "bg-violet-50 ring-1 ring-violet-100 hover:bg-violet-100/70"
           : "hover:bg-slate-50"
       } ${terminal && !isNext ? "opacity-70" : ""}`}
     >
-      <div className={`pt-0.5 text-end text-base font-semibold tabular-nums ${isNext ? "text-violet-800" : "text-slate-800"}`}>
+      <Link href={`/appointments/${appointment.id}`} aria-label={`فتح موعد ${appointment.patient_name}`} className="absolute inset-0 rounded-2xl" />
+      <div className={`pointer-events-none relative z-10 pt-0.5 text-end text-base font-semibold tabular-nums ${isNext ? "text-violet-800" : "text-slate-800"}`}>
         {formatTime(appointment.start_at, timezone)}
       </div>
-      <div className="min-w-0">
+      <div className="pointer-events-none relative z-10 min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <div className={`truncate text-[15px] font-semibold ${cancelled ? "text-slate-500" : "text-slate-950"}`}>
-            {appointment.patient_name}
-          </div>
+          {appointment.patient_id ? (
+            <Link href={`/patients/${appointment.patient_id}`} className={`pointer-events-auto relative z-20 truncate text-[15px] font-semibold hover:text-violet-700 hover:underline hover:underline-offset-2 ${cancelled ? "text-slate-500" : "text-slate-950"}`}>
+              {appointment.patient_name}
+            </Link>
+          ) : (
+            <div className={`truncate text-[15px] font-semibold ${cancelled ? "text-slate-500" : "text-slate-950"}`}>
+              {appointment.patient_name}
+            </div>
+          )}
           {isNext && (
             <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-bold text-violet-800">التالي</span>
           )}
@@ -72,7 +78,7 @@ function AppointmentRow({
           <StatusBadge domain="appointment" status={appointment.status} showIcon={false} />
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
 

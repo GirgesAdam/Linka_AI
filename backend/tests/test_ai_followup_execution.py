@@ -145,7 +145,7 @@ def test_staff_claim_or_assignment_stops_scheduled_ai_followup() -> None:
     assert 'job.status = "cancelled"' in service
 
 
-def test_patient_and_task_ui_make_automatic_followup_explicit() -> None:
+def test_patient_profile_creates_shared_human_followup_without_executor_selector() -> None:
     patient_page = (_root() / "frontend/src/app/(dashboard)/patients/[patientId]/page.tsx").read_text(
         encoding="utf-8"
     )
@@ -156,10 +156,14 @@ def test_patient_and_task_ui_make_automatic_followup_explicit() -> None:
         encoding="utf-8"
     )
 
-    assert 'name="execution_mode"' in patient_page
-    assert '<option value="ai">' in patient_page
-    assert '<option value="human">' in patient_page
-    assert "execution_mode: executionMode" in patient_actions
+    assert 'name="execution_mode"' not in patient_page
+    assert '<option value="ai">' not in patient_page
+    assert '<option value="human">' not in patient_page
+    assert 'name="assigned_user_id"' not in patient_page
+    assert 'assigned_user_id: null' in patient_actions
+    assert 'execution_mode: "human"' in patient_actions
+    assert "execution_mode: executionMode" not in patient_actions
+    # Legacy AI / assigned tasks still render correctly in the shared queue.
     assert 'task.execution_mode === "ai"' in tasks_page
     assert 'task.execution_mode === "human"' in tasks_page
 
