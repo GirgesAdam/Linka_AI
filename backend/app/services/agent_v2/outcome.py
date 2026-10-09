@@ -35,6 +35,8 @@ ResponseGoal = Literal[
     "appointment_confirmed",
     "active_task_cancelled",
     "package_information",
+    "package_comparison",
+    "availability_reference",
     "package_purchased",
     "pulse_information",
     "pulse_pack_purchased",

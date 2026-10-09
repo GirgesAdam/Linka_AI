@@ -20,6 +20,7 @@ OperationType = Literal[
     "customer_profile",
     "customer_history",
     "package_info",
+    "package_compare",
     "buy_package",
     "pulse_info",
     "buy_pulse_pack",
@@ -49,7 +50,8 @@ PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "fina
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
-SelectionKind = Literal["index", "time", "ref"]
+SelectionKind = Literal["index", "time", "ref", "relative"]
+RelativeSelection = Literal["next", "previous", "first", "last"]
 EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
 FinancialOwnership = Literal["none", "reception"]
@@ -153,6 +155,7 @@ class Selection(StrictContractModel):
     index: int | None = None
     time: str | None = None
     ref: str | None = None
+    relative: RelativeSelection | None = None
     time_ambiguity: TimeAmbiguity = "none"
 
     @model_validator(mode="after")
@@ -160,23 +163,30 @@ class Selection(StrictContractModel):
         if self.kind == "index":
             if self.index is None or self.index < 1:
                 raise ValueError("index selection requires a positive index.")
-            if self.time is not None or self.ref is not None:
-                raise ValueError("index selection cannot also contain time/ref.")
+            if self.time is not None or self.ref is not None or self.relative is not None:
+                raise ValueError("index selection cannot also contain time/ref/relative.")
             if self.time_ambiguity != "none":
                 raise ValueError("index selection cannot contain time ambiguity.")
         elif self.kind == "time":
             if self.time is None:
                 raise ValueError("time selection requires time.")
             time.fromisoformat(self.time)
-            if self.index is not None or self.ref is not None:
-                raise ValueError("time selection cannot also contain index/ref.")
+            if self.index is not None or self.ref is not None or self.relative is not None:
+                raise ValueError("time selection cannot also contain index/ref/relative.")
         elif self.kind == "ref":
             if not self.ref:
                 raise ValueError("ref selection requires ref.")
-            if self.index is not None or self.time is not None:
-                raise ValueError("ref selection cannot also contain index/time.")
+            if self.index is not None or self.time is not None or self.relative is not None:
+                raise ValueError("ref selection cannot also contain index/time/relative.")
             if self.time_ambiguity != "none":
                 raise ValueError("ref selection cannot contain time ambiguity.")
+        elif self.kind == "relative":
+            if self.relative is None:
+                raise ValueError("relative selection requires a relative direction.")
+            if self.index is not None or self.time is not None or self.ref is not None:
+                raise ValueError("relative selection cannot also contain index/time/ref.")
+            if self.time_ambiguity != "none":
+                raise ValueError("relative selection cannot contain time ambiguity.")
         return self
 
 

@@ -210,6 +210,33 @@ def verified_read_semantic_view(
         )
         if appointment_ref is not None:
             safe["appointment_ref"] = appointment_ref
+    raw_reference_options = read_context.get("availability_reference_options")
+    if isinstance(raw_reference_options, list):
+        safe_options: list[dict[str, object]] = []
+        for raw_option in raw_reference_options:
+            if not isinstance(raw_option, dict):
+                continue
+            safe_option = {
+                key: raw_option[key]
+                for key in (
+                    "index",
+                    "concrete",
+                    "start_local",
+                    "end_local",
+                    "start_time_24h",
+                    "end_time_24h",
+                    "doctor_name",
+                    "laser_device_name",
+                )
+                if raw_option.get(key) not in (None, "")
+            }
+            safe_options.append(safe_option)
+        if safe_options:
+            safe["availability_reference_options"] = safe_options
+    anchor = read_context.get("availability_reference_anchor_index")
+    if isinstance(anchor, int) and not isinstance(anchor, bool) and anchor > 0:
+        safe["availability_reference_anchor_index"] = anchor
+
     option_count = read_context.get("availability_option_count")
     if isinstance(option_count, int) and option_count >= 0:
         safe["availability_option_count"] = option_count

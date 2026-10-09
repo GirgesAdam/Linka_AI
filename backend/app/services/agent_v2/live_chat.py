@@ -40,6 +40,7 @@ from app.services.agent_chat import (
     run_agent_for_existing_inbound as run_agent_for_existing_inbound_v1,
 )
 from app.services.agent_v2.orchestrator import V2OrchestratedTurn, orchestrate_v2_turn
+from app.services.agent_v2.reference_resolution import build_availability_reference_options
 from app.services.agent_v2.write_executor import execute_write_ready_step
 from app.services.conversation_ownership import (
     OWNER_HUMAN,
@@ -402,6 +403,16 @@ def _verified_read_context_from_turn(
 ) -> dict[str, Any] | None:
     """Keep only the last read-only canonical scope plus a minimal verified result summary."""
     for step in reversed(turn.plan.steps):
+        if step.facts.get("verified_availability_reference") is True and isinstance(
+            previous_read_context, dict
+        ):
+            context = dict(previous_read_context)
+            selected_index = step.facts.get("availability_reference_index")
+            if isinstance(selected_index, int) and not isinstance(selected_index, bool):
+                context["availability_reference_anchor_index"] = selected_index
+            return context
+
+    for step in reversed(turn.plan.steps):
         if step.disposition != "read" or step.write_intent is not None or not step.reads:
             continue
         context: dict[str, Any] = {"operation_type": step.operation_type}
@@ -458,15 +469,16 @@ def _verified_read_context_from_turn(
             context["availability_option_count"] = option_count
 
         if step.operation_type in {"availability", "book", "reschedule"}:
-            outcome = next(
+            matching_trace = next(
                 (
-                    trace.outcome
+                    trace
                     for trace in reversed(turn.traces)
                     if trace.operation_index == step.operation_index
                     and trace.outcome is not None
                 ),
                 None,
             )
+            outcome = matching_trace.outcome if matching_trace is not None else None
             if outcome is not None:
                 service_name, windows = availability_windows_from_outcome_facts(
                     outcome.facts
@@ -499,11 +511,22 @@ def _verified_read_context_from_turn(
                                 for value in raw_keys
                                 if isinstance(value, str) and value
                             }
-                    _selected, selected_keys, has_more = select_availability_window_page(
+                    selected_windows, selected_keys, has_more = select_availability_window_page(
                         windows,
                         service_name=service_name,
                         shown_keys=previous_keys,
                     )
+                    verified_slots = (
+                        [dict(item) for item in getattr(matching_trace, "availability_slots", ())]
+                        if matching_trace is not None
+                        else []
+                    )
+                    reference_options = build_availability_reference_options(
+                        displayed_windows=selected_windows,
+                        verified_slots=verified_slots,
+                    )
+                    if reference_options:
+                        context["availability_reference_options"] = reference_options
                     cumulative = sorted(previous_keys | set(selected_keys))
                     if cumulative:
                         context["availability_presented_window_keys"] = cumulative

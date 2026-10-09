@@ -69,6 +69,9 @@ from app.services.agent_v2.read_executor import (
     ReadExecutionContext,
     execute_step_reads,
 )
+from app.services.agent_v2.reference_resolution import (
+    recover_verified_availability_reference_selection,
+)
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingTaskState,
@@ -111,6 +114,7 @@ class V2RuntimeStepTrace:
     outcome: TurnOutcome | None = None
     verified_parameters: dict[str, object] | None = None
     pending_write: bool = False
+    availability_slots: tuple[dict[str, object], ...] = ()
     skipped: bool = False
     skip_reason: str | None = None
 
@@ -128,6 +132,16 @@ class V2OrchestratedTurn:
     pending_write: PendingV2Write | None
     verified_action_context: dict[str, object] | None = None
     pending_choice: OptionSnapshot | None = None
+
+
+def _verified_availability_slots(reads: ReadExecutionBundle) -> tuple[dict[str, object], ...]:
+    for result in reads.results:
+        if result.kind != "availability" or not result.ok:
+            continue
+        raw = result.payload.get("slots")
+        if isinstance(raw, list):
+            return tuple(dict(item) for item in raw if isinstance(item, dict))
+    return ()
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -1283,6 +1297,23 @@ def orchestrate_v2_turn(
         timezone_name=timezone_name,
         local_now=local_now,
     )
+    if len(understanding.operations) == 1:
+        operation = understanding.operations[0]
+        recovered_selection = recover_verified_availability_reference_selection(
+            operation_type=operation.type,
+            continues_previous=operation.continues_previous,
+            existing_selection=operation.selection,
+            latest_customer_text=latest_customer_text,
+            recent_read_context=recent_read_context,
+        )
+        if recovered_selection is not None and recovered_selection != operation.selection:
+            understanding = understanding.model_copy(
+                update={
+                    "operations": [
+                        operation.model_copy(update={"selection": recovered_selection})
+                    ]
+                }
+            )
     understanding, semantic_visit_groups = expand_multi_service_operations(
         understanding,
         semantic_context=semantic_context,
@@ -1317,6 +1348,7 @@ def orchestrate_v2_turn(
             now=local_now,
             pending_choice=pending_choice,
             explicit_user_time=explicit_user_time,
+            recent_read_context=recent_read_context,
         ),
     )
     plan = normalize_compound_turn_plan(
@@ -1632,6 +1664,7 @@ def orchestrate_v2_turn(
                         disposition_after=advanced.disposition,
                         read_kinds=tuple(result.kind for result in reads.results),
                         verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
                         pending_write=True,
                     )
                 )
@@ -1661,6 +1694,7 @@ def orchestrate_v2_turn(
                     read_kinds=tuple(result.kind for result in reads.results),
                     outcome=outcome,
                     verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
                 )
             )
             outcomes.append(outcome)
@@ -1721,6 +1755,7 @@ def orchestrate_v2_turn(
                         read_kinds=tuple(result.kind for result in reads.results),
                         outcome=outcome,
                         verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
                     )
                 )
             break
@@ -1748,6 +1783,7 @@ def orchestrate_v2_turn(
                 read_kinds=tuple(result.kind for result in reads.results),
                 outcome=outcome,
                 verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
             )
         )
         outcomes.append(outcome)
