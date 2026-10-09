@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from app.agents.explicit_time import extract_single_explicit_hhmm
 from app.agents.llm_runtime import invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_interpreter_fallback_model,
@@ -969,6 +970,80 @@ def merge_verified_action_context(
     return turn.model_copy(update={"operations": operations})
 
 
+def _same_clock_or_twelve_hour_variant(value: str | None, explicit: str) -> bool:
+    raw = str(value or "").strip()[:5]
+    if not raw:
+        return False
+    try:
+        raw_hour, raw_minute = (int(part) for part in raw.split(":", 1))
+        exp_hour, exp_minute = (int(part) for part in explicit.split(":", 1))
+    except (TypeError, ValueError):
+        return False
+    return raw_minute == exp_minute and (raw_hour == exp_hour or abs(raw_hour - exp_hour) == 12)
+
+
+def _preserve_explicit_clock_constraints_v2(
+    turn: TiaTurnUnderstanding,
+    *,
+    latest_customer_text: str,
+) -> TiaTurnUnderstanding:
+    """Make one explicit colon-formatted clock authoritative before AM/PM resolution."""
+    explicit = extract_single_explicit_hhmm(latest_customer_text)
+    if explicit is None:
+        return turn
+
+    operations = []
+    changed = False
+    for operation in turn.operations:
+        entities = operation.entities
+        time_constraint = entities.time
+        if (
+            time_constraint is not None
+            and time_constraint.start_time is not None
+            and _same_clock_or_twelve_hour_variant(time_constraint.start_time, explicit)
+        ):
+            time_constraint = time_constraint.model_copy(
+                update={
+                    "start_time": explicit,
+                    "start_time_ambiguity": "none",
+                }
+            )
+            entities = entities.model_copy(update={"time": time_constraint})
+            changed = True
+        elif (
+            len(turn.operations) == 1
+            and operation.type in {"book", "reschedule", "availability"}
+        ):
+            entities = entities.model_copy(
+                update={
+                    "time": TimeConstraint(
+                        mode="exact",
+                        start_time=explicit,
+                        start_time_ambiguity="none",
+                    )
+                }
+            )
+            changed = True
+
+        selection = operation.selection
+        if (
+            selection is not None
+            and selection.kind == "time"
+            and _same_clock_or_twelve_hour_variant(selection.time, explicit)
+        ):
+            selection = selection.model_copy(
+                update={"time": explicit, "time_ambiguity": "none"}
+            )
+            changed = True
+
+        operations.append(
+            operation.model_copy(update={"entities": entities, "selection": selection})
+            if entities != operation.entities or selection != operation.selection
+            else operation
+        )
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
 def interpret_customer_turn_v2(
     *,
     history: list[BaseMessage],
@@ -1039,7 +1114,12 @@ def interpret_customer_turn_v2(
         operation="v2-turn-interpreter",
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
-    bounded = enforce_unscoped_task_boundary(invocation.value, semantic_context)
+    latest_index = _latest_customer_index(history)
+    latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
+    explicit_safe = _preserve_explicit_clock_constraints_v2(
+        invocation.value, latest_customer_text=latest_customer_text
+    )
+    bounded = enforce_unscoped_task_boundary(explicit_safe, semantic_context)
     isolated = isolate_fresh_task_context(bounded)
     continued = merge_verified_read_context(isolated, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)

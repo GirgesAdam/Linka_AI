@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.clinic_grounding import validate_grounded_entity_ids
+from app.agents.explicit_time import extract_single_explicit_hhmm
 from app.agents.llm_runtime import invoke_with_model_chain
 from app.agents.model_provider import (
     build_realtime_interpreter_emergency_model,
@@ -314,6 +315,45 @@ def _single_location_entity_state(state: object) -> dict[str, object]:
     return {key: value for key, value in state.items() if key not in blocked}
 
 
+def _preserve_explicit_clock_constraint(
+    decision: UnifiedTurnDecision,
+    *,
+    latest_customer_text: str,
+) -> UnifiedTurnDecision:
+    """Prevent semantic drift of an explicit colon-formatted clock value.
+
+    Colloquial hours can still use clinic-hours disambiguation, but HH:MM/H:MM
+    values are already explicit. Arabic-Indic digits are canonicalized by the
+    extractor before this invariant is applied.
+    """
+    explicit = extract_single_explicit_hhmm(latest_customer_text)
+    if explicit is None:
+        return decision
+
+    hints = decision.entity_hints
+    hint_updates: dict[str, object] = {}
+    selection_time = decision.selection_time
+    if hints.requested_start_time is not None:
+        hint_updates["requested_start_time"] = explicit
+    elif selection_time is not None:
+        selection_time = explicit
+    elif hints.not_before_time is not None and hints.not_after_time is None:
+        hint_updates["not_before_time"] = explicit
+    elif hints.not_after_time is not None and hints.not_before_time is None:
+        hint_updates["not_after_time"] = explicit
+    elif set(map(str, decision.capabilities)).intersection(
+        {"appointment_creation", "appointment_reschedule"}
+    ):
+        hint_updates["requested_start_time"] = explicit
+
+    if not hint_updates and selection_time == decision.selection_time:
+        return decision
+    updated_hints = hints.model_copy(update=hint_updates) if hint_updates else hints
+    return decision.model_copy(
+        update={"entity_hints": updated_hints, "selection_time": selection_time}
+    )
+
+
 def _normalize_single_location_decision(
     decision: UnifiedTurnDecision,
 ) -> UnifiedTurnDecision:
@@ -597,6 +637,9 @@ def interpret_customer_turn(
         circuit_breaker_cooldown_seconds=settings.llm_realtime_circuit_breaker_cooldown_seconds,
     )
     value = _normalize_single_location_decision(invocation.value)
+    value = _preserve_explicit_clock_constraint(
+        value, latest_customer_text=_latest_customer_turn(history)
+    )
     grounded_hints = validate_grounded_entity_ids(value.entity_hints, clinic_catalog)
     value = value.model_copy(update={"entity_hints": grounded_hints})
     return _normalize_active_booking_decision(value, flow)

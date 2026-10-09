@@ -7,10 +7,11 @@ from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
+from app.agents.explicit_time import extract_single_explicit_hhmm
 from app.agents.v2.availability_scope import (
     availability_scope_key_from_reads,
     availability_scope_matches,
@@ -1241,6 +1242,18 @@ def orchestrate_v2_turn(
         now=local_now,
     )
 
+    latest_customer_text = next(
+        (
+            str(message.content).strip()
+            for message in reversed(history)
+            if isinstance(message, HumanMessage)
+            and isinstance(message.content, str)
+            and message.content.strip()
+        ),
+        "",
+    )
+    explicit_user_time = extract_single_explicit_hhmm(latest_customer_text)
+
     canonical_catalog = catalog or build_clinic_catalog(db, workspace)
     semantic_context: SemanticContext = build_semantic_context(canonical_catalog)
     task_context_kwargs: dict[str, Any] = {
@@ -1303,6 +1316,7 @@ def orchestrate_v2_turn(
             active_task=planner_active_task,
             now=local_now,
             pending_choice=pending_choice,
+            explicit_user_time=explicit_user_time,
         ),
     )
     plan = normalize_compound_turn_plan(
