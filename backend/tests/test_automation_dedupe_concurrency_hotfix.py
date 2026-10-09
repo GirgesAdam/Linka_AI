@@ -109,7 +109,9 @@ def test_concurrent_planning_dedupe_is_atomic_and_transaction_safe_x20():
             try:
                 barrier = Barrier(2)
 
-                def plan_in_session():
+                def plan_in_session(
+                    *, barrier: Barrier = barrier, workspace_id=workspace_id
+                ):
                     with Session(engine) as db:
                         barrier.wait(timeout=5)
                         result = automations.plan_automation_jobs(
