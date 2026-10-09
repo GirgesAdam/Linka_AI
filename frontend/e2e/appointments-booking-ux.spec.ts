@@ -57,3 +57,17 @@ test("inline resource context reuses existing device/category constraints withou
   expect(actions).toContain('const endpoint = bookingMode === "quick" ? "/booking/appointments/quick" : "/booking/appointments"');
   expect(actions).toContain("start_at: manualStartToIso(startsAt, clinicTimezone)");
 });
+
+
+test("today inline booking does not advertise starts that are already in the past", () => {
+  expect(page).toContain("const currentMinute = minuteInTimezone(new Date().toISOString(), timezone)");
+  expect(page).toContain("minimumInlineStartMinutes={selectedDate === today ? currentMinute : undefined}");
+  expect(page).toContain("minimumStartMinutes === undefined || start >= minimumStartMinutes");
+  expect(page.match(/minimumInlineStartMinutes,/g)?.length || 0).toBeGreaterThanOrEqual(2);
+});
+
+test("mobile resource filter has readable labels", () => {
+  expect(page).toContain("التخصص / الجهاز");
+  expect(page).toContain(">الكل</Link>");
+  expect(page).not.toContain("?????? / ?????");
+});

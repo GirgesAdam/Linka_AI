@@ -303,6 +303,7 @@ function bookingStartsForPeriod(
   period: SchedulePeriod,
   slotIntervalMinutes: number,
   includePeriodStart: boolean,
+  minimumStartMinutes?: number,
 ) {
   const step = Number.isInteger(slotIntervalMinutes) && slotIntervalMinutes > 0 ? slotIntervalMinutes : 30;
   const starts = new Set<number>();
@@ -312,7 +313,9 @@ function bookingStartsForPeriod(
     starts.add(minute);
     minute += step;
   }
-  return [...starts].sort((left, right) => left - right);
+  return [...starts]
+    .filter((start) => minimumStartMinutes === undefined || start >= minimumStartMinutes)
+    .sort((left, right) => left - right);
 }
 
 function isAppointmentReleaseMinute(
@@ -429,7 +432,7 @@ function buildSchedulePeriods(
   });
 }
 
-function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable, slotIntervalMinutes }: {
+function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable, slotIntervalMinutes, minimumInlineStartMinutes }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
   hours: KnowledgeHour[];
@@ -444,6 +447,7 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
   allowQuickBooking: boolean;
   availabilityTruthAvailable: boolean;
   slotIntervalMinutes: number;
+  minimumInlineStartMinutes?: number;
 }) {
   const visible = appointments
     .filter((appointment) => visibleColumns.includes(appointmentColumn(appointment, serviceById)))
@@ -477,6 +481,7 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
                     period,
                     slotIntervalMinutes,
                     period.start === intervalStart || isAppointmentReleaseMinute(period.start, columnAppointments, timezone),
+                    minimumInlineStartMinutes,
                   ),
                 );
             }),
@@ -572,6 +577,7 @@ function DailySchedule({
   allowQuickBooking,
   availabilityTruthAvailable,
   slotIntervalMinutes,
+  minimumInlineStartMinutes,
 }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
@@ -587,6 +593,7 @@ function DailySchedule({
   allowQuickBooking: boolean;
   availabilityTruthAvailable: boolean;
   slotIntervalMinutes: number;
+  minimumInlineStartMinutes?: number;
 }) {
   if (!hours.length) {
     return (
@@ -603,7 +610,7 @@ function DailySchedule({
 
   return (
     <>
-      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} availabilityTruthAvailable={availabilityTruthAvailable} slotIntervalMinutes={slotIntervalMinutes} />
+      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} availabilityTruthAvailable={availabilityTruthAvailable} slotIntervalMinutes={slotIntervalMinutes} minimumInlineStartMinutes={minimumInlineStartMinutes} />
       <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
@@ -682,6 +689,7 @@ function DailySchedule({
                                         period,
                                         slotIntervalMinutes,
                                         period.start === start || isAppointmentReleaseMinute(period.start, columnAppointments, timezone),
+                                        minimumInlineStartMinutes,
                                       ).map((start) => (
                                         <Link
                                           key={`${column.id}-${start}`}
@@ -796,6 +804,7 @@ export default async function AppointmentsPage({
     null;
   const timezone = selectedBranch?.timezone || knowledge.workspace_timezone || "Africa/Cairo";
   const today = dateInTimezone(timezone);
+  const currentMinute = minuteInTimezone(new Date().toISOString(), timezone);
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(raw.date || "") ? raw.date! : today;
   const bookingDateForForm = /^\d{4}-\d{2}-\d{2}$/.test(raw.booking_date || "")
     ? raw.booking_date!
@@ -1052,9 +1061,9 @@ export default async function AppointmentsPage({
             )}
 
           {selectedBranch && <div className="border-t border-slate-100 pt-3 md:hidden" aria-label="mobile resource filter">
-            <div className="mb-2 text-xs font-black text-slate-600">?????? / ?????</div>
+            <div className="mb-2 text-xs font-black text-slate-600">التخصص / الجهاز</div>
             <div className="flex gap-2 overflow-x-auto pb-1">
-              <Link href={resourceFilterHref(currentParams, selectedDate, selectedBranch.id)} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold ${visibleColumns.length === scheduleColumns.length ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "border-slate-200 bg-white text-slate-600"}`}>????</Link>
+              <Link href={resourceFilterHref(currentParams, selectedDate, selectedBranch.id)} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold ${visibleColumns.length === scheduleColumns.length ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "border-slate-200 bg-white text-slate-600"}`}>الكل</Link>
               {scheduleColumns.map((column) => <Link key={column.id} href={resourceFilterHref(currentParams, selectedDate, selectedBranch.id, column.id)} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-bold ${visibleColumns.length === 1 && visibleColumns[0] === column.id ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "border-slate-200 bg-white text-slate-600"}`}>{column.label}</Link>)}
             </div>
           </div>}
@@ -1097,6 +1106,7 @@ export default async function AppointmentsPage({
               allowQuickBooking={!patientId}
               availabilityTruthAvailable={availabilityTruthAvailable}
               slotIntervalMinutes={slotIntervalMinutes}
+              minimumInlineStartMinutes={selectedDate === today ? currentMinute : undefined}
             />
           ) : (
             <div className="py-12 text-center text-sm font-semibold text-[var(--muted)]">لا يوجد فرع نشط لعرض جدول المواعيد.</div>
