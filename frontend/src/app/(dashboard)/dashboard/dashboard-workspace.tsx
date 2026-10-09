@@ -112,7 +112,13 @@ function FollowUpRow({
     <div className="grid min-h-16 gap-3 px-1 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-3">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="truncate text-[15px] font-semibold text-slate-950">{task.patient_name}</span>
+          {task.patient_id ? (
+            <Link href={`/patients/${task.patient_id}`} className="truncate text-[15px] font-semibold text-slate-950 hover:text-violet-700 hover:underline hover:underline-offset-2">
+              {task.patient_name}
+            </Link>
+          ) : (
+            <span className="truncate text-[15px] font-semibold text-slate-950">{task.patient_name}</span>
+          )}
           <StatusBadge domain="priority" status={task.priority} showIcon={false} />
           {task.is_overdue && (
             <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-700">متأخرة</span>
@@ -311,7 +317,7 @@ export function DashboardWorkspace({
             <h2 id="followups-heading" className="text-xl font-semibold text-slate-950">المتابعات المستحقة</h2>
             <p className="mt-1 text-sm text-slate-500">متابعات اليوم وأي متابعة متأخرة من الأيام السابقة لحد ما تتعمل تم</p>
           </div>
-          <Link href="/tasks?scope=all" className="hidden text-xs font-bold text-violet-700 sm:inline-flex">كل المتابعات</Link>
+          <Link href="/tasks?view=pending" className="hidden text-xs font-bold text-violet-700 sm:inline-flex">كل المتابعات</Link>
         </div>
 
         <div className="rounded-2xl bg-white px-3 sm:px-4">

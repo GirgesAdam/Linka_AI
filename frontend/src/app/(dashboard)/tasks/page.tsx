@@ -15,9 +15,8 @@ import type { CRMTask, WorkspaceMember } from "@/lib/types";
 import { claimTask, setTaskStatus } from "./actions";
 import { ExecutorSelect } from "./executor-select";
 
-type TaskSearchParams = { scope?: string; status?: string; mine?: string; patient_id?: string };
-const scopes = [["all", "الكل"], ["overdue", "متأخرة"], ["today", "اليوم"], ["upcoming", "قادمة"]] as const;
-const statuses = [["", "كل الحالات"], ["pending", "قيد الانتظار"], ["completed", "مكتملة"], ["cancelled", "ملغاة"]] as const;
+type TaskSearchParams = { view?: string; patient_id?: string };
+const views = [["pending", "لم تنفذ"], ["completed", "مكتملة"], ["all", "الكل"]] as const;
 
 function hrefFor(current: TaskSearchParams, key: keyof TaskSearchParams, value: string) {
   const params = new URLSearchParams();
@@ -30,21 +29,21 @@ function hrefFor(current: TaskSearchParams, key: keyof TaskSearchParams, value: 
 export default async function TasksPage({ searchParams }: { searchParams: Promise<TaskSearchParams> }) {
   const raw = await searchParams;
   const filters: TaskSearchParams = {
-    scope: scopes.some(([value]) => value === raw.scope) ? raw.scope : "all",
-    status: statuses.some(([value]) => value === raw.status) ? raw.status : "",
-    mine: raw.mine === "1" ? "1" : "",
+    view: views.some(([value]) => value === raw.view) ? raw.view : "pending",
     patient_id: (raw.patient_id || "").trim(),
   };
   const ctx = await getAppContext();
-  const query = new URLSearchParams({ limit: "100", scope: filters.scope || "all" });
-  if (filters.status) query.set("status", filters.status);
-  if (filters.mine) query.set("assigned_to_me", "true");
+  const query = new URLSearchParams({ limit: "100", scope: "all", task_type: "follow_up" });
+  if (filters.view === "completed") query.set("status", "completed");
   if (filters.patient_id) query.set("patient_id", filters.patient_id);
 
-  const [tasks, members] = await Promise.all([
+  const [loadedTasks, members] = await Promise.all([
     tiaRequest<CRMTask[]>(`/crm/tasks?${query.toString()}`),
     ctx.workspace.role === "admin" ? tiaRequest<WorkspaceMember[]>("/auth/workspace/members") : Promise.resolve([]),
   ]);
+  const tasks = filters.view === "pending"
+    ? loadedTasks.filter((task) => task.status === "pending" || task.status === "in_progress")
+    : loadedTasks;
   const memberOptions = members
     .filter((member) => member.is_active)
     .map((member) => ({ user_id: member.user_id, label: member.full_name || member.email }));
@@ -67,20 +66,11 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
       )}
 
       <div className="surface-toolbar mb-4">
-        {scopes.map(([value, label]) => (
-          <FilterChip key={value} href={hrefFor(filters, "scope", value)} active={filters.scope === value}>
+        {views.map(([value, label]) => (
+          <FilterChip key={value} href={hrefFor(filters, "view", value)} active={filters.view === value}>
             {label}
           </FilterChip>
         ))}
-        <span className="mx-1 hidden h-8 w-px bg-slate-200 sm:block" />
-        {statuses.map(([value, label]) => (
-          <FilterChip key={value || "all"} href={hrefFor(filters, "status", value)} active={filters.status === value}>
-            {label}
-          </FilterChip>
-        ))}
-        <FilterChip href={hrefFor(filters, "mine", filters.mine ? "" : "1")} active={Boolean(filters.mine)}>
-          متابعتي
-        </FilterChip>
         <div className="mr-auto flex gap-2 text-xs text-[var(--muted)]">
           <span>{activeCount} نشطة</span>
           <span>·</span>
