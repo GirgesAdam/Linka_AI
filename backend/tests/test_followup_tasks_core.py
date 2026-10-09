@@ -181,9 +181,20 @@ def test_followup_ui_uses_backend_task_api_and_patient_profile_entrypoint() -> N
     )
     nav = (_root() / "frontend/src/components/dashboard-navigation.tsx").read_text(encoding="utf-8")
 
-    assert 'scope: "100"' not in page
-    assert 'scope: filters.scope || "all"' in page
-    assert "assigned_to_me" in page
+    expected_views = (
+        '["pending", "لم تنفذ"]',
+        '["completed", "مكتملة"]',
+        '["all", "الكل"]',
+    )
+    assert all(view in page for view in expected_views)
+    assert 'view: views.some(([value]) => value === raw.view) ? raw.view : "pending"' in page
+    assert 'new URLSearchParams({ limit: "100", scope: "all", task_type: "follow_up" })' in page
+    assert 'if (filters.view === "completed") query.set("status", "completed")' in page
+    assert 'task.status === "pending" || task.status === "in_progress"' in page
+    assert "assigned_to_me" not in page
+    assert "filters.scope" not in page
+    assert "filters.mine" not in page
+    assert 'hrefFor(filters, "mine"' not in page
     assert "claimTask" in page
     assert "setTaskStatus" in page
     assert "/crm/tasks/${taskId}/claim" in actions
