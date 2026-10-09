@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { PATIENT_PHONE_ERROR, isValidPatientPhone } from "@/lib/patient-phone";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { Appointment, Patient } from "@/lib/types";
 
@@ -255,6 +256,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
       const lastName = String(formData.get("last_name") || "").trim();
       const phone = String(formData.get("phone") || "").trim();
       if (!firstName || !phone) return { ok: false, message: "اكتب اسم العميل ورقم الهاتف." };
+      if (!isValidPatientPhone(phone)) return { ok: false, message: PATIENT_PHONE_ERROR };
       const patient = await tiaRequest<Patient>("/crm/patients", {
         method: "POST",
         body: JSON.stringify({ first_name: firstName, last_name: lastName || null, phone, source: "phone", status: "active", preferred_language: "ar" }),

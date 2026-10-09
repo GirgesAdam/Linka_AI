@@ -3,6 +3,7 @@ import { Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PATIENT_PHONE_ERROR } from "@/lib/patient-phone";
 import { formatDateTime } from "@/lib/format";
 import { appointmentLabels } from "@/lib/status";
 import type { Appointment, Doctor, Patient, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
@@ -38,6 +39,7 @@ export function QuickAppointmentDialog({
   windowStartMinutes,
   windowEndMinutes,
   phone,
+  phoneInvalid,
   patient,
   history,
   packages,
@@ -58,6 +60,7 @@ export function QuickAppointmentDialog({
   windowStartMinutes: number;
   windowEndMinutes: number;
   phone: string;
+  phoneInvalid: boolean;
   patient: Patient | null;
   history: Appointment[];
   packages: PatientPackage[];
@@ -105,12 +108,25 @@ export function QuickAppointmentDialog({
             {visibleColumns.map((visibleColumn) => <input key={visibleColumn} type="hidden" name="column" value={visibleColumn} />)}
             <label className="min-w-0 flex-1">
               <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم هاتف العميل</span>
-              <Input name="quick_phone" defaultValue={phone} required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" autoFocus={!phone} />
+              <Input
+                name="quick_phone"
+                defaultValue={phone}
+                required
+                inputMode="numeric"
+                pattern="[0-9]{11}"
+                minLength={11}
+                maxLength={11}
+                title={PATIENT_PHONE_ERROR}
+                dir="ltr"
+                placeholder="01xxxxxxxxx"
+                autoFocus={!phone}
+              />
+              {phoneInvalid && <p className="mt-1 text-xs font-bold text-red-600">{PATIENT_PHONE_ERROR}</p>}
             </label>
             <Button type="submit" variant="outline" className="mt-6"><Search size={16} /> بحث</Button>
           </form>
 
-          {phone && (
+          {phone && !phoneInvalid && (
             <>
               {patient && (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">

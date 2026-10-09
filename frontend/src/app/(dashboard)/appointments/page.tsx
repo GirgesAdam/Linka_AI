@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { formatDateTime } from "@/lib/format";
+import { PATIENT_PHONE_ERROR, isValidPatientPhone } from "@/lib/patient-phone";
 import { appointmentLabels } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type {
@@ -643,6 +644,8 @@ export default async function AppointmentsPage({
   const patientId = raw.patient_id;
   const manualPhone = (raw.manual_phone || "").trim();
   const quickPhone = (raw.quick_phone || "").trim();
+  const manualPhoneInvalid = Boolean(manualPhone) && !isValidPatientPhone(manualPhone);
+  const quickPhoneInvalid = Boolean(quickPhone) && !isValidPatientPhone(quickPhone);
 
   const [knowledge, services, doctors, staff, laserDevices, devicePrices] = await Promise.all([
     tiaRequest<BookingKnowledge>("/clinic/knowledge"),
@@ -701,8 +704,8 @@ export default async function AppointmentsPage({
   const appointments = allAppointments.filter((appointment) => scheduleStatuses.has(appointment.status));
 
   const [manualPatient, quickPatient] = await Promise.all([
-    findPatientByPhone(manualPhone),
-    quickWindow ? findPatientByPhone(quickPhone) : Promise.resolve(null),
+    manualPhoneInvalid ? Promise.resolve(null) : findPatientByPhone(manualPhone),
+    quickWindow && !quickPhoneInvalid ? findPatientByPhone(quickPhone) : Promise.resolve(null),
   ]);
 
   const [selectedPackages, selectedPulseBalances] = selectedPatient
@@ -800,12 +803,24 @@ export default async function AppointmentsPage({
               {selectedBranch && <input type="hidden" name="branch_id" value={selectedBranch.id} />}
               <label className="min-w-0 flex-1">
                 <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم هاتف العميل</span>
-                <Input name="manual_phone" defaultValue={manualPhone} required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" />
+                <Input
+                  name="manual_phone"
+                  defaultValue={manualPhone}
+                  required
+                  inputMode="numeric"
+                  pattern="[0-9]{11}"
+                  minLength={11}
+                  maxLength={11}
+                  title={PATIENT_PHONE_ERROR}
+                  dir="ltr"
+                  placeholder="01xxxxxxxxx"
+                />
+                {manualPhoneInvalid && <p className="mt-1 text-xs font-bold text-red-600">{PATIENT_PHONE_ERROR}</p>}
               </label>
               <Button type="submit" variant="outline" className="mt-6"><Search size={16} /> بحث</Button>
             </form>
 
-            {manualPhone && (
+            {manualPhone && !manualPhoneInvalid && (
               <div className="mt-5 border-t border-slate-100 pt-5">
                 {manualPatient && (
                   <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -961,6 +976,7 @@ export default async function AppointmentsPage({
           windowStartMinutes={quickWindow.start}
           windowEndMinutes={quickWindow.end}
           phone={quickPhone}
+          phoneInvalid={quickPhoneInvalid}
           patient={quickPatient}
           history={quickHistory}
           packages={quickPackages}
