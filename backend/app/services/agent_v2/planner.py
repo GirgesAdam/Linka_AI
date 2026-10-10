@@ -625,6 +625,7 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
             **_explicit_time_authority_parameters(operation, context),
         }
         parameters["appointment_id"] = target_appointment_id
+        parameters["_reschedule_required_fields_resolved"] = True
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
@@ -1541,6 +1542,10 @@ def advance_step_after_verification(
                         "response_goal": "clarification",
                     }
                 )
+            verified_parameters = {
+                **verified_parameters,
+                "_reschedule_required_fields_resolved": True,
+            }
             return step.model_copy(
                 update={
                     "disposition": "write_ready",

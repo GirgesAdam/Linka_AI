@@ -154,6 +154,24 @@ def test_verified_cancel_is_patient_scoped_and_ai_attributed(monkeypatch) -> Non
     db.commit.assert_called_once_with()
 
 
+def test_reschedule_executor_rejects_write_without_required_field_proof(monkeypatch) -> None:
+    db, workspace, patient = _context()
+    reschedule = MagicMock()
+    authority = MagicMock()
+    monkeypatch.setattr(write_executor, "reschedule_appointment_operation", reschedule)
+    monkeypatch.setattr(write_executor, "require_tia_workspace_domain_write", authority)
+    parameters = {**_booking_parameters(), "appointment_id": str(uuid4())}
+
+    result = write_executor.execute_write_ready_step(
+        db, workspace=workspace, patient=patient, step=_step("reschedule", parameters)
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "reschedule_target_unresolved"
+    reschedule.assert_not_called()
+    db.commit.assert_not_called()
+
+
 def test_verified_reschedule_uses_only_canonical_parameters(monkeypatch) -> None:
     db, workspace, patient = _context()
     replacement = SimpleNamespace(id=uuid4(), status="confirmed")
@@ -165,6 +183,7 @@ def test_verified_reschedule_uses_only_canonical_parameters(monkeypatch) -> None
         **_booking_parameters(),
         "appointment_id": str(previous.id),
         "device_key": "prime_lase",
+        "_reschedule_required_fields_resolved": True,
     }
 
     result = write_executor.execute_write_ready_step(
@@ -378,6 +397,7 @@ def test_explicit_time_mismatch_blocks_reschedule_before_write(monkeypatch) -> N
         "appointment_id": str(uuid4()),
         "start_at": "2026-10-10T15:00:00+03:00",
         "_explicit_user_time_24h": "03:00",
+        "_reschedule_required_fields_resolved": True,
     }
 
     result = write_executor.execute_write_ready_step(
