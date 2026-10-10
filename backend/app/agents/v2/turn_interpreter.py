@@ -19,6 +19,7 @@ from app.agents.v2.turn_contract import (
     AppointmentSelector,
     DateConstraint,
     EntityReference,
+    Selection,
     TiaTurnUnderstanding,
     TimeConstraint,
 )
@@ -82,6 +83,15 @@ SEMANTIC PRINCIPLES
   candidate_mode=set for the compared entity set. For an availability comparison with no explicit
   date, use date mode=next_available so Python can verify which requested candidate is available
   sooner. Never ask the customer to choose one candidate merely in order to compare them.
+- availability_followup_intent, when supplied, is the result of a separate narrow semantic model
+  over the current server-owned displayed availability. Treat action=new_search as strong semantic
+  evidence that the latest turn is changing the currently displayed availability search rather than
+  selecting an old option. For a related availability scope change, emit availability with
+  continues_previous=true, include only constraints the customer actually changes, and do not ask to
+  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Treat
+  action=refresh_availability as the same verified availability search being requested again: emit an
+  availability continuation so Python performs a fresh read. This hint is semantic only; it never
+  supplies canonical IDs, slots, write authority, or permission to invent constraints.
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
   When true, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
@@ -139,9 +149,10 @@ SEMANTIC PRINCIPLES
   the customer intends it to consume the newly purchased package. If the same turn requests another
   appointment too, emit that as another separate book operation rather than collapsing any action.
 - When the customer explicitly compares using an owned package with paying for a standalone session
-  of the same service, keep the turn informational and emit both package_info and pricing operations
-  for that service so both sides of the comparison are grounded. Do not turn the comparison into a
-  booking or purchase request.
+  of the same service, emit one package_compare operation for that service with
+  execution_intent=informational. package_compare is read-only and grounds both the customer's owned
+  package state and the single-session service price; do not emit package offers, booking, or purchase
+  merely because those actions are mentioned as alternatives.
 - When a request asks both about a past appointment outcome and its effect on the customer's
   owned-package balance or current owned-package state, preserve both concerns as separate semantic
   operations: customer_history for the historical event and package_info for current package state.
@@ -149,6 +160,10 @@ SEMANTIC PRINCIPLES
 - A read request never becomes a write request merely because the requested action could be
   executed.
 - A harmless informational/social side turn must not be interpreted as cancelling an active task.
+- If the customer explicitly clarifies that the prior package/booking discussion was only a question
+  and authorizes no action, with no new factual question, emit an informational social acknowledgement
+  rather than replaying package discovery/offers. This no-action clarification is turn-local: a later
+  explicit request to use a package, buy, or book is a new execute intent and must proceed normally.
 - response_disposition is about whether this turn needs an outbound customer message, not about intent routing. Use no_reply only for a pure closing acknowledgement after the previous task/read is already complete and only when the supplied active_task and pending choice are empty, automation_context is not being acknowledged, there is no requested action/question, and there is no safety signal. A short acknowledgement while a task/question/choice is pending is reply, not no_reply. Never classify based on a phrase list; classify the conversational role in the supplied state.
 - automation_context is server-owned system-initiated conversational focus, not a verified read/action
   and never write authority. If it is present, a simple acknowledgement of that reminder/follow-up is
@@ -203,10 +218,15 @@ SEMANTIC PRINCIPLES
   doctor/device/slot is absent from the current active_task, do not resurrect that constraint from
   an older abandoned task in native dialogue. Do not reconstruct stale constraints from assistant
   prose when a verified structured scope exists.
-- Ordinal references to an immediately preceding option list are positional: first/second/third (and
-  equivalents such as الأولى/التانية/الثالثة) refer to the corresponding displayed item in that
-  list, in order. Never reinterpret "the second" as "the other" or the last item. Ground the chosen
-  entity back to the verified recent read when that scope is available.
+- presented_availability is a server-owned view of the latest availability items Linka actually
+  displayed and may survive harmless side questions. Its option refs are opaque. Pure availability
+  references are normally handled by a smaller semantic resolver before this interpreter. If this full
+  interpreter is used because the customer also requests a lifecycle action, preserve that action and,
+  when it clearly targets a displayed/last-selected option, set selection kind=ref to the supplied opt_*
+  ref and continues_previous=true. For this ref selection, set index=null, time=null, relative=null, and
+  time_ambiguity=none; do not redundantly copy the option position or clock into other selection fields.
+  Never invent an option ref or reconstruct a slot from assistant prose. Python validates the ref, binds
+  canonical slot facts, and revalidates availability before any write.
 - recent_verified_action describes only the immediately previous completed action when Python exposes
   one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
   added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
@@ -559,8 +579,19 @@ def merge_verified_read_context(
             previous_time = None
 
     operations = []
+    presented = semantic_context.model_input.get("presented_availability")
     for operation in turn.operations:
         if not operation.continues_previous:
+            operations.append(operation)
+            continue
+        selection = operation.selection
+        if (
+            isinstance(presented, dict)
+            and selection is not None
+            and selection.kind == "ref"
+            and isinstance(selection.ref, str)
+            and _presented_option_by_ref(presented, selection.ref) is not None
+        ):
             operations.append(operation)
             continue
 
@@ -640,6 +671,112 @@ def merge_verified_read_context(
     return turn.model_copy(update={"operations": operations})
 
 
+def _presented_option_by_ref(
+    raw: dict[str, object],
+    option_ref: str,
+) -> dict[str, object] | None:
+    options = raw.get("options")
+    if not isinstance(options, list):
+        return None
+    matches = [
+        item
+        for item in options
+        if isinstance(item, dict) and item.get("option_ref") == option_ref
+    ]
+    return dict(matches[0]) if len(matches) == 1 else None
+
+
+def merge_presented_availability_context(
+    turn: TiaTurnUnderstanding,
+    semantic_context: SemanticContext,
+) -> TiaTurnUnderstanding:
+    """Bind model-understood option refs to safe displayed facts, never raw slot authority."""
+    raw = semantic_context.model_input.get("presented_availability")
+    if not isinstance(raw, dict) or not raw:
+        return turn
+
+    last_selected = raw.get("last_selected_option_ref")
+    operations: list = []
+    changed = False
+    for operation in turn.operations:
+        if operation.type not in {"book", "reschedule"}:
+            operations.append(operation)
+            continue
+
+        selection = operation.selection
+        new_constraints_present = any(
+            getattr(operation.entities, field) is not None
+            for field in ("service", "doctor", "device", "date", "time")
+        )
+        if (
+            selection is None
+            and operation.continues_previous
+            and not new_constraints_present
+            and isinstance(last_selected, str)
+            and last_selected
+        ):
+            selection = Selection(kind="ref", ref=last_selected)
+
+        if selection is None or selection.kind != "ref" or not selection.ref:
+            operations.append(operation)
+            continue
+        option = _presented_option_by_ref(raw, selection.ref)
+        if option is None:
+            operations.append(
+                operation.model_copy(update={"selection": selection})
+                if selection != operation.selection
+                else operation
+            )
+            changed = changed or selection != operation.selection
+            continue
+
+        updates: dict[str, object] = {}
+        inherited = (
+            ("service", _reference_from_verified(raw, single_key="service_ref")),
+            ("doctor", _reference_from_verified(raw, single_key="doctor_ref")),
+            ("device", _reference_from_verified(raw, single_key="device_ref")),
+        )
+        for field, value in inherited:
+            if getattr(operation.entities, field) is None and value is not None:
+                updates[field] = value
+
+        if option.get("concrete") is True:
+            start_local = option.get("start_local")
+            start_time = option.get("start_time_24h")
+            if operation.entities.date is None and isinstance(start_local, str) and start_local:
+                try:
+                    local_dt = datetime.fromisoformat(start_local)
+                except ValueError:
+                    local_dt = None
+                if local_dt is not None:
+                    updates["date"] = DateConstraint(
+                        mode="exact",
+                        start_date=local_dt.date().isoformat(),
+                    )
+            if operation.entities.time is None and isinstance(start_time, str) and start_time:
+                updates["time"] = TimeConstraint(
+                    mode="exact",
+                    start_time=start_time[:5],
+                    start_time_ambiguity="none",
+                )
+
+        entities = (
+            operation.entities.model_copy(update=updates) if updates else operation.entities
+        )
+        normalized = operation.model_copy(
+            update={
+                "entities": entities,
+                "selection": selection,
+                "continues_previous": True,
+                "fresh_task": False,
+                "fresh_task_explicit_fields": [],
+            }
+        )
+        changed = changed or normalized != operation
+        operations.append(normalized)
+    return turn.model_copy(update={"operations": operations}) if changed else turn
+
+
 def merge_same_turn_pulse_device_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
@@ -712,7 +849,12 @@ def enforce_unscoped_task_boundary(
 
     recent_read = semantic_context.model_input.get("recent_verified_read")
     recent_action = semantic_context.model_input.get("recent_verified_action")
-    has_verified_read = isinstance(recent_read, dict) and bool(recent_read)
+    presented_availability = semantic_context.model_input.get("presented_availability")
+    has_verified_read = (
+        isinstance(recent_read, dict) and bool(recent_read)
+    ) or (
+        isinstance(presented_availability, dict) and bool(presented_availability.get("options"))
+    )
     pulse_action = (
         recent_action.get("operation_type") == "buy_pulse_pack"
         if isinstance(recent_action, dict)
@@ -1119,7 +1261,8 @@ def interpret_customer_turn_v2(
     explicit_safe = _preserve_explicit_clock_constraints_v2(
         invocation.value, latest_customer_text=latest_customer_text
     )
-    bounded = enforce_unscoped_task_boundary(explicit_safe, semantic_context)
+    presented = merge_presented_availability_context(explicit_safe, semantic_context)
+    bounded = enforce_unscoped_task_boundary(presented, semantic_context)
     isolated = isolate_fresh_task_context(bounded)
     continued = merge_verified_read_context(isolated, semantic_context)
     continued = merge_verified_action_context(continued, semantic_context)

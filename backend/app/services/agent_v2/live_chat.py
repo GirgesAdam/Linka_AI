@@ -40,6 +40,7 @@ from app.services.agent_chat import (
     run_agent_for_existing_inbound as run_agent_for_existing_inbound_v1,
 )
 from app.services.agent_v2.orchestrator import V2OrchestratedTurn, orchestrate_v2_turn
+from app.services.agent_v2.reference_resolution import build_availability_reference_options
 from app.services.agent_v2.write_executor import execute_write_ready_step
 from app.services.conversation_ownership import (
     OWNER_HUMAN,
@@ -244,6 +245,32 @@ def _recent_verified_read_context(
     return dict(value) if isinstance(value, dict) else None
 
 
+def _recent_availability_reference_context(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound: Message,
+) -> dict[str, Any] | None:
+    """Read the carried server-owned displayed availability state from the prior AI turn."""
+    previous = db.scalar(
+        select(Message)
+        .where(
+            Message.workspace_id == conversation.workspace_id,
+            Message.conversation_id == conversation.id,
+            Message.created_at < inbound.created_at,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if previous is None or previous.sender_type != "ai" or previous.direction != "outbound":
+        return None
+    metadata = dict(previous.metadata_json or {})
+    if metadata.get("runtime") != "v2":
+        return None
+    value = metadata.get("v2_availability_reference_context")
+    return dict(value) if isinstance(value, dict) else None
+
+
 def _recent_verified_action_context_from_outbounds(
     messages: list[Message],
 ) -> dict[str, Any] | None:
@@ -402,6 +429,16 @@ def _verified_read_context_from_turn(
 ) -> dict[str, Any] | None:
     """Keep only the last read-only canonical scope plus a minimal verified result summary."""
     for step in reversed(turn.plan.steps):
+        if step.facts.get("verified_availability_reference") is True and isinstance(
+            previous_read_context, dict
+        ):
+            context = dict(previous_read_context)
+            selected_index = step.facts.get("availability_reference_index")
+            if isinstance(selected_index, int) and not isinstance(selected_index, bool):
+                context["availability_reference_anchor_index"] = selected_index
+            return context
+
+    for step in reversed(turn.plan.steps):
         if step.disposition != "read" or step.write_intent is not None or not step.reads:
             continue
         context: dict[str, Any] = {"operation_type": step.operation_type}
@@ -458,15 +495,16 @@ def _verified_read_context_from_turn(
             context["availability_option_count"] = option_count
 
         if step.operation_type in {"availability", "book", "reschedule"}:
-            outcome = next(
+            matching_trace = next(
                 (
-                    trace.outcome
+                    trace
                     for trace in reversed(turn.traces)
                     if trace.operation_index == step.operation_index
                     and trace.outcome is not None
                 ),
                 None,
             )
+            outcome = matching_trace.outcome if matching_trace is not None else None
             if outcome is not None:
                 service_name, windows = availability_windows_from_outcome_facts(
                     outcome.facts
@@ -499,11 +537,22 @@ def _verified_read_context_from_turn(
                                 for value in raw_keys
                                 if isinstance(value, str) and value
                             }
-                    _selected, selected_keys, has_more = select_availability_window_page(
+                    selected_windows, selected_keys, has_more = select_availability_window_page(
                         windows,
                         service_name=service_name,
                         shown_keys=previous_keys,
                     )
+                    verified_slots = (
+                        [dict(item) for item in getattr(matching_trace, "availability_slots", ())]
+                        if matching_trace is not None
+                        else []
+                    )
+                    reference_options = build_availability_reference_options(
+                        displayed_windows=selected_windows,
+                        verified_slots=verified_slots,
+                    )
+                    if reference_options:
+                        context["availability_reference_options"] = reference_options
                     cumulative = sorted(previous_keys | set(selected_keys))
                     if cumulative:
                         context["availability_presented_window_keys"] = cumulative
@@ -530,6 +579,70 @@ def _verified_read_context_from_turn(
                     context["doctor_ids"] = ids
         return context
     return None
+
+
+def _availability_reference_context_from_turn(
+    turn: V2OrchestratedTurn,
+    *,
+    previous_context: dict[str, Any] | None,
+    verified_read_context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Persist only the latest displayed options plus one selected opaque ref."""
+    if any(
+        outcome.status == "completed"
+        and outcome.response_goal in {"booking_completed", "reschedule_completed"}
+        for outcome in turn.outcomes
+    ):
+        return None
+
+    for step in reversed(turn.plan.steps):
+        if step.facts.get("verified_availability_reference") is not True:
+            continue
+        if not isinstance(previous_context, dict):
+            return None
+        context = dict(previous_context)
+        selected_ref = step.facts.get("availability_reference_option_ref")
+        if isinstance(selected_ref, str) and selected_ref:
+            context["last_selected_option_ref"] = selected_ref
+        return context
+
+    availability_read = any(
+        request.kind == "availability"
+        for step in turn.plan.steps
+        for request in step.reads
+    )
+    if availability_read:
+        if not isinstance(verified_read_context, dict):
+            return None
+        raw_options = verified_read_context.get("availability_reference_options")
+        if not isinstance(raw_options, list) or not raw_options:
+            return None
+        context: dict[str, Any] = {
+            "availability_reference_options": [
+                dict(item) for item in raw_options if isinstance(item, dict)
+            ]
+        }
+        for key in (
+            "service_id",
+            "doctor_id",
+            "doctor_ids",
+            "device_key",
+            "date",
+            "time",
+            "package_usage",
+        ):
+            value = verified_read_context.get(key)
+            if value not in (None, "", [], {}):
+                context[key] = value
+        return context
+
+    if (
+        getattr(turn, "reference_semantic_path_used", False)
+        and getattr(turn, "reference_action", None) == "new_search"
+    ):
+        return None
+
+    return dict(previous_context) if isinstance(previous_context, dict) else None
 
 
 def _verified_action_context_from_turn(
@@ -655,6 +768,11 @@ def _run_v2_after_inbound(
         conversation=conversation,
         inbound=inbound,
     )
+    availability_reference_context = _recent_availability_reference_context(
+        db,
+        conversation=conversation,
+        inbound=inbound,
+    )
     recent_action_context = _recent_verified_action_context(
         db,
         conversation=conversation,
@@ -699,6 +817,7 @@ def _run_v2_after_inbound(
         recent_action_context=recent_action_context,
         automation_context=automation_context,
         pending_choice_context=pending_choice_context,
+        availability_reference_context=availability_reference_context,
     )
     if turn.pending_write is not None:
         raise RuntimeError("Live V2 turn returned an unexecuted verified write.")
@@ -773,6 +892,11 @@ def _run_v2_after_inbound(
         turn,
         recent_action_context=recent_action_context,
     )
+    outgoing_availability_reference_context = _availability_reference_context_from_turn(
+        turn,
+        previous_context=availability_reference_context,
+        verified_read_context=verified_read_context,
+    )
     outbound_now = datetime.now(UTC)
     outbound = Message(
         workspace_id=workspace.id,
@@ -799,6 +923,14 @@ def _run_v2_after_inbound(
                 else None
             ),
             "v2_read_context": verified_read_context,
+            "v2_availability_reference_context": outgoing_availability_reference_context,
+            "v2_reference_semantic": {
+                "path_used": turn.reference_semantic_path_used,
+                "full_interpreter_called": turn.full_interpreter_called,
+                "action": turn.reference_action,
+                "selected_option_ref": turn.selected_option_ref,
+                "structured_output_error": turn.reference_structured_output_error,
+            },
             "v2_action_context": verified_action_context,
             "v2_action_context_passthrough": _safe_action_context_passthrough(turn),
             "v2_pending_choice": (

@@ -210,10 +210,80 @@ def verified_read_semantic_view(
         )
         if appointment_ref is not None:
             safe["appointment_ref"] = appointment_ref
+    raw_reference_options = read_context.get("availability_reference_options")
+    if isinstance(raw_reference_options, list):
+        safe_options: list[dict[str, object]] = []
+        for raw_option in raw_reference_options:
+            if not isinstance(raw_option, dict):
+                continue
+            safe_option = {
+                key: raw_option[key]
+                for key in (
+                    "index",
+                    "concrete",
+                    "start_local",
+                    "end_local",
+                    "start_time_24h",
+                    "end_time_24h",
+                    "doctor_name",
+                    "laser_device_name",
+                )
+                if raw_option.get(key) not in (None, "")
+            }
+            safe_options.append(safe_option)
+        if safe_options:
+            safe["availability_reference_options"] = safe_options
+    anchor = read_context.get("availability_reference_anchor_index")
+    if isinstance(anchor, int) and not isinstance(anchor, bool) and anchor > 0:
+        safe["availability_reference_anchor_index"] = anchor
+
     option_count = read_context.get("availability_option_count")
     if isinstance(option_count, int) and option_count >= 0:
         safe["availability_option_count"] = option_count
         safe["availability_found"] = option_count > 0
+    return safe
+
+
+def presented_availability_semantic_view(
+    value: dict[str, Any] | None,
+    *,
+    context: SemanticContext,
+) -> dict[str, object]:
+    """Expose the latest displayed availability list without canonical slot authority."""
+    if not isinstance(value, dict):
+        return {}
+    raw_options = value.get("availability_reference_options")
+    if not isinstance(raw_options, list) or not raw_options:
+        return {}
+
+    safe: dict[str, object] = {}
+    safe.update(_safe_constraints(value, context))
+    options: list[dict[str, object]] = []
+    for raw in raw_options:
+        if not isinstance(raw, dict):
+            continue
+        option = {
+            key: raw[key]
+            for key in (
+                "option_ref",
+                "concrete",
+                "start_local",
+                "end_local",
+                "start_time_24h",
+                "end_time_24h",
+                "doctor_name",
+                "laser_device_name",
+            )
+            if raw.get(key) not in (None, "")
+        }
+        if option.get("option_ref"):
+            options.append(option)
+    if not options:
+        return {}
+    safe["options"] = options
+    selected = value.get("last_selected_option_ref")
+    if isinstance(selected, str) and selected:
+        safe["last_selected_option_ref"] = selected
     return safe
 
 
@@ -607,4 +677,20 @@ def with_safe_automation_context(
         context=context,
     )
     stale = _state_has_stale_refs(automation_context, context=context)
+    return _apply_verified_focus(context, model_input, block_focus=stale)
+
+def with_safe_availability_reference_context(
+    context: SemanticContext,
+    *,
+    availability_context: dict[str, Any] | None = None,
+) -> SemanticContext:
+    """Carry server-owned displayed availability independently of side-read focus."""
+    if availability_context is None:
+        return context
+    model_input = dict(context.model_input)
+    model_input["presented_availability"] = presented_availability_semantic_view(
+        availability_context,
+        context=context,
+    )
+    stale = _state_has_stale_refs(availability_context, context=context)
     return _apply_verified_focus(context, model_input, block_focus=stale)

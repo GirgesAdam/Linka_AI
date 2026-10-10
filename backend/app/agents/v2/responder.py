@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from datetime import datetime
@@ -38,6 +38,7 @@ from app.agents.v2.doctor_composer import (
     compose_doctor_contract_reply,
     deterministic_doctor_contract_reply,
 )
+from app.agents.v2.package_compare_composer import deterministic_package_comparison_reply
 from app.agents.v2.package_composer import (
     compose_package_contract_reply,
     deterministic_package_contract_reply,
@@ -1146,6 +1147,51 @@ def _compose_mixed_typed_contract_reply(
     return rendered, source
 
 
+def _deterministic_availability_reference_reply(
+    outcomes: list[TurnOutcome],
+) -> tuple[str, str] | None:
+    for outcome in outcomes:
+        facts = outcome.facts if isinstance(outcome.facts, dict) else {}
+        if facts.get("verified_availability_reference") is not True:
+            continue
+        option = facts.get("availability_reference_option")
+        if outcome.response_goal == "availability_reference" and isinstance(option, dict):
+            index = option.get("index") or facts.get("availability_reference_index")
+            time_value = str(option.get("start_time_24h") or "").strip()
+            doctor = str(option.get("doctor_name") or "").strip()
+            device = str(option.get("laser_device_name") or "").strip()
+            parts = [f"الاختيار {index}" if index not in (None, "") else "المعاد ده"]
+            if time_value:
+                parts.append(f"الساعة {time_value}")
+            if doctor:
+                parts.append(f"مع {doctor}")
+            if device:
+                parts.append(f"على {device}")
+            return "، ".join(parts) + ".", "deterministic:verified-availability-reference"
+
+        reason = str(facts.get("availability_reference_reason") or "")
+        if reason in {"needs_anchor", "semantic_clarification"}:
+            return (
+                "تقصد أنهي ميعاد من المواعيد اللي عرضتهالك؟",
+                "deterministic:availability-reference-clarification",
+            )
+        if reason == "window_ambiguous":
+            return (
+                "الاختيار ده فترة فيها أكتر من ميعاد متاح، فمش هحدد ساعة من عندي. قولي الساعة اللي تناسبك جوه الفترة.",
+                "deterministic:availability-reference-clarification",
+            )
+        if reason == "out_of_range":
+            return (
+                "مفيش اختيار في الاتجاه ده ضمن المواعيد اللي عرضتهالك. اختار واحد من المواعيد الظاهرة.",
+                "deterministic:availability-reference-clarification",
+            )
+        return (
+            "مش قادر أربط الإشارة دي باختيار مؤكد من المواعيد اللي عرضتهالك. قولي أنهي اختيار تقصد.",
+            "deterministic:availability-reference-clarification",
+        )
+    return None
+
+
 def compose_v2_customer_reply(
     *,
     clinic_name: str,
@@ -1158,6 +1204,15 @@ def compose_v2_customer_reply(
 ) -> tuple[str, str]:
     """Render one customer reply from verified V2 outcomes; never execute actions or tools."""
     outcomes = deduplicate_equivalent_choice_outcomes(outcomes)
+
+    reference_reply = _deterministic_availability_reference_reply(outcomes)
+    if reference_reply is not None:
+        return reference_reply
+
+    package_comparison = deterministic_package_comparison_reply(outcomes)
+    if package_comparison is not None:
+        return package_comparison
+
     response_contract = build_customer_response_contract(outcomes)
     pure_reply = _compose_pure_supported_contract_reply(
         history=history,

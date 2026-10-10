@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.explicit_time import extract_single_explicit_hhmm
+from app.agents.v2.availability_reference_interpreter import (
+    ReferenceInterpretation,
+    interpret_availability_reference_turn,
+)
 from app.agents.v2.availability_scope import (
     availability_scope_key_from_reads,
     availability_scope_matches,
@@ -21,11 +25,19 @@ from app.agents.v2.semantic_context import SemanticContext, build_semantic_conte
 from app.agents.v2.semantic_state_view import (
     with_safe_action_context,
     with_safe_automation_context,
+    with_safe_availability_reference_context,
     with_safe_read_context,
     with_safe_task_context,
 )
-from app.agents.v2.turn_contract import DateConstraint, TiaTurnUnderstanding, TurnOperation
-from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    Selection,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
+from app.agents.v2.turn_interpreter import interpret_customer_turn_v2, merge_verified_read_context
 from app.integrations.clinic.base import ClinicAdapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
@@ -111,6 +123,7 @@ class V2RuntimeStepTrace:
     outcome: TurnOutcome | None = None
     verified_parameters: dict[str, object] | None = None
     pending_write: bool = False
+    availability_slots: tuple[dict[str, object], ...] = ()
     skipped: bool = False
     skip_reason: str | None = None
 
@@ -128,6 +141,21 @@ class V2OrchestratedTurn:
     pending_write: PendingV2Write | None
     verified_action_context: dict[str, object] | None = None
     pending_choice: OptionSnapshot | None = None
+    reference_semantic_path_used: bool = False
+    full_interpreter_called: bool = True
+    reference_action: str | None = None
+    selected_option_ref: str | None = None
+    reference_structured_output_error: bool = False
+
+
+def _verified_availability_slots(reads: ReadExecutionBundle) -> tuple[dict[str, object], ...]:
+    for result in reads.results:
+        if result.kind != "availability" or not result.ok:
+            continue
+        raw = result.payload.get("slots")
+        if isinstance(raw, list):
+            return tuple(dict(item) for item in raw if isinstance(item, dict))
+    return ()
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -1221,6 +1249,7 @@ def orchestrate_v2_turn(
     recent_action_context: dict[str, Any] | None = None,
     automation_context: dict[str, Any] | None = None,
     pending_choice_context: dict[str, Any] | None = None,
+    availability_reference_context: dict[str, Any] | None = None,
 ) -> V2OrchestratedTurn:
     """Run one stateful V2 turn with an optional verified-write executor.
 
@@ -1269,6 +1298,10 @@ def orchestrate_v2_turn(
         semantic_context,
         read_context=recent_read_context,
     )
+    semantic_context = with_safe_availability_reference_context(
+        semantic_context,
+        availability_context=availability_reference_context,
+    )
     semantic_context = with_safe_action_context(
         semantic_context,
         action_context=recent_action_context,
@@ -1277,12 +1310,104 @@ def orchestrate_v2_turn(
         semantic_context,
         automation_context=automation_context,
     )
-    understanding = interpret_customer_turn_v2(
-        history=history,
-        semantic_context=semantic_context,
-        timezone_name=timezone_name,
-        local_now=local_now,
+    reference_interpretation: ReferenceInterpretation | None = None
+    reference_plan_override: TurnPlan | None = None
+    full_interpreter_called = True
+    raw_reference_options = (availability_reference_context or {}).get(
+        "availability_reference_options"
     )
+    if latest_customer_text and isinstance(raw_reference_options, list) and raw_reference_options:
+        reference_interpretation = interpret_availability_reference_turn(
+            latest_customer_text=latest_customer_text,
+            availability_context=availability_reference_context or {},
+        )
+
+    decision = reference_interpretation.decision if reference_interpretation is not None else None
+    if decision is not None and decision.action in {"new_search", "refresh_availability"}:
+        model_input = dict(semantic_context.model_input)
+        model_input["availability_followup_intent"] = {"action": decision.action}
+        semantic_context = SemanticContext(
+            model_input=model_input,
+            reference_map=semantic_context.reference_map,
+            server_metadata=semantic_context.server_metadata,
+        )
+    exact_reference_time = (
+        str(decision.exact_time).strip()[:5]
+        if decision is not None and decision.exact_time is not None
+        else None
+    )
+    if (
+        decision is not None
+        and decision.action == "new_search"
+        and exact_reference_time is not None
+        and explicit_user_time is not None
+        and exact_reference_time == explicit_user_time
+    ):
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="availability",
+                    entities=TurnEntities(
+                        time=TimeConstraint(
+                            mode="exact",
+                            start_time=explicit_user_time,
+                            start_time_ambiguity="none",
+                        )
+                    ),
+                    execution_intent="informational",
+                    continues_previous=True,
+                )
+            ]
+        )
+        understanding = merge_verified_read_context(understanding, semantic_context)
+        full_interpreter_called = False
+    elif decision is not None and decision.action == "select_presented_option" and decision.option_ref:
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="availability",
+                    entities=TurnEntities(),
+                    selection=Selection(kind="ref", ref=decision.option_ref),
+                    execution_intent="informational",
+                    continues_previous=True,
+                )
+            ]
+        )
+        full_interpreter_called = False
+    elif decision is not None and decision.action == "clarify":
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="availability",
+                    entities=TurnEntities(),
+                    execution_intent="informational",
+                    continues_previous=True,
+                )
+            ]
+        )
+        reference_plan_override = TurnPlan(
+            steps=[
+                PlanStep(
+                    operation_index=0,
+                    operation_type="availability",
+                    disposition="clarify",
+                    response_goal="clarification",
+                    clarification_field="availability_reference",
+                    facts={
+                        "verified_availability_reference": True,
+                        "availability_reference_reason": "semantic_clarification",
+                    },
+                )
+            ]
+        )
+        full_interpreter_called = False
+    else:
+        understanding = interpret_customer_turn_v2(
+            history=history,
+            semantic_context=semantic_context,
+            timezone_name=timezone_name,
+            local_now=local_now,
+        )
     understanding, semantic_visit_groups = expand_multi_service_operations(
         understanding,
         semantic_context=semantic_context,
@@ -1309,7 +1434,7 @@ def orchestrate_v2_turn(
         recent_read_context=recent_read_context,
     )
     planner_active_task: ActiveTaskState | None = narrowed_booking_task or initial_task
-    plan = plan_turn(
+    plan = reference_plan_override or plan_turn(
         understanding,
         PlannerContext(
             semantic_context=semantic_context,
@@ -1317,6 +1442,8 @@ def orchestrate_v2_turn(
             now=local_now,
             pending_choice=pending_choice,
             explicit_user_time=explicit_user_time,
+            recent_read_context=recent_read_context,
+            availability_reference_context=availability_reference_context,
         ),
     )
     plan = normalize_compound_turn_plan(
@@ -1361,6 +1488,23 @@ def orchestrate_v2_turn(
             active_task=initial_task if preserve_active_task else None,
             persisted_task=persisted if preserve_active_task else None,
             pending_write=None,
+            reference_semantic_path_used=reference_interpretation is not None,
+            full_interpreter_called=full_interpreter_called,
+            reference_action=(
+                reference_interpretation.decision.action
+                if reference_interpretation is not None
+                else None
+            ),
+            selected_option_ref=(
+                reference_interpretation.decision.option_ref
+                if reference_interpretation is not None
+                else None
+            ),
+            reference_structured_output_error=(
+                reference_interpretation.structured_output_error
+                if reference_interpretation is not None
+                else False
+            ),
         )
 
     read_context = ReadExecutionContext(
@@ -1632,6 +1776,7 @@ def orchestrate_v2_turn(
                         disposition_after=advanced.disposition,
                         read_kinds=tuple(result.kind for result in reads.results),
                         verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
                         pending_write=True,
                     )
                 )
@@ -1661,6 +1806,7 @@ def orchestrate_v2_turn(
                     read_kinds=tuple(result.kind for result in reads.results),
                     outcome=outcome,
                     verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
                 )
             )
             outcomes.append(outcome)
@@ -1721,6 +1867,7 @@ def orchestrate_v2_turn(
                         read_kinds=tuple(result.kind for result in reads.results),
                         outcome=outcome,
                         verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
                     )
                 )
             break
@@ -1748,6 +1895,7 @@ def orchestrate_v2_turn(
                 read_kinds=tuple(result.kind for result in reads.results),
                 outcome=outcome,
                 verified_parameters=dict(reads.verification.verified_parameters),
+                        availability_slots=_verified_availability_slots(reads),
             )
         )
         outcomes.append(outcome)
@@ -1804,6 +1952,23 @@ def orchestrate_v2_turn(
             persisted_task=persisted_after,
             pending_write=pending_write,
             pending_choice=outgoing_pending_choice,
+            reference_semantic_path_used=reference_interpretation is not None,
+            full_interpreter_called=full_interpreter_called,
+            reference_action=(
+                reference_interpretation.decision.action
+                if reference_interpretation is not None
+                else None
+            ),
+            selected_option_ref=(
+                reference_interpretation.decision.option_ref
+                if reference_interpretation is not None
+                else None
+            ),
+            reference_structured_output_error=(
+                reference_interpretation.structured_output_error
+                if reference_interpretation is not None
+                else False
+            ),
         )
 
     if _terminal_no_reply_allowed(
@@ -1824,6 +1989,23 @@ def orchestrate_v2_turn(
             pending_write=None,
             verified_action_context=completed_action_context,
             pending_choice=outgoing_pending_choice,
+            reference_semantic_path_used=reference_interpretation is not None,
+            full_interpreter_called=full_interpreter_called,
+            reference_action=(
+                reference_interpretation.decision.action
+                if reference_interpretation is not None
+                else None
+            ),
+            selected_option_ref=(
+                reference_interpretation.decision.option_ref
+                if reference_interpretation is not None
+                else None
+            ),
+            reference_structured_output_error=(
+                reference_interpretation.structured_output_error
+                if reference_interpretation is not None
+                else False
+            ),
         )
 
     if not outcomes:
@@ -1857,4 +2039,15 @@ def orchestrate_v2_turn(
         pending_write=None,
         verified_action_context=completed_action_context,
         pending_choice=outgoing_pending_choice,
+        reference_semantic_path_used=reference_interpretation is not None,
+        full_interpreter_called=full_interpreter_called,
+        reference_action=(
+            reference_interpretation.decision.action if reference_interpretation is not None else None
+        ),
+        selected_option_ref=(
+            reference_interpretation.decision.option_ref if reference_interpretation is not None else None
+        ),
+        reference_structured_output_error=(
+            reference_interpretation.structured_output_error if reference_interpretation is not None else False
+        ),
     )

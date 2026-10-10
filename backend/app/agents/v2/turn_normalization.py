@@ -133,6 +133,17 @@ def _split_generic_financial_ownership(
     return None, True
 
 
+def _normalize_package_comparison(operation: TurnOperation) -> TurnOperation:
+    if operation.type != "package_compare":
+        return operation
+    return operation.model_copy(
+        update={
+            "execution_intent": "informational",
+            "package_usage": "unspecified",
+        }
+    )
+
+
 def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
     """Repair contradictions using only structured model output, never raw customer text."""
     existing_human_support = any(operation.type == "human_support" for operation in turn.operations)
@@ -142,6 +153,7 @@ def normalize_semantic_invariants(turn: TiaTurnUnderstanding) -> TiaTurnUndersta
     for operation in turn.operations:
         normalized = _normalize_pulse_pricing(operation)
         normalized = _normalize_doctor_set_booking_comparison(normalized)
+        normalized = _normalize_package_comparison(normalized)
         normalized, needs_handoff = _split_pulse_financial_ledger(normalized)
         requires_financial_handoff = requires_financial_handoff or needs_handoff
         normalized, needs_handoff = _split_generic_financial_ownership(normalized)
