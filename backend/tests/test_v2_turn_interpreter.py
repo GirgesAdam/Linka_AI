@@ -132,9 +132,10 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     )
 
     assert isinstance(messages[0], SystemMessage)
-    assert "Ordinal references to an immediately preceding option list are positional" in str(
-        messages[0].content
-    )
+    system_prompt = str(messages[0].content)
+    assert "presented_availability is a server-owned view" in system_prompt
+    assert "selection kind=ref" in system_prompt
+    assert "Never invent an option ref" in system_prompt
     assert "old appointments and any that were cancelled" in str(messages[0].content)
     assert "own scheduled appointment/date/time" in str(messages[0].content)
     assert "availability means open/bookable" in str(messages[0].content)

@@ -1170,9 +1170,9 @@ def _deterministic_availability_reference_reply(
             return "، ".join(parts) + ".", "deterministic:verified-availability-reference"
 
         reason = str(facts.get("availability_reference_reason") or "")
-        if reason == "needs_anchor":
+        if reason in {"needs_anchor", "semantic_clarification"}:
             return (
-                "تقصد المعاد اللي بعد/قبل أنهي اختيار من المواعيد اللي عرضتهالك؟",
+                "تقصد أنهي ميعاد من المواعيد اللي عرضتهالك؟",
                 "deterministic:availability-reference-clarification",
             )
         if reason == "window_ambiguous":

@@ -133,6 +133,7 @@ class PlannerContext:
     pending_choice: OptionSnapshot | None = None
     explicit_user_time: str | None = None
     recent_read_context: dict[str, object] | None = None
+    availability_reference_context: dict[str, object] | None = None
 
 
 def _canonical_entity(
@@ -734,11 +735,14 @@ def _plan_verified_availability_reference(
         operation.type != "availability"
         or not operation.continues_previous
         or selection is None
-        or selection.kind not in {"index", "relative"}
+        or selection.kind not in {"index", "relative", "ref"}
     ):
         return None
+    reference_context = context.availability_reference_context or context.recent_read_context
     resolution = resolve_verified_availability_reference(
-        selection, context.recent_read_context
+        selection,
+        reference_context,
+        explicit_user_time=context.explicit_user_time,
     )
     status = str(resolution.get("status") or "unavailable")
     if status == "resolved":
@@ -753,6 +757,7 @@ def _plan_verified_availability_reference(
                 facts={
                     "verified_availability_reference": True,
                     "availability_reference_index": resolution.get("index"),
+                    "availability_reference_option_ref": option.get("option_ref"),
                     "availability_reference_option": safe_option,
                 },
             )
@@ -777,6 +782,30 @@ def _plan_operation(
     compound_book: bool = False,
 ) -> PlanStep:
     params, ambiguous = _base_parameters(operation, context)
+
+    if (
+        operation.type in {"book", "reschedule"}
+        and operation.selection is not None
+        and operation.selection.kind == "ref"
+        and operation.selection.ref
+    ):
+        resolution = resolve_verified_availability_reference(
+            operation.selection,
+            context.availability_reference_context,
+            explicit_user_time=context.explicit_user_time,
+        )
+        if resolution.get("status") != "resolved":
+            return _clarify(
+                index=index,
+                operation=operation,
+                field="availability_reference",
+                facts={
+                    "verified_availability_reference": True,
+                    "availability_reference_reason": str(
+                        resolution.get("status") or "unavailable"
+                    ),
+                },
+            )
 
     if operation.type == "human_support":
         financial = operation.financial_ownership == "reception"

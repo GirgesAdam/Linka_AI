@@ -5,88 +5,7 @@ from typing import Any, Literal
 
 from app.agents.v2.turn_contract import Selection
 
-ReferenceStatus = Literal["resolved", "needs_anchor", "out_of_range", "window_ambiguous", "unavailable"]
-
-_DISCOURSE_TOKENS = frozenset({"طب", "طيب"})
-_REFERENCE_NOUNS = frozenset({"المعاد", "الميعاد", "الموعد", "ميعاد", "موعد", "الاختيار", "اختيار"})
-_UNIT_TOKENS = frozenset({"واحد", "واحدة"})
-_FIRST_TOKENS = frozenset({"اول", "الاول", "الاولي", "اولي"})
-_SECOND_TOKENS = frozenset({"التاني", "تاني", "الثاني", "ثاني", "الثانية", "التانية"})
-_THIRD_TOKENS = frozenset({"التالت", "تالت", "الثالث", "ثالث", "الثالثة", "التالتة"})
-_LAST_TOKENS = frozenset({"اخر", "الاخر", "الاخير", "اخير"})
-_NEXT_TOKENS = frozenset({"بعده", "بعدها"})
-_PREVIOUS_TOKENS = frozenset({"قبله", "قبلها"})
-_RELATIVE_LINKERS = frozenset({"اللي", "الي"})
-
-
-def _reference_tokens(text: str) -> list[str]:
-    normalized = str(text or "").strip().lower()
-    for old, new in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ى", "ي")):
-        normalized = normalized.replace(old, new)
-    for mark in ("؟", "?", "!", ".", ",", "،", ":", ";", "؛"):
-        normalized = normalized.replace(mark, " ")
-    tokens = [token for token in normalized.split() if token]
-    while tokens and tokens[0] in _DISCOURSE_TOKENS:
-        tokens.pop(0)
-    return tokens
-
-
-def infer_positional_reference_selection(text: str) -> Selection | None:
-    """Parse one complete positional-reference utterance into the typed selection contract.
-
-    This is a deliberately small grammar, not a broad keyword router: the entire
-    customer turn must reduce to an ordinal/relative reference. Extra action words
-    such as a refresh request keep the turn on the normal semantic/read path.
-    """
-    tokens = _reference_tokens(text)
-    if not tokens:
-        return None
-
-    if tokens and tokens[0] in _REFERENCE_NOUNS:
-        tokens = tokens[1:]
-    if tokens and tokens[0] in _RELATIVE_LINKERS:
-        tokens = tokens[1:]
-    if not tokens:
-        return None
-
-    if len(tokens) == 1 and tokens[0] in _NEXT_TOKENS:
-        return Selection(kind="relative", relative="next")
-    if len(tokens) == 1 and tokens[0] in _PREVIOUS_TOKENS:
-        return Selection(kind="relative", relative="previous")
-
-    core = list(tokens)
-    if len(core) == 2 and core[1] in _UNIT_TOKENS:
-        core = core[:1]
-    if len(core) != 1:
-        return None
-    token = core[0]
-    if token in _FIRST_TOKENS:
-        return Selection(kind="relative", relative="first")
-    if token in _SECOND_TOKENS:
-        return Selection(kind="index", index=2)
-    if token in _THIRD_TOKENS:
-        return Selection(kind="index", index=3)
-    if token in _LAST_TOKENS:
-        return Selection(kind="relative", relative="last")
-    return None
-
-
-def recover_verified_availability_reference_selection(
-    *,
-    operation_type: str,
-    continues_previous: bool,
-    existing_selection: Selection | None,
-    latest_customer_text: str,
-    recent_read_context: dict[str, Any] | None,
-) -> Selection | None:
-    if existing_selection is not None:
-        return existing_selection
-    if operation_type != "availability" or not continues_previous:
-        return None
-    raw_options = (recent_read_context or {}).get("availability_reference_options")
-    if not isinstance(raw_options, list) or not raw_options:
-        return None
-    return infer_positional_reference_selection(latest_customer_text)
+ReferenceStatus = Literal["resolved", "needs_anchor", "out_of_range", "window_ambiguous", "explicit_time_mismatch", "unavailable"]
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -120,10 +39,14 @@ def _slots_inside_window(
         if not _same_dimension(slot, window, "laser_device_name"):
             continue
         slot_start = _parse_dt(slot.get("start_local"))
-        slot_end = _parse_dt(slot.get("end_local"))
-        if slot_start is None or slot_end is None:
+        if slot_start is None:
             continue
-        if window_start <= slot_start and slot_end <= window_end:
+        # Availability presentation windows describe verified *bookable start*
+        # ranges, not appointment-duration intervals. A discrete displayed time
+        # therefore has start_local == end_local even though its canonical slot
+        # has a later appointment end. Bind only by verified starts inside the
+        # displayed start range; never infer from an appointment end boundary.
+        if window_start <= slot_start <= window_end:
             matches.append(slot)
     return matches
 
@@ -165,14 +88,21 @@ def build_availability_reference_options(
     options: list[dict[str, object]] = []
     for index, window in enumerate(displayed_windows, start=1):
         candidates = _slots_inside_window(verified_slots, window)
+        window_start = _parse_dt(window.get("start_local"))
+        window_end = _parse_dt(window.get("end_local"))
+        discrete = (
+            window_start is not None
+            and window_end is not None
+            and window_start == window_end
+        )
         exact = [
             slot
             for slot in candidates
             if str(slot.get("start_local") or "") == str(window.get("start_local") or "")
-            and str(slot.get("end_local") or "") == str(window.get("end_local") or "")
         ]
-        concrete = len(candidates) == 1 and len(exact) == 1
+        concrete = discrete and len(candidates) == 1 and len(exact) == 1
         option: dict[str, object] = {
+            "option_ref": f"opt_{index}",
             "index": index,
             "concrete": concrete,
             "start_local": window.get("start_local"),
@@ -216,29 +146,53 @@ def _target_index(selection: Selection, *, anchor: int | None, count: int) -> tu
 def resolve_verified_availability_reference(
     selection: Selection,
     read_context: dict[str, Any] | None,
+    *,
+    explicit_user_time: str | None = None,
 ) -> dict[str, object]:
     raw_options = (read_context or {}).get("availability_reference_options")
     options = [dict(item) for item in raw_options if isinstance(item, dict)] if isinstance(raw_options, list) else []
-    raw_anchor = (read_context or {}).get("availability_reference_anchor_index")
-    anchor = raw_anchor if isinstance(raw_anchor, int) and not isinstance(raw_anchor, bool) else None
-    target, status = _target_index(selection, anchor=anchor, count=len(options))
-    result: dict[str, object] = {"status": status}
-    if target is None:
-        return result
-    option = options[target - 1]
-    result["index"] = target
-    result["option"] = option
+    if selection.kind == "ref" and selection.ref:
+        matches = [
+            option for option in options
+            if str(option.get("option_ref") or "") == selection.ref
+        ]
+        if len(matches) != 1:
+            return {"status": "unavailable"}
+        option = matches[0]
+        raw_index = option.get("index")
+        target = raw_index if isinstance(raw_index, int) and not isinstance(raw_index, bool) else None
+        if target is None:
+            return {"status": "unavailable"}
+        status: ReferenceStatus = "resolved"
+    else:
+        raw_anchor = (read_context or {}).get("availability_reference_anchor_index")
+        anchor = raw_anchor if isinstance(raw_anchor, int) and not isinstance(raw_anchor, bool) else None
+        target, status = _target_index(selection, anchor=anchor, count=len(options))
+        if target is None:
+            return {"status": status}
+        option = options[target - 1]
+
+    result: dict[str, object] = {"status": status, "index": target, "option": option}
     if option.get("concrete") is not True or not isinstance(option.get("slot"), dict):
         result["status"] = "window_ambiguous"
         return result
+
+    explicit = str(explicit_user_time or "").strip()[:5]
+    if explicit:
+        slot = option.get("slot")
+        slot_time = str(slot.get("start_time_24h") or "").strip()[:5] if isinstance(slot, dict) else ""
+        if slot_time != explicit:
+            result["status"] = "explicit_time_mismatch"
+            return result
+
     result["status"] = "resolved"
     return result
-
 
 def customer_safe_reference_option(option: dict[str, object]) -> dict[str, object]:
     slot = option.get("slot")
     safe_slot = slot if isinstance(slot, dict) else {}
     safe = {
+        "option_ref": option.get("option_ref"),
         "index": option.get("index"),
         "concrete": option.get("concrete"),
         "start_local": safe_slot.get("start_local") or option.get("start_local"),

@@ -8,7 +8,12 @@ import pytest
 from app.agents.v2.package_compare_composer import deterministic_package_comparison_reply
 from app.agents.v2.responder import _deterministic_availability_reference_reply
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.semantic_state_view import verified_read_semantic_view, with_safe_read_context
+from app.agents.v2.semantic_state_view import (
+    presented_availability_semantic_view,
+    verified_read_semantic_view,
+    with_safe_availability_reference_context,
+    with_safe_read_context,
+)
 from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
@@ -17,8 +22,12 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.agents.v2.turn_interpreter import merge_presented_availability_context
 from app.agents.v2.turn_normalization import normalize_semantic_invariants
-from app.services.agent_v2.live_chat import _verified_read_context_from_turn
+from app.services.agent_v2.live_chat import (
+    _availability_reference_context_from_turn,
+    _verified_read_context_from_turn,
+)
 from app.services.agent_v2.orchestrator import V2OrchestratedTurn, V2RuntimeStepTrace
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_step_outcome
@@ -32,8 +41,6 @@ from app.services.agent_v2.planner import (
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.reference_resolution import (
     build_availability_reference_options,
-    infer_positional_reference_selection,
-    recover_verified_availability_reference_selection,
     resolve_verified_availability_reference,
 )
 
@@ -90,11 +97,13 @@ def _slot(time_value: str, *, end: str | None = None) -> dict[str, object]:
 
 
 def _window(slot: dict[str, object]) -> dict[str, object]:
+    # Customer-facing single-slot windows represent one verified bookable start,
+    # so their start/end are the same clock even though the appointment has duration.
     return {
         "start_local": slot["start_local"],
-        "end_local": slot["end_local"],
+        "end_local": slot["start_local"],
         "start_time_24h": slot["start_time_24h"],
-        "end_time_24h": slot["end_time_24h"],
+        "end_time_24h": slot["start_time_24h"],
         "doctor_name": slot["doctor_name"],
         "laser_device_name": slot["laser_device_name"],
     }
@@ -122,6 +131,7 @@ def _reference_context(*, anchor: int | None = None) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("selection", "anchor", "expected_index", "expected_time"),
     [
+        (Selection(kind="ref", ref="opt_2"), None, 2, "14:00"),
         (Selection(kind="index", index=2), None, 2, "14:00"),
         (Selection(kind="relative", relative="next"), 1, 2, "14:00"),
         (Selection(kind="relative", relative="previous"), 3, 2, "14:00"),
@@ -202,9 +212,9 @@ def test_compressed_availability_window_never_becomes_invented_slot() -> None:
     second = _slot("14:45", end="15:15")
     compressed = {
         "start_local": first["start_local"],
-        "end_local": second["end_local"],
+        "end_local": second["start_local"],
         "start_time_24h": "14:15",
-        "end_time_24h": "15:15",
+        "end_time_24h": "14:45",
         "doctor_name": "يوسف",
         "laser_device_name": "Candela",
     }
@@ -621,65 +631,237 @@ def test_package_comparison_outcome_builder_carries_owned_state_and_single_price
     assert "3 جلسة" in reply[0]
 
 
-@pytest.mark.parametrize(
-    ("text", "kind", "index", "relative"),
-    [
-        ("التاني", "index", 2, None),
-        ("الثاني", "index", 2, None),
-        ("الأول", "relative", None, "first"),
-        ("أول واحد", "relative", None, "first"),
-        ("آخر واحد", "relative", None, "last"),
-        ("اللي بعده", "relative", None, "next"),
-        ("المعاد اللي بعده", "relative", None, "next"),
-        ("طب بعده؟", "relative", None, "next"),
-        ("اللي قبله", "relative", None, "previous"),
-        ("الميعاد اللي قبله", "relative", None, "previous"),
-    ],
-)
-def test_positional_reference_grammar_covers_natural_forms(
-    text: str,
-    kind: str,
-    index: int | None,
-    relative: str | None,
-) -> None:
-    selection = infer_positional_reference_selection(text)
-    assert selection is not None
-    assert selection.kind == kind
-    assert selection.index == index
-    assert selection.relative == relative
-
-
-def test_reference_grammar_does_not_capture_legitimate_refresh_request() -> None:
-    assert infer_positional_reference_selection("طب شوف تاني يمكن ظهر ميعاد") is None
-    assert infer_positional_reference_selection("ممكن تدور تاني على مواعيد؟") is None
-
-
-def test_server_recovery_only_fills_missing_selection_for_verified_continuation() -> None:
+def test_opaque_option_ref_is_server_validated_and_invalid_ref_fails_closed() -> None:
     context = _reference_context()
-    selection = recover_verified_availability_reference_selection(
-        operation_type="availability",
-        continues_previous=True,
-        existing_selection=None,
-        latest_customer_text="طب اللي بعده؟",
-        recent_read_context=context,
+    resolved = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_2"),
+        context,
     )
-    assert selection == Selection(kind="relative", relative="next")
+    assert resolved["status"] == "resolved"
+    assert resolved["option"]["option_ref"] == "opt_2"
+    assert resolved["option"]["slot"]["start_time_24h"] == "14:00"
+
+    invalid = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_99"),
+        context,
+    )
+    assert invalid == {"status": "unavailable"}
 
 
-def test_server_recovery_requires_verified_options_and_does_not_override_model_selection() -> None:
-    explicit = Selection(kind="index", index=2)
-    assert recover_verified_availability_reference_selection(
+def test_explicit_hhmm_guard_rejects_different_presented_option() -> None:
+    context = _reference_context()
+    mismatch = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_3"),
+        context,
+        explicit_user_time="03:00",
+    )
+    assert mismatch["status"] == "explicit_time_mismatch"
+
+    exact = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        context,
+        explicit_user_time="12:00",
+    )
+    assert exact["status"] == "resolved"
+
+
+def test_presented_availability_semantic_view_exposes_opaque_refs_not_canonical_slots() -> None:
+    semantic = _semantic()
+    raw = _reference_context()
+    raw["last_selected_option_ref"] = "opt_2"
+    safe = presented_availability_semantic_view(raw, context=semantic)
+    assert safe["last_selected_option_ref"] == "opt_2"
+    assert safe["options"][1]["option_ref"] == "opt_2"
+    assert safe["options"][1]["start_time_24h"] == "14:00"
+    assert "slot" not in safe["options"][1]
+    assert "doctor_id" not in safe["options"][1]
+
+    with_context = with_safe_availability_reference_context(
+        semantic,
+        availability_context=raw,
+    )
+    assert with_context.model_input["presented_availability"] == safe
+
+
+def test_side_question_preserves_last_presented_availability_snapshot() -> None:
+    previous = _reference_context()
+    previous["last_selected_option_ref"] = "opt_1"
+    side_turn = SimpleNamespace(
+        plan=TurnPlan(
+            steps=[
+                PlanStep(
+                    operation_index=0,
+                    operation_type="pricing",
+                    disposition="read",
+                    reads=[ReadRequest(kind="service_catalog", parameters={"service_id": SERVICE_ID})],
+                    response_goal="answer_price",
+                )
+            ]
+        ),
+        outcomes=(TurnOutcome(status="answered", response_goal="answer_price"),),
+    )
+    carried = _availability_reference_context_from_turn(
+        side_turn,
+        previous_context=previous,
+        verified_read_context={"operation_type": "pricing", "service_id": SERVICE_ID},
+    )
+    assert carried == previous
+
+
+def test_reference_selection_updates_only_last_selected_option_ref() -> None:
+    previous = _reference_context()
+    step = PlanStep(
+        operation_index=0,
         operation_type="availability",
+        disposition="respond",
+        response_goal="availability_reference",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_index": 2,
+            "availability_reference_option_ref": "opt_2",
+            "availability_reference_option": {
+                "option_ref": "opt_2",
+                "index": 2,
+                "start_time_24h": "14:00",
+            },
+        },
+    )
+    turn = SimpleNamespace(
+        plan=TurnPlan(steps=[step]),
+        outcomes=(TurnOutcome(status="answered", response_goal="availability_reference"),),
+    )
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    )
+    assert updated is not None
+    assert updated["last_selected_option_ref"] == "opt_2"
+    assert updated["availability_reference_options"] == previous["availability_reference_options"]
+
+
+def test_new_availability_replaces_snapshot_and_clears_selected_ref() -> None:
+    previous = _reference_context()
+    previous["last_selected_option_ref"] = "opt_3"
+    new_turn = _availability_turn_for_context(
+        date_value="2026-10-11",
+        times=["10:00", "11:00"],
+    )
+    verified = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=new_turn,
+        previous_read_context=None,
+    )
+    assert verified is not None
+    updated = _availability_reference_context_from_turn(
+        new_turn,
+        previous_context=previous,
+        verified_read_context=verified,
+    )
+    assert updated is not None
+    assert "last_selected_option_ref" not in updated
+    assert updated["date"]["start_date"] == "2026-10-11"
+    assert [item["option_ref"] for item in updated["availability_reference_options"]] == [
+        "opt_1",
+        "opt_2",
+    ]
+
+def test_full_booking_interpreter_can_bind_last_presented_option_without_stale_prose() -> None:
+    raw = _reference_context()
+    raw["last_selected_option_ref"] = "opt_2"
+    semantic = with_safe_availability_reference_context(
+        _semantic(),
+        availability_context=raw,
+    )
+    model_turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+                selection=Selection(kind="ref", ref="opt_2"),
+                fresh_task=True,
+                fresh_task_explicit_fields=[],
+            )
+        ]
+    )
+
+    bound = merge_presented_availability_context(model_turn, semantic)
+    operation = bound.operations[0]
+    assert operation.selection == Selection(kind="ref", ref="opt_2")
+    assert operation.continues_previous is True
+    assert operation.fresh_task is False
+    assert operation.entities.date is not None
+    assert operation.entities.date.start_date == "2026-10-10"
+    assert operation.entities.time is not None
+    assert operation.entities.time.start_time == "14:00"
+    assert operation.entities.time.start_time_ambiguity == "none"
+    assert operation.entities.service is not None
+    assert operation.entities.service.ref is not None
+    assert operation.entities.doctor is not None
+    assert operation.entities.doctor.ref is not None
+
+    step = plan_turn(
+        bound,
+        PlannerContext(
+            semantic_context=semantic,
+            active_task=None,
+            now=NOW,
+            availability_reference_context=raw,
+        ),
+    ).steps[0]
+    assert step.operation_type == "book"
+    assert step.state_action == "start_booking"
+    assert any(read.kind == "availability" for read in step.reads)
+    assert step.facts["time"]["start_time"] == "14:00"
+
+
+def test_booking_with_invalid_or_compressed_option_ref_cannot_reach_write_path() -> None:
+    first = _slot("14:15", end="14:45")
+    second = _slot("14:45", end="15:15")
+    raw = _reference_context()
+    raw["availability_reference_options"] = build_availability_reference_options(
+        displayed_windows=[
+            {
+                "start_local": first["start_local"],
+                "end_local": second["end_local"],
+                "start_time_24h": "14:15",
+                "end_time_24h": "15:15",
+                "doctor_name": "Mariam",
+                "laser_device_name": "Candela",
+            }
+        ],
+        verified_slots=[first, second],
+    )
+    semantic = with_safe_availability_reference_context(
+        _semantic(),
+        availability_context=raw,
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="execute",
         continues_previous=True,
-        existing_selection=explicit,
-        latest_customer_text="اللي بعده",
-        recent_read_context=_reference_context(),
-    ) == explicit
-    assert recover_verified_availability_reference_selection(
-        operation_type="availability",
-        continues_previous=True,
-        existing_selection=None,
-        latest_customer_text="اللي بعده",
-        recent_read_context={},
-    ) is None
+        selection=Selection(kind="ref", ref="opt_1"),
+    )
+    bound = merge_presented_availability_context(
+        TiaTurnUnderstanding(operations=[operation]),
+        semantic,
+    )
+    step = plan_turn(
+        bound,
+        PlannerContext(
+            semantic_context=semantic,
+            active_task=None,
+            now=NOW,
+            availability_reference_context=raw,
+        ),
+    ).steps[0]
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "availability_reference"
+    assert step.reads == []
+    assert step.write_intent is None
+    assert step.facts["availability_reference_reason"] == "window_ambiguous"
 
