@@ -158,6 +158,31 @@ class Selection(StrictContractModel):
     relative: RelativeSelection | None = None
     time_ambiguity: TimeAmbiguity = "none"
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_presented_option_ref(cls, value: object) -> object:
+        """Canonicalize redundant model coordinates only for server-owned availability refs.
+
+        ``opt_*`` is an opaque technical namespace whose canonical meaning is validated
+        later against the server-owned presented availability snapshot. The model may
+        redundantly echo a displayed index/clock alongside that ref because provider
+        schemas require every selection field. Those echoes are not authority. Keep the
+        ref and discard only those redundant coordinates; all other refs keep the strict
+        fail-closed validator below.
+        """
+        if not isinstance(value, dict):
+            return value
+        ref = value.get("ref")
+        if value.get("kind") != "ref" or not isinstance(ref, str) or not ref.startswith("opt_"):
+            return value
+        return {
+            **value,
+            "index": None,
+            "time": None,
+            "relative": None,
+            "time_ambiguity": "none",
+        }
+
     @model_validator(mode="after")
     def validate_selection(self) -> Selection:
         if self.kind == "index":

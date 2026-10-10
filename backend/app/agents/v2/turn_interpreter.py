@@ -83,6 +83,15 @@ SEMANTIC PRINCIPLES
   candidate_mode=set for the compared entity set. For an availability comparison with no explicit
   date, use date mode=next_available so Python can verify which requested candidate is available
   sooner. Never ask the customer to choose one candidate merely in order to compare them.
+- availability_followup_intent, when supplied, is the result of a separate narrow semantic model
+  over the current server-owned displayed availability. Treat action=new_search as strong semantic
+  evidence that the latest turn is changing the currently displayed availability search rather than
+  selecting an old option. For a related availability scope change, emit availability with
+  continues_previous=true, include only constraints the customer actually changes, and do not ask to
+  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Treat
+  action=refresh_availability as the same verified availability search being requested again: emit an
+  availability continuation so Python performs a fresh read. This hint is semantic only; it never
+  supplies canonical IDs, slots, write authority, or permission to invent constraints.
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
   When true, include only constraints the customer newly states or changes; deterministic Python
   inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
@@ -214,8 +223,10 @@ SEMANTIC PRINCIPLES
   references are normally handled by a smaller semantic resolver before this interpreter. If this full
   interpreter is used because the customer also requests a lifecycle action, preserve that action and,
   when it clearly targets a displayed/last-selected option, set selection kind=ref to the supplied opt_*
-  ref and continues_previous=true. Never invent an option ref or reconstruct a slot from assistant prose.
-  Python validates the ref, binds canonical slot facts, and revalidates availability before any write.
+  ref and continues_previous=true. For this ref selection, set index=null, time=null, relative=null, and
+  time_ambiguity=none; do not redundantly copy the option position or clock into other selection fields.
+  Never invent an option ref or reconstruct a slot from assistant prose. Python validates the ref, binds
+  canonical slot facts, and revalidates availability before any write.
 - recent_verified_action describes only the immediately previous completed action when Python exposes
   one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
   added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its

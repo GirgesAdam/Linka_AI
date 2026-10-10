@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import dataclass
@@ -46,6 +46,13 @@ class ReferenceDecision(BaseModel):
             "Never invent an option_ref."
         ),
     )
+    exact_time: str | None = Field(
+        default=None,
+        description=(
+            "The customer's exact colon-formatted HH:MM only when action=new_search and the explicit "
+            "clock is not one of the displayed options. Never normalize, infer, or convert AM/PM."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_option_ref(self) -> ReferenceDecision:
@@ -54,6 +61,8 @@ class ReferenceDecision(BaseModel):
                 raise ValueError("select_presented_option requires option_ref.")
         elif self.option_ref is not None:
             raise ValueError("option_ref is valid only for select_presented_option.")
+        if self.exact_time is not None and self.action != "new_search":
+            raise ValueError("exact_time is valid only for new_search.")
         return self
 
 
@@ -76,7 +85,7 @@ Actions:
   the intended option is unambiguous. Return that supplied option_ref. This includes references by
   position, displayed clock time, or relative wording when last_selected_option_ref makes the target clear.
 - refresh_availability: the customer wants Linka to check availability again / refresh the same search.
-- new_search: the customer changes or starts an availability search scope such as doctor/service/date.
+- new_search: the customer changes or starts an availability search scope such as doctor/service/date/time. An explicit clock time that does not match any displayed option is a time change/new search, not an ambiguous displayed-option reference.
 - clarify: the customer is referring to the displayed options but the intended option cannot be determined
   safely, including a relative request with no usable anchor.
 - normal: the latest message is not merely resolving the displayed availability (for example a side question,
@@ -86,8 +95,14 @@ Safety:
 - option_ref is semantic intent only. Python validates it against server-owned options.
 - A displayed compressed window with concrete=false is not a canonical single slot. If the customer selects
   that window, still return its option_ref; Python will ask for a specific time rather than invent one.
-- An explicit colon-formatted clock is exact: 03:00 is not 15:00. Never map an exact displayed-time request
-  to a different clock time.
+- Natural 12-hour clock wording without a colon/explicit AM-PM marker is semantic, not 24-hour authority.
+  If exactly one displayed option corresponds to that natural clock reading, select that supplied option_ref.
+  If more than one displayed option could correspond to it (for example both 03:00 and 15:00), clarify rather
+  than guessing. This preserves the conversational meaning of a displayed 3 PM option when the customer says
+  "3", without Python parsing the phrase.
+- An explicit colon-formatted clock is exact: 03:00 is not 15:00. If that exact clock is one displayed option,
+  select that option_ref. If it is not displayed, use new_search so the normal availability flow can verify
+  that exact time. For this time-only new search, copy the exact colon clock into exact_time. Never map it to a different displayed clock.
 - If the customer explicitly asks Linka to book/reschedule/cancel or otherwise execute a lifecycle action now,
   use normal so the full V2 interpreter preserves that action. Do not turn a write request into a mere selection.
 """

@@ -10,6 +10,7 @@ from app.agents.v2.availability_reference_interpreter import (
     ReferenceDecision,
     interpret_availability_reference_turn,
 )
+from app.agents.v2.turn_contract import Selection
 from app.core.config import settings
 
 
@@ -50,10 +51,40 @@ def _context(*, selected: str | None = None) -> dict[str, object]:
 def test_reference_decision_contract_is_tiny_and_rejects_invalid_ref_shape() -> None:
     assert ReferenceDecision(action="select_presented_option", option_ref="opt_2").option_ref == "opt_2"
     assert ReferenceDecision(action="refresh_availability", option_ref=None).option_ref is None
+    exact = ReferenceDecision(action="new_search", option_ref=None, exact_time="03:00")
+    assert exact.exact_time == "03:00"
     with pytest.raises(ValueError):
         ReferenceDecision(action="select_presented_option", option_ref=None)
     with pytest.raises(ValueError):
         ReferenceDecision(action="normal", option_ref="opt_1")
+    with pytest.raises(ValueError):
+        ReferenceDecision(action="select_presented_option", option_ref="opt_1", exact_time="03:00")
+
+
+def test_presented_option_ref_normalizes_only_redundant_provider_coordinates() -> None:
+    selection = Selection.model_validate(
+        {
+            "kind": "ref",
+            "ref": "opt_2",
+            "index": 2,
+            "time": "12:00",
+            "relative": "next",
+            "time_ambiguity": "twelve_hour",
+        }
+    )
+    assert selection == Selection(kind="ref", ref="opt_2")
+
+    with pytest.raises(ValueError):
+        Selection.model_validate(
+            {
+                "kind": "ref",
+                "ref": "A1",
+                "index": 2,
+                "time": None,
+                "relative": None,
+                "time_ambiguity": "none",
+            }
+        )
 
 
 def test_model_input_contains_only_displayed_safe_options_and_opaque_refs() -> None:

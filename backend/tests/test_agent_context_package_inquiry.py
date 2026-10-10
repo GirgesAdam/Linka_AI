@@ -865,3 +865,29 @@ def test_booking_with_invalid_or_compressed_option_ref_cannot_reach_write_path()
     assert step.write_intent is None
     assert step.facts["availability_reference_reason"] == "window_ambiguous"
 
+
+
+def test_new_search_semantic_turn_invalidates_stale_presented_snapshot() -> None:
+    previous = _reference_context(anchor=2)
+    turn = SimpleNamespace(
+        plan=TurnPlan(
+            steps=[
+                PlanStep(
+                    operation_index=0,
+                    operation_type="availability",
+                    disposition="clarify",
+                    response_goal="clarification",
+                    clarification_field="service",
+                )
+            ]
+        ),
+        outcomes=(TurnOutcome(status="needs_input", response_goal="clarification"),),
+        reference_semantic_path_used=True,
+        reference_action="new_search",
+    )
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    )
+    assert updated is None

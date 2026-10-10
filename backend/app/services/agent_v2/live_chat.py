@@ -636,6 +636,12 @@ def _availability_reference_context_from_turn(
                 context[key] = value
         return context
 
+    if (
+        getattr(turn, "reference_semantic_path_used", False)
+        and getattr(turn, "reference_action", None) == "new_search"
+    ):
+        return None
+
     return dict(previous_context) if isinstance(previous_context, dict) else None
 
 

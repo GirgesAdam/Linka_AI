@@ -33,10 +33,11 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     Selection,
     TiaTurnUnderstanding,
+    TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
+from app.agents.v2.turn_interpreter import interpret_customer_turn_v2, merge_verified_read_context
 from app.integrations.clinic.base import ClinicAdapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
@@ -1322,7 +1323,45 @@ def orchestrate_v2_turn(
         )
 
     decision = reference_interpretation.decision if reference_interpretation is not None else None
-    if decision is not None and decision.action == "select_presented_option" and decision.option_ref:
+    if decision is not None and decision.action in {"new_search", "refresh_availability"}:
+        model_input = dict(semantic_context.model_input)
+        model_input["availability_followup_intent"] = {"action": decision.action}
+        semantic_context = SemanticContext(
+            model_input=model_input,
+            reference_map=semantic_context.reference_map,
+            server_metadata=semantic_context.server_metadata,
+        )
+    exact_reference_time = (
+        str(decision.exact_time).strip()[:5]
+        if decision is not None and decision.exact_time is not None
+        else None
+    )
+    if (
+        decision is not None
+        and decision.action == "new_search"
+        and exact_reference_time is not None
+        and explicit_user_time is not None
+        and exact_reference_time == explicit_user_time
+    ):
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="availability",
+                    entities=TurnEntities(
+                        time=TimeConstraint(
+                            mode="exact",
+                            start_time=explicit_user_time,
+                            start_time_ambiguity="none",
+                        )
+                    ),
+                    execution_intent="informational",
+                    continues_previous=True,
+                )
+            ]
+        )
+        understanding = merge_verified_read_context(understanding, semantic_context)
+        full_interpreter_called = False
+    elif decision is not None and decision.action == "select_presented_option" and decision.option_ref:
         understanding = TiaTurnUnderstanding(
             operations=[
                 TurnOperation(
