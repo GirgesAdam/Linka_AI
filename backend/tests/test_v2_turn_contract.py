@@ -99,3 +99,33 @@ def test_v2_provider_schema_exposes_typed_package_read_scope() -> None:
     assert set(details["items"]["enum"]) == {"owned", "offers"}
     provider = canonicalize_provider_json_schema(schema)
     assert "requested_package_details" in str(provider)
+
+
+def test_active_reschedule_explicit_fields_are_latest_message_provenance() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+        entities=TurnEntities(
+            date=DateConstraint(mode="next_available"),
+            time=TimeConstraint(mode="exact", start_time="16:00"),
+        ),
+    )
+    assert operation.active_task_explicit_fields == ["date", "time"]
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="reschedule",
+            active_task_relationship="continue",
+            active_task_explicit_fields=["date"],
+            entities=TurnEntities(date=None),
+        )
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="reschedule",
+            active_task_relationship="unspecified",
+            active_task_explicit_fields=["date"],
+            entities=TurnEntities(date=DateConstraint(mode="next_available")),
+        )

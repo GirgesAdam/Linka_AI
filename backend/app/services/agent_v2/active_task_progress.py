@@ -371,6 +371,7 @@ def adapt_matching_active_task_step(
         and isinstance(candidate_date, dict)
         and candidate_date.get("mode") == "next_available"
         and effective_time_mode == "exact"
+        and "date" not in set(operation.active_task_explicit_fields)
     ):
         params["date"] = None
 

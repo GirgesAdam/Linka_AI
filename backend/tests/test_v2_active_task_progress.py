@@ -342,6 +342,55 @@ def test_reschedule_next_available_cannot_silently_fill_missing_date_with_exact_
     assert progress.write_intent is None
 
 
+def test_reschedule_explicit_same_turn_next_available_and_exact_time_remains_searchable() -> None:
+    base = _reschedule_state()
+    state = base.model_copy(
+        update={
+            "replacement": base.replacement.model_copy(
+                update={"date": None, "time": None}
+            )
+        }
+    )
+    operation = TurnOperation(
+        type="reschedule",
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+        entities=TurnEntities(
+            date=DateConstraint(mode="next_available"),
+            time=TimeConstraint(mode="exact", start_time="16:00"),
+        ),
+    )
+
+    adapted = adapt_matching_active_task_step(
+        _fresh_reschedule_step(),
+        operation=operation,
+        active_task=state,
+        context=_context(),
+    )
+    assert adapted.facts["date"]["mode"] == "next_available"
+    assert adapted.facts["time"]["start_time"] == "16:00"
+
+    transition = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-explicit-next-time",
+    )
+    updated = transition.active_task
+    assert isinstance(updated, RescheduleTaskState)
+    assert updated.replacement.date == DateConstraint(mode="next_available")
+    assert updated.replacement.time == TimeConstraint(mode="exact", start_time="16:00")
+
+    progress = plan_active_task_progress(updated, operation_index=0, context=_context())
+    assert progress.disposition == "read"
+    assert progress.facts["exact_time_requested"] is True
+    assert progress.write_intent is not None
+    assert progress.write_intent.requires_verification is True
+
+
 def test_reschedule_explicit_next_available_without_exact_time_remains_searchable() -> None:
     base = _reschedule_state()
     state = base.model_copy(
