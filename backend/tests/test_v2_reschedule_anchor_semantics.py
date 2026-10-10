@@ -195,6 +195,7 @@ def test_reschedule_anchors_unique_target_before_date_then_reuses_same_id_on_fol
     assert ready.write_intent is not None
     assert ready.write_intent.parameters["appointment_id"] == "apt-1"
     assert ready.write_intent.parameters["start_at"] == "2026-09-15T18:00:00+03:00"
+    assert ready.write_intent.parameters["_reschedule_required_fields_resolved"] is True
 
 
 def test_reschedule_does_not_anchor_an_arbitrary_target_when_multiple_appointments_match() -> None:
@@ -246,3 +247,74 @@ def test_reschedule_does_not_create_target_when_no_appointment_matches() -> None
         turn_id="turn-reschedule-missing",
     )
     assert transition.active_task is None
+
+
+def test_reschedule_missing_time_never_promotes_to_write_ready() -> None:
+    operation = _reschedule_operation()
+    first_step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    verified_first = advance_step_after_verification(
+        first_step,
+        VerificationFacts(appointment_match_count=1, verified_parameters={"appointment_id": "apt-1"}),
+    )
+    transition = apply_step_state(
+        None,
+        step=verified_first,
+        operation=operation,
+        reads=_appointment_reads([_appointment_row()]),
+        now=NOW,
+        turn_id="turn-start",
+    )
+    state = transition.active_task
+    assert isinstance(state, RescheduleTaskState)
+    state = state.model_copy(
+        update={
+            "replacement": state.replacement.model_copy(
+                update={"date": DateConstraint(mode="exact", start_date="2026-09-15"), "time": None}
+            )
+        }
+    )
+    progress = plan_active_task_progress(state, operation_index=0, context=_semantic_context())
+    assert progress.facts["exact_time_requested"] is False
+    advanced = advance_step_after_verification(
+        progress,
+        VerificationFacts(appointment_match_count=1, exact_slot_match_count=1, verified_parameters={"start_at": "2026-09-15T18:00:00+03:00"}),
+    )
+    assert advanced.disposition != "write_ready"
+
+
+
+def test_reschedule_occupied_exact_target_never_promotes_to_write() -> None:
+    operation = _reschedule_operation(date="2026-09-15", time="18:00")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    verified_target = advance_step_after_verification(
+        step,
+        VerificationFacts(appointment_match_count=1, verified_parameters={"appointment_id": "apt-1"}),
+    )
+    transition = apply_step_state(
+        None,
+        step=verified_target,
+        operation=operation,
+        reads=_appointment_reads([_appointment_row()]),
+        now=NOW,
+        turn_id="turn-occupied",
+    )
+    state = transition.active_task
+    assert isinstance(state, RescheduleTaskState)
+    progress = plan_active_task_progress(state, operation_index=0, context=_semantic_context())
+    blocked = advance_step_after_verification(
+        progress,
+        VerificationFacts(
+            appointment_match_count=1,
+            exact_slot_match_count=0,
+            verified_parameters={},
+        ),
+    )
+    assert blocked.disposition == "blocked"
+    assert blocked.response_goal == "requested_time_unavailable"
+    assert blocked.disposition != "write_ready"

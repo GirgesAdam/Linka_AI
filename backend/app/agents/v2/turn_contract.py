@@ -63,6 +63,7 @@ GroupedBookingAction = Literal["preserve_group", "remove_other_components"]
 ActiveTaskRelationship = Literal["unspecified", "continue", "replace"]
 AutomationContextRelationship = Literal["none", "acknowledge", "appointment_action", "next_session"]
 AppointmentActionExplicitField = Literal["date", "time"]
+ActiveTaskExplicitField = Literal["date", "time"]
 ResponseDisposition = Literal["reply", "no_reply"]
 FreshTaskField = Literal["service", "doctor", "device", "appointment", "package", "date", "time", "package_usage"]
 
@@ -371,6 +372,17 @@ class TurnOperation(StrictContractModel):
             "this marker on non-task operations."
         ),
     )
+    active_task_explicit_fields: list[ActiveTaskExplicitField] = Field(
+        default_factory=list,
+        description=(
+            "For active_task_relationship=continue with reschedule only, list replacement date "
+            "and/or time exactly when that dimension is explicitly supplied in the latest customer "
+            "message. Never mark model-inferred/default constraints, values inherited from active_task, "
+            "source appointment facts, verified context, assistant prose, or older dialogue. Python "
+            "uses this provenance to distinguish customer-grounded replacement constraints from "
+            "model defaults while keeping active-task lifecycle deterministic."
+        ),
+    )
     automation_context_relationship: AutomationContextRelationship = Field(
         default="none",
         description=(
@@ -468,6 +480,21 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_active_task_explicit_fields(self) -> TurnOperation:
+        explicit = set(self.active_task_explicit_fields)
+        if not explicit:
+            return self
+        if self.active_task_relationship != "continue" or self.type != "reschedule":
+            raise ValueError(
+                "active_task_explicit_fields is only valid for active reschedule continuations."
+            )
+        if "date" in explicit and self.entities.date is None:
+            raise ValueError("active-task explicit date marker requires a date entity.")
+        if "time" in explicit and self.entities.time is None:
+            raise ValueError("active-task explicit time marker requires a time entity.")
+        return self
 
     @model_validator(mode="after")
     def validate_automation_context_relationship(self) -> TurnOperation:

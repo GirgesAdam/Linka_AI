@@ -296,6 +296,12 @@ def execute_write_ready_step(
                     }
 
             elif intent.kind == "reschedule":
+                if parameters.get("_reschedule_required_fields_resolved") is not True:
+                    return _failure(
+                        write_kind=intent.kind,
+                        code="reschedule_target_unresolved",
+                        detail="Reschedule target fields were not fully resolved by the verified planner.",
+                    )
                 appointment_ids = _uuid_sequence(parameters, "appointment_ids")
                 visit_group_id = _optional_uuid(parameters, "visit_group_id")
                 raw_components = parameters.get("reschedule_components")

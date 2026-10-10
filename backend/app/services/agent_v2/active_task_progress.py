@@ -350,6 +350,31 @@ def adapt_matching_active_task_step(
     if explicit_target is not None and str(explicit_target) != active_task.target.appointment_id:
         return step
 
+    # ``next_available`` is a search scope, not a concrete reschedule date.  If the
+    # durable task still has no replacement date while an exact time is already
+    # known, do not let a same-turn model default silently fill the missing date and
+    # become write authority.  A legitimate next-available request without a
+    # concrete time is still persisted and searched; after that earlier turn it is
+    # valid inherited state, and a later exact time may continue normally.
+    candidate_date = params.get("date")
+    candidate_time = params.get("time")
+    inherited_time = active_task.replacement.time
+    effective_time_mode = (
+        str(candidate_time.get("mode"))
+        if isinstance(candidate_time, dict)
+        else inherited_time.mode
+        if inherited_time is not None
+        else None
+    )
+    if (
+        active_task.replacement.date is None
+        and isinstance(candidate_date, dict)
+        and candidate_date.get("mode") == "next_available"
+        and effective_time_mode == "exact"
+        and "date" not in set(operation.active_task_explicit_fields)
+    ):
+        params["date"] = None
+
     return PlanStep(
         operation_index=step.operation_index,
         operation_type=operation.type,

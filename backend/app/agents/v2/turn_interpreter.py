@@ -198,6 +198,13 @@ SEMANTIC PRINCIPLES
   cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
   unspecified for side reads/social turns and when no active task applies. Python, not this marker,
   performs the lifecycle transition.
+  For an active reschedule continuation, active_task_explicit_fields must list date and/or time only
+  when that replacement dimension is explicitly supplied in the latest customer message. Do not mark
+  a dimension merely because you infer/default it, or because it exists in active_task, source appointment,
+  verified context, assistant prose, or older dialogue. If the customer explicitly supplies a
+  next-available date scope and an exact time in the same message, list both date and time. If the latest
+  message only authorizes/acknowledges the change without restating either dimension, leave this list
+  empty even if an inferred/default date or time entity is emitted.
 - Independently set fresh_task=true when the latest customer message explicitly opens a new/separate
   booking or reschedule instead of continuing any prior task or completed action. Also, whenever
   active_task is empty and a book/reschedule is not explicitly continuing supplied verified context,

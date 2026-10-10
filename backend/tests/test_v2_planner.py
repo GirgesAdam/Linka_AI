@@ -323,6 +323,7 @@ def test_reschedule_slot_selection_preserves_persisted_target_appointment_id() -
     assert step.write_intent.kind == "reschedule"
     assert step.write_intent.parameters["appointment_id"] == "appointment-1"
     assert step.write_intent.parameters["start_at"] == "2026-09-30T10:00:00+03:00"
+    assert step.write_intent.parameters["_reschedule_required_fields_resolved"] is True
 
 
 def test_reschedule_slot_payload_does_not_need_appointment_id() -> None:
