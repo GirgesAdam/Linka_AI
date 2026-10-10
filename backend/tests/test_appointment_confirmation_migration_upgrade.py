@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -177,8 +177,12 @@ def test_0092_reconciles_without_removing_legitimate_manual_confirmations(
     engine = create_engine(migration_database, pool_pre_ping=True)
     try:
         with Session(engine) as db:
-            far_start = datetime(2026, 10, 20, 10, 0, tzinfo=UTC)
-            far_created = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+            db_now = db.execute(text("SELECT CURRENT_TIMESTAMP")).scalar_one()
+            assert db_now.tzinfo is not None
+            assert db_now.utcoffset() is not None
+
+            far_start = db_now + timedelta(days=10)
+            far_created = db_now - timedelta(days=10)
 
             # M1: legacy booking created directly as confirmed, without a later
             # explicit staff pending -> confirmed transition.
@@ -193,7 +197,7 @@ def test_0092_reconciles_without_removing_legitimate_manual_confirmations(
             )
 
             # M2: explicit staff confirmation before the customer window is valid.
-            manual_far_at = datetime(2026, 10, 5, 10, 0, tzinfo=UTC)
+            manual_far_at = db_now - timedelta(days=5)
             manual_far_id = _seed_confirmation_case(
                 db,
                 suffix="m2-manual-far",
@@ -207,8 +211,8 @@ def test_0092_reconciles_without_removing_legitimate_manual_confirmations(
             )
 
             # M3: manual confirmation inside the ordinary customer window remains confirmed.
-            near_start = datetime(2026, 10, 10, 10, 0, tzinfo=UTC)
-            manual_near_at = datetime(2026, 10, 9, 9, 0, tzinfo=UTC)
+            near_start = db_now + timedelta(hours=12)
+            manual_near_at = db_now - timedelta(minutes=30)
             manual_near_id = _seed_confirmation_case(
                 db,
                 suffix="m3-manual-near",
@@ -222,7 +226,7 @@ def test_0092_reconciles_without_removing_legitimate_manual_confirmations(
             )
 
             # M4: a booking created pending inside the allowed creation window is reconciled up.
-            near_created = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
+            near_created = db_now - timedelta(hours=1)
             automatic_near_id = _seed_confirmation_case(
                 db,
                 suffix="m4-automatic-near",
@@ -235,7 +239,7 @@ def test_0092_reconciles_without_removing_legitimate_manual_confirmations(
 
             # M5: invalid branch timezone falls back to the valid workspace timezone,
             # while the explicit staff confirmation remains authoritative.
-            invalid_tz_manual_at = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+            invalid_tz_manual_at = db_now - timedelta(days=5)
             invalid_tz_manual_id = _seed_confirmation_case(
                 db,
                 suffix="m5-invalid-tz-manual",
