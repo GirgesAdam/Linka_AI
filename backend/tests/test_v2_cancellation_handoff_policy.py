@@ -112,7 +112,7 @@ class _PatientScopedAdapter:
         return None
 
     def get_patient_appointments(self, request: object) -> AppointmentReadResult:
-        patient_id = str(getattr(request, "patient_id"))
+        patient_id = str(request.patient_id)
         self.requested_patient_ids.append(patient_id)
         return AppointmentReadResult(
             appointments=tuple(row for row in self.rows if row.patient_id == patient_id)
