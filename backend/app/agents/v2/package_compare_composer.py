@@ -91,6 +91,3 @@ def deterministic_package_comparison_reply(
         f"{price_sentence} و{state}، فمش هاعتبرها رصيد متاح للجلسة دي.",
         "deterministic:package-comparison",
     )
-
-
-
