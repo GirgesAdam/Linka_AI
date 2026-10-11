@@ -222,6 +222,26 @@ def resolve_additional_services(
     return resolved
 
 
+def _main_appointment_device_key(
+    db: Session,
+    *,
+    workspace: Workspace,
+    proposal: BookingProposal,
+) -> str | None:
+    service = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace.id,
+            Service.id == UUID(proposal.main_service_id),
+            Service.is_active.is_(True),
+        )
+    )
+    if service is None:
+        raise MultiServiceBookingError("Main service is missing or inactive.")
+    if not bool(service.requires_laser_device):
+        return None
+    return (proposal.device_key or "").strip() or None
+
+
 def booking_proposal_alternatives(
     db: Session,
     *,
@@ -241,6 +261,12 @@ def booking_proposal_alternatives(
     if branch is None:
         return []
     timezone = resolve_timezone(workspace, branch)
+    try:
+        main_appointment_device_key = _main_appointment_device_key(
+            db, workspace=workspace, proposal=proposal
+        )
+    except MultiServiceBookingError:
+        return []
     current = (now or datetime.now(UTC)).astimezone(UTC)
     first_date = proposal.start_at.astimezone(timezone).date()
     alternatives: list[dict[str, str]] = []
@@ -254,7 +280,7 @@ def booking_proposal_alternatives(
                 booking_date=first_date + timedelta(days=offset),
                 doctor_id=UUID(proposal.doctor_id),
                 now=current,
-                laser_device_key=proposal.device_key,
+                laser_device_key=main_appointment_device_key,
             )
         except BookingRuleError:
             continue
@@ -294,13 +320,16 @@ def execute_booking_proposal(
     additionals = resolve_additional_services(db, workspace=workspace, proposal=proposal)
 
     main_service_id = UUID(proposal.main_service_id)
+    main_appointment_device_key = _main_appointment_device_key(
+        db, workspace=workspace, proposal=proposal
+    )
     package_resolution = resolve_booking_package(
         db,
         workspace=workspace,
         patient=patient,
         service_id=main_service_id,
         start_at=proposal.start_at,
-        device_key=proposal.device_key,
+        device_key=main_appointment_device_key,
         package_usage=proposal.package_usage,
         requested_package_id=(UUID(proposal.package_id) if proposal.package_id else None),
     )
@@ -318,7 +347,7 @@ def execute_booking_proposal(
             use_pulse_balance=False,
             visit_group_id=None,
             source="ai",
-            laser_device_key=proposal.device_key,
+            laser_device_key=main_appointment_device_key,
             idempotency_key=(f"{idempotency_key}:main" if idempotency_key else None),
             actor_type="ai",
         )

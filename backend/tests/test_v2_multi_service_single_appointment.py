@@ -492,6 +492,10 @@ def test_proposal_executor_creates_one_appointment_then_additional_rows(monkeypa
             package_name=None,
         ),
     )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: None,
+    )
 
     def fake_create(*_args, **_kwargs):
         created.append("appointment")
