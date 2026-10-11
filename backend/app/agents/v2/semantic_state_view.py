@@ -47,6 +47,7 @@ def _safe_constraints(value: object, context: SemanticContext) -> dict[str, obje
     mappings: tuple[tuple[str, ReferenceKind, str], ...] = (
         ("service_id", "service", "service_ref"),
         ("doctor_id", "doctor", "doctor_ref"),
+        ("branch_id", "branch", "branch_ref"),
         ("device_key", "device", "device_ref"),
         ("package_id", "package", "package_ref"),
     )
@@ -386,6 +387,7 @@ def pending_choice_semantic_view(
 _STATE_ID_KINDS: dict[str, ReferenceKind] = {
     "service_id": "service",
     "doctor_id": "doctor",
+    "branch_id": "branch",
     "device_key": "device",
     "appointment_id": "appointment",
     "package_id": "package",

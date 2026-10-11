@@ -231,6 +231,7 @@ class AppointmentSelector(StrictContractModel):
 class TurnEntities(StrictContractModel):
     service: EntityReference | None = None
     doctor: EntityReference | None = None
+    branch: EntityReference | None = None
     device: EntityReference | None = None
     appointment: EntityReference | None = None
     package: EntityReference | None = None
