@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - fix/cancellation-handoff-20261011
-  pull_request:
-    types: [opened, synchronize]
-    branches: [main]
 
 permissions:
   contents: read
@@ -14,11 +11,26 @@ permissions:
 jobs:
   focused:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
     env:
-      DATABASE_URL: "sqlite+pysqlite:///:memory:"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
       SUPABASE_SECRET_KEY: sb_secret_ci_dummy
@@ -33,6 +45,14 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Bootstrap Supabase compatibility roles
+        run: |
+          PGPASSWORD=ci_password psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          SQL
+      - name: Migrate PostgreSQL 16
+        run: alembic upgrade head
       - name: Focused cancellation and safety regressions
         run: |
           python -m pytest -q \
@@ -50,4 +70,8 @@ jobs:
             tests/test_v2_turn_interpreter.py
       - run: ruff check app tests/test_v2_cancellation_handoff_policy.py
       - run: python -m compileall -q app tests/test_v2_cancellation_handoff_policy.py
+      - name: Verify single Alembic head
+        run: |
+          test "$(alembic heads | wc -l)" -eq 1
+          alembic heads
       - run: git diff --check origin/main...HEAD
