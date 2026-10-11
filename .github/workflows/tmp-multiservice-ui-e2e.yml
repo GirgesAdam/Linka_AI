@@ -109,7 +109,9 @@ jobs:
 
       - name: Run real Agent V2 booking scenarios A B C
         working-directory: .
-        run: PYTHONPATH=backend:. python tools/agent_eval/tmp_multiservice_ui_audit.py | tee audit-output/agent-run.log
+        run: |
+          set -o pipefail
+          PYTHONPATH=backend:. python tools/agent_eval/tmp_multiservice_ui_audit.py 2>&1 | tee audit-output/agent-run.log
 
       - name: Start fake local Supabase Auth
         working-directory: .
@@ -130,8 +132,8 @@ jobs:
         working-directory: backend
         run: |
           SSL_CERT_FILE=../audit-output/audit-cert.pem nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../audit-output/backend.log 2>&1 &
-          for i in {1..60}; do curl -fsS http://127.0.0.1:8000/health && break; sleep 1; done
-          curl -fsS http://127.0.0.1:8000/health
+          for i in {1..60}; do curl -fsS http://127.0.0.1:8000/api/v1/health/live && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8000/api/v1/health/live
 
       - name: Install frontend and browser
         working-directory: frontend
@@ -187,3 +189,4 @@ jobs:
             audit-output/
           if-no-files-found: error
           retention-days: 7
+
