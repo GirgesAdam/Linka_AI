@@ -21,7 +21,10 @@ from app.services.agent_v2.state import (
     OptionSnapshot,
     RescheduleTaskState,
 )
-from app.services.agent_v2.state_rules import option_snapshot_is_current
+from app.services.agent_v2.state_rules import (
+    booking_proposal_is_current,
+    option_snapshot_is_current,
+)
 
 PlanDisposition = Literal[
     "read",
@@ -50,6 +53,7 @@ ReadKind = Literal[
 ]
 WriteKind = Literal[
     "booking",
+    "booking_proposal",
     "confirm_appointment",
     "cancel_appointment",
     "reschedule",
@@ -786,6 +790,41 @@ def _plan_operation(
     compound_book: bool = False,
 ) -> PlanStep:
     params, ambiguous = _base_parameters(operation, context)
+
+    if operation.type == "confirm_booking_proposal":
+        task = context.active_task
+        if not isinstance(task, BookingTaskState) or task.proposal is None:
+            return _clarify(index=index, operation=operation, field="intent")
+        if not booking_proposal_is_current(
+            task, proposal_id=task.proposal.proposal_id, now=context.now
+        ):
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="blocked",
+                response_goal="clarification",
+                facts={"booking_proposal_expired": True},
+            )
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="write_ready",
+            write_intent=WriteIntent(
+                kind="booking_proposal",
+                authorized=True,
+                parameters={
+                    "proposal_id": task.proposal.proposal_id,
+                    "proposal": task.proposal.model_dump(mode="json"),
+                },
+                requires_verification=False,
+            ),
+            state_action="none",
+            response_goal="booking_completed",
+            facts={
+                "booking_proposal_confirmation": True,
+                "requested_service_ids": list(task.proposal.service_ids),
+            },
+        )
 
     if (
         operation.type in {"book", "reschedule"}

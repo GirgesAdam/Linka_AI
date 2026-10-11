@@ -10,7 +10,7 @@ from app.models.appointment_additional_service import AppointmentAdditionalServi
 from app.models.doctor_service import DoctorService
 from app.models.patient_package import PatientPackage
 from app.models.service import Service
-from app.services.activity import record_activity_event
+from app.services.activity import ActivityActorType, record_activity_event
 from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.package_offers import (
     PackageOfferError,
@@ -104,6 +104,7 @@ def add_additional_service(
     service_id: UUID,
     laser_device_key: str | None,
     created_by_user_id: UUID | None,
+    actor_type: ActivityActorType = "staff",
     pulse_mode: str = "none",
     pulses_used: int | None = None,
     pulse_pack_offer_id: UUID | None = None,
@@ -220,7 +221,7 @@ def add_additional_service(
     record_activity_event(
         db,
         workspace_id=workspace_id,
-        actor_type="staff",
+        actor_type=actor_type,
         actor_user_id=created_by_user_id,
         action="appointment.additional_service_added",
         entity_type="appointment",

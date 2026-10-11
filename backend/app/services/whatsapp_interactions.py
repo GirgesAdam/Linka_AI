@@ -9,12 +9,30 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
+from app.integrations.clinic.authority import require_tia_workspace_domain_write
 from app.models.appointment import Appointment
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.patient import Patient
 from app.models.workspace import Workspace
 from app.schemas.agent import AgentChatResponse
+from app.services.agent_v2.multi_service_booking import (
+    MultiServiceBookingError,
+    MultiServiceBookingUnavailable,
+    execute_booking_proposal,
+)
+from app.services.agent_v2.state import BookingTaskState
+from app.services.agent_v2.state_persistence import (
+    V2StateConflictError,
+    complete_active_task,
+    load_active_task,
+    save_active_task,
+)
+from app.services.agent_v2.state_rules import (
+    booking_proposal_is_current,
+    invalidate_booking_proposal,
+)
+from app.services.appointment_commerce import AppointmentCommerceError
 from app.services.appointment_confirmation import (
     can_customer_confirm_appointment,
     confirmation_timezone,
@@ -29,13 +47,16 @@ from app.services.handoffs import get_active_handoff
 
 _CONFIRM_PREFIX = "tia.booking.confirm:"
 _RESCHEDULE_PREFIX = "tia.booking.reschedule:"
+_PROPOSAL_CONFIRM_PREFIX = "tia.booking.proposal.confirm:"
+_PROPOSAL_EDIT_PREFIX = "tia.booking.proposal.edit:"
 _MAX_APPOINTMENT_REF_LENGTH = 180
 
 
 @dataclass(frozen=True)
 class WhatsAppBookingAction:
     action: str
-    appointment_id: str
+    appointment_id: str | None = None
+    proposal_id: str | None = None
 
 
 def parse_whatsapp_booking_action(metadata: object) -> WhatsAppBookingAction | None:
@@ -51,15 +72,19 @@ def parse_whatsapp_booking_action(metadata: object) -> WhatsAppBookingAction | N
     raw_id = raw_id.strip()
 
     for prefix, action in (
+        (_PROPOSAL_CONFIRM_PREFIX, "proposal_confirm"),
+        (_PROPOSAL_EDIT_PREFIX, "proposal_edit"),
         (_CONFIRM_PREFIX, "confirm"),
         (_RESCHEDULE_PREFIX, "reschedule"),
     ):
         if not raw_id.startswith(prefix):
             continue
-        appointment_id = raw_id[len(prefix) :].strip()
-        if not appointment_id or len(appointment_id) > _MAX_APPOINTMENT_REF_LENGTH:
+        reference = raw_id[len(prefix) :].strip()
+        if not reference or len(reference) > _MAX_APPOINTMENT_REF_LENGTH:
             return None
-        return WhatsAppBookingAction(action=action, appointment_id=appointment_id)
+        if action.startswith("proposal_"):
+            return WhatsAppBookingAction(action=action, proposal_id=reference)
+        return WhatsAppBookingAction(action=action, appointment_id=reference)
     return None
 
 
@@ -201,6 +226,154 @@ def _confirmation_reply(
     )
 
 
+def _process_booking_proposal_action(
+    db: Session,
+    *,
+    workspace: Workspace,
+    patient: Patient,
+    conversation: Conversation,
+    inbound: Message,
+    action: WhatsAppBookingAction,
+    run_id: UUID,
+) -> AgentChatResponse:
+    persisted = load_active_task(
+        db,
+        workspace_id=workspace.id,
+        conversation_id=conversation.id,
+        patient_id=patient.id,
+        run_id=run_id,
+    )
+    task = persisted.active_task if persisted is not None else None
+    now = datetime.now(UTC)
+    proposal_id = action.proposal_id or ""
+    if (
+        persisted is None
+        or not isinstance(task, BookingTaskState)
+        or task.proposal is None
+        or not booking_proposal_is_current(task, proposal_id=proposal_id, now=now)
+    ):
+        return _persist_reply(
+            db,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            reply="الاقتراح ده لم يعد صالحًا. قولي تحب أراجعلك المواعيد المتاحة من جديد.",
+            action=action.action,
+        )
+
+    if action.action == "proposal_edit":
+        edited = invalidate_booking_proposal(task)
+        save_active_task(
+            db,
+            workspace_id=workspace.id,
+            conversation_id=conversation.id,
+            patient_id=patient.id,
+            active_task=edited,
+            run_id=run_id,
+            expected=persisted,
+        )
+        return _persist_reply(
+            db,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            reply="أكيد، تحب تعدل إيه؟",
+            action="proposal_edit",
+        )
+
+    try:
+        with db.begin_nested():
+            require_tia_workspace_domain_write(
+                db, workspace_id=workspace.id, domain="appointments"
+            )
+            result = execute_booking_proposal(
+                db,
+                workspace=workspace,
+                patient=patient,
+                proposal=task.proposal,
+                idempotency_key=f"proposal-button:{proposal_id}",
+            )
+            complete_active_task(
+                db,
+                workspace_id=workspace.id,
+                conversation_id=conversation.id,
+                patient_id=patient.id,
+                expected=persisted,
+                run_id=run_id,
+                result=result,
+            )
+    except MultiServiceBookingUnavailable as exc:
+        alternatives = "\n".join(
+            f"• {item['date']} · {item['time']}" for item in exc.alternatives
+        )
+        reply = "الموعد لم يعد متاحًا بنفس التفاصيل."
+        if alternatives:
+            reply += f"\nالمتاح الأقرب:\n{alternatives}"
+        else:
+            reply += " قولي تحب أراجعلك يوم أو وقت تاني."
+        if persisted is not None and isinstance(task, BookingTaskState):
+            try:
+                invalidated = invalidate_booking_proposal(task)
+                save_active_task(
+                    db,
+                    workspace_id=workspace.id,
+                    conversation_id=conversation.id,
+                    patient_id=patient.id,
+                    active_task=invalidated,
+                    run_id=run_id,
+                    expected=persisted,
+                )
+            except V2StateConflictError:
+                pass
+        return _persist_reply(
+            db,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            reply=reply,
+            action="proposal_confirm_unavailable",
+        )
+    except (
+        AppointmentOperationError,
+        AppointmentCommerceError,
+        MultiServiceBookingError,
+        V2StateConflictError,
+    ):
+        # Any appointment/additional rows created before the failure are rolled back with
+        # the savepoint. Invalidate the stale proposal so a second click cannot claim success.
+        if persisted is not None and isinstance(task, BookingTaskState):
+            try:
+                invalidated = invalidate_booking_proposal(task)
+                save_active_task(
+                    db,
+                    workspace_id=workspace.id,
+                    conversation_id=conversation.id,
+                    patient_id=patient.id,
+                    active_task=invalidated,
+                    run_id=run_id,
+                    expected=persisted,
+                )
+            except V2StateConflictError:
+                pass
+        return _persist_reply(
+            db,
+            conversation=conversation,
+            inbound=inbound,
+            run_id=run_id,
+            reply="الموعد لم يعد متاحًا بنفس التفاصيل. قولي تحب أراجعلك المتاح الجديد.",
+            action="proposal_confirm_unavailable",
+        )
+
+    return _persist_reply(
+        db,
+        conversation=conversation,
+        inbound=inbound,
+        run_id=run_id,
+        reply="تم تأكيد الحجز بكل الخدمات المطلوبة ✅",
+        action="proposal_confirm",
+    )
+
+
 def process_whatsapp_booking_action(
     db: Session,
     *,
@@ -236,6 +409,19 @@ def process_whatsapp_booking_action(
     if recovered is not None:
         return recovered
 
+    if action.action in {"proposal_confirm", "proposal_edit"}:
+        return _process_booking_proposal_action(
+            db,
+            workspace=workspace,
+            patient=patient,
+            conversation=conversation,
+            inbound=inbound,
+            action=action,
+            run_id=run_id,
+        )
+
+    if action.appointment_id is None:
+        return None
     appointment = _action_appointment(
         db,
         workspace_id=workspace.id,
@@ -354,6 +540,20 @@ def whatsapp_booking_dispatch_metadata(
     *,
     message: Message,
 ) -> dict:
-    """Do not attach immediate confirmation buttons to booking success replies."""
+    """Attach proposal-specific quick replies without routing on customer-visible text."""
     del db
-    return dict(message.metadata_json or {})
+    metadata = dict(message.metadata_json or {})
+    proposal = metadata.get("v2_booking_proposal")
+    if not isinstance(proposal, dict):
+        return metadata
+    proposal_id = str(proposal.get("proposal_id") or "").strip()
+    if not proposal_id:
+        return metadata
+    metadata["whatsapp_interactive"] = {
+        "type": "button",
+        "buttons": [
+            {"id": f"{_PROPOSAL_CONFIRM_PREFIX}{proposal_id}", "title": "تأكيد الحجز"},
+            {"id": f"{_PROPOSAL_EDIT_PREFIX}{proposal_id}", "title": "تعديل"},
+        ],
+    }
+    return metadata

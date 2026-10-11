@@ -8,8 +8,11 @@ def test_new_whatsapp_bookings_do_not_offer_reschedule_button() -> None:
 
     assert '"title": "تغيير الميعاد"' not in producer
     assert '_RESCHEDULE_PREFIX' not in producer
-    assert 'return dict(message.metadata_json or {})' in producer
-    assert 'metadata["whatsapp_interactive"]' not in producer
+    assert '_PROPOSAL_CONFIRM_PREFIX' in producer
+    assert '_PROPOSAL_EDIT_PREFIX' in producer
+    assert 'metadata["whatsapp_interactive"]' in producer
+    assert '"title": "تأكيد الحجز"' in producer
+    assert '"title": "تعديل"' in producer
 
 
 def test_legacy_reschedule_button_reply_remains_parseable() -> None:

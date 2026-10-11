@@ -682,6 +682,11 @@ RULES
   not claim that preference was applied. If an action is completed, state the result directly; never ask
   to start or confirm that same action again. Missing completed outcomes mean those requested actions did
   not succeed.
+- For response_goal=booking_proposal, booking_proposal_summary is a verified pending proposal, not a
+  completed booking. Summarize its supplied date/time, doctor, branch/location, and every service naturally,
+  then ask the customer to confirm or modify it. Never call any service "main" or "additional", never expose
+  proposal ids/versions, and never claim the appointment already exists. The interactive channel may render
+  confirm/edit buttons separately, so keep the text natural rather than spelling implementation details.
 - For response_goal=social_ack, an acknowledgment fact with already_completed=true is canonical.
   Verbalize that already-completed result naturally. If same_booking=true, say that this same booking
   was already created. Otherwise acknowledge only the completed result described by the fact. Do not

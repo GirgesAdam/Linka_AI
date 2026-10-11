@@ -29,6 +29,46 @@ def test_structured_button_id_selects_exact_booking_action() -> None:
     assert action.appointment_id == appointment_id
 
 
+def test_structured_proposal_button_routes_by_proposal_id_only() -> None:
+    proposal_id = str(uuid4())
+    action = parse_whatsapp_booking_action(
+        {
+            "interactive_reply": {
+                "type": "button_reply",
+                "id": f"tia.booking.proposal.confirm:{proposal_id}",
+                "title": "anything customer-visible",
+            }
+        }
+    )
+    assert action is not None
+    assert action.action == "proposal_confirm"
+    assert action.proposal_id == proposal_id
+    assert action.appointment_id is None
+
+
+def test_pending_booking_proposal_dispatch_gets_confirm_and_edit_buttons() -> None:
+    run_id = uuid4()
+    proposal_id = str(uuid4())
+    message = _booking_message(run_id)
+    message.metadata_json["v2_booking_proposal"] = {
+        "proposal_id": proposal_id,
+        "expires_at": "2026-10-11T20:00:00+00:00",
+    }
+    metadata = whatsapp_booking_dispatch_metadata(SimpleNamespace(), message=message)
+    interactive = metadata["whatsapp_interactive"]
+    assert interactive["type"] == "button"
+    assert interactive["buttons"] == [
+        {
+            "id": f"tia.booking.proposal.confirm:{proposal_id}",
+            "title": "تأكيد الحجز",
+        },
+        {
+            "id": f"tia.booking.proposal.edit:{proposal_id}",
+            "title": "تعديل",
+        },
+    ]
+
+
 def _booking_message(run_id):
     return SimpleNamespace(
         workspace_id=uuid4(),
