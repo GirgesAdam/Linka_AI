@@ -415,7 +415,7 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
         const service = serviceById.get(appointment.service_id);
         const resource = scheduleColumns.find((item) => item.id === appointmentColumn(appointment, serviceById));
         return (
-          <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 rounded-2xl border border-slate-200 bg-white p-3 transition active:bg-slate-50">
+          <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="interactive-surface grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 rounded-2xl border border-slate-200 bg-white p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
             <div className="border-l border-slate-100 pl-3 text-left" dir="ltr">
               <div className="text-sm font-black text-slate-950">{appointmentTime(appointment.start_at, timezone)}</div>
               <div className="mt-1 text-[11px] font-semibold text-slate-400">{appointmentTime(appointment.end_at, timezone)}</div>
@@ -550,7 +550,7 @@ function DailySchedule({
                                     {period.block && <div className="flex items-center justify-between gap-2"><div className="text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(period.block, serviceById, scheduleColumns)}</div><ReopenAvailabilityBlockButton blockId={period.block.id} compact /></div>}
                                     {period.appointments.map((appointment) => {
                                       const service = serviceById.get(appointment.service_id);
-                                      return <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div><div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div></div><StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" /></div><div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">{appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}</div></Link>;
+                                      return <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="interactive-surface block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div><div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div></div><StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" /></div><div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">{appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}</div></Link>;
                                     })}
                                   </div>
                                 ) : isAvailable ? (
@@ -621,7 +621,7 @@ function DailySchedule({
             {appointments
               .filter((appointment) => !rendered.has(appointment.id) && visibleColumns.includes(appointmentColumn(appointment, serviceById)))
               .map((appointment) => (
-                <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="rounded-xl bg-white p-3 text-sm shadow-sm">
+                <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="interactive-surface rounded-xl border border-transparent bg-white p-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
                   <div className="font-black">{patientNames.get(appointment.patient_id) || "عميل"}</div>
                   <div className="mt-1 text-xs text-slate-600">
                     {serviceById.get(appointment.service_id)?.name || "خدمة"} · {appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}
@@ -866,7 +866,7 @@ export default async function AppointmentsPage({
                     {manualHistory.length ? (
                       <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                         {manualHistory.slice(0, 6).map((appointment) => (
-                          <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="rounded-xl bg-white px-3 py-2 text-xs transition hover:ring-1 hover:ring-[var(--accent-ring)]">
+                          <Link href={`/appointments/${appointment.id}`} key={appointment.id} className="interactive-surface rounded-xl border border-transparent bg-white px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
                             <div className="font-black text-slate-900">{serviceNames.get(appointment.service_id) || "خدمة"}</div>
                             <div className="mt-1 text-[var(--accent-strong)]">{formatDateTime(appointment.start_at)}</div>
                             <div className="mt-1 font-bold text-slate-700">{appointmentLabels[appointment.status] || appointment.status}</div>
@@ -942,13 +942,13 @@ export default async function AppointmentsPage({
             </form>
             {selectedBranch && (
               <div className="flex items-center gap-1.5">
-                <Link href={scheduleHref(currentParams, addDays(selectedDate, -1), selectedBranch.id)} className="inline-flex h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50">
+                <Link href={scheduleHref(currentParams, addDays(selectedDate, -1), selectedBranch.id)} className="inline-flex h-10 cursor-pointer items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-black text-slate-700 transition-[background-color,border-color,transform] duration-150 hover:border-slate-300 hover:bg-slate-50 active:translate-y-px motion-reduce:transform-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
                   <ChevronRight size={15} /> السابق
                 </Link>
-                <Link href={scheduleHref(currentParams, today, selectedBranch.id)} className="inline-flex h-10 items-center rounded-xl border border-slate-200 px-3 text-xs font-black text-[var(--accent-strong)] hover:bg-[var(--accent-soft)]">
+                <Link href={scheduleHref(currentParams, today, selectedBranch.id)} className="inline-flex h-10 cursor-pointer items-center rounded-xl border border-slate-200 px-3 text-xs font-black text-[var(--accent-strong)] transition-[background-color,border-color,transform] duration-150 hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] active:translate-y-px motion-reduce:transform-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
                   اليوم
                 </Link>
-                <Link href={scheduleHref(currentParams, addDays(selectedDate, 1), selectedBranch.id)} className="inline-flex h-10 items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50">
+                <Link href={scheduleHref(currentParams, addDays(selectedDate, 1), selectedBranch.id)} className="inline-flex h-10 cursor-pointer items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-black text-slate-700 transition-[background-color,border-color,transform] duration-150 hover:border-slate-300 hover:bg-slate-50 active:translate-y-px motion-reduce:transform-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
                   التالي <ChevronLeft size={15} />
                 </Link>
               </div>

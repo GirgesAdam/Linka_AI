@@ -210,7 +210,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         </div>
         <button
           type="submit"
-          className="inline-flex h-10 items-center justify-center rounded-xl bg-[var(--accent)] px-5 text-sm font-bold text-white transition hover:bg-[var(--accent-strong)]"
+          className="inline-flex h-10 cursor-pointer items-center justify-center rounded-xl bg-[var(--accent)] px-5 text-sm font-bold text-white shadow-[0_1px_2px_rgba(15,23,42,.08)] transition-[background-color,box-shadow,transform] duration-150 hover:-translate-y-px hover:bg-[var(--accent-strong)] hover:shadow-[0_4px_10px_rgba(101,70,215,.16)] active:translate-y-0 active:shadow-none motion-reduce:transform-none motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2"
         >
           بحث
         </button>
@@ -257,7 +257,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
                   <Link
                     href={`/inbox/${conversation.id}`}
                     key={conversation.id}
-                    className="grid gap-3 p-4 transition hover:bg-slate-50 sm:p-5 md:grid-cols-[minmax(190px,.8fr)_minmax(260px,1.5fr)_auto] md:items-center"
+                    className="interactive-row grid gap-3 p-4 sm:p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)] md:grid-cols-[minmax(190px,.8fr)_minmax(260px,1.5fr)_auto] md:items-center"
                   >
                     <div className="min-w-0">
                       {attention && (

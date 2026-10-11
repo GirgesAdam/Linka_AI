@@ -44,13 +44,13 @@ function AppointmentRow({
 
   return (
     <div
-      className={`group relative grid min-h-16 grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-2xl px-2 py-3 transition sm:grid-cols-[82px_minmax(0,1fr)] sm:px-3 ${
+      className={`interactive-row group relative grid min-h-16 grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-2xl px-2 py-3 sm:grid-cols-[82px_minmax(0,1fr)] sm:px-3 ${
         isNext
           ? "bg-violet-50 ring-1 ring-violet-100 hover:bg-violet-100/70"
           : "hover:bg-slate-50"
       } ${terminal && !isNext ? "opacity-70" : ""}`}
     >
-      <Link href={`/appointments/${appointment.id}`} aria-label={`فتح موعد ${appointment.patient_name}`} className="absolute inset-0 rounded-2xl" />
+      <Link href={`/appointments/${appointment.id}`} aria-label={`فتح موعد ${appointment.patient_name}`} className="absolute inset-0 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1" />
       <div className={`pointer-events-none relative z-10 pt-0.5 text-end text-base font-semibold tabular-nums ${isNext ? "text-violet-800" : "text-slate-800"}`}>
         {formatTime(appointment.start_at, timezone)}
       </div>
