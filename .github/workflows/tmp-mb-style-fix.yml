@@ -1,0 +1,42 @@
+name: Temporary MB Style Fix
+
+on:
+  push:
+    branches:
+      - fix/multi-service-branch-continuation-20261011
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/multi-service-branch-continuation-20261011
+          fetch-depth: 0
+      - name: Apply surgical import sort
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/app/services/agent_v2/planner.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'from app.services.agent_v2.outcome import ResponseGoal\nfrom app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters\n'
+          new = 'from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters\nfrom app.services.agent_v2.outcome import ResponseGoal\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one import-order target, got {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git diff --check
+          git diff -- backend/app/services/agent_v2/planner.py
+      - name: Commit style-only fix
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/services/agent_v2/planner.py
+          git commit -m "style: sort branch resolver import"
+          git push origin HEAD:fix/multi-service-branch-continuation-20261011
