@@ -90,7 +90,7 @@ export function QuickAppointmentDialog({
               </p>
             )}
           </div>
-          <Link href={closeHref} className="grid size-9 place-items-center rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50" aria-label="إغلاق">
+          <Link href={closeHref} className="icon-action grid size-9 cursor-pointer place-items-center rounded-full border border-slate-200 text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]" aria-label="إغلاق">
             <X size={17} />
           </Link>
         </header>

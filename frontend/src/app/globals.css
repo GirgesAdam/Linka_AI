@@ -90,9 +90,7 @@ button:disabled { cursor: not-allowed; }
   font-weight: 700;
 }
 .data-table td { padding: 0.95rem 1rem; vertical-align: middle; }
-.data-table tbody tr { transition: background-color 140ms ease; }
 .data-table tbody tr + tr td { border-top: 1px solid #edf1f3; }
-.data-table tbody tr:hover { background: #fafcfc; }
 .data-table a { text-underline-offset: 3px; }
 
 .form-label {
@@ -147,6 +145,54 @@ button:disabled { cursor: not-allowed; }
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.015em;
+}
+
+.interactive-surface {
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.interactive-surface:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.055);
+  transform: translateY(-1px);
+}
+.interactive-surface:active {
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  transform: translateY(0);
+}
+.interactive-row {
+  cursor: pointer;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+.interactive-row:hover { background: #fafbff; }
+.interactive-row:active { background: var(--surface-2); }
+.interactive-link {
+  transition: color 140ms ease, text-decoration-color 140ms ease, opacity 140ms ease;
+  text-underline-offset: 3px;
+}
+.interactive-link:hover { text-decoration: underline; }
+.icon-action {
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, transform 120ms ease;
+}
+.icon-action:hover { background: var(--surface-2); color: var(--text); }
+.icon-action:active { transform: scale(.97); }
+
+@media (prefers-reduced-motion: reduce) {
+  .interactive-surface,
+  .interactive-row,
+  .interactive-link,
+  .icon-action,
+  .form-control,
+  button,
+  a {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  .interactive-surface:hover,
+  .interactive-surface:active,
+  .icon-action:active { transform: none; }
 }
 
 .app-shell-sidebar {

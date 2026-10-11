@@ -52,7 +52,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
             <>
               <div className="divide-y divide-[var(--border)] md:hidden">
                 {patients.map((patient) => (
-                  <Link key={patient.id} href={`/patients/${patient.id}`} className="block p-4 transition hover:bg-slate-50">
+                  <Link key={patient.id} href={`/patients/${patient.id}`} className="interactive-row block p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-black text-slate-950">{patient.first_name} {patient.last_name || ""}</div>
@@ -89,7 +89,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
                     {patients.map((patient) => (
                       <tr key={patient.id}>
                         <td className="font-bold">
-                          <Link href={`/patients/${patient.id}`} className="text-[var(--interactive-strong)] hover:underline">{patient.first_name} {patient.last_name || ""}</Link>
+                          <Link href={`/patients/${patient.id}`} className="interactive-link font-semibold text-[var(--interactive-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]">{patient.first_name} {patient.last_name || ""}</Link>
                         </td>
                         <td dir="ltr" className="text-right">{patient.phone || "—"}</td>
                         <td>{labelForSource(patient.source)}</td>

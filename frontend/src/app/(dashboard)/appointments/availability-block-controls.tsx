@@ -190,7 +190,7 @@ export function AvailabilityBlockControls({
           <input type="hidden" name="branch_id" value={branchId} />
           <div className="flex items-start justify-between gap-3">
             <div><div className="text-base font-black text-slate-950">قفل فترة</div><div className="mt-1 text-xs font-semibold text-slate-500">اقفل تخصص أو جهاز للحجوزات العادية والـAI. الحجز السريع الاستثنائي يظل متاحًا.</div></div>
-            <button type="button" aria-label="إغلاق" onClick={() => createDialogRef.current?.close()} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={17} /></button>
+            <button type="button" aria-label="إغلاق" onClick={() => createDialogRef.current?.close()} className="icon-action cursor-pointer rounded-lg p-2 text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"><X size={17} /></button>
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <label className="text-xs font-bold text-slate-700 sm:col-span-2">التاريخ<Input className="mt-1.5" name="date" type="date" min={now.date} value={blockDate} onChange={(event) => updateDate(event.target.value)} required /></label>
@@ -222,7 +222,7 @@ export function AvailabilityBlockControls({
 
       <dialog ref={managerDialogRef} className="m-auto w-[min(92vw,36rem)] rounded-2xl border border-slate-200 bg-white p-0 shadow-2xl backdrop:bg-slate-950/30">
         <div className="p-5">
-          <div className="flex items-start justify-between gap-3"><div><div className="text-base font-black text-slate-950">الفترات المقفولة</div><div className="mt-1 text-xs font-semibold text-slate-500">فترات اليوم والفرع الحالي. فتح فترة يحذف القفل ده فقط.</div></div><button type="button" aria-label="إغلاق" onClick={() => managerDialogRef.current?.close()} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={17} /></button></div>
+          <div className="flex items-start justify-between gap-3"><div><div className="text-base font-black text-slate-950">الفترات المقفولة</div><div className="mt-1 text-xs font-semibold text-slate-500">فترات اليوم والفرع الحالي. فتح فترة يحذف القفل ده فقط.</div></div><button type="button" aria-label="إغلاق" onClick={() => managerDialogRef.current?.close()} className="icon-action cursor-pointer rounded-lg p-2 text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"><X size={17} /></button></div>
           <div className="mt-4 space-y-3">
             {!blocks.length && <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm font-semibold text-slate-500">لا توجد فترات مقفولة في اليوم ده.</div>}
             {blocks.map((block) => <div key={block.id} className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="text-sm font-black text-rose-950">{blockTime(block.start_at, timezone)} – {blockTime(block.end_at, timezone)}</div><div className="mt-1 text-xs font-black text-rose-700">{scopeLabel(block, targets, services)}</div>{block.reason && <div className="mt-1 text-xs font-semibold text-rose-800">{block.reason}</div>}</div><ReopenAvailabilityBlockButton blockId={block.id} /></div></div>)}
