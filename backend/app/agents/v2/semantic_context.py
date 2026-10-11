@@ -5,7 +5,7 @@ from typing import Literal
 
 from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding
 
-ReferenceKind = Literal["service", "doctor", "device", "appointment", "package"]
+ReferenceKind = Literal["service", "doctor", "branch", "device", "appointment", "package"]
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,7 @@ def build_semantic_context(
     reference_map: dict[str, SemanticReferenceTarget] = {}
     model_services: list[dict[str, object]] = []
     model_doctors: list[dict[str, object]] = []
+    model_branches: list[dict[str, object]] = []
     model_devices_by_ref: dict[str, dict[str, object]] = {}
     service_device_refs: dict[str, list[str]] = {}
     model_appointments: list[dict[str, object]] = []
@@ -125,6 +126,7 @@ def build_semantic_context(
 
     service_ref_by_id: dict[str, str] = {}
     doctor_ref_by_id: dict[str, str] = {}
+    branch_ref_by_id: dict[str, str] = {}
     device_ref_by_key: dict[str, str] = {}
 
     services = clinic_catalog.get("services")
@@ -196,6 +198,31 @@ def build_semantic_context(
                 service_device_refs[ref] = list(device_refs)
             focus_details[ref] = detail
 
+    branches = clinic_catalog.get("branches")
+    if isinstance(branches, list):
+        for position, row in enumerate(branches, start=1):
+            if not isinstance(row, dict):
+                continue
+            canonical_id = row.get("id") or row.get("branch_id")
+            ref = _append_reference(
+                reference_map,
+                prefix="B",
+                index=position,
+                kind="branch",
+                canonical_id=canonical_id,
+            )
+            if ref is None:
+                continue
+            branch_ref_by_id[str(canonical_id)] = ref
+            model_branches.append(
+                {
+                    "ref": ref,
+                    "name": row.get("name") or row.get("branch_name"),
+                    "city": row.get("city"),
+                }
+            )
+            focus_details[ref] = {"ref": ref}
+
     doctors = clinic_catalog.get("doctors")
     if isinstance(doctors, list):
         for position, row in enumerate(doctors, start=1):
@@ -237,6 +264,18 @@ def build_semantic_context(
                         doctor_refs = service_detail.setdefault("doctor_refs", [])
                         if isinstance(doctor_refs, list) and ref not in doctor_refs:
                             doctor_refs.append(ref)
+            raw_branch_ids = row.get("branch_ids")
+            branch_refs = (
+                [
+                    branch_ref_by_id[str(value)]
+                    for value in raw_branch_ids
+                    if str(value) in branch_ref_by_id
+                ]
+                if isinstance(raw_branch_ids, list)
+                else []
+            )
+            if branch_refs:
+                detail["branch_refs"] = branch_refs
             if row.get("specialization") not in (None, ""):
                 detail["specialization"] = row.get("specialization")
             focus_details[ref] = detail
@@ -313,6 +352,7 @@ def build_semantic_context(
         "service_device_refs": service_device_refs,
         "devices": list(model_devices_by_ref.values()),
         "doctors": model_doctors,
+        "branches": model_branches,
         "appointments": model_appointments,
         "packages": model_packages,
         "focused_context": {},
@@ -326,6 +366,15 @@ def build_semantic_context(
         reference_map=reference_map,
         server_metadata={
             "clinic_operating_hours": _clinic_operating_hours(clinic_catalog),
+            "branch_resolution_catalog": {
+                "primary_branch_id": clinic_catalog.get("primary_branch_id"),
+                "branches": [dict(row) for row in branches if isinstance(row, dict)]
+                if isinstance(branches, list)
+                else [],
+                "doctors": [dict(row) for row in doctors if isinstance(row, dict)]
+                if isinstance(doctors, list)
+                else [],
+            },
             "focus_details": focus_details,
             "broad_appointments": tuple(model_appointments),
             "broad_packages": tuple(model_packages),
@@ -379,6 +428,11 @@ def ground_turn_references(
                 "doctor": _ground_entity(
                     operation.entities.doctor,
                     expected_kind="doctor",
+                    context=context,
+                ),
+                "branch": _ground_entity(
+                    operation.entities.branch,
+                    expected_kind="branch",
                     context=context,
                 ),
                 "device": _ground_entity(

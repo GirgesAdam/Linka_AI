@@ -27,6 +27,7 @@ def _constraints_from_step(step: PlanStep) -> CustomerConstraints:
         {
             "service_id": str(facts["service_id"]) if facts.get("service_id") else None,
             "doctor_id": str(facts["doctor_id"]) if facts.get("doctor_id") else None,
+            "branch_id": str(facts["branch_id"]) if facts.get("branch_id") else None,
             "device_key": str(facts["device_key"]) if facts.get("device_key") else None,
             "date": facts.get("date"),
             "time": facts.get("time"),
@@ -155,6 +156,13 @@ def _operation_for_component(
     )
     if component.doctor_id is not None and doctor_ref is None:
         return None
+    branch_ref = _canonical_ref(
+        context,
+        kind="branch",
+        canonical_id=component.branch_id,
+    )
+    if component.branch_id is not None and branch_ref is None:
+        return None
     device_ref = _canonical_ref(
         context,
         kind="device",
@@ -167,6 +175,7 @@ def _operation_for_component(
         update={
             "service": _entity_ref(service_ref),
             "doctor": _entity_ref(doctor_ref),
+            "branch": _entity_ref(branch_ref),
             "device": _entity_ref(device_ref),
             "appointment": None,
             "package": None,
@@ -195,7 +204,7 @@ def _merge_component(
     apply_to_all: bool,
 ) -> CustomerConstraints:
     updates: dict[str, object] = {}
-    for key in ("doctor_id", "date", "time"):
+    for key in ("doctor_id", "branch_id", "date", "time"):
         if key in params:
             updates[key] = params[key]
     if not apply_to_all and "device_key" in params:
@@ -290,36 +299,49 @@ def explicitly_narrow_grouped_booking_task(
         if operation.type in _BOOKING_OPERATION_TYPES
         and operation.execution_intent == "execute"
     ]
-    if len(executable) != 1:
+    if not executable or not any(
+        operation.grouped_booking_action == "remove_other_components"
+        for operation in executable
+    ):
         return None
-    operation = executable[0]
-    if operation.grouped_booking_action != "remove_other_components":
+
+    components_by_service = {
+        component.service_id: component
+        for component in active_task.grouped.components
+        if component.service_id is not None
+    }
+    narrowed_components: list[CustomerConstraints] = []
+    seen_services: set[str] = set()
+    for operation in executable:
+        params = resolved_operation_parameters(operation, context=context)
+        service_id = params.get("service_id")
+        if not isinstance(service_id, str) or service_id in seen_services:
+            return None
+        component = components_by_service.get(service_id)
+        if component is None:
+            return None
+        narrowed_components.append(
+            _merge_component(
+                component,
+                operation=operation,
+                params=params,
+                apply_to_all=False,
+            )
+        )
+        seen_services.add(service_id)
+
+    if not narrowed_components:
         return None
-    params = resolved_operation_parameters(operation, context=context)
-    service_id = params.get("service_id")
-    if not isinstance(service_id, str):
-        return None
-    component = next(
-        (
-            item
-            for item in active_task.grouped.components
-            if item.service_id == service_id
-        ),
-        None,
-    )
-    if component is None:
-        return None
-    narrowed = _merge_component(
-        component,
-        operation=operation,
-        params=params,
-        apply_to_all=False,
+    narrowed_group = (
+        GroupedBookingState(components=narrowed_components)
+        if len(narrowed_components) > 1
+        else None
     )
     return active_task.model_copy(
         update={
             "status": "collecting",
-            "constraints": narrowed,
-            "grouped": None,
+            "constraints": narrowed_components[0],
+            "grouped": narrowed_group,
             "derived": DerivedBookingState(),
             "option_snapshot": None,
             "version": active_task.version + 1,

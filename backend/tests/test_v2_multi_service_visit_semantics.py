@@ -55,6 +55,68 @@ def test_multi_service_book_expands_and_preserves_execution_intent() -> None:
     assert len(set(groups.values())) == 1
 
 
+def _separate_book(
+    service_ref: str,
+    *,
+    date: DateConstraint | None = None,
+    branch_ref: str | None = None,
+    grouped_booking_action: str = "preserve_group",
+) -> TurnOperation:
+    return TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(ref=service_ref),
+            branch=EntityReference(ref=branch_ref) if branch_ref else None,
+            date=date,
+        ),
+        execution_intent="execute",
+        grouped_booking_action=grouped_booking_action,
+    )
+
+
+def test_separate_book_operations_with_same_missing_anchor_form_one_visit_group() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[_separate_book("S1"), _separate_book("S2"), _separate_book("S3")]
+    )
+
+    expanded, groups = expand_multi_service_operations(turn)
+
+    assert expanded.operations == turn.operations
+    assert groups == {
+        0: "semantic-multi-book:0",
+        1: "semantic-multi-book:0",
+        2: "semantic-multi-book:0",
+    }
+
+
+def test_separate_book_operations_with_distinct_dates_do_not_form_one_visit_group() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _separate_book("S1", date=DateConstraint(mode="exact", start_date="2026-10-13")),
+            _separate_book("S2", date=DateConstraint(mode="exact", start_date="2026-10-14")),
+        ]
+    )
+
+    expanded, groups = expand_multi_service_operations(turn)
+
+    assert expanded is turn
+    assert groups == {}
+
+
+def test_separate_book_operations_with_distinct_branches_do_not_form_one_visit_group() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _separate_book("S1", branch_ref="B1"),
+            _separate_book("S2", branch_ref="B2"),
+        ]
+    )
+
+    expanded, groups = expand_multi_service_operations(turn)
+
+    assert expanded is turn
+    assert groups == {}
+
+
 def test_non_visit_service_set_is_not_expanded() -> None:
     pricing = _multi_service_operation().model_copy(update={"type": "pricing"})
     turn = TiaTurnUnderstanding(operations=[pricing])

@@ -16,6 +16,7 @@ from app.services.agent_v2.compound_turn_policy import (
 )
 from app.services.agent_v2.planner import PlanStep, TurnPlan
 from app.services.agent_v2.read_executor import ReadExecutionContext
+from app.services.booking import BookingCompatibilityError
 
 _SEARCH_DAYS = 14
 _SEQUENCE_FACT_KEYS = frozenset(
@@ -174,16 +175,21 @@ def _availability_for_day(
             return None
         if bool(step.facts.get("service_requires_laser_device")) and not params.get("device_key"):
             return None
-        result = adapter.get_availability(
-            AvailabilityRequest(
-                branch_id=str(branch_id),
-                service_id=str(service_id),
-                booking_date=booking_date,
-                doctor_id=str(doctor_id),
-                now=context.now,
-                laser_device_key=str(params["device_key"]) if params.get("device_key") else None,
+        try:
+            result = adapter.get_availability(
+                AvailabilityRequest(
+                    branch_id=str(branch_id),
+                    service_id=str(service_id),
+                    booking_date=booking_date,
+                    doctor_id=str(doctor_id),
+                    now=context.now,
+                    laser_device_key=(
+                        str(params["device_key"]) if params.get("device_key") else None
+                    ),
+                )
             )
-        )
+        except BookingCompatibilityError:
+            return None
         results.append(result)
     return results
 

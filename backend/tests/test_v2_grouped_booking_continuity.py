@@ -12,6 +12,10 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
+    persist_initial_task_intent,
+)
 from app.services.agent_v2.compound_turn_policy import (
     compound_write_group,
     normalize_compound_turn_plan,
@@ -188,6 +192,55 @@ def _grouped_state() -> BookingTaskState:
     )
 
 
+def test_missing_date_clarification_retains_group_component_identity() -> None:
+    first_source = _operation("svc-a")
+    second_source = _operation("svc-c")
+    first = first_source.model_copy(
+        update={
+            "entities": first_source.entities.model_copy(
+                update={"date": None, "time": None}
+            )
+        }
+    )
+    second = second_source.model_copy(
+        update={
+            "entities": second_source.entities.model_copy(
+                update={"date": None, "time": None}
+            )
+        }
+    )
+    understanding = TiaTurnUnderstanding(operations=[first, second])
+    planned = plan_turn(
+        understanding,
+        PlannerContext(semantic_context=_context(), active_task=None, now=NOW),
+    )
+    normalized = normalize_compound_turn_plan(
+        planned,
+        catalog={
+            "services": [
+                {"id": "svc-a", "duration_minutes": 30},
+                {"id": "svc-c", "duration_minutes": 30},
+            ]
+        },
+        operation_visit_groups={0: "semantic-group", 1: "semantic-group"},
+    )
+
+    task = grouped_booking_task_from_plan(
+        normalized,
+        understanding=understanding,
+        existing=None,
+        now=NOW,
+        turn_id="turn-missing-date",
+    )
+
+    assert task is not None
+    assert task.grouped is not None
+    assert [component.service_id for component in task.grouped.components] == [
+        "svc-a",
+        "svc-c",
+    ]
+
+
 def test_grouped_plan_captures_durable_component_state() -> None:
     plan = TurnPlan(
         steps=[
@@ -250,6 +303,80 @@ def test_side_read_preserves_full_group_unchanged() -> None:
     assert transition.active_task is not None
     assert transition.active_task.grouped is not None
     assert len(transition.active_task.grouped.components) == 2
+
+
+def test_fresh_compound_component_does_not_replace_new_group() -> None:
+    state = _grouped_state()
+    source = _operation("svc-a")
+    operation = source.model_copy(
+        update={"fresh_task": True, "fresh_task_explicit_fields": ["service"]}
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="clarify",
+        state_action="none",
+        response_goal="clarification",
+        clarification_field="date",
+        facts={
+            "service_id": "svc-a",
+            "compound_visit_group": "semantic-multi-book:0",
+            "compound_visit_grouped": True,
+        },
+    )
+
+    adapted = adapt_matching_active_task_step(
+        step,
+        operation=operation,
+        active_task=state,
+        context=_context(),
+        now=NOW,
+    )
+    assert adapted.state_action == "none"
+
+    persisted = persist_initial_task_intent(
+        adapted,
+        operation=operation,
+        context=_context(),
+    )
+    assert persisted.state_action == "start_booking"
+
+    transition = apply_step_state(
+        state,
+        step=persisted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-fresh-group",
+    )
+    assert transition.active_task is not None
+    assert transition.active_task.grouped is not None
+    assert [
+        component.service_id for component in transition.active_task.grouped.components
+    ] == ["svc-a", "svc-b"]
+
+
+def test_grouped_component_start_does_not_collapse_durable_group() -> None:
+    state = _grouped_state()
+    operation = _operation("svc-a", time=TIME_A)
+    step = _step(0, "svc-a", TIME_A)
+
+    transition = apply_step_state(
+        state,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-grouped-start",
+    )
+
+    assert transition.active_task is not None
+    assert transition.active_task.grouped is not None
+    assert [
+        component.service_id for component in transition.active_task.grouped.components
+    ] == ["svc-a", "svc-b"]
+
+
 def test_resume_reconstructs_all_grouped_components() -> None:
     state = _grouped_state()
     resume = TiaTurnUnderstanding(
@@ -330,6 +457,48 @@ def test_explicit_component_removal_can_collapse_to_single_booking() -> None:
     assert narrowed.grouped is None
     assert narrowed.constraints.service_id == "svc-a"
     assert narrowed.write_authorization.authorized is True
+
+
+def test_explicit_subset_correction_removes_stale_group_component() -> None:
+    state = _grouped_state()
+    assert state.grouped is not None
+    third = CustomerConstraints(
+        service_id="svc-c",
+        doctor_id="doc-1",
+        date=DATE,
+        time=TIME_B,
+    )
+    state = state.model_copy(
+        update={
+            "grouped": GroupedBookingState(
+                components=[*state.grouped.components, third]
+            )
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _operation(
+                "svc-a",
+                time=TIME_A,
+                grouped_booking_action="remove_other_components",
+            ),
+            _operation("svc-b", time=TIME_B),
+        ]
+    )
+
+    narrowed = explicitly_narrow_grouped_booking_task(
+        turn,
+        active_task=state,
+        context=_context(),
+    )
+
+    assert narrowed is not None
+    assert narrowed.grouped is not None
+    assert [
+        component.service_id for component in narrowed.grouped.components
+    ] == ["svc-a", "svc-b"]
+    assert narrowed.constraints.service_id == "svc-a"
+    assert narrowed.version == state.version + 1
 
 
 def test_service_replacement_full_group_becomes_a_plus_c() -> None:

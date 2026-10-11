@@ -16,6 +16,7 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_rules import (
+    apply_booking_branch_change,
     apply_booking_date_change,
     apply_booking_device_change,
     apply_booking_doctor_change,
@@ -82,6 +83,7 @@ def _booking_constraints(step: PlanStep, operation: TurnOperation) -> CustomerCo
     return CustomerConstraints(
         service_id=str(facts["service_id"]) if facts.get("service_id") else None,
         doctor_id=str(facts["doctor_id"]) if facts.get("doctor_id") else None,
+        branch_id=str(facts["branch_id"]) if facts.get("branch_id") else None,
         device_key=str(facts["device_key"]) if facts.get("device_key") else None,
         date=_date_constraint(facts.get("date") or operation.entities.date),
         time=_time_constraint(facts.get("time") or operation.entities.time),
@@ -130,6 +132,11 @@ def _apply_booking_updates(
         updated = apply_booking_doctor_change(
             updated,
             doctor_id=str(facts["doctor_id"]) if facts.get("doctor_id") else None,
+        )
+    if "branch_id" in facts:
+        updated = apply_booking_branch_change(
+            updated,
+            branch_id=str(facts["branch_id"]) if facts.get("branch_id") else None,
         )
     if "device_key" in facts:
         updated = apply_booking_device_change(
@@ -422,7 +429,18 @@ def apply_step_state(
         else:
             raise RuntimeError("replace_active requires a book or reschedule operation.")
     elif step.state_action == "start_booking":
-        current = _new_booking_state(step=step, operation=operation, turn_id=turn_id, now=now)
+        grouped_service_ids = (
+            {
+                component.service_id
+                for component in current.grouped.components
+                if component.service_id is not None
+            }
+            if isinstance(current, BookingTaskState) and current.grouped is not None
+            else set()
+        )
+        step_service_id = str(step.facts.get("service_id") or "")
+        if not step_service_id or step_service_id not in grouped_service_ids:
+            current = _new_booking_state(step=step, operation=operation, turn_id=turn_id, now=now)
     elif step.state_action == "start_reschedule":
         current = _new_reschedule_state(
             step=step,

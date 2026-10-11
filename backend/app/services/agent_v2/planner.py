@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
+from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters
 from app.services.agent_v2.outcome import ResponseGoal
 from app.services.agent_v2.reference_resolution import (
     customer_safe_reference_option,
@@ -69,6 +70,7 @@ StateAction = Literal[
 ClarificationField = Literal[
     "service",
     "doctor",
+    "branch",
     "device",
     "date",
     "time",
@@ -169,6 +171,7 @@ def _base_parameters(
     for field, kind, output_key, set_key in (
         ("service", "service", "service_id", "service_ids"),
         ("doctor", "doctor", "doctor_id", "doctor_ids"),
+        ("branch", "branch", "branch_id", "branch_ids"),
         ("device", "device", "device_key", "device_keys"),
         ("appointment", "appointment", "appointment_id", "appointment_ids"),
         ("package", "package", "package_id", "package_ids"),
@@ -971,6 +974,20 @@ def _plan_operation(
             return reference_step
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
+        params, branch_refs, branch_reason = resolve_scheduling_branch_parameters(
+            params, context=context.semantic_context
+        )
+        if branch_reason is not None:
+            return _clarify(
+                index=index,
+                operation=operation,
+                field="branch",
+                facts={
+                    **params,
+                    "_verified_candidate_refs": branch_refs,
+                    "branch_resolution_reason": branch_reason,
+                },
+            )
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
@@ -1011,6 +1028,21 @@ def _plan_operation(
                     "booking_device_price_step": True,
                 },
             )
+        if "date" in params:
+            params, branch_refs, branch_reason = resolve_scheduling_branch_parameters(
+                params, context=context.semantic_context
+            )
+            if branch_reason is not None:
+                return _clarify(
+                    index=index,
+                    operation=operation,
+                    field="branch",
+                    facts={
+                        **params,
+                        "_verified_candidate_refs": branch_refs,
+                        "branch_resolution_reason": branch_reason,
+                    },
+                )
         if not compound_book:
             commercial_path = (
                 "package" if operation.package_usage == "use_existing" else "standalone"
@@ -1064,7 +1096,12 @@ def _plan_operation(
                 },
             )
         if "date" not in params:
-            return _clarify(index=index, operation=operation, field="date")
+            return _clarify(
+                index=index,
+                operation=operation,
+                field="date",
+                facts=params,
+            )
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
         return PlanStep(
             operation_index=index,
