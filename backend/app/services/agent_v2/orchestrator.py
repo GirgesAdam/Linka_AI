@@ -467,6 +467,54 @@ def _terminal_no_reply_allowed(
     )
 
 
+def _availability_slot_identity(payload: dict[str, object]) -> tuple[str, ...]:
+    device = payload.get("device_key") or payload.get("laser_device_key")
+    start = payload.get("start_at") or payload.get("start_local")
+    return tuple(
+        str(value or "")
+        for value in (
+            payload.get("branch_id"),
+            payload.get("service_id"),
+            payload.get("doctor_id"),
+            device,
+            start,
+        )
+    )
+
+
+def _active_task_reference_option_is_current(
+    task: ActiveTaskState,
+    *,
+    option_ref: str,
+    availability_context: dict[str, Any] | None,
+    now: datetime,
+) -> bool:
+    """Require the selected displayed slot to still belong to the current task snapshot."""
+    snapshot = task.option_snapshot
+    if snapshot is None or not snapshot.is_current(task_version=task.version, now=now):
+        return False
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return False
+    matches = [
+        item
+        for item in raw_options
+        if isinstance(item, dict) and item.get("option_ref") == option_ref
+    ]
+    if len(matches) != 1 or matches[0].get("concrete") is not True:
+        return False
+    slot = matches[0].get("slot")
+    if not isinstance(slot, dict):
+        return False
+    identity = _availability_slot_identity(slot)
+    snapshot_matches = [
+        choice
+        for choice in snapshot.options
+        if _availability_slot_identity(choice.payload) == identity
+    ]
+    return len(snapshot_matches) == 1
+
+
 def _pending_choice_from_context(
     value: dict[str, Any] | None,
     *,
@@ -1670,17 +1718,69 @@ def orchestrate_v2_turn(
         understanding = merge_verified_read_context(understanding, semantic_context)
         full_interpreter_called = False
     elif decision is not None and decision.action == "select_presented_option" and decision.option_ref:
-        understanding = TiaTurnUnderstanding(
-            operations=[
-                TurnOperation(
-                    type="availability",
-                    entities=TurnEntities(),
-                    selection=Selection(kind="ref", ref=decision.option_ref),
-                    execution_intent="informational",
-                    continues_previous=True,
-                )
-            ]
+        active_selection_type = (
+            "book"
+            if isinstance(initial_task, BookingTaskState)
+            else "reschedule"
+            if isinstance(initial_task, RescheduleTaskState)
+            else "availability"
         )
+        stale_active_selection = (
+            initial_task is not None
+            and not _active_task_reference_option_is_current(
+                initial_task,
+                option_ref=decision.option_ref,
+                availability_context=availability_reference_context,
+                now=local_now,
+            )
+        )
+        if stale_active_selection:
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="availability",
+                        entities=TurnEntities(),
+                        execution_intent="informational",
+                        continues_previous=True,
+                    )
+                ]
+            )
+            reference_plan_override = TurnPlan(
+                steps=[
+                    PlanStep(
+                        operation_index=0,
+                        operation_type="availability",
+                        disposition="clarify",
+                        response_goal="clarification",
+                        clarification_field="availability_reference",
+                        facts={
+                            "verified_availability_reference": True,
+                            "availability_reference_reason": "stale_task_option_snapshot",
+                        },
+                    )
+                ]
+            )
+        else:
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type=active_selection_type,
+                        entities=TurnEntities(),
+                        selection=Selection(kind="ref", ref=decision.option_ref),
+                        execution_intent=(
+                            "execute"
+                            if active_selection_type != "availability"
+                            else "informational"
+                        ),
+                        active_task_relationship=(
+                            "continue"
+                            if active_selection_type != "availability"
+                            else "unspecified"
+                        ),
+                        continues_previous=True,
+                    )
+                ]
+            )
         full_interpreter_called = False
     elif decision is not None and decision.action == "clarify":
         understanding = TiaTurnUnderstanding(

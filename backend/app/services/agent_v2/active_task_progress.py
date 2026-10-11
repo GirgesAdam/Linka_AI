@@ -483,6 +483,19 @@ def adapt_matching_active_task_step(
                 context=context,
                 now=now,
             )
+            if step.facts.get("verified_availability_reference") is True:
+                for key in (
+                    "service_id",
+                    "doctor_id",
+                    "branch_id",
+                    "device_key",
+                    "date",
+                    "time",
+                    "selected_option_ref",
+                    "verified_availability_reference",
+                ):
+                    if key in step.facts:
+                        params[key] = step.facts[key]
             return PlanStep(
                 operation_index=step.operation_index,
                 operation_type=operation.type,

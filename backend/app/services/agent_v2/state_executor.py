@@ -455,7 +455,15 @@ def _attach_availability_snapshot(
 
 
 def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTaskState:
-    if step.state_action != "select_active" and step.disposition != "write_ready":
+    verified_reference_selection = (
+        step.facts.get("verified_availability_reference") is True
+        and step.facts.get("selected_option_ref") not in (None, "")
+    )
+    if (
+        step.state_action != "select_active"
+        and step.disposition != "write_ready"
+        and not verified_reference_selection
+    ):
         return state
     selected_ref = step.facts.get("selected_option_ref")
     status = "ready" if step.disposition == "write_ready" else state.status
