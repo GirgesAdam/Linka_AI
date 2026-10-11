@@ -46,6 +46,7 @@ from app.services.agent_v2.orchestrator import (
     orchestrate_v2_turn,
 )
 from app.services.agent_v2.reference_resolution import build_availability_reference_options
+from app.services.agent_v2.state import BookingTaskState
 from app.services.agent_v2.write_executor import execute_write_ready_step
 from app.services.conversation_ownership import (
     OWNER_HUMAN,
@@ -1128,6 +1129,15 @@ def _run_v2_after_inbound(
             "v2_pending_choice": (
                 turn.pending_choice.model_dump(mode="json")
                 if turn.pending_choice is not None
+                else None
+            ),
+            "v2_booking_proposal": (
+                {
+                    "proposal_id": turn.active_task.proposal.proposal_id,
+                    "expires_at": turn.active_task.proposal.expires_at.isoformat(),
+                }
+                if isinstance(turn.active_task, BookingTaskState)
+                and turn.active_task.proposal is not None
                 else None
             ),
         },

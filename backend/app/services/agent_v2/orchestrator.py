@@ -67,6 +67,10 @@ from app.services.agent_v2.grouped_write_transaction import (
     release_group_savepoint,
     rollback_group_savepoint,
 )
+from app.services.agent_v2.multi_service_booking import (
+    MultiServiceBookingError,
+    resolve_additional_services,
+)
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -84,6 +88,7 @@ from app.services.agent_v2.read_executor import (
 )
 from app.services.agent_v2.state import (
     ActiveTaskState,
+    BookingProposal,
     BookingTaskState,
     OptionChoice,
     OptionSnapshot,
@@ -100,7 +105,14 @@ from app.services.agent_v2.state_persistence import (
     load_active_task,
     save_active_task,
 )
-from app.services.agent_v2.turn_normalization import expand_multi_service_operations
+from app.services.agent_v2.state_rules import attach_booking_proposal
+from app.services.agent_v2.turn_normalization import (
+    collapse_booking_service_sets,
+    expand_multi_service_operations,
+    guard_multiple_booking_writes,
+    merge_same_visit_booking_operations,
+    tag_booking_service_sets,
+)
 from app.services.agent_v2.write_policy import advance_step_with_write_policies
 
 V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
@@ -186,6 +198,171 @@ def _verified_availability_slots(reads: ReadExecutionBundle) -> tuple[dict[str, 
         if isinstance(raw, list):
             return tuple(dict(item) for item in raw if isinstance(item, dict))
     return ()
+
+
+def _service_names(catalog: dict[str, Any], service_ids: list[str]) -> list[str]:
+    rows = catalog.get("services")
+    by_id = {
+        str(row.get("id")): str(row.get("name") or "")
+        for row in rows if isinstance(row, dict) and row.get("id")
+    } if isinstance(rows, list) else {}
+    return [by_id.get(service_id, service_id) for service_id in service_ids]
+
+
+def _proposal_slot(reads: ReadExecutionBundle, *, start_at: str, doctor_id: str) -> dict[str, object] | None:
+    for slot in _verified_availability_slots(reads):
+        if str(slot.get("start_at") or "") != start_at:
+            continue
+        if str(slot.get("doctor_id") or "") != doctor_id:
+            continue
+        return slot
+    return None
+
+
+def _prepare_booking_proposal(
+    step: PlanStep,
+    *,
+    reads: ReadExecutionBundle,
+    current_task: ActiveTaskState | None,
+    db: Session,
+    workspace: Workspace,
+    patient: Patient,
+    catalog: dict[str, Any],
+    now: datetime,
+    turn_id: str,
+) -> tuple[PlanStep, BookingProposal | None]:
+    intent = step.write_intent
+    requested_raw = step.facts.get("requested_service_ids")
+    if (
+        step.disposition != "write_ready"
+        or intent is None
+        or intent.kind != "booking"
+        or step.facts.get("booking_proposal_required") is not True
+        or not isinstance(requested_raw, list)
+    ):
+        return step, None
+    requested = list(dict.fromkeys(str(item) for item in requested_raw if item not in (None, "")))
+    params = dict(intent.parameters)
+    main_service_id = str(params.get("service_id") or "")
+    start_raw = str(params.get("start_at") or "")
+    branch_id = str(params.get("branch_id") or "")
+    doctor_id = str(params.get("doctor_id") or "")
+    if not requested or main_service_id not in requested or not all((start_raw, branch_id, doctor_id)):
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {**step.facts, "booking_proposal_invalid": True},
+            }
+        ), None
+    slot = _proposal_slot(reads, start_at=start_raw, doctor_id=doctor_id)
+    if slot is None or slot.get("end_at") in (None, ""):
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "requested_time_unavailable",
+                "facts": {**step.facts, "booking_proposal_slot_missing": True},
+            }
+        ), None
+    try:
+        start_at = datetime.fromisoformat(start_raw)
+        end_at = datetime.fromisoformat(str(slot["end_at"]))
+    except ValueError:
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {**step.facts, "booking_proposal_invalid_time": True},
+            }
+        ), None
+
+    previous_version = (
+        current_task.proposal.proposal_version
+        if isinstance(current_task, BookingTaskState) and current_task.proposal is not None
+        else 0
+    )
+    service_devices = (
+        dict(current_task.service_device_keys)
+        if isinstance(current_task, BookingTaskState)
+        else {}
+    )
+    if params.get("device_key") not in (None, ""):
+        service_devices[main_service_id] = str(params["device_key"])
+    proposal = BookingProposal(
+        proposal_id=str(
+            uuid5(
+                NAMESPACE_URL,
+                "tia-booking-proposal:"
+                f"{workspace.id}:{patient.id}:{turn_id}:{','.join(requested)}:"
+                f"{branch_id}:{doctor_id}:{start_at.isoformat()}",
+            )
+        ),
+        patient_id=str(patient.id),
+        service_ids=requested,
+        main_service_id=main_service_id,
+        additional_service_ids=[item for item in requested if item != main_service_id],
+        branch_id=branch_id,
+        doctor_id=doctor_id,
+        start_at=start_at,
+        end_at=end_at,
+        device_key=(str(params["device_key"]) if params.get("device_key") else None),
+        additional_service_device_keys={
+            service_id: service_devices[service_id]
+            for service_id in requested
+            if service_id != main_service_id and service_id in service_devices
+        },
+        package_usage=str(params.get("package_usage") or "unspecified"),
+        package_id=(str(params["package_id"]) if params.get("package_id") else None),
+        task_version=max(getattr(current_task, "version", 1), 1),
+        proposal_version=previous_version + 1,
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+    )
+    try:
+        resolved = resolve_additional_services(db, workspace=workspace, proposal=proposal)
+    except MultiServiceBookingError as exc:
+        field = exc.dimension if exc.dimension in {"doctor", "device", "branch", "service"} else "service"
+        return step.model_copy(
+            update={
+                "disposition": "clarify",
+                "write_intent": None,
+                "clarification_field": field,
+                "response_goal": "clarification",
+                "facts": {
+                    **step.facts,
+                    "additional_service_incompatible": True,
+                    "compatibility_dimension": exc.dimension,
+                },
+            }
+        ), None
+    proposal = proposal.model_copy(
+        update={
+            "additional_service_device_keys": {
+                str(item.service_id): item.device_key
+                for item in resolved
+                if item.device_key is not None
+            }
+        }
+    )
+    summary = {
+        "services": _service_names(catalog, requested),
+        "start_at": start_at.isoformat(),
+        "end_at": end_at.isoformat(),
+        "start_local": slot.get("start_local"),
+        "doctor_name": slot.get("doctor_name"),
+        "branch_name": slot.get("branch_name"),
+    }
+    return step.model_copy(
+        update={
+            "disposition": "respond",
+            "write_intent": None,
+            "response_goal": "booking_proposal",
+            "facts": {**step.facts, "booking_proposal_summary": summary},
+        }
+    ), proposal
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -586,6 +763,35 @@ def _completed_action_context(
         pulse_count = parameters.get("pulse_count")
         if isinstance(pulse_count, int) and not isinstance(pulse_count, bool) and pulse_count > 0:
             context["pulse_count"] = pulse_count
+        return context
+
+    if intent.kind == "booking_proposal":
+        raw_proposal = parameters.get("proposal")
+        if not isinstance(raw_proposal, dict):
+            return None
+        appointment_id = action_result.get("appointment_id")
+        status = action_result.get("status")
+        required = ("main_service_id", "doctor_id", "start_at")
+        if (
+            appointment_id in (None, "")
+            or status not in {"pending", "confirmed"}
+            or any(raw_proposal.get(key) in (None, "") for key in required)
+        ):
+            return None
+        context: dict[str, object] = {
+            "operation_type": "book",
+            "appointment_id": str(appointment_id),
+            "service_id": str(raw_proposal["main_service_id"]),
+            "doctor_id": str(raw_proposal["doctor_id"]),
+            "start_at": str(raw_proposal["start_at"]),
+            "status": str(status),
+            "package_usage": str(raw_proposal.get("package_usage") or "unspecified"),
+        }
+        additional = raw_proposal.get("additional_service_ids")
+        if isinstance(additional, list):
+            context["additional_service_ids"] = [str(item) for item in additional]
+        if raw_proposal.get("device_key") not in (None, ""):
+            context["device_key"] = str(raw_proposal["device_key"])
         return context
 
     if intent.kind == "booking":
@@ -1443,6 +1649,12 @@ def orchestrate_v2_turn(
             raise V2TurnInterpretationStructuredOutputError(
                 "V2 turn semantic interpretation exhausted structured attempts."
             ) from exc
+    understanding = merge_same_visit_booking_operations(understanding)
+    understanding, booking_service_sets = collapse_booking_service_sets(
+        understanding,
+        semantic_context=semantic_context,
+        catalog=canonical_catalog,
+    )
     understanding, semantic_visit_groups = expand_multi_service_operations(
         understanding,
         semantic_context=semantic_context,
@@ -1481,11 +1693,13 @@ def orchestrate_v2_turn(
             availability_reference_context=availability_reference_context,
         ),
     )
+    plan = tag_booking_service_sets(plan, service_sets=booking_service_sets)
     plan = normalize_compound_turn_plan(
         plan,
         catalog=canonical_catalog,
         operation_visit_groups=semantic_visit_groups,
     )
+    plan = guard_multiple_booking_writes(plan)
     plan = _normalize_recent_action_acknowledgments(
         plan,
         understanding,
@@ -1647,6 +1861,17 @@ def orchestrate_v2_turn(
             operation=operation,
             context=semantic_context,
         )
+        if isinstance(planned_step.facts.get("requested_service_ids"), list):
+            effective_step = effective_step.model_copy(
+                update={
+                    "facts": {
+                        **effective_step.facts,
+                        "requested_service_ids": list(planned_step.facts["requested_service_ids"]),
+                        "multi_service_single_appointment": True,
+                        "booking_proposal_required": True,
+                    }
+                }
+            )
         step_group_key = compound_write_group(effective_step) or compound_write_group(planned_step)
 
         if effective_step.state_action == "update_active" and step_group_key is None:
@@ -1764,6 +1989,17 @@ def orchestrate_v2_turn(
             )
 
         advanced = _auto_resolve_single_booking_device(advanced, reads)
+        advanced, pending_proposal_for_step = _prepare_booking_proposal(
+            advanced,
+            reads=reads,
+            current_task=current_task,
+            db=db,
+            workspace=workspace,
+            patient=patient,
+            catalog=canonical_catalog,
+            now=local_now,
+            turn_id=resolved_turn_id,
+        )
         operation_reads[effective_step.operation_index] = reads
         if effective_step.operation_type == "appointment_list":
             verified_appointment = dict(reads.verification.verified_parameters)
@@ -1780,6 +2016,19 @@ def orchestrate_v2_turn(
             now=local_now,
             turn_id=resolved_turn_id,
         )
+        if (
+            pending_proposal_for_step is not None
+            and isinstance(transition.active_task, BookingTaskState)
+        ):
+            proposal_task = attach_booking_proposal(
+                transition.active_task,
+                proposal=pending_proposal_for_step,
+            )
+            transition = transition.__class__(
+                active_task=proposal_task,
+                changed=True,
+                reason="booking_proposal_created",
+            )
         advanced = finalize_step_after_state_transition(advanced, transition)
         if (
             advanced.state_action == "cancel_active"
@@ -1874,7 +2123,10 @@ def orchestrate_v2_turn(
                 if (
                     terminal_task_write
                     and current_task is not None
-                    and current_task.task_type == write_kind
+                    and (
+                        current_task.task_type == write_kind
+                        or (current_task.task_type == "booking" and write_kind == "booking_proposal")
+                    )
                 ):
                     if (
                         persisted is not None

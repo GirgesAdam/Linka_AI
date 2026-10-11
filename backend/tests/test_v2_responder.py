@@ -725,3 +725,38 @@ def test_device_compatibility_reply_is_deterministic_and_actionable(
     assert "مش متوافق" in reply
     assert "Prime Lase" in reply
     assert "اختاري جهاز" in reply
+
+
+def test_booking_proposal_is_rendered_deterministically_without_false_success(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("booking proposal must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["هيدرافيشل", "ليزر إزالة الشعر - إبط وبكيني"],
+                "start_local": "2026-10-13T11:00:00+03:00",
+                "doctor_name": "مريم حسن",
+                "branch_name": "التجمع الخامس",
+            }
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="تمام أكد الحجز")],
+        outcomes=[outcome],
+    )
+
+    assert "الموعد المقترح" in reply
+    assert "هيدرافيشل" in reply
+    assert "إبط وبكيني" in reply
+    assert "تأكدي" in reply
+    assert "تم تأكيد" not in reply
+    assert "اتأكد" not in reply
+    assert model == "deterministic:mixed-typed-contract"

@@ -29,6 +29,7 @@ ResponseGoal = Literal[
     "ask_appointment_choice",
     "ask_package_choice",
     "clarification",
+    "booking_proposal",
     "booking_completed",
     "reschedule_completed",
     "cancellation_completed",

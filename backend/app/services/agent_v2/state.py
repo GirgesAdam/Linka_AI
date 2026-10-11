@@ -108,6 +108,49 @@ class OptionSnapshot(StrictStateModel):
         return self.task_version == task_version and now < self.expires_at
 
 
+class BookingProposal(StrictStateModel):
+    proposal_id: str
+    patient_id: str
+    service_ids: list[str] = Field(default_factory=list)
+    main_service_id: str
+    additional_service_ids: list[str] = Field(default_factory=list)
+    branch_id: str
+    doctor_id: str
+    start_at: datetime
+    end_at: datetime
+    device_key: str | None = None
+    additional_service_device_keys: dict[str, str] = Field(default_factory=dict)
+    package_usage: PackageUsage = "unspecified"
+    package_id: str | None = None
+    task_version: int = 1
+    proposal_version: int = 1
+    created_at: datetime
+    expires_at: datetime
+
+    @model_validator(mode="after")
+    def validate_proposal(self) -> BookingProposal:
+        ordered = list(dict.fromkeys(item for item in self.service_ids if item))
+        if not ordered or ordered != self.service_ids:
+            raise ValueError("booking proposal services must be unique and non-empty.")
+        if self.main_service_id not in ordered:
+            raise ValueError("booking proposal main service must be in service_ids.")
+        expected_additional = [item for item in ordered if item != self.main_service_id]
+        if self.additional_service_ids != expected_additional:
+            raise ValueError("booking proposal additional services must match non-main services.")
+        if self.end_at <= self.start_at:
+            raise ValueError("booking proposal end_at must be after start_at.")
+        if self.expires_at <= self.created_at:
+            raise ValueError("booking proposal expiry must be after creation.")
+        if self.task_version < 1 or self.proposal_version < 1:
+            raise ValueError("booking proposal versions must be positive.")
+        if set(self.additional_service_device_keys) - set(self.additional_service_ids):
+            raise ValueError("booking proposal device map contains a non-additional service.")
+        return self
+
+    def is_current(self, *, task_version: int, now: datetime) -> bool:
+        return self.task_version == task_version and now < self.expires_at
+
+
 class GroupedBookingState(StrictStateModel):
     """Durable component set for one pending same-visit booking."""
 
@@ -128,6 +171,9 @@ class BookingTaskState(StrictStateModel):
     status: TaskStatus = "collecting"
     write_authorization: WriteAuthorization
     constraints: CustomerConstraints = Field(default_factory=CustomerConstraints)
+    requested_service_ids: list[str] = Field(default_factory=list)
+    service_device_keys: dict[str, str] = Field(default_factory=dict)
+    proposal: BookingProposal | None = None
     grouped: GroupedBookingState | None = None
     derived: DerivedBookingState = Field(default_factory=DerivedBookingState)
     option_snapshot: OptionSnapshot | None = None
@@ -139,6 +185,10 @@ class BookingTaskState(StrictStateModel):
             raise ValueError("task version must be positive.")
         if self.write_authorization.operation != "booking":
             raise ValueError("booking task requires booking write authorization type.")
+        if len(self.requested_service_ids) != len(set(self.requested_service_ids)):
+            raise ValueError("requested booking services must be unique.")
+        if self.proposal is not None and self.proposal.service_ids != self.requested_service_ids:
+            raise ValueError("booking proposal must match the current requested service set.")
         return self
 
 

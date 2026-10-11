@@ -45,6 +45,7 @@ _INTERNAL_KEYS = frozenset(
 
 _COMPLETED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
     "booking": "booking_completed",
+    "booking_proposal": "booking_completed",
     "confirm_appointment": "appointment_confirmed",
     "cancel_appointment": "cancellation_completed",
     "reschedule": "reschedule_completed",
@@ -56,6 +57,7 @@ _COMPLETED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
 
 _FAILED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
     "booking": "clarification",
+    "booking_proposal": "clarification",
     "confirm_appointment": "clarification",
     "cancel_appointment": "clarification",
     "reschedule": "clarification",
@@ -1234,9 +1236,16 @@ def build_step_outcome(
                 active_task_summary=active_summary,
             )
         if action_result.get("ok") is not True:
+            failed_goal = (
+                "requested_time_unavailable"
+                if step.write_intent is not None
+                and step.write_intent.kind == "booking_proposal"
+                and action_result.get("error_code") == "booking_unavailable"
+                else _failed_write_goal(step)
+            )
             return TurnOutcome(
                 status="blocked",
-                response_goal=_failed_write_goal(step),
+                response_goal=failed_goal,
                 facts=base_facts,
                 action_result=_visible_dict(action_result),
                 active_task_summary=active_summary,

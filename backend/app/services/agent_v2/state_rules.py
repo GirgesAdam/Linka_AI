@@ -5,6 +5,7 @@ from datetime import datetime
 from app.agents.v2.turn_contract import DateConstraint, PackageUsage, TimeConstraint
 from app.services.agent_v2.state import (
     ActiveTaskState,
+    BookingProposal,
     BookingTaskState,
     CustomerConstraints,
     DerivedBookingState,
@@ -80,6 +81,7 @@ def _next_booking_state(
             "status": "collecting",
             "constraints": constraints,
             "derived": derived,
+            "proposal": None,
             "option_snapshot": None,
             "version": state.version + 1,
         }
@@ -205,6 +207,86 @@ def apply_booking_package_usage_change(
     return _next_booking_state(state, constraints=constraints, derived=derived)
 
 
+def apply_booking_requested_services_change(
+    state: BookingTaskState,
+    *,
+    service_ids: list[str],
+) -> BookingTaskState:
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    if state.requested_service_ids == ordered:
+        return state
+    retained_devices = {
+        service_id: device_key
+        for service_id, device_key in state.service_device_keys.items()
+        if service_id in ordered
+    }
+    if state.constraints.service_id in ordered and state.constraints.device_key:
+        retained_devices[state.constraints.service_id] = state.constraints.device_key
+    return state.model_copy(
+        update={
+            "status": "collecting",
+            "requested_service_ids": ordered,
+            "service_device_keys": retained_devices,
+            "proposal": None,
+            "grouped": None,
+            "derived": _booking_derived(
+                state,
+                clear_availability=True,
+                clear_package=True,
+                reset_doctor_compatibility=True,
+                reset_device_compatibility=True,
+                clear_commercial_basis=True,
+            ),
+            "option_snapshot": None,
+            "version": state.version + 1,
+        }
+    )
+
+
+def attach_booking_proposal(
+    state: BookingTaskState,
+    *,
+    proposal: BookingProposal,
+) -> BookingTaskState:
+    next_version = state.version + 1
+    current = proposal.model_copy(update={"task_version": next_version})
+    return state.model_copy(
+        update={
+            "status": "ready",
+            "proposal": current,
+            "option_snapshot": None,
+            "version": next_version,
+        }
+    )
+
+
+def invalidate_booking_proposal(state: BookingTaskState) -> BookingTaskState:
+    if state.proposal is None:
+        return state
+    return state.model_copy(
+        update={
+            "status": "collecting",
+            "proposal": None,
+            "option_snapshot": None,
+            "version": state.version + 1,
+        }
+    )
+
+
+def booking_proposal_is_current(
+    state: BookingTaskState,
+    *,
+    proposal_id: str,
+    now: datetime,
+) -> bool:
+    proposal = state.proposal
+    return (
+        proposal is not None
+        and proposal.proposal_id == proposal_id
+        and proposal.is_current(task_version=state.version, now=now)
+    )
+
+
 def record_booking_commercial_basis_presented(
     state: BookingTaskState,
     *,
@@ -222,6 +304,7 @@ def record_booking_commercial_basis_presented(
                 }
             ),
             "version": state.version + 1,
+            "proposal": None,
             "option_snapshot": None,
         }
     )
@@ -238,6 +321,7 @@ def record_booking_doctor_compatibility(
         update={
             "derived": state.derived.model_copy(update={"doctor_compatible": compatible}),
             "version": state.version + 1,
+            "proposal": None,
             "option_snapshot": None,
         }
     )
@@ -254,6 +338,7 @@ def record_booking_device_compatibility(
         update={
             "derived": state.derived.model_copy(update={"device_compatible": compatible}),
             "version": state.version + 1,
+            "proposal": None,
             "option_snapshot": None,
         }
     )
@@ -277,13 +362,14 @@ def attach_option_snapshot(
         expires_at=expires_at,
         options=choices,
     )
-    return state.model_copy(
-        update={
-            "status": "awaiting_choice",
-            "option_snapshot": snapshot,
-            "version": next_version,
-        }
-    )
+    update: dict[str, object] = {
+        "status": "awaiting_choice",
+        "option_snapshot": snapshot,
+        "version": next_version,
+    }
+    if isinstance(state, BookingTaskState):
+        update["proposal"] = None
+    return state.model_copy(update=update)
 
 
 def option_snapshot_is_current(

@@ -21,6 +21,7 @@ from app.services.agent_v2.state_rules import (
     apply_booking_device_change,
     apply_booking_doctor_change,
     apply_booking_package_usage_change,
+    apply_booking_requested_services_change,
     apply_booking_service_change,
     apply_booking_time_change,
     apply_reschedule_date_change,
@@ -104,6 +105,17 @@ def _new_booking_state(
         and step.write_intent.kind == "booking"
         and step.write_intent.authorized
     )
+    constraints = _booking_constraints(step, operation)
+    requested = [
+        str(item)
+        for item in step.facts.get("requested_service_ids", [])
+        if item not in (None, "")
+    ] if isinstance(step.facts.get("requested_service_ids"), list) else []
+    service_devices = (
+        {constraints.service_id: constraints.device_key}
+        if requested and constraints.service_id and constraints.device_key
+        else {}
+    )
     return BookingTaskState(
         write_authorization=_authorization(
             operation="booking",
@@ -111,7 +123,9 @@ def _new_booking_state(
             now=now,
             authorized=authorized,
         ),
-        constraints=_booking_constraints(step, operation),
+        constraints=constraints,
+        requested_service_ids=requested,
+        service_device_keys=service_devices,
     )
 
 
@@ -155,6 +169,25 @@ def _apply_booking_updates(
         updated = apply_booking_package_usage_change(
             updated,
             package_usage=operation.package_usage,
+        )
+    requested = facts.get("requested_service_ids")
+    if isinstance(requested, list):
+        updated = apply_booking_requested_services_change(
+            updated,
+            service_ids=[str(item) for item in requested if item not in (None, "")],
+        )
+    if (
+        updated.requested_service_ids
+        and updated.constraints.service_id
+        and updated.constraints.device_key
+    ):
+        updated = updated.model_copy(
+            update={
+                "service_device_keys": {
+                    **updated.service_device_keys,
+                    updated.constraints.service_id: updated.constraints.device_key,
+                }
+            }
         )
     return updated
 

@@ -89,6 +89,9 @@ def _patch_runtime(monkeypatch, plan: TurnPlan) -> None:
     monkeypatch.setattr(target, "interpret_customer_turn_v2", lambda **kwargs: understanding)
     monkeypatch.setattr(target, "plan_turn", lambda *args, **kwargs: plan)
     monkeypatch.setattr(target, "normalize_compound_turn_plan", lambda value, **kwargs: value)
+    # This test isolates legacy grouped savepoint mechanics; single-appointment
+    # normalization is covered separately and must not rewrite this synthetic plan.
+    monkeypatch.setattr(target, "guard_multiple_booking_writes", lambda value: value)
     monkeypatch.setattr(target, "preflight_compound_visit_plan", lambda value, **kwargs: value)
     monkeypatch.setattr(target, "adapt_matching_active_task_step", lambda step, **kwargs: step)
     monkeypatch.setattr(target, "persist_initial_task_intent", lambda step, **kwargs: step)

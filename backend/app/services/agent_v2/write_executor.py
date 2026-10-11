@@ -20,11 +20,18 @@ from app.services.agent_v2.grouped_visit_operations import (
     cancel_visit_group_operation,
     reschedule_visit_group_operation,
 )
+from app.services.agent_v2.multi_service_booking import (
+    MultiServiceBookingError,
+    MultiServiceBookingUnavailable,
+    execute_booking_proposal,
+)
 from app.services.agent_v2.package_booking_policy import (
     BookingPackagePolicyError,
     resolve_booking_package,
 )
 from app.services.agent_v2.planner import _EXPLICIT_TIME_AUTHORITY_PARAM, PlanStep
+from app.services.agent_v2.state import BookingProposal
+from app.services.appointment_commerce import AppointmentCommerceError
 from app.services.appointment_creation import create_appointment_operation
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
@@ -170,6 +177,7 @@ def execute_write_ready_step(
         with write_scope:
             if intent.kind in {
                 "booking",
+                "booking_proposal",
                 "confirm_appointment",
                 "cancel_appointment",
                 "reschedule",
@@ -180,7 +188,21 @@ def execute_write_ready_step(
                     domain="appointments",
                 )
 
-            if intent.kind == "booking":
+            if intent.kind == "booking_proposal":
+                raw_proposal = parameters.get("proposal")
+                if not isinstance(raw_proposal, dict):
+                    raise WriteExecutionError("Verified proposal write is missing proposal state.")
+                proposal = BookingProposal.model_validate(raw_proposal)
+                if str(parameters.get("proposal_id") or "") != proposal.proposal_id:
+                    raise WriteExecutionError("Verified proposal id does not match proposal state.")
+                result = execute_booking_proposal(
+                    db,
+                    workspace=workspace,
+                    patient=patient,
+                    proposal=proposal,
+                    idempotency_key=idempotency_key,
+                )
+            elif intent.kind == "booking":
                 if patient.status == "blocked":
                     return _failure(
                         write_kind=intent.kind,
@@ -504,8 +526,21 @@ def execute_write_ready_step(
             detail=str(exc),
             requires_human=True,
         )
+    except MultiServiceBookingUnavailable as exc:
+        if commit:
+            db.rollback()
+        return {
+            **_failure(
+                write_kind="booking_proposal",
+                code="booking_unavailable",
+                detail=str(exc),
+            ),
+            "alternatives": list(exc.alternatives),
+        }
     except (
         AppointmentOperationError,
+        AppointmentCommerceError,
+        MultiServiceBookingError,
         CRMTaskError,
         PackageOfferError,
         PackageOperationError,

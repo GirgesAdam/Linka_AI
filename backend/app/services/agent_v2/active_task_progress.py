@@ -649,6 +649,13 @@ def _booking_progress(
     context: SemanticContext,
 ) -> PlanStep:
     params = _constraint_parameters(state)
+    if state.requested_service_ids:
+        params = {
+            **params,
+            "requested_service_ids": list(state.requested_service_ids),
+            "multi_service_single_appointment": True,
+            "booking_proposal_required": True,
+        }
     service_id = state.constraints.service_id
     if service_id is None:
         return PlanStep(

@@ -13,6 +13,7 @@ OperationType = Literal[
     "payment_info",
     "availability",
     "book",
+    "confirm_booking_proposal",
     "appointment_list",
     "confirm_appointment",
     "cancel_appointment",

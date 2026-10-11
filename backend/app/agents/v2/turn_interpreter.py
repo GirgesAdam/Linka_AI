@@ -137,6 +137,22 @@ SEMANTIC PRINCIPLES
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.
+- For one same-visit booking request that names multiple treatment components, choose the minimal
+  non-overlapping canonical service set from the supplied catalog and emit it as ONE book operation.
+  Put that canonical set in entities.service.candidate_refs with candidate_mode=set. Prefer a supplied
+  combined/combo catalog service when it semantically covers components the customer requested; never
+  emit that combo together with its constituent services. A combo may coexist with another independent
+  requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
+  the requested components to one canonical service ref. Do not decide which service is primary/main;
+  Python chooses that deterministically from catalog duration.
+- When the customer corrects the services for an unfinished same-visit booking, emit the CURRENT complete
+  canonical service set after the correction, not a delta and not the stale prior set. Keep it one book
+  continuation operation with candidate_mode=set.
+- If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
+  confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
+  reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the
+  customer instead wants to change it, continue the booking task normally with only the requested change;
+  never reuse the old proposal after a mutation.
 - Resolve the whole latest customer turn jointly before emitting operations. Cross-operation
   references such as the same day, time, doctor, device, or visit may be defined by another
   operation in the same turn even when the explicit value appears later in the sentence. Copy the

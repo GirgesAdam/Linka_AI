@@ -161,18 +161,39 @@ def active_task_semantic_view(
         constraints = _safe_constraints(active_task.get("constraints"), context)
         if constraints:
             safe["constraints"] = constraints
-        grouped = active_task.get("grouped")
-        if isinstance(grouped, dict):
-            raw_components = grouped.get("components")
-            if isinstance(raw_components, list):
-                components = [
-                    _safe_constraints(component, context)
-                    for component in raw_components
-                    if isinstance(component, dict)
-                ]
-                components = [component for component in components if component]
-                if len(components) >= 2:
-                    safe["grouped_components"] = components
+        requested = active_task.get("requested_service_ids")
+        requested_refs: list[str] = []
+        if isinstance(requested, list):
+            for service_id in requested:
+                ref = _entity_ref(service_id, kind="service", context=context)
+                if ref is not None and ref not in requested_refs:
+                    requested_refs.append(ref)
+        if requested_refs:
+            safe["requested_service_refs"] = requested_refs
+        else:
+            grouped = active_task.get("grouped")
+            if isinstance(grouped, dict):
+                raw_components = grouped.get("components")
+                if isinstance(raw_components, list):
+                    components = [
+                        _safe_constraints(component, context)
+                        for component in raw_components
+                        if isinstance(component, dict)
+                    ]
+                    components = [component for component in components if component]
+                    if len(components) >= 2:
+                        safe["grouped_components"] = components
+        proposal = active_task.get("proposal")
+        if isinstance(proposal, dict):
+            safe["pending_booking_proposal"] = {
+                "awaiting_confirmation": True,
+                "service_refs": requested_refs,
+                **{
+                    key: proposal[key]
+                    for key in ("start_at", "end_at", "expires_at")
+                    if proposal.get(key) not in (None, "")
+                },
+            }
     else:
         target = _safe_target(active_task.get("target"), context)
         replacement = _safe_constraints(active_task.get("replacement"), context)
