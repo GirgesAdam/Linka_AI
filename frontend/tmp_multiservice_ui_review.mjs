@@ -6,7 +6,8 @@ const baseURL = process.env.AUDIT_FRONTEND_URL || 'http://127.0.0.1:3000';
 const outputDir = path.resolve('audit-output');
 const shots = path.join(outputDir, 'screenshots');
 fs.mkdirSync(shots, { recursive: true });
-const agentEvidence = JSON.parse(fs.readFileSync(path.join(outputDir, 'agent-db-evidence.json'), 'utf8'));
+const agentPath = path.join(outputDir, 'agent-db-evidence.json');
+const agentEvidence = fs.existsSync(agentPath) ? JSON.parse(fs.readFileSync(agentPath, 'utf8')) : { scenarios: {} };
 const probeEvidence = JSON.parse(fs.readFileSync(path.join(outputDir, 'ui-probe-evidence.json'), 'utf8'));
 function scenarioEvidence(key) {
   const actual = agentEvidence.scenarios?.[key];

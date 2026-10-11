@@ -24,9 +24,9 @@ AGENT_EVIDENCE = OUT / "agent-db-evidence.json"
 UI_EVIDENCE = OUT / "ui-probe-evidence.json"
 
 SCENARIOS = {
-    "A": {"slugs": ["laser-hair-underarm", "laser-hair-bikini", "laser-hair-arms"], "times": [(16, 0), (16, 30), (17, 0)]},
-    "B": {"slugs": ["laser-hair-underarm", "laser-hair-bikini"], "times": [(18, 0), (18, 30)]},
-    "C": {"slugs": ["laser-hair-underarm", "laser-hair-bikini"], "times": [(19, 0), (19, 30)]},
+    "A": {"slugs": ["laser-hair-removal-underarm", "laser-hair-removal-bikini", "laser-hair-removal-full-arms"], "times": [(16, 0), (16, 30), (17, 0)]},
+    "B": {"slugs": ["laser-hair-removal-underarm", "laser-hair-removal-bikini"], "times": [(18, 0), (18, 30)]},
+    "C": {"slugs": ["laser-hair-removal-underarm", "laser-hair-removal-bikini"], "times": [(19, 0), (19, 30)]},
 }
 
 
@@ -70,7 +70,7 @@ def main() -> None:
         if workspace is None:
             raise RuntimeError("Synthetic workspace tia not found")
 
-        branch = db.scalar(select(Branch).where(Branch.workspace_id == workspace.id, Branch.is_active.is_(True)))
+        branch = db.scalar(select(Branch).where(Branch.workspace_id == workspace.id, Branch.code == "new-cairo"))
         if branch is None:
             raise RuntimeError("No active synthetic branch")
 
@@ -102,7 +102,21 @@ def main() -> None:
                 )
             )
             if patient is None:
-                raise RuntimeError(f"Audit patient missing for {key}")
+                patient = Patient(
+                    id=uuid4(),
+                    workspace_id=workspace.id,
+                    first_name="E2E",
+                    last_name=f"Multi {key}",
+                    phone=f"+20000024000{ord(key) - 64}",
+                    phone_normalized=f"+20000024000{ord(key) - 64}",
+                    preferred_language="ar",
+                    preferred_branch_id=branch.id,
+                    source="other",
+                    source_detail=f"multiservice-ui-audit-{key}",
+                    status="active",
+                )
+                db.add(patient)
+                db.flush()
 
             group_id = uuid4()
             rows = []
