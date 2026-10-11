@@ -148,7 +148,7 @@ function DesktopNavItem({
       href={href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition",
+        "group relative flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-[background-color,color,transform] duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 active:translate-y-px motion-reduce:active:translate-y-0",
         active ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/[0.06] hover:text-white",
       )}
     >
@@ -208,7 +208,7 @@ function MobileNavLink({ href, label, Icon, onNavigate }: { href: string; label:
       aria-current={active ? "page" : undefined}
       onClick={onNavigate}
       className={cn(
-        "flex min-h-12 items-center gap-3 rounded-xl px-3 text-sm font-bold transition",
+        "flex min-h-12 cursor-pointer items-center gap-3 rounded-xl px-3 text-sm font-bold transition-[background-color,color,transform] duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] active:translate-y-px motion-reduce:active:translate-y-0",
         active ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "text-slate-700 hover:bg-slate-50",
       )}
     >
@@ -266,7 +266,7 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
               href={href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-bold transition",
+                "flex min-h-12 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-bold transition-[background-color,color,transform] duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] active:scale-[.98] motion-reduce:active:scale-100",
                 active ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
               )}
             >
@@ -283,7 +283,7 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
           onClick={() => dialogRef.current?.showModal()}
           aria-haspopup="dialog"
           className={cn(
-            "flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-bold transition",
+            "flex min-h-12 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl px-1 text-[11px] font-bold transition-[background-color,color,transform] duration-150 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] active:scale-[.98] motion-reduce:active:scale-100",
             moreActive ? "bg-[var(--accent-soft)] text-[var(--accent-strong)]" : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
           )}
         >
@@ -309,7 +309,7 @@ export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
             <button
               type="button"
               onClick={close}
-              className="grid size-10 place-items-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+              className="icon-action grid size-10 cursor-pointer place-items-center rounded-xl border border-slate-200 text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
               aria-label="إغلاق القائمة"
             >
               <X size={18} />
