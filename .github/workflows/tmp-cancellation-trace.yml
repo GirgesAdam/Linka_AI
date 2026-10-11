@@ -73,6 +73,7 @@ jobs:
           from sqlalchemy.orm import Session
           from app.core.config import settings
           from app.models.appointment import Appointment
+          from app.models.patient import Patient
           from app.models.workspace import Workspace
           import v2_benchmark_core as bench
 
@@ -84,64 +85,63 @@ jobs:
                   Appointment.patient_id == patient.id,
               ).order_by(Appointment.start_at, Appointment.id)))
               return [{
-                  'id': str(row.id),
-                  'status': row.status,
-                  'service_id': str(row.service_id),
-                  'doctor_id': str(row.doctor_id) if row.doctor_id else None,
-                  'branch_id': str(row.branch_id),
-                  'start_at': row.start_at.isoformat(),
-                  'end_at': row.end_at.isoformat(),
-                  'visit_group_id': str(row.visit_group_id) if row.visit_group_id else None,
-              } for row in rows]
+                  'id': str(r.id), 'status': r.status, 'service_id': str(r.service_id),
+                  'branch_id': str(r.branch_id), 'start_at': r.start_at.isoformat(),
+                  'visit_group_id': str(r.visit_group_id) if r.visit_group_id else None,
+              } for r in rows]
 
-          conn = engine.connect(); outer = conn.begin()
-          db = Session(bind=conn, expire_on_commit=False, join_transaction_mode='create_savepoint')
-          try:
-              ws = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
-              patient = bench.patient_without_future(db, ws)
-              patient_id = patient.id
-              before = snapshot(db, ws, patient)
-              messages = [
-                  'عايزة أحجز في فرع مدينة نصر ليزر إزالة الشعر - إبط وليزر إزالة الشعر - بكيني وليزر إزالة الشعر - ذراعين كاملين',
-                  'يوم الثلاثاء الجاي',
-                  'خليهم إبط وبكيني بس',
-                  'بالمناسبة سعر ليزر إزالة الشعر - إبط كام؟',
-                  'تمام نكمل الحجز',
-              ]
-              turns = bench.run_messages(db, ws, patient, messages)
-              during = snapshot(db, ws, patient)
-              payload = {
-                  'patient_id': str(patient_id),
-                  'before': before,
-                  'turns': [{
-                      'customer': t.customer,
-                      'assistant': t.assistant,
-                      'model': t.model,
-                      'understanding': t.understanding,
-                      'plan': t.plan,
-                      'traces': t.traces,
-                      'outcomes': t.outcomes,
-                      'state_after': t.state_after,
-                  } for t in turns],
-                  'during': during,
+          def turn_json(t):
+              return {
+                  'customer': t.customer, 'assistant': t.assistant, 'model': t.model,
+                  'understanding': t.understanding, 'plan': t.plan,
+                  'traces': t.traces, 'outcomes': t.outcomes, 'state_after': t.state_after,
               }
-          finally:
-              db.close()
-              if outer.is_active: outer.rollback()
-              conn.close()
-          from app.models.patient import Patient
-          with Session(engine) as verify:
-              ws = verify.scalar(select(Workspace).where(Workspace.slug == 'tia'))
-              patient = verify.get(Patient, payload['patient_id'])
-              persisted = snapshot(verify, ws, patient)
-          payload['after_rollback'] = persisted
-          payload['rollback_restored'] = persisted == payload['before']
-          print('ML_AUDIT=' + json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
+
+          def scenario(name, messages):
+              conn = engine.connect(); outer = conn.begin()
+              db = Session(bind=conn, expire_on_commit=False, join_transaction_mode='create_savepoint')
+              payload = {'case': name, 'turns': [], 'error': None}
+              try:
+                  ws = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+                  patient = bench.patient_without_future(db, ws)
+                  payload['patient_id'] = str(patient.id)
+                  payload['before'] = snapshot(db, ws, patient)
+                  conversation_id = None
+                  for message in messages:
+                      try:
+                          turn, conversation_id = bench.send(db, ws, patient, message, conversation_id)
+                          payload['turns'].append(turn_json(turn))
+                          print('ML_TURN=' + json.dumps({'case': name, 'turn': turn_json(turn)}, ensure_ascii=False, separators=(',', ':')))
+                      except Exception as exc:
+                          payload['error'] = {'type': type(exc).__name__, 'message': str(exc)}
+                          print('ML_ERROR=' + json.dumps({'case': name, **payload['error']}, ensure_ascii=False, separators=(',', ':')))
+                          break
+                  payload['during'] = snapshot(db, ws, patient)
+              finally:
+                  db.close()
+                  if outer.is_active: outer.rollback()
+                  conn.close()
+              with Session(engine) as verify:
+                  ws = verify.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+                  patient = verify.get(Patient, payload['patient_id'])
+                  payload['after_rollback'] = snapshot(verify, ws, patient)
+              payload['rollback_restored'] = payload['after_rollback'] == payload['before']
+              print('ML_CASE=' + json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
+              if not payload['rollback_restored']:
+                  raise RuntimeError(f'{name}: rollback did not restore DB')
+              return payload
+
+          base = 'عايزة أحجز في فرع مدينة نصر ليزر إزالة الشعر - إبط وليزر إزالة الشعر - بكيني وليزر إزالة الشعر - ذراعين كاملين'
+          cases = [
+              scenario('ML1', [base]),
+              scenario('ML2', [base, 'يوم الثلاثاء الجاي']),
+              scenario('ML3', [base, 'خليهم إبط وبكيني بس']),
+              scenario('ML4', [base, 'بالمناسبة سعر ليزر إزالة الشعر - إبط كام؟', 'تمام نكمل الحجز']),
+          ]
           print('ML_SUMMARY=' + json.dumps({
-              'rollback_restored': payload['rollback_restored'],
-              'models': sorted({t['model'] for t in payload['turns'] if t['model']}),
+              'rollback_restored_all': all(c['rollback_restored'] for c in cases),
+              'cases': [{'case': c['case'], 'turns': len(c['turns']), 'error': c['error']} for c in cases],
+              'models': sorted({t['model'] for c in cases for t in c['turns'] if t['model']}),
           }, ensure_ascii=False, separators=(',', ':')))
-          if not payload['rollback_restored']:
-              raise RuntimeError('multi-laser rollback did not restore DB')
           engine.dispose()
           PY
