@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.services.agent_v2.branch_resolution import (
-    BranchResolutionError,
-    resolve_single_location_branch_id,
-)
+from app.services.agent_v2.branch_resolution import resolve_single_location_branch_id
 
 
 def _catalog(context: SemanticContext) -> dict[str, object]:
@@ -26,16 +23,25 @@ def _compatible_catalog(
             if not isinstance(row, dict) or str(row.get("id") or "") != doctor_id:
                 continue
             raw = row.get("branch_ids")
-            allowed = {str(value) for value in raw if value not in (None, "")} if isinstance(raw, list) else set()
+            allowed = (
+                {str(value) for value in raw if value not in (None, "")}
+                if isinstance(raw, list)
+                else set()
+            )
             break
     if allowed is None:
         return catalog
     branches = catalog.get("branches")
-    filtered = [
-        dict(row)
-        for row in branches
-        if isinstance(row, dict) and str(row.get("id") or row.get("branch_id") or "") in allowed
-    ] if isinstance(branches, list) else []
+    filtered = (
+        [
+            dict(row)
+            for row in branches
+            if isinstance(row, dict)
+            and str(row.get("id") or row.get("branch_id") or "") in allowed
+        ]
+        if isinstance(branches, list)
+        else []
+    )
     primary = catalog.get("primary_branch_id")
     if primary not in (None, "") and str(primary) not in allowed:
         primary = None
@@ -66,20 +72,27 @@ def resolve_scheduling_branch_parameters(
         doctor_id=str(params.get("doctor_id") or "").strip() or None,
     )
     branches = catalog.get("branches")
-    branch_ids = {
-        str(row.get("id") or row.get("branch_id"))
-        for row in branches
-        if isinstance(row, dict) and (row.get("id") or row.get("branch_id")) not in (None, "")
-    } if isinstance(branches, list) else set()
+    branch_ids = (
+        {
+            str(row.get("id") or row.get("branch_id"))
+            for row in branches
+            if isinstance(row, dict)
+            and (row.get("id") or row.get("branch_id")) not in (None, "")
+        }
+        if isinstance(branches, list)
+        else set()
+    )
 
     if explicit:
         if branch_ids and explicit not in branch_ids:
             return params, _refs_for_branch_ids(context, branch_ids), "incompatible_branch"
         return params, [], None
 
-    try:
-        resolved = resolve_single_location_branch_id(explicit_ref=None, catalog=catalog)
-    except BranchResolutionError:
+    resolved = resolve_single_location_branch_id(
+        primary_branch_id=catalog.get("primary_branch_id"),
+        catalog=catalog,
+    )
+    if resolved is None:
         refs = _refs_for_branch_ids(context, branch_ids)
         return params, refs, "branch_choice" if refs else "no_compatible_branch"
     return {**params, "branch_id": resolved}, [], None
