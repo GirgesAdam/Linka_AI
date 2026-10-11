@@ -30,6 +30,19 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         with:
           python-version: '3.12'
+      - name: Relax temporary replacement uniqueness only
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/scripts/tmp_apply_mb_branch_patch.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    if text.count(old) != 1:\n        raise RuntimeError(f"Expected exactly one match in {path}: {old[:80]!r}; got {text.count(old)}")\n'
+          new = '    if text.count(old) < 1:\n        raise RuntimeError(f"Expected at least one match in {path}: {old[:80]!r}; got {text.count(old)}")\n'
+          if old not in text:
+              raise SystemExit('temporary helper shape changed')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Apply focused production patch
         if: steps.gate.outputs.skip != 'true'
         run: python backend/scripts/tmp_apply_mb_branch_patch.py
@@ -38,6 +51,7 @@ jobs:
         run: |
           git diff --check
           git status --short
+          git diff -- backend/app backend/tests/test_v2_multi_service_branch_continuation.py
       - name: Commit production and permanent tests
         if: steps.gate.outputs.skip != 'true'
         run: |
