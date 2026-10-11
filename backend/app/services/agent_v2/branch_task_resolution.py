@@ -48,6 +48,20 @@ def _compatible_catalog(
     return {**catalog, "primary_branch_id": primary, "branches": filtered}
 
 
+def _branch_ids(catalog: dict[str, object]) -> set[str]:
+    branches = catalog.get("branches")
+    return (
+        {
+            str(row.get("id") or row.get("branch_id"))
+            for row in branches
+            if isinstance(row, dict)
+            and (row.get("id") or row.get("branch_id")) not in (None, "")
+        }
+        if isinstance(branches, list)
+        else set()
+    )
+
+
 def _refs_for_branch_ids(context: SemanticContext, branch_ids: set[str]) -> list[str]:
     return [
         ref
@@ -64,33 +78,29 @@ def resolve_scheduling_branch_parameters(
     """Resolve branch only from canonical backend facts; never from customer text.
 
     Returns (parameters, candidate_refs, reason). A non-null reason means the caller
-    must clarify and must not perform an availability read/write. Contexts that do
-    not provide canonical branch metadata retain legacy planning behavior.
+    must clarify and must not perform an availability read/write. Contexts without
+    any canonical branch facts retain legacy planning behavior.
     """
     raw_catalog = _catalog(context)
     if raw_catalog is None:
         return params, [], None
 
     explicit = str(params.get("branch_id") or "").strip()
+    raw_branch_ids = _branch_ids(raw_catalog)
+    if not raw_branch_ids:
+        return params, [], None
+
     catalog = _compatible_catalog(
         raw_catalog,
         doctor_id=str(params.get("doctor_id") or "").strip() or None,
     )
-    branches = catalog.get("branches")
-    branch_ids = (
-        {
-            str(row.get("id") or row.get("branch_id"))
-            for row in branches
-            if isinstance(row, dict)
-            and (row.get("id") or row.get("branch_id")) not in (None, "")
-        }
-        if isinstance(branches, list)
-        else set()
-    )
+    branch_ids = _branch_ids(catalog)
 
     if explicit:
         if branch_ids and explicit not in branch_ids:
             return params, _refs_for_branch_ids(context, branch_ids), "incompatible_branch"
+        if not branch_ids and explicit in raw_branch_ids:
+            return params, _refs_for_branch_ids(context, raw_branch_ids), "incompatible_branch"
         return params, [], None
 
     resolved = resolve_single_location_branch_id(
