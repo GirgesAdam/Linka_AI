@@ -147,7 +147,11 @@ SEMANTIC PRINCIPLES
   Python chooses that deterministically from catalog duration.
 - When the customer corrects the services for an unfinished same-visit booking, emit the CURRENT complete
   canonical service set after the correction, not a delta and not the stale prior set. Keep it one book
-  continuation operation with candidate_mode=set.
+  continuation operation with candidate_mode=set. If the current set is A+B+C and the customer explicitly
+  removes B while keeping the visit, the emitted set is A+C: exclude B, set grouped_booking_action to
+  remove_other_components, and do NOT emit B merely to identify what was removed. If the customer adds D,
+  emit the resulting complete set A+B+C+D and preserve_group. This is semantic set mutation, not wording or
+  phrase matching.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
   reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the

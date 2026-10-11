@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from app.agents.v2.turn_contract import DateConstraint, TimeConstraint, TurnOperation
+from app.services.agent_v2.multi_service_booking import (
+    common_laser_device_keys,
+    laser_service_ids,
+    select_main_service_id,
+)
 from app.services.agent_v2.planner import PlanStep
 from app.services.agent_v2.read_executor import ReadExecutionBundle
 from app.services.agent_v2.state import (
@@ -190,6 +196,40 @@ def _apply_booking_updates(
             }
         )
     return updated
+
+
+def reconcile_booking_service_set_state(
+    state: BookingTaskState,
+    *,
+    catalog: dict[str, Any],
+) -> BookingTaskState:
+    """Re-derive booking authority from the current canonical requested service set."""
+    if not state.requested_service_ids:
+        return state
+
+    current = state
+    main_service_id = select_main_service_id(catalog, current.requested_service_ids)
+    if current.constraints.service_id != main_service_id:
+        current = apply_booking_service_change(current, service_id=main_service_id)
+
+    laser_ids = laser_service_ids(catalog, current.requested_service_ids)
+    common_devices = common_laser_device_keys(catalog, current.requested_service_ids)
+    selected_device = current.constraints.device_key
+    if not laser_ids:
+        if selected_device is not None:
+            current = apply_booking_device_change(current, device_key=None)
+        visit_devices: dict[str, str] = {}
+    elif selected_device is not None and selected_device not in common_devices:
+        current = apply_booking_device_change(current, device_key=None)
+        visit_devices = {}
+    elif selected_device is not None:
+        visit_devices = {service_id: selected_device for service_id in laser_ids}
+    else:
+        visit_devices = {}
+
+    if current.service_device_keys != visit_devices:
+        current = current.model_copy(update={"service_device_keys": visit_devices})
+    return current
 
 
 def _unique_appointment_target(reads: ReadExecutionBundle | None) -> RescheduleTarget | None:
@@ -435,6 +475,7 @@ def apply_step_state(
     reads: ReadExecutionBundle | None,
     now: datetime,
     turn_id: str,
+    catalog: dict[str, Any] | None = None,
 ) -> StateTransition:
     """Apply one deterministic V2 workflow transition without persistence or writes."""
     before = active_task
@@ -502,6 +543,9 @@ def apply_step_state(
 
     if current is None:
         return StateTransition(active_task=None, changed=before is not None, reason="state_cleared")
+
+    if isinstance(current, BookingTaskState) and catalog is not None:
+        current = reconcile_booking_service_set_state(current, catalog=catalog)
 
     commercial_read_verified = False
     if reads is not None and isinstance(current, BookingTaskState):

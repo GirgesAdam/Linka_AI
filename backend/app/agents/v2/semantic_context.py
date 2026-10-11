@@ -162,6 +162,8 @@ def build_semantic_context(
                 for device in raw_devices:
                     if not isinstance(device, dict):
                         continue
+                    if device.get("configured") is False:
+                        continue
                     device_key = device.get("device_key")
                     if device_key in (None, ""):
                         continue

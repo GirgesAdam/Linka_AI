@@ -336,3 +336,26 @@ def test_single_laser_operation_preserves_explicit_incompatible_device_for_compa
     assert normalized.operations[0].entities.device is not None
     assert normalized.operations[0].entities.device.ref == "V1"
     assert groups == {}
+
+
+def test_collapsed_non_laser_main_preserves_visit_device_for_laser_additional() -> None:
+    context = _component_device_context()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(ref="S1"),
+            device=EntityReference(ref="V1"),
+            date=DateConstraint(mode="next_available"),
+        ),
+        execution_intent="execute",
+    )
+
+    normalized, groups = expand_multi_service_operations(
+        TiaTurnUnderstanding(operations=[operation]),
+        semantic_context=context,
+        booking_service_sets={0: ["standard", "laser-a"]},
+    )
+
+    assert normalized.operations[0].entities.device is not None
+    assert normalized.operations[0].entities.device.ref == "V1"
+    assert groups == {}

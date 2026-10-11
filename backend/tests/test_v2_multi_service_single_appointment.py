@@ -204,6 +204,121 @@ def test_combo_plus_full_arms_selects_combo_as_main_without_duplication() -> Non
     assert context.resolve(collapsed.operations[0].entities.service.ref, expected_kind="service") == COMBO
 
 
+
+
+def test_preserve_group_cannot_narrow_current_requested_service_set() -> None:
+    context = build_semantic_context(_catalog())
+    task = _task()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        ref="S4",
+                        candidate_mode="set",
+                    )
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    collapsed, sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=_catalog(),
+        active_task=task,
+    )
+
+    assert sets == {0: [COMBO, FULL_ARMS]}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert context.resolve(service.ref, expected_kind="service") == COMBO
+
+
+def test_remove_other_components_preserves_request_order_of_retained_services() -> None:
+    context = build_semantic_context(_catalog())
+    task = BookingTaskState(
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-order",
+            granted_at=NOW,
+        ),
+        constraints=CustomerConstraints(service_id=COMBO),
+        requested_service_ids=[UNDERARM, COMBO, FULL_ARMS],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=["S4", "S3"],
+                        candidate_mode="set",
+                    )
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="remove_other_components",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    collapsed, sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=_catalog(),
+        active_task=task,
+    )
+
+    assert sets == {0: [COMBO, FULL_ARMS]}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert context.resolve(service.ref, expected_kind="service") == COMBO
+
+
+def test_explicit_combo_replacement_does_not_retain_covered_atomic_services() -> None:
+    context = build_semantic_context(_catalog())
+    task = BookingTaskState(
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-combo",
+            granted_at=NOW,
+        ),
+        constraints=CustomerConstraints(service_id=BIKINI),
+        requested_service_ids=[UNDERARM, BIKINI],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S3", candidate_mode="set")
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="remove_other_components",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    _, sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=_catalog(),
+        active_task=task,
+    )
+
+    assert sets == {0: [COMBO]}
+
 def test_legacy_same_visit_operations_are_merged_before_planning() -> None:
     turn = TiaTurnUnderstanding(
         operations=[
@@ -376,6 +491,10 @@ def test_proposal_executor_creates_one_appointment_then_additional_rows(monkeypa
             package_used=False,
             package_name=None,
         ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: None,
     )
 
     def fake_create(*_args, **_kwargs):

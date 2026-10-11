@@ -14,6 +14,7 @@ from app.models.appointment_additional_service import AppointmentAdditionalServi
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.clinic_integration import ClinicIntegration
+from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -338,4 +339,330 @@ def test_additional_failure_rolls_back_main_appointment_savepoint(monkeypatch) -
             commit=False,
         )
         assert result["ok"] is False
+        assert _counts(db, workspace.id) == (0, 0)
+
+
+
+def _add_device_price(
+    db: Session,
+    *,
+    workspace: Workspace,
+    service: Service,
+    device_key: str,
+    duration_minutes: int,
+) -> None:
+    existing = db.scalar(
+        select(ClinicLaserDevice).where(
+            ClinicLaserDevice.workspace_id == workspace.id,
+            ClinicLaserDevice.device_key == device_key,
+        )
+    )
+    if existing is None:
+        db.add(
+            ClinicLaserDevice(
+                workspace_id=workspace.id,
+                device_key=device_key,
+                name=device_key.title(),
+                is_active=True,
+            )
+        )
+        db.flush()
+    service.requires_laser_device = True
+    service.operational_category = "laser"
+    db.add(
+        ServiceDevicePrice(
+            workspace_id=workspace.id,
+            service_id=service.id,
+            device_key=device_key,
+            device_name=device_key.title(),
+            price_minor=service.price_minor,
+            duration_minutes=duration_minutes,
+            currency="EGP",
+            is_active=True,
+        )
+    )
+    db.flush()
+
+
+def test_same_visit_laser_services_persist_one_shared_device() -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, _, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=main,
+            device_key="candela",
+            duration_minutes=45,
+        )
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=additional,
+            device_key="candela",
+            duration_minutes=30,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={
+                "device_key": "candela",
+                "additional_service_device_keys": {str(additional.id): "candela"},
+            }
+        )
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            idempotency_key=f"proposal:{proposal.proposal_id}",
+            commit=False,
+        )
+
+        assert result["ok"] is True
+        assert _counts(db, workspace.id) == (1, 1)
+        appointment = db.scalar(select(Appointment).where(Appointment.workspace_id == workspace.id))
+        line = db.scalar(
+            select(AppointmentAdditionalService).where(
+                AppointmentAdditionalService.workspace_id == workspace.id
+            )
+        )
+        assert appointment is not None and line is not None
+        assert appointment.laser_device_key == "candela"
+        assert line.laser_device_key == "candela"
+        assert {appointment.laser_device_key, line.laser_device_key} == {"candela"}
+
+
+def test_additional_laser_cannot_auto_switch_to_its_sole_other_device() -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, _, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=main,
+            device_key="candela",
+            duration_minutes=45,
+        )
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=additional,
+            device_key="deka",
+            duration_minutes=30,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={"device_key": "candela", "additional_service_device_keys": {}}
+        )
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            commit=False,
+        )
+
+        assert result["ok"] is False
+        assert _counts(db, workspace.id) == (0, 0)
+
+
+def test_non_laser_additional_keeps_device_null_on_shared_laser_visit() -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, _, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=main,
+            device_key="candela",
+            duration_minutes=45,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={"device_key": "candela", "additional_service_device_keys": {}}
+        )
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            commit=False,
+        )
+
+        assert result["ok"] is True
+        appointment = db.scalar(select(Appointment).where(Appointment.workspace_id == workspace.id))
+        line = db.scalar(
+            select(AppointmentAdditionalService).where(
+                AppointmentAdditionalService.workspace_id == workspace.id
+            )
+        )
+        assert appointment is not None and line is not None
+        assert appointment.laser_device_key == "candela"
+        assert line.laser_device_key is None
+
+def test_mixed_non_laser_main_laser_additional_uses_visit_device_only_on_laser_component() -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, _, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=additional,
+            device_key="candela",
+            duration_minutes=30,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={
+                "device_key": "candela",
+                "additional_service_device_keys": {str(additional.id): "candela"},
+            }
+        )
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            idempotency_key=f"proposal:{proposal.proposal_id}",
+            commit=False,
+        )
+
+        assert result["ok"] is True
+        assert _counts(db, workspace.id) == (1, 1)
+        appointment = db.scalar(select(Appointment).where(Appointment.workspace_id == workspace.id))
+        line = db.scalar(
+            select(AppointmentAdditionalService).where(
+                AppointmentAdditionalService.workspace_id == workspace.id
+            )
+        )
+        assert appointment is not None and line is not None
+        assert appointment.service_id == main.id
+        assert appointment.laser_device_key is None
+        assert line.service_id == additional.id
+        assert line.laser_device_key == "candela"
+
+
+def test_mixed_non_laser_main_multiple_laser_additionals_share_visit_device() -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, laser, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=additional,
+            device_key="candela",
+            duration_minutes=30,
+        )
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=laser,
+            device_key="candela",
+            duration_minutes=15,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={
+                "service_ids": [str(main.id), str(additional.id), str(laser.id)],
+                "additional_service_ids": [str(additional.id), str(laser.id)],
+                "device_key": "candela",
+                "additional_service_device_keys": {
+                    str(additional.id): "candela",
+                    str(laser.id): "candela",
+                },
+            }
+        )
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            idempotency_key=f"proposal:{proposal.proposal_id}",
+            commit=False,
+        )
+
+        assert result["ok"] is True
+        assert _counts(db, workspace.id) == (1, 2)
+        appointment = db.scalar(select(Appointment).where(Appointment.workspace_id == workspace.id))
+        lines = list(
+            db.scalars(
+                select(AppointmentAdditionalService).where(
+                    AppointmentAdditionalService.workspace_id == workspace.id
+                )
+            ).all()
+        )
+        assert appointment is not None
+        assert appointment.laser_device_key is None
+        assert {line.laser_device_key for line in lines} == {"candela"}
+
+
+def test_mixed_non_laser_main_incompatible_laser_additional_fails_before_any_write() -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, _, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=additional,
+            device_key="deka",
+            duration_minutes=30,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={"device_key": "candela", "additional_service_device_keys": {}}
+        )
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            commit=False,
+        )
+
+        assert result["ok"] is False
+        assert _counts(db, workspace.id) == (0, 0)
+
+
+def test_mixed_non_laser_main_stale_slot_alternatives_do_not_pass_visit_device_to_main(
+    monkeypatch,
+) -> None:
+    with _db_session() as db:
+        workspace, patient, branch, doctor, main, additional, _, _, start_local = _fixture(db)
+        _add_device_price(
+            db,
+            workspace=workspace,
+            service=additional,
+            device_key="candela",
+            duration_minutes=30,
+        )
+        proposal = _proposal(patient, branch, doctor, main, additional, start_local).model_copy(
+            update={
+                "device_key": "candela",
+                "additional_service_device_keys": {str(additional.id): "candela"},
+            }
+        )
+        seen_devices: list[str | None] = []
+
+        def stale_slot(*_args, **_kwargs):
+            try:
+                raise multi_service_booking.BookingRuleError("synthetic stale slot")
+            except multi_service_booking.BookingRuleError as exc:
+                raise multi_service_booking.AppointmentOperationError("synthetic stale slot") from exc
+
+        def fake_availability(*_args, **kwargs):
+            seen_devices.append(kwargs.get("laser_device_key"))
+            alt_start = proposal.start_at + timedelta(minutes=30)
+            slot = type("Slot", (), {"start_at": alt_start})()
+            return "Africa/Cairo", [slot]
+
+        monkeypatch.setattr(multi_service_booking, "create_appointment_operation", stale_slot)
+        monkeypatch.setattr(multi_service_booking, "calculate_availability", fake_availability)
+
+        result = execute_write_ready_step(
+            db,
+            workspace=workspace,
+            patient=patient,
+            step=_step(proposal),
+            commit=False,
+        )
+
+        assert result["ok"] is False
+        assert result["error_code"] == "booking_unavailable"
+        assert result["alternatives"]
+        assert seen_devices
+        assert set(seen_devices) == {None}
         assert _counts(db, workspace.id) == (0, 0)
