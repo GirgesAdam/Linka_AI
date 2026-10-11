@@ -121,7 +121,7 @@ def time_from_reply(reply: str) -> str | None:
     evening = "\u0645\u0633\u0627\u0621"
     # Require an Arabic day-part marker so date numbers are never mistaken for time.
     # Accept both natural forms: 4 pm-equivalent and 4:45 pm-equivalent.
-    pattern = rf"(?<!\\d)(\\d{{1,2}})(?::(\\d{{2}}))?\\s*({morning}[^\\s,]*|{evening}[^\\s,]*|{am}|{pm})"
+    pattern = rf"(?<!\d)(\d{{1,2}})(?::(\d{{2}}))?\s*({morning}[^\s,]*|{evening}[^\s,]*|{am}|{pm})"
     match = re.search(pattern, text)
     if match is None:
         return None
