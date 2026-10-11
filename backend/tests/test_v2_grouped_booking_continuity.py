@@ -12,6 +12,10 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
+    persist_initial_task_intent,
+)
 from app.services.agent_v2.compound_turn_policy import (
     compound_write_group,
     normalize_compound_turn_plan,
@@ -299,6 +303,57 @@ def test_side_read_preserves_full_group_unchanged() -> None:
     assert transition.active_task is not None
     assert transition.active_task.grouped is not None
     assert len(transition.active_task.grouped.components) == 2
+
+
+def test_fresh_compound_component_does_not_replace_new_group() -> None:
+    state = _grouped_state()
+    source = _operation("svc-a")
+    operation = source.model_copy(
+        update={"fresh_task": True, "fresh_task_explicit_fields": ["service"]}
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="clarify",
+        state_action="none",
+        response_goal="clarification",
+        clarification_field="date",
+        facts={
+            "service_id": "svc-a",
+            "compound_visit_group": "semantic-multi-book:0",
+            "compound_visit_grouped": True,
+        },
+    )
+
+    adapted = adapt_matching_active_task_step(
+        step,
+        operation=operation,
+        active_task=state,
+        context=_context(),
+        now=NOW,
+    )
+    assert adapted.state_action == "none"
+
+    persisted = persist_initial_task_intent(
+        adapted,
+        operation=operation,
+        context=_context(),
+    )
+    assert persisted.state_action == "start_booking"
+
+    transition = apply_step_state(
+        state,
+        step=persisted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-fresh-group",
+    )
+    assert transition.active_task is not None
+    assert transition.active_task.grouped is not None
+    assert [
+        component.service_id for component in transition.active_task.grouped.components
+    ] == ["svc-a", "svc-b"]
 
 
 def test_grouped_component_start_does_not_collapse_durable_group() -> None:

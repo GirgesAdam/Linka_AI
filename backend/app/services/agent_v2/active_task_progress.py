@@ -388,6 +388,17 @@ def adapt_matching_active_task_step(
     now: datetime | None = None,
 ) -> PlanStep:
     """Merge continuations or mark an explicit fresh task for safe replacement."""
+    grouped_step = step.facts.get("compound_visit_group") not in (None, "") or step.facts.get(
+        "compound_write_group"
+    ) not in (None, "")
+    if (
+        isinstance(active_task, BookingTaskState)
+        and active_task.grouped is not None
+        and operation.type in {"continue_active", "book"}
+        and grouped_step
+    ):
+        return step.model_copy(update={"state_action": "none"})
+
     lifecycle = classify_active_task_lifecycle(operation, active_task=active_task)
     if lifecycle == "replace":
         params = resolved_operation_parameters(operation, context=context)
