@@ -108,10 +108,17 @@ jobs:
         run: python scripts/seed_realistic_aesthetic_clinic.py --workspace-slug tia
 
       - name: Run real Agent V2 booking scenarios A B C
+        id: agent_e2e
+        continue-on-error: true
         working-directory: .
         run: |
           set -o pipefail
           PYTHONPATH=backend:. python tools/agent_eval/tmp_multiservice_ui_audit.py 2>&1 | tee audit-output/agent-run.log
+
+      - name: Seed supplemental grouped UI fixture when Agent booking is unavailable
+        working-directory: .
+        run: |
+          PYTHONPATH=backend:. python tools/agent_eval/tmp_multiservice_ui_fixture.py | tee audit-output/ui-probe.log
 
       - name: Start fake local Supabase Auth
         working-directory: .

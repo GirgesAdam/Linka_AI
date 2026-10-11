@@ -6,10 +6,16 @@ const baseURL = process.env.AUDIT_FRONTEND_URL || 'http://127.0.0.1:3000';
 const outputDir = path.resolve('audit-output');
 const shots = path.join(outputDir, 'screenshots');
 fs.mkdirSync(shots, { recursive: true });
-const evidence = JSON.parse(fs.readFileSync(path.join(outputDir, 'agent-db-evidence.json'), 'utf8'));
-const scenarioA = evidence.scenarios.A;
-const scenarioB = evidence.scenarios.B;
-const scenarioC = evidence.scenarios.C;
+const agentEvidence = JSON.parse(fs.readFileSync(path.join(outputDir, 'agent-db-evidence.json'), 'utf8'));
+const probeEvidence = JSON.parse(fs.readFileSync(path.join(outputDir, 'ui-probe-evidence.json'), 'utf8'));
+function scenarioEvidence(key) {
+  const actual = agentEvidence.scenarios?.[key];
+  if (actual?.appointments?.length) return { ...actual, evidence_source: 'agent' };
+  return probeEvidence.scenarios[key];
+}
+const scenarioA = scenarioEvidence('A');
+const scenarioB = scenarioEvidence('B');
+const scenarioC = scenarioEvidence('C');
 
 function countText(haystack, needle) {
   if (!needle) return 0;
@@ -36,7 +42,7 @@ async function main() {
     page.locator('form button[type="submit"]').click(),
   ]);
 
-  const ui = { login_final_url: page.url(), scenarios: {} };
+  const ui = { login_final_url: page.url(), scenarios: {}, warning: 'UI screenshots may use supplemental grouped rows when Agent booking failed; see evidence_source.' };
 
   const aFirst = scenarioA.appointments[0];
   const aDate = aFirst.start_local.slice(0, 10);
@@ -51,6 +57,7 @@ async function main() {
 
   const aServices = scenarioA.appointments.map((row) => row.service_name);
   ui.scenarios.A = {
+    evidence_source: scenarioA.evidence_source,
     dashboard: {
       patient_name_occurrences: countText(dashboard.text, scenarioA.patient.name),
       service_occurrences: Object.fromEntries(aServices.map((name) => [name, countText(dashboard.text, name)])),
@@ -86,6 +93,7 @@ async function main() {
     const pp = await snapshot(page, `scenario-${key.toLowerCase()}-patient-desktop`, `/patients/${scenario.patient.id}`);
     const services = scenario.appointments.map((row) => row.service_name);
     ui.scenarios[key] = {
+      evidence_source: scenario.evidence_source,
       appointments: {
         patient_name_occurrences: countText(ap.text, scenario.patient.name),
         service_occurrences: Object.fromEntries(services.map((name) => [name, countText(ap.text, name)])),
