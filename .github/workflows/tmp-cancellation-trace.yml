@@ -18,13 +18,10 @@ jobs:
           POSTGRES_USER: ci_user
           POSTGRES_PASSWORD: ci_password
           POSTGRES_DB: ci_db
-        ports:
-          - 5432:5432
+        ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U ci_user -d ci_db"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -51,8 +48,7 @@ jobs:
           DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
           DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
           SQL
-      - name: Migrate PostgreSQL 16
-        run: alembic upgrade head
+      - run: alembic upgrade head
       - name: Focused cancellation and safety regressions
         run: |
           python -m pytest -q \
@@ -75,3 +71,152 @@ jobs:
           test "$(alembic heads | wc -l)" -eq 1
           alembic heads
       - run: git diff --check origin/main...HEAD
+
+  real-agent:
+    runs-on: ubuntu-latest
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: audit_user
+          POSTGRES_PASSWORD: audit_password
+          POSTGRES_DB: audit_db
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U audit_user -d audit_db"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONPATH: .:../.github/benchmark
+      DATABASE_URL: postgresql+psycopg://audit_user:audit_password@localhost:5432/audit_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://audit_user:audit_password@localhost:5432/audit_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_audit_dummy
+      SUPABASE_SECRET_KEY: sb_secret_audit_dummy
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_V2_LIVE_ENABLED: "true"
+      CORS_ORIGINS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Verify real model secret
+        run: test -n "$OPENAI_API_KEY"
+      - name: Bootstrap DB and realistic synthetic clinic
+        run: |
+          PGPASSWORD=audit_password psql -h localhost -U audit_user -d audit_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          SQL
+          alembic upgrade head
+          python -m scripts.provision_workspace --name 'Linka Synthetic Audit' --slug tia --timezone Africa/Cairo
+          python -m scripts.seed_realistic_aesthetic_clinic --workspace-slug tia
+      - name: Real Agent rollback-only cancellation and multi-laser audit
+        run: |
+          python - <<'PY'
+          import json
+          from sqlalchemy import create_engine, select
+          from sqlalchemy.orm import Session
+          from app.core.config import settings
+          from app.models.appointment import Appointment
+          from app.models.patient import Patient
+          from app.models.workspace import Workspace
+          import v2_benchmark_core as bench
+
+          engine = create_engine(settings.database_url, pool_pre_ping=True)
+
+          def resolve_patient(db, workspace, marker=None, no_future=False):
+              if no_future:
+                  return bench.patient_without_future(db, workspace)
+              appt = db.scalar(select(Appointment).where(
+                  Appointment.workspace_id == workspace.id,
+                  Appointment.customer_note.like(f'%{marker}%'),
+              ).limit(1))
+              if appt is None:
+                  raise RuntimeError(f'appointment marker not found: {marker}')
+              return db.get(Patient, appt.patient_id)
+
+          def snapshot(db, workspace, patient):
+              rows = list(db.scalars(select(Appointment).where(
+                  Appointment.workspace_id == workspace.id,
+                  Appointment.patient_id == patient.id,
+              ).order_by(Appointment.start_at, Appointment.id)))
+              return [{
+                  'id': str(r.id), 'status': r.status, 'service_id': str(r.service_id),
+                  'start_at': r.start_at.isoformat(), 'cancelled_at': str(r.cancelled_at) if r.cancelled_at else None,
+                  'reason': r.cancellation_reason,
+              } for r in rows]
+
+          def run_case(name, messages, marker=None, no_future=False):
+              conn = engine.connect(); outer = conn.begin()
+              db = Session(bind=conn, expire_on_commit=False, join_transaction_mode='create_savepoint')
+              try:
+                  ws = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+                  patient = resolve_patient(db, ws, marker=marker, no_future=no_future)
+                  before = snapshot(db, ws, patient)
+                  turns = bench.run_messages(db, ws, patient, messages)
+                  during = snapshot(db, ws, patient)
+                  payload = {
+                      'case': name,
+                      'patient_id': str(patient.id),
+                      'before': before,
+                      'turns': [{
+                          'customer': t.customer, 'assistant': t.assistant, 'model': t.model,
+                          'understanding': t.understanding, 'plan': t.plan,
+                          'traces': t.traces, 'outcomes': t.outcomes, 'state_after': t.state_after,
+                      } for t in turns],
+                      'during': during,
+                  }
+              finally:
+                  db.close()
+                  if outer.is_active: outer.rollback()
+                  conn.close()
+              with Session(engine) as verify:
+                  ws = verify.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+                  patient = verify.get(Patient, payload['patient_id'])
+                  persisted = snapshot(verify, ws, patient)
+              payload['after_rollback'] = persisted
+              payload['rollback_restored'] = persisted == payload['before']
+              print('AUDIT=' + json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
+              if not payload['rollback_restored']:
+                  raise RuntimeError(f'{name}: rollback did not restore DB')
+              return payload
+
+          cases = []
+          cases.append(run_case('CA1', ['عايزة ألغي ميعادي'], no_future=True))
+          cases.append(run_case('CA2', ['عايزة ألغي ميعادي'], marker='ahmed-tuesday-18-busy'))
+          cases.append(run_case('CA3', ['عايزة ألغي ميعادي'], marker='multiple-upcoming-1'))
+          cases.append(run_case('CA4', ['الغي التاني'], marker='multiple-upcoming-1'))
+          laser = run_case('ML1_ML4', [
+              'عايزة أحجز ليزر إزالة الشعر - إبط وليزر إزالة الشعر - بكيني وليزر إزالة الشعر - ذراعين كاملين',
+              'يوم الثلاثاء الجاي',
+              'خليهم إبط وبكيني بس',
+              'بالمناسبة سعر ليزر إزالة الشعر - إبط كام؟',
+              'تمام نكمل الحجز',
+          ], no_future=True)
+          cases.append(laser)
+          print('AUDIT_SUMMARY=' + json.dumps({
+              'cases': [c['case'] for c in cases],
+              'rollback_restored_all': all(c['rollback_restored'] for c in cases),
+              'models': sorted({t['model'] for c in cases for t in c['turns'] if t['model']}),
+          }, ensure_ascii=False, separators=(',', ':')))
+          engine.dispose()
+          PY
