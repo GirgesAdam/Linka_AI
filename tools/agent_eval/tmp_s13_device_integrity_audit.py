@@ -1182,7 +1182,7 @@ def ra_mixed_non_laser_main_laser_additional() -> dict[str, Any]:
         underarm = s[SLUG["underarm"]]
         f.send("\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 Hydrafacial \u0648\u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0632\u064a\u0627\u0631\u0629")
         f.send("\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621 \u0627\u0644\u062c\u0627\u064a \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0635\u0628\u0627\u062d\u064b\u0627 \u0645\u0639 \u062f. \u0645\u0631\u064a\u0645 \u062d\u0633\u0646")
-        f.send("Candela")
+        f.send("\u0644\u064a\u0632\u0631 \u0627\u0644\u0625\u0628\u0637 \u0639\u0644\u0649 \u062c\u0647\u0627\u0632 Candela")
         proposal = f.ensure_proposal("\u062a\u0645\u0627\u0645")
         expected_ids = [str(hydra.id), str(underarm.id)]
         proposal_ids = [str(value) for value in (proposal or {}).get("service_ids") or []]
