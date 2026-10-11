@@ -1096,7 +1096,12 @@ def _plan_operation(
                 },
             )
         if "date" not in params:
-            return _clarify(index=index, operation=operation, field="date")
+            return _clarify(
+                index=index,
+                operation=operation,
+                field="date",
+                facts=params,
+            )
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
         return PlanStep(
             operation_index=index,

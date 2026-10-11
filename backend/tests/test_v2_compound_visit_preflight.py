@@ -10,6 +10,7 @@ from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_p
 from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
 from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
 from app.services.agent_v2.read_executor import ReadExecutionContext
+from app.services.booking import BookingCompatibilityError
 
 SERVICE_A = "11111111-1111-1111-1111-111111111111"
 SERVICE_B = "22222222-2222-2222-2222-222222222222"
@@ -105,6 +106,15 @@ class _Adapter:
         )
 
 
+class _IncompatibleAdapter(_Adapter):
+    def get_availability(self, request):
+        self.requests.append(request)
+        raise BookingCompatibilityError(
+            "Doctor is not available for this service at this branch.",
+            dimension="doctor",
+        )
+
+
 class _Db:
     def __init__(self, buffers: dict[str, tuple[int, int]]) -> None:
         self.buffers = buffers
@@ -183,6 +193,21 @@ def _joint_adapter() -> _Adapter:
             ),
         }
     )
+
+
+def test_compound_incompatible_doctor_fails_closed_without_exception() -> None:
+    adapter = _IncompatibleAdapter({})
+
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert all(step.reads == [] for step in planned.steps)
+    assert all(step.response_goal == "no_availability" for step in planned.steps)
+    assert all(step.facts["compound_visit_no_joint_window"] is True for step in planned.steps)
 
 
 def test_missing_primary_branch_uses_single_catalog_branch() -> None:

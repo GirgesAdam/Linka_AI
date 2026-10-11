@@ -188,6 +188,55 @@ def _grouped_state() -> BookingTaskState:
     )
 
 
+def test_missing_date_clarification_retains_group_component_identity() -> None:
+    first_source = _operation("svc-a")
+    second_source = _operation("svc-c")
+    first = first_source.model_copy(
+        update={
+            "entities": first_source.entities.model_copy(
+                update={"date": None, "time": None}
+            )
+        }
+    )
+    second = second_source.model_copy(
+        update={
+            "entities": second_source.entities.model_copy(
+                update={"date": None, "time": None}
+            )
+        }
+    )
+    understanding = TiaTurnUnderstanding(operations=[first, second])
+    planned = plan_turn(
+        understanding,
+        PlannerContext(semantic_context=_context(), active_task=None, now=NOW),
+    )
+    normalized = normalize_compound_turn_plan(
+        planned,
+        catalog={
+            "services": [
+                {"id": "svc-a", "duration_minutes": 30},
+                {"id": "svc-c", "duration_minutes": 30},
+            ]
+        },
+        operation_visit_groups={0: "semantic-group", 1: "semantic-group"},
+    )
+
+    task = grouped_booking_task_from_plan(
+        normalized,
+        understanding=understanding,
+        existing=None,
+        now=NOW,
+        turn_id="turn-missing-date",
+    )
+
+    assert task is not None
+    assert task.grouped is not None
+    assert [component.service_id for component in task.grouped.components] == [
+        "svc-a",
+        "svc-c",
+    ]
+
+
 def test_grouped_plan_captures_durable_component_state() -> None:
     plan = TurnPlan(
         steps=[
