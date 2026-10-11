@@ -29,9 +29,9 @@ jobs:
     env:
       DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
-      SUPABASE_URL: http://127.0.0.1:54321
-      SUPABASE_PUBLISHABLE_KEY: audit-publishable-key
-      SUPABASE_SECRET_KEY: audit-secret-key
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+      SUPABASE_SECRET_KEY: sb_secret_ci_dummy
       ENVIRONMENT: test
       DEBUG: "false"
       DOCS_ENABLED: "false"
@@ -40,10 +40,12 @@ jobs:
       OPENAI_MODEL: gpt-6-luna
       OPENAI_FALLBACK_MODEL: gpt-5-mini
       TIA_AGENT_EVAL_CONFIRM_DEMO: "1"
-      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: audit-publishable-key
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
       TIA_API_URL: http://127.0.0.1:8000
       AUDIT_FRONTEND_URL: http://127.0.0.1:3000
+      NO_PROXY: example.supabase.co,127.0.0.1,localhost
+      no_proxy: example.supabase.co,127.0.0.1,localhost
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +80,11 @@ jobs:
           SQL
           python -m alembic upgrade head
 
+      - name: Prepare audit output
+        run: |
+          mkdir -p audit-output
+          echo "$GITHUB_SHA" > audit-output/audit-run-sha.txt
+
       - name: Create synthetic demo workspace
         working-directory: backend
         run: |
@@ -109,14 +116,22 @@ jobs:
       - name: Start fake local Supabase Auth
         working-directory: .
         run: |
-          PYTHONPATH=backend:. nohup python -m uvicorn tools.agent_eval.tmp_fake_supabase_auth:app --host 127.0.0.1 --port 54321 > audit-output/fake-auth.log 2>&1 &
-          for i in {1..30}; do curl -fsS http://127.0.0.1:54321/health && break; sleep 1; done
-          curl -fsS http://127.0.0.1:54321/health
+          mkdir -p audit-output
+          echo "127.0.0.1 example.supabase.co" | sudo tee -a /etc/hosts
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout audit-output/audit-key.pem -out audit-output/audit-cert.pem -days 1 \
+            -subj "/CN=example.supabase.co" -addext "subjectAltName=DNS:example.supabase.co"
+          sudo -E env PYTHONPATH=backend:. nohup $(which python) -m uvicorn tools.agent_eval.tmp_fake_supabase_auth:app \
+            --host 0.0.0.0 --port 443 \
+            --ssl-keyfile audit-output/audit-key.pem --ssl-certfile audit-output/audit-cert.pem \
+            > audit-output/fake-auth.log 2>&1 &
+          for i in {1..30}; do curl --cacert audit-output/audit-cert.pem -fsS https://example.supabase.co/health && break; sleep 1; done
+          curl --cacert audit-output/audit-cert.pem -fsS https://example.supabase.co/health
 
       - name: Start real Linka backend
         working-directory: backend
         run: |
-          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../audit-output/backend.log 2>&1 &
+          SSL_CERT_FILE=../audit-output/audit-cert.pem nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > ../audit-output/backend.log 2>&1 &
           for i in {1..60}; do curl -fsS http://127.0.0.1:8000/health && break; sleep 1; done
           curl -fsS http://127.0.0.1:8000/health
 
@@ -130,7 +145,7 @@ jobs:
         working-directory: frontend
         run: |
           npm run build
-          nohup npm start -- -p 3000 > ../audit-output/frontend.log 2>&1 &
+          NODE_EXTRA_CA_CERTS=../audit-output/audit-cert.pem nohup npm start -- -p 3000 > ../audit-output/frontend.log 2>&1 &
           for i in {1..60}; do curl -fsS http://127.0.0.1:3000/login >/dev/null && break; sleep 1; done
           curl -fsS http://127.0.0.1:3000/login >/dev/null
 
@@ -174,4 +189,3 @@ jobs:
             audit-output/
           if-no-files-found: error
           retention-days: 7
-
