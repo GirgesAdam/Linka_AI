@@ -195,6 +195,19 @@ def execute_write_ready_step(
                 proposal = BookingProposal.model_validate(raw_proposal)
                 if str(parameters.get("proposal_id") or "") != proposal.proposal_id:
                     raise WriteExecutionError("Verified proposal id does not match proposal state.")
+                if _explicit_time_mismatch(
+                    parameters,
+                    start_at=proposal.start_at,
+                    timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
+                ):
+                    return _failure(
+                        write_kind=intent.kind,
+                        code="booking_proposal_time_mismatch",
+                        detail=(
+                            "Verified booking proposal time does not match the current authoritative "
+                            "customer time constraint."
+                        ),
+                    )
                 result = execute_booking_proposal(
                     db,
                     workspace=workspace,

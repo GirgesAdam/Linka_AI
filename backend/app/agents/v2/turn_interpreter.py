@@ -218,13 +218,14 @@ SEMANTIC PRINCIPLES
   cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
   unspecified for side reads/social turns and when no active task applies. Python, not this marker,
   performs the lifecycle transition.
-  For an active reschedule continuation, active_task_explicit_fields must list date and/or time only
-  when that replacement dimension is explicitly supplied in the latest customer message. Do not mark
-  a dimension merely because you infer/default it, or because it exists in active_task, source appointment,
-  verified context, assistant prose, or older dialogue. If the customer explicitly supplies a
-  next-available date scope and an exact time in the same message, list both date and time. If the latest
-  message only authorizes/acknowledges the change without restating either dimension, leave this list
-  empty even if an inferred/default date or time entity is emitted.
+  For an active booking or reschedule continuation, active_task_explicit_fields must list date and/or time
+  only when that dimension is explicitly supplied or corrected in the latest customer message. For a booking
+  correction, emit only the NEW semantic value in entities; an older value mentioned only as the value being
+  replaced is not the current constraint. Do not mark a dimension merely because you infer/default it, or
+  because it exists in active_task, source appointment, verified context, assistant prose, or older dialogue.
+  If the customer explicitly supplies a next-available date scope and an exact time in the same message, list
+  both date and time. If the latest message only authorizes/acknowledges the change without restating either
+  dimension, leave this list empty even if an inferred/default date or time entity is emitted.
 - cleared_active_task_fields is explicit CLEAR provenance, not omission. In this contract only doctor is
   supported. When the customer explicitly removes any doctor preference for the current unfinished task,
   set cleared_active_task_fields=[doctor] and leave entities.doctor null. Do not use CLEAR for an unknown or

@@ -815,6 +815,7 @@ def _plan_operation(
                 parameters={
                     "proposal_id": task.proposal.proposal_id,
                     "proposal": task.proposal.model_dump(mode="json"),
+                    **_explicit_time_authority_parameters(operation, context),
                 },
                 requires_verification=False,
             ),
