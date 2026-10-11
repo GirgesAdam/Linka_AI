@@ -219,18 +219,46 @@ def classify(name: str, result: dict[str, Any], predicate) -> dict[str, Any]:
     return result
 
 
+def _has_false_success(result: dict[str, Any]) -> bool:
+    for index, turn in enumerate(result["turns"]):
+        if index >= len(result["task_history"]):
+            continue
+        task = result["task_history"][index]
+        if not isinstance(task, dict) or not isinstance(task.get("proposal"), dict):
+            continue
+        before = result["counts"][index]
+        after = result["counts"][index + 1]
+        if before != after:
+            continue
+        reply = str(turn.get("reply") or "").casefold()
+        forbidden = ("تم تأكيد الحجز", "الحجز اتأكد", "booking is confirmed", "booking confirmed")
+        if any(text in reply for text in forbidden):
+            return True
+    return False
+
+
+def _safe_rollback(result: dict[str, Any]) -> bool:
+    return (
+        not result["runtime_errors"]
+        and not _has_false_success(result)
+        and result["persisted_after_rollback_matches_before"]
+        and result["persisted_counts_match_before"]
+    )
+
+
 def main() -> int:
     results: dict[str, dict[str, Any]] = {}
 
     r = run_messages(
         "MS1_COMBO_ONLY",
-        [f"عايزة أحجز {COMBO} {DATE_TIME} مع {DOCTOR}"],
+        [f"عايزة أحجز {COMBO} {DATE_TIME} مع {DOCTOR}", "تمام"],
     )
     results["MS1_COMBO_ONLY"] = classify(
         "MS1_COMBO_ONLY",
         r,
         lambda x: (
             no_write(x)
+            and _safe_rollback(x)
             and proposal(x) is not None
             and proposal(x)["service_ids"] == [x["service_ids"]["combo"]]
             and proposal(x)["main_service_id"] == x["service_ids"]["combo"]
@@ -240,13 +268,14 @@ def main() -> int:
 
     r = run_messages(
         "MS2_COMBO_PLUS_ADDITIONAL",
-        [f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع {DOCTOR}"],
+        [f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع {DOCTOR}", "تمام"],
     )
     results["MS2_COMBO_PLUS_ADDITIONAL"] = classify(
         "MS2_COMBO_PLUS_ADDITIONAL",
         r,
         lambda x: (
             no_write(x)
+            and _safe_rollback(x)
             and proposal(x) is not None
             and set(proposal(x)["service_ids"])
             == {x["service_ids"]["combo"], x["service_ids"]["hydrafacial"]}
@@ -259,6 +288,7 @@ def main() -> int:
         "MS3_TEXT_CONFIRM_ATOMIC",
         [
             f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع {DOCTOR}",
+            "تمام",
             "تمام أكد الحجز",
         ],
     )
@@ -266,15 +296,14 @@ def main() -> int:
         "MS3_TEXT_CONFIRM_ATOMIC",
         r,
         lambda x: (
-            proposal(x, 0) is not None
+            proposal(x, 1) is not None
             and x["counts"][1] == x["counts"][0]
-            and x["counts"][2]["appointments"] == x["counts"][0]["appointments"] + 1
-            and x["counts"][2]["additional_services"]
+            and x["counts"][2] == x["counts"][0]
+            and x["counts"][3]["appointments"] == x["counts"][0]["appointments"] + 1
+            and x["counts"][3]["additional_services"]
             == x["counts"][0]["additional_services"] + 1
             and x["final_task"] is None
-            and not x["runtime_errors"]
-            and x["persisted_after_rollback_matches_before"]
-            and x["persisted_counts_match_before"]
+            and _safe_rollback(x)
         ),
     )
 
@@ -283,6 +312,7 @@ def main() -> int:
         [
             f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع {DOCTOR}",
             f"لا خليها {COMBO} بس {DATE_TIME} مع {DOCTOR}",
+            "تمام",
         ],
     )
     results["MS4_CORRECTION_REPLACES_SET"] = classify(
@@ -290,11 +320,10 @@ def main() -> int:
         r,
         lambda x: (
             no_write(x)
-            and proposal(x, 0) is not None
-            and proposal(x, 1) is not None
-            and proposal(x, 0)["proposal_id"] != proposal(x, 1)["proposal_id"]
-            and proposal(x, 1)["service_ids"] == [x["service_ids"]["combo"]]
-            and x["service_ids"]["hydrafacial"] not in proposal(x, 1)["service_ids"]
+            and _safe_rollback(x)
+            and proposal(x) is not None
+            and proposal(x)["service_ids"] == [x["service_ids"]["combo"]]
+            and x["service_ids"]["hydrafacial"] not in proposal(x)["service_ids"]
         ),
     )
 
@@ -311,6 +340,7 @@ def main() -> int:
         r,
         lambda x: (
             no_write(x)
+            and _safe_rollback(x)
             and proposal(x) is not None
             and set(proposal(x)["service_ids"])
             == {x["service_ids"]["combo"], x["service_ids"]["hydrafacial"]}
@@ -330,6 +360,7 @@ def main() -> int:
         r,
         lambda x: (
             no_write(x)
+            and _safe_rollback(x)
             and proposal(x) is not None
             and set(proposal(x)["service_ids"])
             == {x["service_ids"]["combo"], x["service_ids"]["hydrafacial"]}
@@ -338,21 +369,20 @@ def main() -> int:
 
     r = run_messages(
         "MS7_INCOMPATIBLE_DOCTOR",
-        [
-            f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع د. عمر خليل في فرع الشيخ زايد"
-        ],
+        [f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع د. عمر خليل في فرع الشيخ زايد"],
         multi_location=True,
     )
     results["MS7_INCOMPATIBLE_DOCTOR"] = classify(
         "MS7_INCOMPATIBLE_DOCTOR",
         r,
-        lambda x: no_write(x) and proposal(x) is None,
+        lambda x: no_write(x) and _safe_rollback(x) and proposal(x) is None,
     )
 
     r = run_messages(
         "MS8_REPEAT_CONFIRM_NO_DUPLICATE",
         [
             f"عايزة أحجز {COMBO} و{EXTRA} {DATE_TIME} مع {DOCTOR}",
+            "تمام",
             "تمام أكد الحجز",
             "تمام أكد الحجز",
         ],
@@ -361,13 +391,11 @@ def main() -> int:
         "MS8_REPEAT_CONFIRM_NO_DUPLICATE",
         r,
         lambda x: (
-            x["counts"][2]["appointments"] == x["counts"][0]["appointments"] + 1
-            and x["counts"][2]["additional_services"]
+            x["counts"][3]["appointments"] == x["counts"][0]["appointments"] + 1
+            and x["counts"][3]["additional_services"]
             == x["counts"][0]["additional_services"] + 1
-            and x["counts"][3] == x["counts"][2]
-            and not x["runtime_errors"]
-            and x["persisted_after_rollback_matches_before"]
-            and x["persisted_counts_match_before"]
+            and x["counts"][4] == x["counts"][3]
+            and _safe_rollback(x)
         ),
     )
 
@@ -380,7 +408,7 @@ def main() -> int:
         if all(row["persisted_counts_match_before"] for row in results.values())
         else "REVIEW",
         "false_success": 0
-        if all(not row["runtime_errors"] for row in results.values())
+        if all(not _has_false_success(row) and not row["runtime_errors"] for row in results.values())
         else "REVIEW",
         "persisted_audit_writes": 0
         if all(row["persisted_counts_match_before"] for row in results.values())
