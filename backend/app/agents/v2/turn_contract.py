@@ -440,10 +440,13 @@ class TurnOperation(StrictContractModel):
     grouped_booking_action: GroupedBookingAction = Field(
         default="preserve_group",
         description=(
-            "For an active grouped booking only: keep preserve_group unless the customer explicitly "
-            "asks to drop the other pending service components and continue with only this operation's "
-            "service. Use remove_other_components only for that explicit narrowing; never infer it "
-            "merely because the customer mentions or edits one component."
+            "For an active unfinished same-visit multi-service booking, preserve_group means the current "
+            "service set remains part of the visit while the operation adds/edits constraints. Use "
+            "remove_other_components whenever the customer explicitly narrows the service set, including "
+            "removing one or more services while keeping the others. In that case entities.service must "
+            "represent the COMPLETE retained canonical set after the correction, never the removed service "
+            "as a delta and never the stale pre-correction set. Never infer narrowing merely because the "
+            "customer mentions or edits one component."
         ),
     )
     cleared_verified_read_fields: list[VerifiedReadClearField] = Field(
