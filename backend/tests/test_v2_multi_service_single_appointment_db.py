@@ -661,7 +661,7 @@ def test_mixed_non_laser_main_stale_slot_alternatives_do_not_pass_visit_device_t
         )
 
         assert result["ok"] is False
-        assert result["code"] == "booking_unavailable"
+        assert result["error_code"] == "booking_unavailable"
         assert result["alternatives"]
         assert seen_devices
         assert set(seen_devices) == {None}
