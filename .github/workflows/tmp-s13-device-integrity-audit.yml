@@ -1,0 +1,186 @@
+name: Temporary S13 Multi-Service Device Integrity Audit
+
+on:
+  push:
+    branches:
+      - fix/multiservice-state-device-integrity-20261011
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+      SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+      ENVIRONMENT: test
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      AGENT_V2_LIVE_ENABLED: "true"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      TIA_AGENT_EVAL_CONFIRM_DEMO: "1"
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+      TIA_API_URL: http://127.0.0.1:8000
+      AUDIT_FRONTEND_URL: http://127.0.0.1:3000
+      AUDIT_UI_EMAIL: audit.reception@linka.local
+      AUDIT_UI_PASSWORD: AuditPass123!
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Bootstrap database and migrations
+        working-directory: backend
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+          END
+          $$;
+          SQL
+          test "$(python -m alembic heads | grep -c '(head)')" -eq 1
+          python -m alembic upgrade head
+
+      - name: Prepare audit output
+        run: |
+          mkdir -p audit-output
+          printf '%s\n' "$GITHUB_SHA" > audit-output/audit-branch-sha.txt
+          printf '%s\n' "3aa12c386e28d3f4bc7138c5771b08cb4ecef4da" > audit-output/starting-main-sha.txt
+
+      - name: Create synthetic demo workspace
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from sqlalchemy import create_engine, select
+          from sqlalchemy.orm import Session
+          from app.core.config import settings
+          from app.models.workspace import Workspace
+          engine = create_engine(settings.database_url)
+          with Session(engine) as db:
+              workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
+              if workspace is None:
+                  workspace = Workspace(name='Linka Post241 E2E Audit', slug='tia', timezone='Africa/Cairo', is_active=True, is_demo=True)
+                  db.add(workspace)
+              else:
+                  workspace.is_demo = True
+                  workspace.is_active = True
+              db.commit()
+          PY
+
+      - name: Seed realistic synthetic aesthetic clinic
+        working-directory: backend
+        run: python scripts/seed_realistic_aesthetic_clinic.py --workspace-slug tia | tee ../audit-output/seed.log
+
+      - name: Validate temporary harness syntax
+        run: |
+          PYTHONPATH=backend:. python -m py_compile tools/agent_eval/tmp_s13_device_integrity_audit.py
+          
+      - name: Run rollback-only Real Agent RA1-RA6
+        id: real_agent
+        working-directory: .
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=backend:. python tools/agent_eval/tmp_s13_device_integrity_audit.py --mode rollback 2>&1 | tee audit-output/real-agent.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Run clean-PostgreSQL focused and regression tests
+        id: regression
+        working-directory: backend
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_v2_multiservice_state_device_integrity.py \
+            tests/test_v2_multi_service_single_appointment.py \
+            tests/test_v2_multi_service_single_appointment_db.py \
+            tests/test_v2_booking_time_correction_authority.py \
+            tests/test_v2_state_executor.py \
+            tests/test_v2_active_task_progress.py \
+            tests/test_v2_fresh_task_lifecycle.py \
+            tests/test_v2_grouped_booking_continuity.py \
+            tests/test_v2_lifecycle_task_invalidation.py \
+            tests/test_agent_explicit_time_safety.py \
+            tests/test_agent_availability_reference_interpreter.py \
+            tests/test_v2_reschedule_required_field_safety_db.py \
+            tests/test_v2_structured_output_containment.py \
+            tests/test_v2_structured_output_containment_db.py \
+            tests/test_v2_side_question_continuity.py \
+            tests/test_v2_correction_semantics_fix.py \
+            tests/test_v2_multi_service_branch_continuation.py \
+            tests/test_booking_journey_contract.py \
+            2>&1 | tee ../audit-output/regression.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Run static validation
+        id: static
+        working-directory: backend
+        shell: bash
+        run: |
+          set +e
+          python -m ruff check app tests/test_v2_multiservice_state_device_integrity.py tests/test_v2_multi_service_single_appointment_db.py 2>&1 | tee ../audit-output/ruff.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -eq 0 ]; then python -m compileall -q app tests; code=$?; fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload S13 device audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s13-device-integrity-${{ github.sha }}
+          path: audit-output
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Final audit gate
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.real_agent.outputs.exit_code }}" = "0"
+          test "${{ steps.regression.outputs.exit_code }}" = "0"
+          test "${{ steps.static.outputs.exit_code }}" = "0"
