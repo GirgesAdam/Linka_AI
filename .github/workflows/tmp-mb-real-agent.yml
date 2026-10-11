@@ -108,5 +108,22 @@ jobs:
           path.write_text(text, encoding='utf-8')
           PY
       - name: Run rollback-only Real Agent MB1-MB10
+        id: audit
         working-directory: .
-        run: PYTHONPATH=backend:. python tools/agent_eval/tmp_mb_branch_audit.py
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=backend:. python tools/agent_eval/tmp_mb_branch_audit.py 2>&1 | tee mb-audit-output.txt
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload MB audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mb-audit-evidence-${{ github.sha }}
+          path: mb-audit-output.txt
+          if-no-files-found: error
+      - name: Fail on audit verdict
+        if: steps.audit.outputs.exit_code != '0'
+        run: exit 1
