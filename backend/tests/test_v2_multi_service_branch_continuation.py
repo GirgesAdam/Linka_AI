@@ -127,6 +127,18 @@ def test_multiple_branches_require_grounded_choice() -> None:
     assert refs == ["B1", "B2"]
 
 
+def test_primary_branch_does_not_override_multi_branch_customer_choice() -> None:
+    catalog = _catalog(branches=2)
+    catalog["primary_branch_id"] = "branch-1"
+    context = build_semantic_context(catalog)
+    params, refs, reason = resolve_scheduling_branch_parameters(
+        {"service_id": "s1"}, context=context
+    )
+    assert params.get("branch_id") is None
+    assert reason == "branch_choice"
+    assert refs == ["B1", "B2"]
+
+
 def test_explicit_branch_is_preserved_by_backend_resolution() -> None:
     context = build_semantic_context(_catalog(branches=2))
     params, refs, reason = resolve_scheduling_branch_parameters(
