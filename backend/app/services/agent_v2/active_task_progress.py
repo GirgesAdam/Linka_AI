@@ -5,6 +5,7 @@ from typing import Literal
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TurnOperation
+from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import ActiveTaskState, BookingTaskState, RescheduleTaskState
 
@@ -32,6 +33,7 @@ def resolved_operation_parameters(
     for field, kind, key in (
         ("service", "service", "service_id"),
         ("doctor", "doctor", "doctor_id"),
+        ("branch", "branch", "branch_id"),
         ("device", "device", "device_key"),
         ("appointment", "appointment", "appointment_id"),
         ("package", "package", "package_id"),
@@ -60,6 +62,7 @@ def _drop_implicit_identity_refs(
     for field, key in (
         ("service", "service_id"),
         ("doctor", "doctor_id"),
+        ("branch", "branch_id"),
         ("device", "device_key"),
     ):
         entity = getattr(operation.entities, field)
@@ -666,6 +669,24 @@ def _booking_progress(
                 "booking_device_price_step": True,
             },
         )
+    if state.constraints.date is not None:
+        params, branch_refs, branch_reason = resolve_scheduling_branch_parameters(
+            params, context=context
+        )
+        if branch_reason is not None:
+            return PlanStep(
+                operation_index=operation_index,
+                operation_type="continue_active",
+                disposition="clarify",
+                state_action="update_active",
+                response_goal="clarification",
+                clarification_field="branch",
+                facts={
+                    **params,
+                    "_verified_candidate_refs": branch_refs,
+                    "branch_resolution_reason": branch_reason,
+                },
+            )
     commercial_key = _commercial_basis_key(state)
     commercial_presented = (
         commercial_key is not None

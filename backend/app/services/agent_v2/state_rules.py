@@ -138,6 +138,18 @@ def apply_booking_doctor_change(
     return _next_booking_state(state, constraints=constraints, derived=derived)
 
 
+def apply_booking_branch_change(
+    state: BookingTaskState,
+    *,
+    branch_id: str | None,
+) -> BookingTaskState:
+    if state.constraints.branch_id == branch_id:
+        return state
+    constraints = state.constraints.model_copy(update={"branch_id": branch_id})
+    derived = _booking_derived(state, clear_availability=True)
+    return _next_booking_state(state, constraints=constraints, derived=derived)
+
+
 def apply_booking_device_change(
     state: BookingTaskState,
     *,
