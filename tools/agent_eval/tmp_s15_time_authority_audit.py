@@ -1095,9 +1095,14 @@ def ra2_unavailable_correction() -> dict[str, Any]:
         _block_mariam_combo_at_noon(f, s)
         reply = f.send("خليه الساعة 12 بدل 11")
         task = f.task()
-        snapshot = (task or {}).get("option_snapshot") if isinstance(task, dict) else None
-        options = snapshot.get("options") if isinstance(snapshot, dict) else None
-        grounded_alternatives = isinstance(options, list) and len(options) > 0
+        correction_event = f.events[-1] if f.events else {}
+        grounded_alternatives = False
+        for trace in correction_event.get("structured_trace") or []:
+            for outcome in trace.get("outcomes") or []:
+                availability = (outcome.get("facts") or {}).get("availability")
+                alternatives = (availability or {}).get("nearest_alternative_windows")
+                if isinstance(alternatives, list) and alternatives:
+                    grounded_alternatives = True
         rows = appointment_rows(f.db, f.patient)
         result = _time_result(
             f,
@@ -1106,7 +1111,7 @@ def ra2_unavailable_correction() -> dict[str, Any]:
                 (_task_clock(task) == "12:00", f"corrected task time={_task_clock(task)}"),
                 (f.proposal() is None, f"unexpected proposal={f.proposal()}"),
                 (len(rows) == 0, f"unexpected appointment rows={len(rows)}"),
-                (grounded_alternatives, f"no grounded option snapshot after unavailable 12; reply={reply}"),
+                (grounded_alternatives, f"no grounded verified alternatives after unavailable 12; reply={reply}"),
             ],
             original_time="11:00",
             corrected_time="12:00",
