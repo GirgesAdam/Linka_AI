@@ -12,6 +12,7 @@ LegacyPulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ChoicePurpose = Literal[
     "service",
     "doctor",
+    "branch",
     "device",
     "appointment",
     "appointment_target",
@@ -45,6 +46,7 @@ class CustomerConstraints(StrictStateModel):
 
     service_id: str | None = None
     doctor_id: str | None = None
+    branch_id: str | None = None
     device_key: str | None = None
     date: DateConstraint | None = None
     time: TimeConstraint | None = None

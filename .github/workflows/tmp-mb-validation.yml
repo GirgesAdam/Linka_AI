@@ -1,0 +1,78 @@
+name: Temporary MB Branch Validation
+
+on:
+  push:
+    branches:
+      - fix/multi-service-branch-continuation-20261011
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
+      SUPABASE_SECRET_KEY: sb_secret_ci_dummy
+      ENVIRONMENT: test
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+          END
+          $$;
+          SQL
+      - name: Clean PostgreSQL migrations
+        run: python -m alembic upgrade head
+      - name: Focused branch and grouped regression tests
+        run: |
+          python -m pytest -q \
+            tests/test_v2_multi_service_branch_continuation.py \
+            tests/test_v2_grouped_booking_continuity.py \
+            tests/test_v2_compound_atomicity.py \
+            tests/test_v2_multi_service_visit_semantics.py \
+            tests/test_laser_device_resource_booking.py \
+            tests/test_v2_correction_semantics_fix.py
+      - name: Static validation
+        run: |
+          ruff check app tests/test_v2_multi_service_branch_continuation.py
+          python -m compileall -q app tests/test_v2_multi_service_branch_continuation.py
+          test "$(python -m alembic heads)" = "0093_availability_resources (head)"
+      - name: Diff check
+        working-directory: .
+        run: git diff --check origin/main...HEAD

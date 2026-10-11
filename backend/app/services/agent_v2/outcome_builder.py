@@ -892,7 +892,7 @@ def _model_rows(context: SemanticContext, collection: str) -> list[dict[str, obj
 
 
 def _row_by_ref(context: SemanticContext, ref: str) -> dict[str, object] | None:
-    for collection in ("services", "doctors", "appointments", "packages"):
+    for collection in ("services", "doctors", "branches", "appointments", "packages"):
         for row in _model_rows(context, collection):
             if row.get("ref") == ref:
                 return row
@@ -935,18 +935,24 @@ def _semantic_choices(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
 ) -> list[OutcomeChoice]:
-    if step.clarification_field not in {"service", "doctor", "device", "appointment", "package"}:
+    if step.clarification_field not in {"service", "doctor", "branch", "device", "appointment", "package"}:
         return []
     try:
         operation = turn.operations[step.operation_index]
     except IndexError:
         return []
     entity = getattr(operation.entities, step.clarification_field)
-    if entity is None:
-        return []
     choices: list[OutcomeChoice] = []
     verified_refs = step.facts.get("_verified_candidate_refs")
-    candidate_refs = verified_refs if isinstance(verified_refs, list) else entity.candidate_refs
+    if entity is None and not isinstance(verified_refs, list):
+        return []
+    candidate_refs = (
+        verified_refs
+        if isinstance(verified_refs, list)
+        else entity.candidate_refs
+        if entity is not None
+        else []
+    )
     for ref in candidate_refs:
         if semantic_context.resolve(ref) is None:
             continue

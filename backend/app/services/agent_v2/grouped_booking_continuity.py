@@ -27,6 +27,7 @@ def _constraints_from_step(step: PlanStep) -> CustomerConstraints:
         {
             "service_id": str(facts["service_id"]) if facts.get("service_id") else None,
             "doctor_id": str(facts["doctor_id"]) if facts.get("doctor_id") else None,
+            "branch_id": str(facts["branch_id"]) if facts.get("branch_id") else None,
             "device_key": str(facts["device_key"]) if facts.get("device_key") else None,
             "date": facts.get("date"),
             "time": facts.get("time"),
@@ -155,6 +156,13 @@ def _operation_for_component(
     )
     if component.doctor_id is not None and doctor_ref is None:
         return None
+    branch_ref = _canonical_ref(
+        context,
+        kind="branch",
+        canonical_id=component.branch_id,
+    )
+    if component.branch_id is not None and branch_ref is None:
+        return None
     device_ref = _canonical_ref(
         context,
         kind="device",
@@ -167,6 +175,7 @@ def _operation_for_component(
         update={
             "service": _entity_ref(service_ref),
             "doctor": _entity_ref(doctor_ref),
+            "branch": _entity_ref(branch_ref),
             "device": _entity_ref(device_ref),
             "appointment": None,
             "package": None,
@@ -195,7 +204,7 @@ def _merge_component(
     apply_to_all: bool,
 ) -> CustomerConstraints:
     updates: dict[str, object] = {}
-    for key in ("doctor_id", "date", "time"):
+    for key in ("doctor_id", "branch_id", "date", "time"):
         if key in params:
             updates[key] = params[key]
     if not apply_to_all and "device_key" in params:
