@@ -67,12 +67,13 @@ def row_payload(row: Appointment, service: Service, branch: Branch, doctor_name:
 def main() -> None:
     agent = json.loads(AGENT_EVIDENCE.read_text(encoding="utf-8")) if AGENT_EVIDENCE.exists() else {"scenarios": {}}
     engine = create_engine(settings.database_url, pool_pre_ping=True)
-    result = {"purpose": "supplemental-ui-only-probe", "not_agent_created": True, "scenarios": {}}
+    result = {"purpose": "supplemental-ui-only-probe", "not_agent_created": True, "workspace_id": None, "scenarios": {}}
 
     with Session(engine) as db:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == "tia"))
         if workspace is None:
             raise RuntimeError("Synthetic workspace tia not found")
+        result["workspace_id"] = str(workspace.id)
 
         branch = db.scalar(select(Branch).where(Branch.workspace_id == workspace.id, Branch.code == "new-cairo"))
         if branch is None:

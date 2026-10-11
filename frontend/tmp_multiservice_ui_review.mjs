@@ -33,20 +33,34 @@ async function snapshot(page, name, url) {
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: 'ar-EG' });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: 'ar-EG', ignoreHTTPSErrors: true });
+  const tokenResponse = await context.request.post('https://example.supabase.co/auth/v1/token?grant_type=password', {
+    data: { email: 'audit.reception@linka.local', password: 'AuditPass123!' },
+    headers: { apikey: 'sb_publishable_ci_dummy' },
+  });
+  if (!tokenResponse.ok()) throw new Error(`Fake Supabase token request failed: ${tokenResponse.status()} ${await tokenResponse.text()}`);
+  const session = await tokenResponse.json();
+  const encoded = 'base64-' + Buffer.from(JSON.stringify(session), 'utf8').toString('base64url');
+  const baseCookie = 'sb-example-auth-token';
+  const cookieChunk = 3000;
+  const authCookies = [];
+  if (encoded.length <= cookieChunk) {
+    authCookies.push({ name: baseCookie, value: encoded, url: baseURL, sameSite: 'Lax' });
+  } else {
+    for (let i = 0, n = 0; i < encoded.length; i += cookieChunk, n += 1) {
+      authCookies.push({ name: `${baseCookie}.${n}`, value: encoded.slice(i, i + cookieChunk), url: baseURL, sameSite: 'Lax' });
+    }
+  }
+  authCookies.push({ name: 'tia_workspace_id', value: probeEvidence.workspace_id, url: baseURL, sameSite: 'Lax', httpOnly: true });
+  await context.addCookies(authCookies);
   const page = await context.newPage();
-  await page.goto(`${baseURL}/login`, { waitUntil: 'networkidle' });
-  fs.writeFileSync(path.join(outputDir, 'pre-login.json'), JSON.stringify({ url: page.url(), body_text: await page.locator('body').innerText() }, null, 2));
-  await page.screenshot({ path: path.join(shots, 'pre-login.png'), fullPage: true });
-  await page.locator('input[name="email"]').fill('audit.reception@linka.local');
-  await page.locator('input[name="password"]').fill('AuditPass123!');
-  await page.locator('form button[type="submit"]').click();
-  await page.waitForTimeout(5000);
+  await page.goto(`${baseURL}/dashboard`, { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForTimeout(1000);
   if (new URL(page.url()).pathname.startsWith('/login')) {
     const loginText = await page.locator('body').innerText();
     await page.screenshot({ path: path.join(shots, 'login-debug.png'), fullPage: true });
     fs.writeFileSync(path.join(outputDir, 'login-debug.json'), JSON.stringify({ url: page.url(), body_text: loginText }, null, 2));
-    throw new Error(`Audit login did not leave /login: ${page.url()}`);
+    throw new Error(`Cookie auth did not leave /login: ${page.url()}`);
   }
 
   const ui = { login_final_url: page.url(), scenarios: {}, warning: 'UI screenshots may use supplemental grouped rows when Agent booking failed; see evidence_source.' };
@@ -104,13 +118,13 @@ async function main() {
       appointments: {
         patient_name_occurrences: countText(ap.text, scenario.patient.name),
         service_occurrences: Object.fromEntries(services.map((name) => [name, countText(ap.text, name)])),
-        full_arms_occurrences: countText(ap.text, 'ليزر إزالة الشعر - ذراعين كاملين'),
+        full_arms_occurrences: countText(ap.text, '\u0644\u064a\u0632\u0631 \u0625\u0632\u0627\u0644\u0629 \u0627\u0644\u0634\u0639\u0631 - \u0630\u0631\u0627\u0639\u064a\u0646 \u0643\u0627\u0645\u0644\u064a\u0646'),
         body_text: ap.text,
       },
       patient: {
         patient_name_occurrences: countText(pp.text, scenario.patient.name),
         service_occurrences: Object.fromEntries(services.map((name) => [name, countText(pp.text, name)])),
-        full_arms_occurrences: countText(pp.text, 'ليزر إزالة الشعر - ذراعين كاملين'),
+        full_arms_occurrences: countText(pp.text, '\u0644\u064a\u0632\u0631 \u0625\u0632\u0627\u0644\u0629 \u0627\u0644\u0634\u0639\u0631 - \u0630\u0631\u0627\u0639\u064a\u0646 \u0643\u0627\u0645\u0644\u064a\u0646'),
         body_text: pp.text,
       },
     };
@@ -126,3 +140,4 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
