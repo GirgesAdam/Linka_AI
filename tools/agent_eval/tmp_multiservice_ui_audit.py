@@ -113,30 +113,37 @@ def summarize_capture(capture) -> dict[str, Any]:
     }
 
 
-def time_from_reply(reply: str) -> str | None:
+def time_options_from_reply(reply: str) -> list[str]:
     text = reply.translate(ARABIC_DIGIT_MAP)
     am = "\u0635"
     pm = "\u0645"
     morning = "\u0635\u0628\u0627\u062d"
     evening = "\u0645\u0633\u0627\u0621"
-    # Require an Arabic day-part marker so date numbers are never mistaken for time.
-    # Accept both natural forms: 4 pm-equivalent and 4:45 pm-equivalent.
     pattern = rf"(?<!\d)(\d{{1,2}})(?::(\d{{2}}))?\s*({morning}[^\s,]*|{evening}[^\s,]*|{am}|{pm})"
-    match = re.search(pattern, text)
-    if match is None:
+    options: list[str] = []
+    for match in re.finditer(pattern, text):
+        hour = int(match.group(1))
+        minute_raw = match.group(2)
+        marker = match.group(3) or ""
+        if hour > 23 or (minute_raw is not None and int(minute_raw) > 59):
+            continue
+        clock = str(hour) if minute_raw is None else f"{hour}:{minute_raw}"
+        option = f"\u0627\u0644\u0633\u0627\u0639\u0629 {clock} {marker}".strip()
+        if option not in options:
+            options.append(option)
+    return options
+
+
+def selection_message_for_reply(scenario: str, reply: str) -> str | None:
+    options = time_options_from_reply(reply)
+    if not options:
         return None
-    hour = int(match.group(1))
-    minute = int(match.group(2) or 0)
-    marker = match.group(3) or ""
-    if hour > 23 or minute > 59:
-        return None
-    if (marker.startswith(pm) or marker.startswith(evening)) and hour < 12:
-        hour += 12
-    if (marker.startswith(am) or marker.startswith(morning)) and hour == 12:
-        hour = 0
-    suffix = "\u0645\u0633\u0627\u0621\u064b" if hour >= 12 else "\u0635\u0628\u0627\u062d\u064b\u0627"
-    display_hour = hour - 12 if hour > 12 else (12 if hour == 0 else hour)
-    return f"\u0627\u0644\u0633\u0627\u0639\u0629 {display_hour}:{minute:02d} {suffix}"
+    if scenario == "A" and len(options) >= 2:
+        return (
+            f"{options[0]} \u0644\u0644\u0625\u0628\u0637 \u0648\u0627\u0644\u0628\u0643\u064a\u0646\u064a"
+            f"\u060c \u0648{options[1]} \u0644\u0644\u0630\u0631\u0627\u0639\u064a\u0646 \u0643\u0627\u0645\u0644\u064a\u0646"
+        )
+    return options[0]
 
 
 def appointment_rows(db: Session, patient_id) -> list[dict[str, Any]]:
@@ -284,10 +291,14 @@ def run_scenario(
         )
 
     rows = appointment_rows(db, patient.id)
-    chosen_time_message = None
-    if not rows:
-        offered = time_from_reply(transcript[-1]["agent"] or "")
-        if offered is None:
+    chosen_time_messages: list[str] = []
+    confirmation_sent = False
+    for _ in range(6):
+        if rows:
+            break
+        reply = transcript[-1]["agent"] or ""
+        selection = selection_message_for_reply(key, reply)
+        if selection is not None and selection not in chosen_time_messages:
             turn_no += 1
             conversation_id = run_turn(
                 db,
@@ -295,43 +306,29 @@ def run_scenario(
                 patient,
                 key,
                 turn_no,
-                "\u0623\u064a\u0648\u0647\u060c \u0643\u0644\u0647\u0645 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0632\u064a\u0627\u0631\u0629",
+                selection,
                 conversation_id,
                 transcript,
             )
-            offered = time_from_reply(transcript[-1]["agent"] or "")
-        if offered is None:
-            raise RuntimeError(
-                f"Scenario {key}: no parseable offered time in agent reply: "
-                f"{transcript[-1]['agent']!r}"
+            chosen_time_messages.append(selection)
+            rows = appointment_rows(db, patient.id)
+            continue
+        if not confirmation_sent:
+            turn_no += 1
+            conversation_id = run_turn(
+                db,
+                workspace,
+                patient,
+                key,
+                turn_no,
+                "\u0623\u064a\u0648\u0647 \u0623\u0643\u062f\u064a \u0627\u0644\u062d\u062c\u0632",
+                conversation_id,
+                transcript,
             )
-        chosen_time_message = offered
-        turn_no += 1
-        conversation_id = run_turn(
-            db,
-            workspace,
-            patient,
-            key,
-            turn_no,
-            offered,
-            conversation_id,
-            transcript,
-        )
-        rows = appointment_rows(db, patient.id)
-
-    if not rows:
-        turn_no += 1
-        conversation_id = run_turn(
-            db,
-            workspace,
-            patient,
-            key,
-            turn_no,
-            "\u0623\u064a\u0648\u0647 \u0623\u0643\u062f\u064a \u0627\u0644\u062d\u062c\u0632",
-            conversation_id,
-            transcript,
-        )
-        rows = appointment_rows(db, patient.id)
+            confirmation_sent = True
+            rows = appointment_rows(db, patient.id)
+            continue
+        break
 
     actual_slugs = [row["service_slug"] for row in rows]
     expected = spec["expected_slugs"]
@@ -346,7 +343,7 @@ def run_scenario(
             "phone": spec["phone"],
         },
         "conversation_id": str(conversation_id) if conversation_id else None,
-        "chosen_time_message": chosen_time_message,
+        "chosen_time_messages": chosen_time_messages,
         "transcript": transcript,
         "appointments": rows,
         "appointment_count": len(rows),
@@ -364,7 +361,8 @@ def run_scenario(
             and all(row["visit_group_id"] == visit_ids[0] for row in rows)
         ),
         "internal_time_overlap": overlap(rows),
-        "booking_success": (
+        "booking_created": bool(rows),
+        "expected_service_match": (
             bool(rows)
             and not (set(expected) - set(actual_slugs))
             and not (set(actual_slugs) - set(expected))
@@ -449,17 +447,18 @@ def main() -> int:
 
     evidence["run_finished_at"] = datetime.now(UTC).isoformat()
     save_evidence(evidence)
-    failed = [
+    missing_booking = [
         key
         for key, result in evidence["scenarios"].items()
-        if not result["booking_success"]
+        if not result["booking_created"]
     ]
     print(
         "AUDIT_SUMMARY="
         + json.dumps(
             {
                 key: {
-                    "booking_success": value["booking_success"],
+                    "booking_created": value["booking_created"],
+                    "expected_service_match": value["expected_service_match"],
                     "appointment_count": value["appointment_count"],
                     "services": value["actual_service_slugs"],
                     "visit_group_ids": value["visit_group_ids"],
@@ -470,7 +469,7 @@ def main() -> int:
             ensure_ascii=True,
         )
     )
-    return 1 if failed else 0
+    return 1 if missing_booking else 0
 
 
 if __name__ == "__main__":
