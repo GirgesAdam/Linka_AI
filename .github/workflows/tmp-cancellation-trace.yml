@@ -77,12 +77,30 @@ jobs:
           import v2_benchmark_core as bench
 
           engine = create_engine(settings.database_url, pool_pre_ping=True)
+
+          def snapshot(db, workspace, patient):
+              rows = list(db.scalars(select(Appointment).where(
+                  Appointment.workspace_id == workspace.id,
+                  Appointment.patient_id == patient.id,
+              ).order_by(Appointment.start_at, Appointment.id)))
+              return [{
+                  'id': str(row.id),
+                  'status': row.status,
+                  'service_id': str(row.service_id),
+                  'doctor_id': str(row.doctor_id) if row.doctor_id else None,
+                  'branch_id': str(row.branch_id),
+                  'start_at': row.start_at.isoformat(),
+                  'end_at': row.end_at.isoformat(),
+                  'visit_group_id': str(row.visit_group_id) if row.visit_group_id else None,
+              } for row in rows]
+
           conn = engine.connect(); outer = conn.begin()
           db = Session(bind=conn, expire_on_commit=False, join_transaction_mode='create_savepoint')
           try:
               ws = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
               patient = bench.patient_without_future(db, ws)
-              before = bench.snapshot_patient(db, ws, patient)
+              patient_id = patient.id
+              before = snapshot(db, ws, patient)
               messages = [
                   'عايزة أحجز في فرع مدينة نصر ليزر إزالة الشعر - إبط وليزر إزالة الشعر - بكيني وليزر إزالة الشعر - ذراعين كاملين',
                   'يوم الثلاثاء الجاي',
@@ -91,8 +109,9 @@ jobs:
                   'تمام نكمل الحجز',
               ]
               turns = bench.run_messages(db, ws, patient, messages)
-              during = bench.snapshot_patient(db, ws, patient)
+              during = snapshot(db, ws, patient)
               payload = {
+                  'patient_id': str(patient_id),
                   'before': before,
                   'turns': [{
                       'customer': t.customer,
@@ -110,10 +129,11 @@ jobs:
               db.close()
               if outer.is_active: outer.rollback()
               conn.close()
+          from app.models.patient import Patient
           with Session(engine) as verify:
               ws = verify.scalar(select(Workspace).where(Workspace.slug == 'tia'))
-              patient = bench.patient_without_future(verify, ws)
-              persisted = bench.snapshot_patient(verify, ws, patient)
+              patient = verify.get(Patient, payload['patient_id'])
+              persisted = snapshot(verify, ws, patient)
           payload['after_rollback'] = persisted
           payload['rollback_restored'] = persisted == payload['before']
           print('ML_AUDIT=' + json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
