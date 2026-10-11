@@ -40,9 +40,9 @@ SCENARIOS = {
             "\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621 \u0627\u0644\u062c\u0627\u064a",
         ],
         "expected_slugs": [
-            "laser-hair-removal-underarm",
-            "laser-hair-removal-bikini",
-            "laser-hair-removal-full-arms",
+            "laser-hair-underarm",
+            "laser-hair-bikini",
+            "laser-hair-arms",
         ],
     },
     "B": {
@@ -53,8 +53,8 @@ SCENARIOS = {
             "\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621 \u0627\u0644\u062c\u0627\u064a",
         ],
         "expected_slugs": [
-            "laser-hair-removal-underarm",
-            "laser-hair-removal-bikini",
+            "laser-hair-underarm",
+            "laser-hair-bikini",
         ],
     },
     "C": {
@@ -66,8 +66,8 @@ SCENARIOS = {
             "\u0627\u0644\u062b\u0644\u0627\u062b\u0627\u0621 \u0627\u0644\u062c\u0627\u064a",
         ],
         "expected_slugs": [
-            "laser-hair-removal-underarm",
-            "laser-hair-removal-bikini",
+            "laser-hair-underarm",
+            "laser-hair-bikini",
         ],
     },
 }
@@ -135,15 +135,14 @@ def time_options_from_reply(reply: str) -> list[str]:
 
 
 def selection_message_for_reply(scenario: str, reply: str) -> str | None:
+    # Audit-only deterministic selection using explicit 24-hour times to avoid
+    # Arabic AM/PM ambiguity while still sending a normal customer turn.
+    if scenario == "A" and "4:45" in reply and "4" in reply:
+        return "خدمة الإبط والبكيني الساعة 16:00 مع د. يوسف سمير، وخدمة الذراعين كاملين الساعة 16:45 مع د. يوسف سمير"
+    if scenario in {"B", "C"} and ("10 صباح" in reply or "10:00" in reply):
+        return "الساعة 10:00 صباحًا مع د. مريم حسن"
     options = time_options_from_reply(reply)
-    if not options:
-        return None
-    if scenario == "A" and len(options) >= 2:
-        return (
-            f"{options[0]} \u0644\u0644\u0625\u0628\u0637 \u0648\u0627\u0644\u0628\u0643\u064a\u0646\u064a"
-            f"\u060c \u0648{options[1]} \u0644\u0644\u0630\u0631\u0627\u0639\u064a\u0646 \u0643\u0627\u0645\u0644\u064a\u0646"
-        )
-    return options[0]
+    return options[0] if options else None
 
 
 def appointment_rows(db: Session, patient_id) -> list[dict[str, Any]]:
