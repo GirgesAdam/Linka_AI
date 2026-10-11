@@ -50,7 +50,7 @@ function AppointmentRow({
           : "hover:bg-slate-50"
       } ${terminal && !isNext ? "opacity-70" : ""}`}
     >
-      <Link href={`/appointments/${appointment.id}`} aria-label={`فتح موعد ${appointment.patient_name}`} className="absolute inset-0 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1" />
+      <Link href={`/appointments/${appointment.id}`} aria-label={`فتح موعد ${appointment.patient_name}`} className="absolute inset-0 rounded-2xl" />
       <div className={`pointer-events-none relative z-10 pt-0.5 text-end text-base font-semibold tabular-nums ${isNext ? "text-violet-800" : "text-slate-800"}`}>
         {formatTime(appointment.start_at, timezone)}
       </div>
