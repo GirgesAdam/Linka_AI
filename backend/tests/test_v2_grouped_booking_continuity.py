@@ -250,6 +250,29 @@ def test_side_read_preserves_full_group_unchanged() -> None:
     assert transition.active_task is not None
     assert transition.active_task.grouped is not None
     assert len(transition.active_task.grouped.components) == 2
+
+
+def test_grouped_component_start_does_not_collapse_durable_group() -> None:
+    state = _grouped_state()
+    operation = _operation("svc-a", time=TIME_A)
+    step = _step(0, "svc-a", TIME_A)
+
+    transition = apply_step_state(
+        state,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-grouped-start",
+    )
+
+    assert transition.active_task is not None
+    assert transition.active_task.grouped is not None
+    assert [
+        component.service_id for component in transition.active_task.grouped.components
+    ] == ["svc-a", "svc-b"]
+
+
 def test_resume_reconstructs_all_grouped_components() -> None:
     state = _grouped_state()
     resume = TiaTurnUnderstanding(

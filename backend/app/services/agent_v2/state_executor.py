@@ -429,7 +429,18 @@ def apply_step_state(
         else:
             raise RuntimeError("replace_active requires a book or reschedule operation.")
     elif step.state_action == "start_booking":
-        current = _new_booking_state(step=step, operation=operation, turn_id=turn_id, now=now)
+        grouped_service_ids = (
+            {
+                component.service_id
+                for component in current.grouped.components
+                if component.service_id is not None
+            }
+            if isinstance(current, BookingTaskState) and current.grouped is not None
+            else set()
+        )
+        step_service_id = str(step.facts.get("service_id") or "")
+        if not step_service_id or step_service_id not in grouped_service_ids:
+            current = _new_booking_state(step=step, operation=operation, turn_id=turn_id, now=now)
     elif step.state_action == "start_reschedule":
         current = _new_reschedule_state(
             step=step,
