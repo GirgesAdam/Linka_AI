@@ -38,10 +38,14 @@ async function main() {
   await page.goto(`${baseURL}/login`, { waitUntil: 'networkidle' });
   await page.locator('input[name="email"]').fill('audit.reception@linka.local');
   await page.locator('input[name="password"]').fill('AuditPass123!');
-  await Promise.all([
-    page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 30000 }),
-    page.locator('form button[type="submit"]').click(),
-  ]);
+  await page.locator('form button[type="submit"]').click();
+  await page.waitForTimeout(5000);
+  if (new URL(page.url()).pathname.startsWith('/login')) {
+    const loginText = await page.locator('body').innerText();
+    await page.screenshot({ path: path.join(shots, 'login-debug.png'), fullPage: true });
+    fs.writeFileSync(path.join(outputDir, 'login-debug.json'), JSON.stringify({ url: page.url(), body_text: loginText }, null, 2));
+    throw new Error(`Audit login did not leave /login: ${page.url()}`);
+  }
 
   const ui = { login_final_url: page.url(), scenarios: {}, warning: 'UI screenshots may use supplemental grouped rows when Agent booking failed; see evidence_source.' };
 
