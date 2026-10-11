@@ -77,17 +77,13 @@ jobs:
                       name='Linka MB Synthetic Clinic',
                       slug='tia',
                       timezone='Africa/Cairo',
-                      default_currency='EGP',
                       is_active=True,
                       is_demo=True,
-                      demo_behavior_enabled=True,
-                      agent_core_version='v2',
                   )
                   db.add(workspace)
               else:
                   workspace.is_demo = True
-                  workspace.demo_behavior_enabled = True
-                  workspace.agent_core_version = 'v2'
+                  workspace.is_active = True
               db.commit()
           PY
       - name: Seed realistic aesthetic clinic
