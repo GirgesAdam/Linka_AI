@@ -10,23 +10,36 @@ permissions:
 
 jobs:
   apply:
-    if: ${{ !contains(github.event.head_commit.message, 'fix: preserve grounded branch across booking continuation') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/multi-service-branch-continuation-20261011
           fetch-depth: 0
+      - name: Stop after production patch commit
+        id: gate
+        shell: bash
+        run: |
+          message="$(git log -1 --pretty=%B)"
+          if [[ "$message" == "fix: preserve grounded branch across booking continuation"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.skip != 'true'
         with:
           python-version: '3.12'
       - name: Apply focused production patch
+        if: steps.gate.outputs.skip != 'true'
         run: python backend/scripts/tmp_apply_mb_branch_patch.py
       - name: Verify patch shape
+        if: steps.gate.outputs.skip != 'true'
         run: |
           git diff --check
           git status --short
       - name: Commit production and permanent tests
+        if: steps.gate.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
