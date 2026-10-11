@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.branch import Branch
-from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -71,33 +70,61 @@ def select_main_service_id(catalog: dict[str, Any], service_ids: list[str]) -> s
     )[1]
 
 
-def _sole_configured_device(
-    db: Session,
-    *,
-    workspace_id: UUID,
-    service_id: UUID,
-) -> str | None:
-    rows = list(
-        db.execute(
-            select(ServiceDevicePrice.device_key)
-            .join(
-                ClinicLaserDevice,
-                (ClinicLaserDevice.workspace_id == ServiceDevicePrice.workspace_id)
-                & (ClinicLaserDevice.device_key == ServiceDevicePrice.device_key),
-            )
-            .where(
-                ServiceDevicePrice.workspace_id == workspace_id,
-                ServiceDevicePrice.service_id == service_id,
-                ServiceDevicePrice.is_active.is_(True),
-                ServiceDevicePrice.price_minor.is_not(None),
-                ServiceDevicePrice.duration_minutes.is_not(None),
-                ClinicLaserDevice.is_active.is_(True),
-            )
-            .distinct()
-        ).scalars()
-    )
-    unique = list(dict.fromkeys(str(item) for item in rows if item))
-    return unique[0] if len(unique) == 1 else None
+def _catalog_service_row(catalog: dict[str, Any], service_id: str) -> dict[str, Any]:
+    services = catalog.get("services")
+    if not isinstance(services, list):
+        raise MultiServiceBookingError("Service catalog is unavailable.")
+    for row in services:
+        if not isinstance(row, dict):
+            continue
+        canonical_id = row.get("id") or row.get("service_id")
+        if str(canonical_id or "") == str(service_id):
+            return row
+    raise MultiServiceBookingError("Requested service is not in the active catalog.")
+
+
+def laser_service_ids(catalog: dict[str, Any], service_ids: list[str]) -> list[str]:
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    return [
+        service_id
+        for service_id in ordered
+        if _catalog_service_row(catalog, service_id).get("requires_laser_device") is True
+    ]
+
+
+def configured_laser_device_keys(catalog: dict[str, Any], service_id: str) -> list[str]:
+    row = _catalog_service_row(catalog, service_id)
+    if row.get("requires_laser_device") is not True:
+        return []
+    raw_devices = row.get("laser_devices")
+    if not isinstance(raw_devices, list):
+        return []
+    keys: list[str] = []
+    for raw in raw_devices:
+        if not isinstance(raw, dict) or raw.get("configured") is False:
+            continue
+        key = str(raw.get("device_key") or "").strip()
+        if not key:
+            continue
+        if raw.get("price_minor") is None and raw.get("price") in (None, ""):
+            continue
+        if raw.get("duration_minutes") is None:
+            continue
+        if key not in keys:
+            keys.append(key)
+    return keys
+
+
+def common_laser_device_keys(catalog: dict[str, Any], service_ids: list[str]) -> list[str]:
+    laser_ids = laser_service_ids(catalog, service_ids)
+    if not laser_ids:
+        return []
+    first = configured_laser_device_keys(catalog, laser_ids[0])
+    common = list(first)
+    for service_id in laser_ids[1:]:
+        allowed = set(configured_laser_device_keys(catalog, service_id))
+        common = [device_key for device_key in common if device_key in allowed]
+    return common
 
 
 def validate_additional_service_compatibility(
@@ -152,14 +179,8 @@ def validate_additional_service_compatibility(
     normalized_device = (device_key or "").strip() or None
     if bool(service.requires_laser_device):
         if normalized_device is None:
-            normalized_device = _sole_configured_device(
-                db,
-                workspace_id=workspace.id,
-                service_id=service.id,
-            )
-        if normalized_device is None:
             raise MultiServiceBookingError(
-                "A compatible laser device must be selected for every requested laser service.",
+                "A compatible visit-level laser device must be selected for every requested laser service.",
                 dimension="device",
             )
         try:
@@ -171,11 +192,8 @@ def validate_additional_service_compatibility(
             )
         except InventoryOperationError as exc:
             raise MultiServiceBookingError(str(exc), dimension="device") from exc
-    elif normalized_device is not None:
-        raise MultiServiceBookingError(
-            "A laser device cannot be assigned to this additional service.",
-            dimension="device",
-        )
+    else:
+        normalized_device = None
 
     return AdditionalServiceResolution(service_id=service.id, device_key=normalized_device)
 
@@ -198,7 +216,7 @@ def resolve_additional_services(
                 branch_id=branch_id,
                 doctor_id=doctor_id,
                 service_id=service_id,
-                device_key=proposal.additional_service_device_keys.get(raw_service_id),
+                device_key=proposal.device_key,
             )
         )
     return resolved
@@ -270,8 +288,9 @@ def execute_booking_proposal(
     if patient.status == "blocked":
         raise MultiServiceBookingError("Blocked patients cannot receive new appointments.")
 
-    # Resolve every additional service before creating the main appointment. This is the
-    # fail-closed boundary that prevents a valid main slot from becoming a partial visit.
+    # Resolve every additional service against the single visit-level device before
+    # creating the main appointment. This fail-closed boundary prevents partial or
+    # cross-device same-visit writes.
     additionals = resolve_additional_services(db, workspace=workspace, proposal=proposal)
 
     main_service_id = UUID(proposal.main_service_id)

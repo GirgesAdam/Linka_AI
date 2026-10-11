@@ -69,7 +69,10 @@ from app.services.agent_v2.grouped_write_transaction import (
 )
 from app.services.agent_v2.multi_service_booking import (
     MultiServiceBookingError,
+    common_laser_device_keys,
+    laser_service_ids,
     resolve_additional_services,
+    select_main_service_id,
 )
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
@@ -274,6 +277,48 @@ def _prepare_booking_proposal(
                 "facts": {**step.facts, "booking_proposal_invalid": True},
             }
         ), None
+    expected_main_service_id = select_main_service_id(catalog, requested)
+    if main_service_id != expected_main_service_id:
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {
+                    **step.facts,
+                    "booking_proposal_main_service_mismatch": True,
+                    "expected_main_service_id": expected_main_service_id,
+                },
+            }
+        ), None
+    requested_laser_ids = laser_service_ids(catalog, requested)
+    common_device_keys = common_laser_device_keys(catalog, requested)
+    visit_device_key = str(params.get("device_key") or "").strip() or None
+    if requested_laser_ids and (
+        not common_device_keys or visit_device_key not in common_device_keys
+    ):
+        return step.model_copy(
+            update={
+                "disposition": "clarify",
+                "write_intent": None,
+                "clarification_field": "device",
+                "response_goal": "clarification",
+                "facts": {
+                    **step.facts,
+                    "multi_service_device_incompatible": True,
+                    "compatible_visit_device_keys": list(common_device_keys),
+                },
+            }
+        ), None
+    if not requested_laser_ids and visit_device_key is not None:
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {**step.facts, "booking_proposal_unexpected_device": True},
+            }
+        ), None
     slot = _proposal_slot(reads, start_at=start_raw, doctor_id=doctor_id)
     if slot is None or slot.get("end_at") in (None, ""):
         return step.model_copy(
@@ -318,13 +363,6 @@ def _prepare_booking_proposal(
         if isinstance(current_task, BookingTaskState) and current_task.proposal is not None
         else 0
     )
-    service_devices = (
-        dict(current_task.service_device_keys)
-        if isinstance(current_task, BookingTaskState)
-        else {}
-    )
-    if params.get("device_key") not in (None, ""):
-        service_devices[main_service_id] = str(params["device_key"])
     proposal = BookingProposal(
         proposal_id=str(
             uuid5(
@@ -342,11 +380,11 @@ def _prepare_booking_proposal(
         doctor_id=doctor_id,
         start_at=start_at,
         end_at=end_at,
-        device_key=(str(params["device_key"]) if params.get("device_key") else None),
+        device_key=visit_device_key,
         additional_service_device_keys={
-            service_id: service_devices[service_id]
-            for service_id in requested
-            if service_id != main_service_id and service_id in service_devices
+            service_id: visit_device_key
+            for service_id in requested_laser_ids
+            if service_id != main_service_id and visit_device_key is not None
         },
         package_usage=str(params.get("package_usage") or "unspecified"),
         package_id=(str(params["package_id"]) if params.get("package_id") else None),
@@ -1919,6 +1957,7 @@ def orchestrate_v2_turn(
                 reads=None,
                 now=local_now,
                 turn_id=resolved_turn_id,
+                catalog=canonical_catalog,
             )
             current_task = initial_transition.active_task
             if current_task is not None and effective_step.disposition != "clarify":
@@ -2049,6 +2088,7 @@ def orchestrate_v2_turn(
             reads=reads if reads.results else None,
             now=local_now,
             turn_id=resolved_turn_id,
+            catalog=canonical_catalog,
         )
         if (
             pending_proposal_for_step is not None

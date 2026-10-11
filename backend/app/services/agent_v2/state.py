@@ -145,6 +145,14 @@ class BookingProposal(StrictStateModel):
             raise ValueError("booking proposal versions must be positive.")
         if set(self.additional_service_device_keys) - set(self.additional_service_ids):
             raise ValueError("booking proposal device map contains a non-additional service.")
+        if self.additional_service_device_keys:
+            if self.device_key is None:
+                raise ValueError("booking proposal additional laser devices require a visit device.")
+            if any(
+                device_key != self.device_key
+                for device_key in self.additional_service_device_keys.values()
+            ):
+                raise ValueError("booking proposal cannot split laser devices within one visit.")
         return self
 
     def is_current(self, *, task_version: int, now: datetime) -> bool:

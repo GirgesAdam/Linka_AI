@@ -633,6 +633,56 @@ def _service_requires_device(service_id: str | None, context: SemanticContext) -
     return target.metadata.get("requires_laser_device") is True
 
 
+def _service_ref_for_id(service_id: str, context: SemanticContext) -> str | None:
+    return next(
+        (
+            ref
+            for ref, target in context.reference_map.items()
+            if target.kind == "service" and target.canonical_id == service_id
+        ),
+        None,
+    )
+
+
+def _booking_laser_service_ids(
+    state: BookingTaskState,
+    context: SemanticContext,
+) -> list[str]:
+    service_ids = state.requested_service_ids or (
+        [state.constraints.service_id] if state.constraints.service_id is not None else []
+    )
+    return [service_id for service_id in service_ids if _service_requires_device(service_id, context)]
+
+
+def _common_visit_device_keys(
+    service_ids: list[str],
+    context: SemanticContext,
+) -> list[str]:
+    if not service_ids:
+        return []
+    raw_map = context.model_input.get("service_device_refs")
+    if not isinstance(raw_map, dict):
+        return []
+    ordered_sets: list[list[str]] = []
+    for service_id in service_ids:
+        service_ref = _service_ref_for_id(service_id, context)
+        raw_refs = raw_map.get(service_ref) if service_ref is not None else None
+        if not isinstance(raw_refs, list):
+            return []
+        keys = [
+            canonical
+            for ref in raw_refs
+            if isinstance(ref, str)
+            and (canonical := context.resolve(ref, expected_kind="device")) is not None
+        ]
+        ordered_sets.append(list(dict.fromkeys(keys)))
+    common = list(ordered_sets[0])
+    for keys in ordered_sets[1:]:
+        allowed = set(keys)
+        common = [key for key in common if key in allowed]
+    return common
+
+
 def _commercial_basis_key(state: BookingTaskState) -> str | None:
     service_id = state.constraints.service_id
     if service_id is None:
@@ -667,8 +717,45 @@ def _booking_progress(
             clarification_field="service",
             facts=params,
         )
-    requires_device = _service_requires_device(service_id, context)
+    main_requires_device = _service_requires_device(service_id, context)
+    laser_service_ids = _booking_laser_service_ids(state, context)
+    requires_device = bool(laser_service_ids)
+    common_device_keys = _common_visit_device_keys(laser_service_ids, context)
+    if requires_device and not common_device_keys:
+        return PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="clarify",
+            state_action="update_active",
+            response_goal="clarification",
+            clarification_field="device",
+            facts={
+                **params,
+                "service_requires_laser_device": True,
+                "multi_service_no_common_device": True,
+            },
+        )
+    if (
+        requires_device
+        and state.constraints.device_key is not None
+        and state.constraints.device_key not in common_device_keys
+    ):
+        return PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="clarify",
+            state_action="update_active",
+            response_goal="clarification",
+            clarification_field="device",
+            facts={
+                **params,
+                "device_key": None,
+                "service_requires_laser_device": True,
+                "multi_service_device_invalid": True,
+            },
+        )
     if requires_device and state.constraints.device_key is None:
+        device_anchor_service_id = laser_service_ids[0]
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
@@ -676,7 +763,14 @@ def _booking_progress(
             reads=[
                 ReadRequest(
                     kind="service_catalog",
-                    parameters={"service_id": service_id},
+                    parameters={
+                        "service_id": device_anchor_service_id,
+                        **(
+                            {"device_keys": list(common_device_keys)}
+                            if len(laser_service_ids) > 1
+                            else {}
+                        ),
+                    },
                 )
             ],
             state_action="update_active",
@@ -685,6 +779,8 @@ def _booking_progress(
                 **params,
                 "service_requires_laser_device": True,
                 "booking_device_price_step": True,
+                "compatible_visit_device_keys": list(common_device_keys),
+                "device_anchor_service_id": device_anchor_service_id,
             },
         )
     if state.constraints.date is not None:
@@ -729,12 +825,15 @@ def _booking_progress(
             parameters={
                 key: params[key]
                 for key in ("service_id", "device_key")
-                if key in params
+                if key in params and (key != "device_key" or main_requires_device)
             },
         )
         reads = [commercial_read]
         if state.constraints.date is not None:
-            reads.append(ReadRequest(kind="availability", parameters=params))
+            availability_params = dict(params)
+            if not main_requires_device:
+                availability_params.pop("device_key", None)
+            reads.append(ReadRequest(kind="availability", parameters=availability_params))
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
@@ -771,11 +870,14 @@ def _booking_progress(
         )
 
     exact_time = state.constraints.time is not None and state.constraints.time.mode == "exact"
+    availability_params = dict(params)
+    if not main_requires_device:
+        availability_params.pop("device_key", None)
     return PlanStep(
         operation_index=operation_index,
         operation_type="book",
         disposition="read",
-        reads=[ReadRequest(kind="availability", parameters=params)],
+        reads=[ReadRequest(kind="availability", parameters=availability_params)],
         write_intent=WriteIntent(
             kind="booking",
             authorized=state.write_authorization.authorized,

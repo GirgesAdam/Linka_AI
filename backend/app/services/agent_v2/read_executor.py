@@ -538,6 +538,17 @@ def _read_service_catalog(
 
     service = dict(row)
     service.pop("description", None)
+    allowed_device_keys = request.parameters.get("device_keys")
+    if isinstance(allowed_device_keys, list):
+        allowed = {str(item) for item in allowed_device_keys if item not in (None, "")}
+        raw_devices = service.get("laser_devices")
+        if isinstance(raw_devices, list):
+            service["laser_devices"] = [
+                dict(device)
+                for device in raw_devices
+                if isinstance(device, dict)
+                and str(device.get("device_key") or "") in allowed
+            ]
     if include_explanation:
         knowledge = _explanatory_knowledge(context)
         if knowledge:
