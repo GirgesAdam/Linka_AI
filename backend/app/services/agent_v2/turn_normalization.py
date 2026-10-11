@@ -4,6 +4,7 @@ from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.multi_service_booking import select_main_service_id
 from app.services.agent_v2.planner import TurnPlan
+from app.services.agent_v2.state import BookingTaskState
 
 
 def _same_visit_signature(operation: TurnOperation) -> tuple[object, ...]:
@@ -126,6 +127,7 @@ def collapse_booking_service_sets(
     *,
     semantic_context: SemanticContext,
     catalog: dict[str, object],
+    active_task: BookingTaskState | None = None,
 ) -> tuple[TiaTurnUnderstanding, dict[int, list[str]]]:
     """Bind one same-visit canonical service set to a backend-selected main service.
 
@@ -166,8 +168,34 @@ def collapse_booking_service_sets(
             continue
 
         canonical_ids = [canonical for _, canonical in resolved]
+        if (
+            active_task is not None
+            and operation.active_task_relationship != "replace"
+            and not operation.fresh_task
+        ):
+            current_ids = list(active_task.requested_service_ids)
+            if not current_ids and active_task.constraints.service_id:
+                current_ids = [active_task.constraints.service_id]
+            if operation.grouped_booking_action == "preserve_group":
+                canonical_ids = [
+                    *current_ids,
+                    *(service_id for service_id in canonical_ids if service_id not in current_ids),
+                ]
+            elif operation.grouped_booking_action == "remove_other_components":
+                selected = set(canonical_ids)
+                canonical_ids = [
+                    *(service_id for service_id in current_ids if service_id in selected),
+                    *(service_id for service_id in canonical_ids if service_id not in current_ids),
+                ]
         main_id = select_main_service_id(catalog, canonical_ids)
-        main_ref = next(ref for ref, canonical in resolved if canonical == main_id)
+        ref_by_id = {canonical: ref for ref, canonical in resolved}
+        for ref, target in semantic_context.reference_map.items():
+            if target.kind == "service" and target.canonical_id in canonical_ids:
+                ref_by_id.setdefault(target.canonical_id, ref)
+        main_ref = ref_by_id.get(main_id)
+        if main_ref is None:
+            normalized.append(operation)
+            continue
         service_sets[index] = canonical_ids
         normalized.append(
             operation.model_copy(

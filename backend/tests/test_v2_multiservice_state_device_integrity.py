@@ -225,3 +225,19 @@ def test_d8_add_service_invalidates_device_when_it_is_not_common_anymore() -> No
     assert updated.derived.availability_snapshot_id is None
     assert updated.derived.selected_slot_ref is None
     assert updated.proposal is None
+
+
+
+def test_unconfigured_device_variant_is_not_a_service_compatibility_choice() -> None:
+    catalog = _catalog(arms_devices=[CANDELA, DEKA])
+    arms = next(row for row in catalog["services"] if row["id"] == FULL_ARMS)
+    arms["laser_devices"][0]["configured"] = False
+    context = build_semantic_context(catalog)
+    arms_ref = next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "service" and target.canonical_id == FULL_ARMS
+    )
+    compatible_refs = context.model_input["service_device_refs"][arms_ref]
+    compatible_keys = [context.resolve(ref, expected_kind="device") for ref in compatible_refs]
+    assert compatible_keys == [DEKA]

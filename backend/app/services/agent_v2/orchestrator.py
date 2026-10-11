@@ -1722,17 +1722,18 @@ def orchestrate_v2_turn(
                 "V2 turn semantic interpretation exhausted structured attempts."
             ) from exc
     understanding = merge_same_visit_booking_operations(understanding)
+    initial_booking_task = (
+        initial_task if isinstance(initial_task, BookingTaskState) else None
+    )
     understanding, booking_service_sets = collapse_booking_service_sets(
         understanding,
         semantic_context=semantic_context,
         catalog=canonical_catalog,
+        active_task=initial_booking_task,
     )
     understanding, semantic_visit_groups = expand_multi_service_operations(
         understanding,
         semantic_context=semantic_context,
-    )
-    initial_booking_task = (
-        initial_task if isinstance(initial_task, BookingTaskState) else None
     )
     narrowed_booking_task = explicitly_narrow_grouped_booking_task(
         understanding,
