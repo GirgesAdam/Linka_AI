@@ -252,7 +252,7 @@ jobs:
           output = Path('../audit-output')
           with Session(engine) as db:
               workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
-              patients = list(db.scalars(select(Patient).where(Patient.workspace_id == workspace.id, Patient.source_detail.like('post241-%audit%'))))
+              patients = list(db.scalars(select(Patient).where(Patient.workspace_id == workspace.id, Patient.source_detail.like('post241-%'))))
               ids = [row.id for row in patients]
               appointment_ids = list(db.scalars(select(Appointment.id).where(Appointment.workspace_id == workspace.id, Appointment.patient_id.in_(ids)))) if ids else []
               before_appt = len(appointment_ids)
