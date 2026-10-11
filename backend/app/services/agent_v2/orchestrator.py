@@ -1734,6 +1734,7 @@ def orchestrate_v2_turn(
     understanding, semantic_visit_groups = expand_multi_service_operations(
         understanding,
         semantic_context=semantic_context,
+        booking_service_sets=booking_service_sets,
     )
     narrowed_booking_task = explicitly_narrow_grouped_booking_task(
         understanding,

@@ -275,8 +275,14 @@ def _scope_component_device(
     *,
     service_ref: str | None,
     semantic_context: SemanticContext | None,
+    preserve_visit_device: bool = False,
 ) -> TurnOperation:
-    if semantic_context is None or service_ref is None or operation.entities.device is None:
+    if (
+        preserve_visit_device
+        or semantic_context is None
+        or service_ref is None
+        or operation.entities.device is None
+    ):
         return operation
     target = semantic_context.reference_map.get(service_ref)
     if target is None or target.kind != "service":
@@ -285,6 +291,21 @@ def _scope_component_device(
         return operation
     return operation.model_copy(
         update={"entities": operation.entities.model_copy(update={"device": None})}
+    )
+
+
+def _service_set_requires_device(
+    service_ids: list[str],
+    semantic_context: SemanticContext | None,
+) -> bool:
+    if semantic_context is None or not service_ids:
+        return False
+    current = set(service_ids)
+    return any(
+        target.kind == "service"
+        and target.canonical_id in current
+        and target.metadata.get("requires_laser_device") is True
+        for target in semantic_context.reference_map.values()
     )
 
 
@@ -334,6 +355,7 @@ def expand_multi_service_operations(
     turn: TiaTurnUnderstanding,
     *,
     semantic_context: SemanticContext | None = None,
+    booking_service_sets: dict[int, list[str]] | None = None,
 ) -> tuple[TiaTurnUnderstanding, dict[int, str]]:
     """Expand one semantic multi-service visit into addressable component operations.
 
@@ -361,11 +383,15 @@ def expand_multi_service_operations(
                 if operation.entities.service is not None
                 else None
             )
+            visit_service_ids = (booking_service_sets or {}).get(source_index, [])
             expanded.append(
                 _scope_component_device(
                     operation,
                     service_ref=service_ref,
                     semantic_context=semantic_context,
+                    preserve_visit_device=_service_set_requires_device(
+                        visit_service_ids, semantic_context
+                    ),
                 )
             )
             continue
