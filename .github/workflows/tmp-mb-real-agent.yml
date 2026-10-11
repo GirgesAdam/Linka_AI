@@ -88,6 +88,25 @@ jobs:
           PY
       - name: Seed realistic aesthetic clinic
         run: python scripts/seed_realistic_aesthetic_clinic.py --workspace-slug tia
+      - name: Align temporary audit capture API
+        working-directory: .
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/agent_eval/tmp_mb_branch_audit.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'def _task(db: Session, workspace: Workspace, conversation_id):\n    handle = load_active_task(db, workspace_id=workspace.id, conversation_id=conversation_id)\n',
+              'def _task(db: Session, workspace: Workspace, patient: Patient, conversation_id):\n    handle = load_active_task(\n        db, workspace_id=workspace.id, conversation_id=conversation_id, patient_id=patient.id\n    )\n',
+              1,
+          )
+          text = text.replace(
+              'task = _task(db, workspace, conversation_id) if conversation_id else None',
+              'task = _task(db, workspace, patient, conversation_id) if conversation_id else None',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Run rollback-only Real Agent MB1-MB10
         working-directory: .
         run: PYTHONPATH=backend:. python tools/agent_eval/tmp_mb_branch_audit.py
