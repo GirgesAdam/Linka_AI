@@ -378,12 +378,12 @@ class TurnOperation(StrictContractModel):
     active_task_explicit_fields: list[ActiveTaskExplicitField] = Field(
         default_factory=list,
         description=(
-            "For active_task_relationship=continue with reschedule only, list replacement date "
-            "and/or time exactly when that dimension is explicitly supplied in the latest customer "
+            "For active_task_relationship=continue with booking or reschedule, list date and/or time "
+            "exactly when that dimension is explicitly supplied or corrected in the latest customer "
             "message. Never mark model-inferred/default constraints, values inherited from active_task, "
             "source appointment facts, verified context, assistant prose, or older dialogue. Python "
-            "uses this provenance to distinguish customer-grounded replacement constraints from "
-            "model defaults while keeping active-task lifecycle deterministic."
+            "uses this provenance to distinguish customer-grounded active-task constraints from model "
+            "defaults while keeping lifecycle and write authority deterministic."
         ),
     )
     cleared_active_task_fields: list[ActiveTaskClearField] = Field(
@@ -499,9 +499,9 @@ class TurnOperation(StrictContractModel):
         explicit = set(self.active_task_explicit_fields)
         if not explicit:
             return self
-        if self.active_task_relationship != "continue" or self.type != "reschedule":
+        if self.active_task_relationship != "continue" or self.type not in {"book", "reschedule"}:
             raise ValueError(
-                "active_task_explicit_fields is only valid for active reschedule continuations."
+                "active_task_explicit_fields is only valid for active booking/reschedule continuations."
             )
         if "date" in explicit and self.entities.date is None:
             raise ValueError("active-task explicit date marker requires a date entity.")

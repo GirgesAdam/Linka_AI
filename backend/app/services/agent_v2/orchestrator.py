@@ -219,6 +219,24 @@ def _proposal_slot(reads: ReadExecutionBundle, *, start_at: str, doctor_id: str)
     return None
 
 
+def _proposal_matches_current_exact_time(
+    current_task: ActiveTaskState | None,
+    *,
+    start_at: datetime,
+    timezone_name: str,
+) -> bool:
+    if not isinstance(current_task, BookingTaskState):
+        return True
+    constraint = current_task.constraints.time
+    if constraint is None or constraint.mode != "exact" or not constraint.start_time:
+        return True
+    try:
+        local_time = start_at.astimezone(ZoneInfo(timezone_name)).strftime("%H:%M")
+    except (ValueError, TypeError, KeyError):
+        return False
+    return local_time == str(constraint.start_time).strip()[:5]
+
+
 def _prepare_booking_proposal(
     step: PlanStep,
     *,
@@ -276,6 +294,22 @@ def _prepare_booking_proposal(
                 "write_intent": None,
                 "response_goal": "clarification",
                 "facts": {**step.facts, "booking_proposal_invalid_time": True},
+            }
+        ), None
+    if not _proposal_matches_current_exact_time(
+        current_task,
+        start_at=start_at,
+        timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
+    ):
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {
+                    **step.facts,
+                    "booking_proposal_time_constraint_mismatch": True,
+                },
             }
         ), None
 
