@@ -4,9 +4,9 @@ from app.agents.v2.semantic_context import SemanticContext
 from app.services.agent_v2.branch_resolution import resolve_single_location_branch_id
 
 
-def _catalog(context: SemanticContext) -> dict[str, object]:
+def _catalog(context: SemanticContext) -> dict[str, object] | None:
     raw = context.server_metadata.get("branch_resolution_catalog")
-    return dict(raw) if isinstance(raw, dict) else {"branches": []}
+    return dict(raw) if isinstance(raw, dict) else None
 
 
 def _compatible_catalog(
@@ -64,11 +64,16 @@ def resolve_scheduling_branch_parameters(
     """Resolve branch only from canonical backend facts; never from customer text.
 
     Returns (parameters, candidate_refs, reason). A non-null reason means the caller
-    must clarify and must not perform an availability read/write.
+    must clarify and must not perform an availability read/write. Contexts that do
+    not provide canonical branch metadata retain legacy planning behavior.
     """
+    raw_catalog = _catalog(context)
+    if raw_catalog is None:
+        return params, [], None
+
     explicit = str(params.get("branch_id") or "").strip()
     catalog = _compatible_catalog(
-        _catalog(context),
+        raw_catalog,
         doctor_id=str(params.get("doctor_id") or "").strip() or None,
     )
     branches = catalog.get("branches")
