@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.services.agent_v2.branch_resolution import resolve_single_location_branch_id
 
 
 def _catalog(context: SemanticContext) -> dict[str, object] | None:
@@ -42,10 +41,7 @@ def _compatible_catalog(
         if isinstance(branches, list)
         else []
     )
-    primary = catalog.get("primary_branch_id")
-    if primary not in (None, "") and str(primary) not in allowed:
-        primary = None
-    return {**catalog, "primary_branch_id": primary, "branches": filtered}
+    return {**catalog, "branches": filtered}
 
 
 def _branch_ids(catalog: dict[str, object]) -> set[str]:
@@ -103,11 +99,11 @@ def resolve_scheduling_branch_parameters(
             return params, _refs_for_branch_ids(context, raw_branch_ids), "incompatible_branch"
         return params, [], None
 
-    resolved = resolve_single_location_branch_id(
-        primary_branch_id=catalog.get("primary_branch_id"),
-        catalog=catalog,
-    )
-    if resolved is None:
-        refs = _refs_for_branch_ids(context, branch_ids)
-        return params, refs, "branch_choice" if refs else "no_compatible_branch"
-    return {**params, "branch_id": resolved}, [], None
+    # A configured primary branch is not a customer branch preference. Scheduling
+    # may auto-resolve only when the grounded compatible set itself contains one
+    # branch; otherwise the customer must choose from verified branch refs.
+    if len(branch_ids) == 1:
+        return {**params, "branch_id": next(iter(branch_ids))}, [], None
+
+    refs = _refs_for_branch_ids(context, branch_ids)
+    return params, refs, "branch_choice" if refs else "no_compatible_branch"
