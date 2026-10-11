@@ -6,8 +6,10 @@ from uuid import UUID
 
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
+    DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
+    TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
@@ -193,6 +195,35 @@ def test_legacy_same_visit_operations_are_merged_before_planning() -> None:
     assert service.candidate_mode == "set"
     assert service.candidate_refs == ["S3", "S4"]
 
+
+def test_real_interpreter_scheduling_entities_are_hashable_for_same_visit_merge() -> None:
+    shared_entities = {
+        "doctor": EntityReference(ref="D1"),
+        "branch": EntityReference(ref="B1"),
+        "date": DateConstraint(mode="exact", start_date="2026-10-13"),
+        "time": TimeConstraint(mode="exact", start_time="11:00"),
+    }
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref=service_ref),
+                    **shared_entities,
+                ),
+                execution_intent="execute",
+            )
+            for service_ref in ("S3", "S4")
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_same_visit_booking_operations(turn)
+
+    assert len(merged.operations) == 1
+    service = merged.operations[0].entities.service
+    assert service is not None
+    assert service.candidate_refs == ["S3", "S4"]
 
 def test_multiple_booking_write_fallback_fails_closed() -> None:
     steps = [

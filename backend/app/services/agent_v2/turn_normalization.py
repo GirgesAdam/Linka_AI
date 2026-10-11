@@ -9,11 +9,11 @@ from app.services.agent_v2.planner import TurnPlan
 def _same_visit_signature(operation: TurnOperation) -> tuple[object, ...]:
     entities = operation.entities
     return (
-        entities.doctor.model_dump(mode="json") if entities.doctor is not None else None,
-        entities.branch.model_dump(mode="json") if entities.branch is not None else None,
-        entities.device.model_dump(mode="json") if entities.device is not None else None,
-        entities.date.model_dump(mode="json") if entities.date is not None else None,
-        entities.time.model_dump(mode="json") if entities.time is not None else None,
+        entities.doctor.model_dump_json() if entities.doctor is not None else None,
+        entities.branch.model_dump_json() if entities.branch is not None else None,
+        entities.device.model_dump_json() if entities.device is not None else None,
+        entities.date.model_dump_json() if entities.date is not None else None,
+        entities.time.model_dump_json() if entities.time is not None else None,
         operation.package_usage,
         operation.continuation_condition,
     )
