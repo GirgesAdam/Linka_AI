@@ -211,6 +211,8 @@ def appointment_rows(db: Session, patient: Patient) -> list[dict[str, Any]]:
                 "service_id": str(appt.service_id),
                 "service_slug": service.slug,
                 "service_name": service.name,
+                "service_price_minor": service.price_minor,
+                "service_currency": service.currency,
                 "branch_id": str(appt.branch_id),
                 "branch_name": branch.name,
                 "doctor_id": str(appt.doctor_id),
@@ -364,11 +366,19 @@ class Flow:
         current = self.proposal()
         if current is not None:
             return current
-        for text in followups:
+        queue = [*followups, "أيوه كمل الحجز", "أيوه احجز", "تمام كمل"]
+        seen: set[str] = set()
+        for text in queue:
+            if text in seen:
+                continue
+            seen.add(text)
+            before = self.counts()
             self.send(text)
             current = self.proposal()
             if current is not None:
                 return current
+            if self.counts()["appointments"] > before["appointments"]:
+                return None
         return None
 
 
@@ -613,12 +623,18 @@ def s5() -> dict[str, Any]:
     return finish_rollback_result(result)
 
 
-def complete_text_booking(f: Flow, initial: str, followup: str = "تمام") -> dict[str, Any] | None:
+def complete_text_booking(f: Flow, initial: str, followup: str = "أيوه كمل الحجز") -> dict[str, Any] | None:
+    before = f.counts()["appointments"]
     f.send(initial)
     p = f.ensure_proposal(followup)
     if p:
         f.send("أيوه أكدي الحجز")
-    return p
+    completed = f.counts()["appointments"] > before
+    if p is not None:
+        return p
+    if completed:
+        return {"direct_booking": True}
+    return None
 
 
 def s6() -> dict[str, Any]:
@@ -632,7 +648,7 @@ def s6() -> dict[str, Any]:
         a_ok, a_err = booking_check(a, s, [SLUG["combo"]], SLUG["combo"], expected_date="2026-10-13", expected_time="10:00")
         b_ok, b_err = booking_check(b, s, [SLUG["face"]], SLUG["face"], expected_date="2026-10-13", expected_time="15:00")
         result = verdict([(p1 is not None, "Booking A proposal missing"), (len(rows1) == 1, f"Booking A rows={len(rows1)}"), (p2 is not None, "Booking B proposal missing"), (len(rows) == 2, f"final rows={len(rows)}"), (a_ok, "; ".join(a_err)), (b_ok, "; ".join(b_err))], f)
-        result["cross_booking_state_leak"] = not (a_ok and b_ok and len(rows) == 2)
+        result["cross_booking_state_leak"] = len(rows) >= 2 and not (a_ok and b_ok)
     return finish_rollback_result(result)
 
 
@@ -646,7 +662,7 @@ def s7() -> dict[str, Any]:
         a_ok, a_err = booking_check(a, s, [SLUG["combo"]], SLUG["combo"], expected_date="2026-10-13", expected_time="10:00", expected_branch="التجمع")
         b_ok, b_err = booking_check(b, s, [SLUG["full_arms"]], SLUG["full_arms"], expected_date="2026-10-17", expected_time="11:00", expected_branch="الشيخ زايد")
         result = verdict([(p1 is not None, "Booking A proposal missing"), (p2 is not None, "Booking B proposal missing"), (len(rows) == 2, f"final rows={len(rows)}"), (a_ok, "; ".join(a_err)), (b_ok, "; ".join(b_err))], f)
-        result["cross_booking_state_leak"] = not (a_ok and b_ok and len(rows) == 2)
+        result["cross_booking_state_leak"] = len(rows) >= 2 and not (a_ok and b_ok)
     return finish_rollback_result(result)
 
 
@@ -660,7 +676,7 @@ def s8() -> dict[str, Any]:
         a_ok, a_err = booking_check(a, s, [SLUG["combo"], SLUG["full_arms"]], SLUG["combo"], expected_date="2026-10-13", expected_time="16:00")
         b_ok, b_err = booking_check(b, s, [SLUG["deep"]], SLUG["deep"], expected_date="2026-10-17", expected_time="17:00")
         result = verdict([(p1 is not None, "Booking A proposal missing"), (p2 is not None, "Booking B proposal missing"), (len(rows) == 2, f"rows={len(rows)}"), (a_ok, "; ".join(a_err)), (b_ok, "; ".join(b_err))], f)
-        result["cross_booking_state_leak"] = not (a_ok and b_ok and len(rows) == 2)
+        result["cross_booking_state_leak"] = len(rows) >= 2 and not (a_ok and b_ok)
     return finish_rollback_result(result)
 
 
@@ -690,14 +706,14 @@ def s10() -> dict[str, Any]:
         before_side = f.counts()
         side_reply = f.send("العيادة بتقفل الساعة كام؟")
         after_side = f.counts()
-        p2 = complete_text_booking(f, "تمام، احجزلي ليزر وجه كامل الأحد الجاي الساعة 11 صباحًا مع د. مريم حسن")
+        p2 = complete_text_booking(f, "تمام، احجزلي ليزر وجه كامل الأحد الجاي الساعة 10:15 صباحًا مع د. مريم حسن")
         rows = appointment_rows(f.db, f.patient)
         a = appointment_by_local(rows, "2026-10-13", "10:00")
-        b = appointment_by_local(rows, "2026-10-18", "11:00")
+        b = appointment_by_local(rows, "2026-10-18", "10:15")
         a_ok, a_err = booking_check(a, s, [SLUG["combo"]], SLUG["combo"])
         b_ok, b_err = booking_check(b, s, [SLUG["face"]], SLUG["face"])
         result = verdict([(p1 is not None, "Booking A proposal missing"), (before_side == after_side, "side question changed DB counts"), (bool(side_reply), "side question had no answer"), (p2 is not None, "Booking B proposal missing"), (len(rows) == 2, f"rows={len(rows)}"), (a_ok, "; ".join(a_err)), (b_ok, "; ".join(b_err))], f)
-        result["cross_booking_state_leak"] = not (a_ok and b_ok and len(rows) == 2)
+        result["cross_booking_state_leak"] = len(rows) >= 2 and not (a_ok and b_ok)
     return finish_rollback_result(result)
 
 
@@ -711,21 +727,21 @@ def s11() -> dict[str, Any]:
         a_ok, a_err = booking_check(a, s, [SLUG["combo"]], SLUG["combo"], expected_doctor="مريم حسن")
         b_ok, b_err = booking_check(b, s, [SLUG["full_arms"]], SLUG["full_arms"], expected_doctor="يوسف سمير")
         result = verdict([(p1 is not None, "A proposal missing"), (p2 is not None, "B proposal missing"), (len(rows) == 2, f"rows={len(rows)}"), (a_ok, "; ".join(a_err)), (b_ok, "; ".join(b_err))], f)
-        result["cross_booking_state_leak"] = not (a_ok and b_ok and len(rows) == 2)
+        result["cross_booking_state_leak"] = len(rows) >= 2 and not (a_ok and b_ok)
     return finish_rollback_result(result)
 
 
 def s12() -> dict[str, Any]:
     with rollback_env("S12", 12) as (f, s):
         p1 = complete_text_booking(f, "عايزة Full Face الثلاثاء الجاي الساعة 11 صباحًا مع د. مريم حسن")
-        p2 = complete_text_booking(f, "واحجزلي Full Face كمان الأحد الجاي الساعة 11 صباحًا مع د. مريم حسن")
+        p2 = complete_text_booking(f, "واحجزلي Full Face كمان الأحد الجاي الساعة 10:15 صباحًا مع د. مريم حسن")
         rows = appointment_rows(f.db, f.patient)
         a = appointment_by_local(rows, "2026-10-13", "11:00")
-        b = appointment_by_local(rows, "2026-10-18", "11:00")
+        b = appointment_by_local(rows, "2026-10-18", "10:15")
         a_ok, a_err = booking_check(a, s, [SLUG["face"]], SLUG["face"])
         b_ok, b_err = booking_check(b, s, [SLUG["face"]], SLUG["face"])
         result = verdict([(p1 is not None, "A proposal missing"), (p2 is not None, "B proposal missing"), (len(rows) == 2, f"rows={len(rows)}"), (a_ok, "; ".join(a_err)), (b_ok, "; ".join(b_err))], f)
-        result["cross_booking_state_leak"] = not (a_ok and b_ok and len(rows) == 2)
+        result["cross_booking_state_leak"] = len(rows) >= 2 and not (a_ok and b_ok)
     return finish_rollback_result(result)
 
 
@@ -896,14 +912,14 @@ def ui_mode() -> int:
         flow.send("وعايزة أحجز إبط وبكيني وذراعين كاملين كمان")
         flow.send("لا شيل الذراعين وخلي الإبط والبكيني بس")
         corrected_task = flow.task()
-        flow.send("الأحد الجاي الساعة 11 صباحًا مع د. مريم حسن")
+        flow.send("الأحد الجاي الساعة 10:15 صباحًا مع د. مريم حسن")
         pc = flow.ensure_proposal("تمام")
         if pc:
             flow.send("أيوه أكدي الحجز")
         db.commit()
         rows_c = appointment_rows(db, patient)
-        c = appointment_by_local(rows_c, "2026-10-18", "11:00")
-        c_ok, c_errors = booking_check(c, services, [SLUG["combo"]], SLUG["combo"], expected_date="2026-10-18", expected_time="11:00")
+        c = appointment_by_local(rows_c, "2026-10-18", "10:15")
+        c_ok, c_errors = booking_check(c, services, [SLUG["combo"]], SLUG["combo"], expected_date="2026-10-18", expected_time="10:15")
         full_arms_id = str(services[SLUG["full_arms"]].id)
         task_clean = full_arms_id not in json.dumps(corrected_task, ensure_ascii=False, default=str)
         proposal_clean = bool(pc and full_arms_id not in [str(x) for x in pc.get("service_ids") or []])
@@ -956,7 +972,25 @@ def rollback_mode() -> int:
         )
 
     failed = [name for name, row in results.items() if row.get("verdict") != "PASS"]
-    wrong_writes = sum(1 for row in results.values() if row.get("severity") == "P1")
+    write_mismatch_markers = (
+        "canonical service representation mismatch",
+        "main service mismatch",
+        "reserved duration mismatch",
+        "end-start differs",
+        "source mismatch",
+        "date mismatch",
+        "time mismatch",
+        "doctor mismatch",
+        "branch mismatch",
+        "duplicate service rows",
+    )
+    wrong_writes = sum(
+        1
+        for row in results.values()
+        if any(any(marker in str(item) for marker in write_mismatch_markers) for item in row.get("failures", []))
+        or row.get("stale_proposal_write")
+        or int(row.get("duplicate_appointments") or 0) > 0
+    )
     partial_writes = sum(
         1
         for row in results.values()

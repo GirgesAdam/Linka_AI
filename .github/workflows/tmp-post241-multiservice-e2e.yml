@@ -132,7 +132,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          pytest -q \
+          PYTHONPATH=. python -m pytest -q \
             tests/test_agent_explicit_time_safety.py \
             tests/test_agent_availability_reference_interpreter.py \
             tests/test_v2_reschedule_required_field_safety_db.py \
