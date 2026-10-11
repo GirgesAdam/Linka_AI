@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
-from app.services.agent_v2.outcome import ResponseGoal
 from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters
+from app.services.agent_v2.outcome import ResponseGoal
 from app.services.agent_v2.reference_resolution import (
     customer_safe_reference_option,
     resolve_verified_availability_reference,
