@@ -100,6 +100,21 @@ jobs:
           name: mb-audit-evidence-${{ github.sha }}
           path: mb-audit-output.txt
           if-no-files-found: error
+      - name: Publish MB audit verdict annotations
+        if: always()
+        working-directory: .
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for line in Path("mb-audit-output.txt").read_text(encoding="utf-8").splitlines():
+              if line.startswith("{"scenario""):
+                  row = json.loads(line)
+                  print(f"::notice title={row['scenario']}::{row.get('verdict')}")
+              elif line.startswith("MB_AUDIT_SUMMARY="):
+                  print(f"::notice title=MB Audit Summary::{line.split('=', 1)[1]}")
+          PY
       - name: Fail on audit verdict
         if: steps.audit.outputs.exit_code != '0'
         run: exit 1

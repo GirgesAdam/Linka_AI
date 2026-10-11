@@ -242,6 +242,13 @@ def main() -> int:
         lambda r: _safe(r) and "عمر خليل" in _reply_text(r) and not r["write_results"],
     )
 
+    result = run_messages(
+        "SINGLE",
+        ["عايزة أحجز ليزر إزالة الشعر - إبط", DATE],
+        single_location=True,
+    )
+    results["SINGLE"] = classify("SINGLE", result, _safe)
+
     failed = [name for name, result in results.items() if result["verdict"] != "PASS"]
     summary = {
         "models": sorted({t["model"] for r in results.values() for t in r["turns"] if t.get("model")}),
