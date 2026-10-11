@@ -5,7 +5,10 @@ from datetime import UTC, datetime, timedelta
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import Selection, TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2.active_task_progress import adapt_matching_active_task_step
-from app.services.agent_v2.orchestrator import _active_task_reference_option_is_current
+from app.services.agent_v2.orchestrator import (
+    _active_task_reference_option_context,
+    _active_task_reference_option_is_current,
+)
 from app.services.agent_v2.planner import PlannerContext, plan_turn
 from app.services.agent_v2.state import (
     BookingTaskState,
@@ -21,7 +24,9 @@ SLOT = {
     "branch_id": "branch-1",
     "service_id": "svc-main",
     "doctor_id": "doctor-youssef",
+    "doctor_name": "Youssef Samir",
     "laser_device_key": "candela",
+    "laser_device_name": "Candela",
     "start_at": "2026-10-13T16:00:00+03:00",
     "start_local": "2026-10-13T16:00:00+03:00",
     "start_time_24h": "16:00",
@@ -64,7 +69,9 @@ def _task(*, expired: bool = False) -> BookingTaskState:
                         "branch_id": "branch-1",
                         "service_id": "svc-main",
                         "doctor_id": "doctor-youssef",
+                        "doctor_name": "Youssef Samir",
                         "device_key": "candela",
+                        "laser_device_name": "Candela",
                         "start_at": "2026-10-13T16:00:00+03:00",
                         "start_local": "2026-10-13T16:00:00+03:00",
                         "start_time_24h": "16:00",
@@ -122,6 +129,98 @@ def test_reference_option_must_match_current_snapshot_payload() -> None:
         availability_context=mismatched,
         now=NOW,
     ) is False
+
+
+def test_explicit_time_narrows_current_compressed_window_to_one_snapshot_slot() -> None:
+    compressed = {
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T22:00:00+03:00",
+                "start_time_24h": "16:00",
+                "end_time_24h": "22:00",
+                "doctor_name": "Youssef Samir",
+                "laser_device_name": "Candela",
+            }
+        ]
+    }
+    resolved = _active_task_reference_option_context(
+        _task(),
+        option_ref="opt_1",
+        availability_context=compressed,
+        explicit_user_time="16:00",
+        now=NOW,
+    )
+    assert resolved is not None
+    option = resolved["availability_reference_options"][0]
+    assert option["concrete"] is True
+    assert option["slot"]["doctor_id"] == "doctor-youssef"
+    assert option["slot"]["start_time_24h"] == "16:00"
+    assert option["slot"]["laser_device_key"] == "candela"
+
+
+def test_explicit_time_outside_compressed_window_snapshot_fails_closed() -> None:
+    compressed = {
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T22:00:00+03:00",
+                "doctor_name": "Youssef Samir",
+                "laser_device_name": "Candela",
+            }
+        ]
+    }
+    assert _active_task_reference_option_context(
+        _task(),
+        option_ref="opt_1",
+        availability_context=compressed,
+        explicit_user_time="16:15",
+        now=NOW,
+    ) is None
+
+
+def test_explicit_time_compressed_window_requires_unique_snapshot_slot() -> None:
+    task = _task()
+    assert task.option_snapshot is not None
+    duplicate = OptionChoice(
+        ref="slot-duplicate",
+        label="16:00 duplicate",
+        payload={
+            **task.option_snapshot.options[0].payload,
+            "branch_id": "branch-2",
+        },
+    )
+    task = task.model_copy(
+        update={
+            "option_snapshot": task.option_snapshot.model_copy(
+                update={"options": [*task.option_snapshot.options, duplicate]}
+            )
+        }
+    )
+    compressed = {
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T22:00:00+03:00",
+                "doctor_name": "Youssef Samir",
+                "laser_device_name": "Candela",
+            }
+        ]
+    }
+    assert _active_task_reference_option_context(
+        task,
+        option_ref="opt_1",
+        availability_context=compressed,
+        explicit_user_time="16:00",
+        now=NOW,
+    ) is None
 
 
 def test_verified_option_ref_binds_canonical_doctor_time_and_slot_ref() -> None:

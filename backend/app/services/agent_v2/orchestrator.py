@@ -482,6 +482,99 @@ def _availability_slot_identity(payload: dict[str, object]) -> tuple[str, ...]:
     )
 
 
+def _active_task_reference_option_context(
+    task: ActiveTaskState,
+    *,
+    option_ref: str,
+    availability_context: dict[str, Any] | None,
+    explicit_user_time: str | None,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """Validate a displayed ref against the current task snapshot.
+
+    A concrete displayed option must match exactly one current snapshot slot. A
+    compressed server-owned window may be narrowed only by an explicit HH:MM that
+    resolves to exactly one current snapshot slot inside that same displayed window.
+    """
+    snapshot = task.option_snapshot
+    if snapshot is None or not snapshot.is_current(task_version=task.version, now=now):
+        return None
+    context = dict(availability_context or {})
+    raw_options = context.get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+    indexed_matches = [
+        (index, item)
+        for index, item in enumerate(raw_options)
+        if isinstance(item, dict) and item.get("option_ref") == option_ref
+    ]
+    if len(indexed_matches) != 1:
+        return None
+    option_index, option = indexed_matches[0]
+    if option.get("concrete") is True:
+        slot = option.get("slot")
+        if not isinstance(slot, dict):
+            return None
+        identity = _availability_slot_identity(slot)
+        snapshot_matches = [
+            choice
+            for choice in snapshot.options
+            if _availability_slot_identity(choice.payload) == identity
+        ]
+        return context if len(snapshot_matches) == 1 else None
+
+    explicit = str(explicit_user_time or "").strip()[:5]
+    if not explicit:
+        return None
+    try:
+        window_start = datetime.fromisoformat(str(option.get("start_local") or ""))
+        window_end = datetime.fromisoformat(str(option.get("end_local") or ""))
+    except ValueError:
+        return None
+
+    candidates: list[OptionChoice] = []
+    for choice in snapshot.options:
+        payload = choice.payload
+        try:
+            slot_start = datetime.fromisoformat(str(payload.get("start_local") or ""))
+        except ValueError:
+            continue
+        if not window_start <= slot_start <= window_end:
+            continue
+        if slot_start.strftime("%H:%M") != explicit:
+            continue
+        if option.get("doctor_name") not in (None, "") and str(
+            payload.get("doctor_name") or ""
+        ) != str(option.get("doctor_name")):
+            continue
+        if option.get("laser_device_name") not in (None, "") and str(
+            payload.get("laser_device_name") or ""
+        ) != str(option.get("laser_device_name")):
+            continue
+        candidates.append(choice)
+    if len(candidates) != 1:
+        return None
+
+    selected_payload = dict(candidates[0].payload)
+    if selected_payload.get("device_key") not in (None, ""):
+        selected_payload.setdefault("laser_device_key", selected_payload["device_key"])
+    materialized = dict(option)
+    materialized.update(
+        {
+            "concrete": True,
+            "slot": selected_payload,
+            "start_local": selected_payload.get("start_local"),
+            "end_local": selected_payload.get("start_local"),
+            "start_time_24h": selected_payload.get("start_time_24h") or explicit,
+            "end_time_24h": selected_payload.get("start_time_24h") or explicit,
+        }
+    )
+    updated_options = list(raw_options)
+    updated_options[option_index] = materialized
+    context["availability_reference_options"] = updated_options
+    return context
+
+
 def _active_task_reference_option_is_current(
     task: ActiveTaskState,
     *,
@@ -489,30 +582,13 @@ def _active_task_reference_option_is_current(
     availability_context: dict[str, Any] | None,
     now: datetime,
 ) -> bool:
-    """Require the selected displayed slot to still belong to the current task snapshot."""
-    snapshot = task.option_snapshot
-    if snapshot is None or not snapshot.is_current(task_version=task.version, now=now):
-        return False
-    raw_options = (availability_context or {}).get("availability_reference_options")
-    if not isinstance(raw_options, list):
-        return False
-    matches = [
-        item
-        for item in raw_options
-        if isinstance(item, dict) and item.get("option_ref") == option_ref
-    ]
-    if len(matches) != 1 or matches[0].get("concrete") is not True:
-        return False
-    slot = matches[0].get("slot")
-    if not isinstance(slot, dict):
-        return False
-    identity = _availability_slot_identity(slot)
-    snapshot_matches = [
-        choice
-        for choice in snapshot.options
-        if _availability_slot_identity(choice.payload) == identity
-    ]
-    return len(snapshot_matches) == 1
+    return _active_task_reference_option_context(
+        task,
+        option_ref=option_ref,
+        availability_context=availability_context,
+        explicit_user_time=None,
+        now=now,
+    ) is not None
 
 
 def _pending_choice_from_context(
@@ -1725,15 +1801,18 @@ def orchestrate_v2_turn(
             if isinstance(initial_task, RescheduleTaskState)
             else "availability"
         )
-        stale_active_selection = (
-            initial_task is not None
-            and not _active_task_reference_option_is_current(
+        validated_reference_context = (
+            _active_task_reference_option_context(
                 initial_task,
                 option_ref=decision.option_ref,
                 availability_context=availability_reference_context,
+                explicit_user_time=explicit_user_time,
                 now=local_now,
             )
+            if initial_task is not None
+            else availability_reference_context
         )
+        stale_active_selection = initial_task is not None and validated_reference_context is None
         if stale_active_selection:
             understanding = TiaTurnUnderstanding(
                 operations=[
@@ -1761,6 +1840,8 @@ def orchestrate_v2_turn(
                 ]
             )
         else:
+            if initial_task is not None and validated_reference_context is not None:
+                availability_reference_context = validated_reference_context
             understanding = TiaTurnUnderstanding(
                 operations=[
                     TurnOperation(
