@@ -299,36 +299,49 @@ def explicitly_narrow_grouped_booking_task(
         if operation.type in _BOOKING_OPERATION_TYPES
         and operation.execution_intent == "execute"
     ]
-    if len(executable) != 1:
+    if not executable or not any(
+        operation.grouped_booking_action == "remove_other_components"
+        for operation in executable
+    ):
         return None
-    operation = executable[0]
-    if operation.grouped_booking_action != "remove_other_components":
+
+    components_by_service = {
+        component.service_id: component
+        for component in active_task.grouped.components
+        if component.service_id is not None
+    }
+    narrowed_components: list[CustomerConstraints] = []
+    seen_services: set[str] = set()
+    for operation in executable:
+        params = resolved_operation_parameters(operation, context=context)
+        service_id = params.get("service_id")
+        if not isinstance(service_id, str) or service_id in seen_services:
+            return None
+        component = components_by_service.get(service_id)
+        if component is None:
+            return None
+        narrowed_components.append(
+            _merge_component(
+                component,
+                operation=operation,
+                params=params,
+                apply_to_all=False,
+            )
+        )
+        seen_services.add(service_id)
+
+    if not narrowed_components:
         return None
-    params = resolved_operation_parameters(operation, context=context)
-    service_id = params.get("service_id")
-    if not isinstance(service_id, str):
-        return None
-    component = next(
-        (
-            item
-            for item in active_task.grouped.components
-            if item.service_id == service_id
-        ),
-        None,
-    )
-    if component is None:
-        return None
-    narrowed = _merge_component(
-        component,
-        operation=operation,
-        params=params,
-        apply_to_all=False,
+    narrowed_group = (
+        GroupedBookingState(components=narrowed_components)
+        if len(narrowed_components) > 1
+        else None
     )
     return active_task.model_copy(
         update={
             "status": "collecting",
-            "constraints": narrowed,
-            "grouped": None,
+            "constraints": narrowed_components[0],
+            "grouped": narrowed_group,
             "derived": DerivedBookingState(),
             "option_snapshot": None,
             "version": active_task.version + 1,

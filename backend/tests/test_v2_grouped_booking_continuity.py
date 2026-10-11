@@ -459,6 +459,48 @@ def test_explicit_component_removal_can_collapse_to_single_booking() -> None:
     assert narrowed.write_authorization.authorized is True
 
 
+def test_explicit_subset_correction_removes_stale_group_component() -> None:
+    state = _grouped_state()
+    assert state.grouped is not None
+    third = CustomerConstraints(
+        service_id="svc-c",
+        doctor_id="doc-1",
+        date=DATE,
+        time=TIME_B,
+    )
+    state = state.model_copy(
+        update={
+            "grouped": GroupedBookingState(
+                components=[*state.grouped.components, third]
+            )
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _operation(
+                "svc-a",
+                time=TIME_A,
+                grouped_booking_action="remove_other_components",
+            ),
+            _operation("svc-b", time=TIME_B),
+        ]
+    )
+
+    narrowed = explicitly_narrow_grouped_booking_task(
+        turn,
+        active_task=state,
+        context=_context(),
+    )
+
+    assert narrowed is not None
+    assert narrowed.grouped is not None
+    assert [
+        component.service_id for component in narrowed.grouped.components
+    ] == ["svc-a", "svc-b"]
+    assert narrowed.constraints.service_id == "svc-a"
+    assert narrowed.version == state.version + 1
+
+
 def test_service_replacement_full_group_becomes_a_plus_c() -> None:
     existing = _grouped_state()
     plan = TurnPlan(
