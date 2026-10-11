@@ -44,7 +44,7 @@ function AppointmentRow({
 
   return (
     <div
-      className={`interactive-row group relative grid min-h-16 grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-2xl px-2 py-3 sm:grid-cols-[82px_minmax(0,1fr)] sm:px-3 ${
+      className={`group relative grid min-h-16 grid-cols-[64px_minmax(0,1fr)] gap-3 rounded-2xl px-2 py-3 sm:grid-cols-[82px_minmax(0,1fr)] sm:px-3 interactive-row ${
         isNext
           ? "bg-violet-50 ring-1 ring-violet-100 hover:bg-violet-100/70"
           : "hover:bg-slate-50"
