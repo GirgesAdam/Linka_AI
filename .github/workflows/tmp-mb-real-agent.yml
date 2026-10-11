@@ -37,6 +37,7 @@ jobs:
       ENVIRONMENT: test
       DEBUG: "false"
       DOCS_ENABLED: "false"
+      AGENT_V2_LIVE_ENABLED: "true"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: gpt-6-luna
       OPENAI_FALLBACK_MODEL: gpt-5-mini
@@ -73,13 +74,7 @@ jobs:
           with Session(engine) as db:
               workspace = db.scalar(select(Workspace).where(Workspace.slug == 'tia'))
               if workspace is None:
-                  workspace = Workspace(
-                      name='Linka MB Synthetic Clinic',
-                      slug='tia',
-                      timezone='Africa/Cairo',
-                      is_active=True,
-                      is_demo=True,
-                  )
+                  workspace = Workspace(name='Linka MB Synthetic Clinic', slug='tia', timezone='Africa/Cairo', is_active=True, is_demo=True)
                   db.add(workspace)
               else:
                   workspace.is_demo = True
@@ -88,25 +83,6 @@ jobs:
           PY
       - name: Seed realistic aesthetic clinic
         run: python scripts/seed_realistic_aesthetic_clinic.py --workspace-slug tia
-      - name: Align temporary audit capture API
-        working-directory: .
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('tools/agent_eval/tmp_mb_branch_audit.py')
-          text = path.read_text(encoding='utf-8')
-          text = text.replace(
-              'def _task(db: Session, workspace: Workspace, conversation_id):\n    handle = load_active_task(db, workspace_id=workspace.id, conversation_id=conversation_id)\n',
-              'def _task(db: Session, workspace: Workspace, patient: Patient, conversation_id):\n    handle = load_active_task(\n        db, workspace_id=workspace.id, conversation_id=conversation_id, patient_id=patient.id\n    )\n',
-              1,
-          )
-          text = text.replace(
-              'task = _task(db, workspace, conversation_id) if conversation_id else None',
-              'task = _task(db, workspace, patient, conversation_id) if conversation_id else None',
-              1,
-          )
-          path.write_text(text, encoding='utf-8')
-          PY
       - name: Run rollback-only Real Agent MB1-MB10
         id: audit
         working-directory: .
