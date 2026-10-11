@@ -16,9 +16,13 @@ from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.service import Service
 from app.models.staff import Staff
+from app.models.user import User
+from app.models.workspace_member import WorkspaceMember
 from app.models.workspace import Workspace
 
 CAIRO = ZoneInfo("Africa/Cairo")
+AUDIT_AUTH_USER_ID = __import__("uuid").UUID("d6a87151-d0c5-4be0-93d8-8a3f0194b239")
+AUDIT_EMAIL = "audit.reception@linka.local"
 OUT = Path("audit-output")
 AGENT_EVIDENCE = OUT / "agent-db-evidence.json"
 UI_EVIDENCE = OUT / "ui-probe-evidence.json"
@@ -73,6 +77,19 @@ def main() -> None:
         branch = db.scalar(select(Branch).where(Branch.workspace_id == workspace.id, Branch.code == "new-cairo"))
         if branch is None:
             raise RuntimeError("No active synthetic branch")
+
+        user = db.scalar(select(User).where(User.auth_user_id == AUDIT_AUTH_USER_ID))
+        if user is None:
+            user = User(auth_user_id=AUDIT_AUTH_USER_ID, email=AUDIT_EMAIL, full_name="Audit Reception", is_active=True)
+            db.add(user)
+            db.flush()
+        membership = db.scalar(select(WorkspaceMember).where(WorkspaceMember.workspace_id == workspace.id, WorkspaceMember.user_id == user.id))
+        if membership is None:
+            db.add(WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role="admin", is_active=True))
+        else:
+            membership.role = "admin"
+            membership.is_active = True
+        db.flush()
 
         doctor_pair = db.execute(
             select(Doctor, Staff)

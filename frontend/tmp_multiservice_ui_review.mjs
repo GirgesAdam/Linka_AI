@@ -36,6 +36,8 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: 'ar-EG' });
   const page = await context.newPage();
   await page.goto(`${baseURL}/login`, { waitUntil: 'networkidle' });
+  fs.writeFileSync(path.join(outputDir, 'pre-login.json'), JSON.stringify({ url: page.url(), body_text: await page.locator('body').innerText() }, null, 2));
+  await page.screenshot({ path: path.join(shots, 'pre-login.png'), fullPage: true });
   await page.locator('input[name="email"]').fill('audit.reception@linka.local');
   await page.locator('input[name="password"]').fill('AuditPass123!');
   await page.locator('form button[type="submit"]').click();
