@@ -149,6 +149,20 @@ def test_explicit_branch_is_preserved_by_backend_resolution() -> None:
     assert params["branch_id"] == "branch-2"
 
 
+def test_single_service_date_continuation_single_branch_reaches_availability() -> None:
+    context = build_semantic_context(_catalog(branches=1))
+    date = DateConstraint(mode="exact", start_date="2026-10-13")
+    task = BookingTaskState(
+        write_authorization=_authorized(),
+        constraints=CustomerConstraints(service_id="s1", date=date),
+    )
+    step = plan_active_task_progress(task, operation_index=0, context=context)
+    assert step.disposition == "read"
+    assert step.clarification_field is None
+    assert step.reads[-1].kind == "availability"
+    assert step.reads[-1].parameters["branch_id"] == "branch-1"
+
+
 def test_grouped_date_continuation_single_branch_reaches_availability() -> None:
     context = build_semantic_context(_catalog(branches=1))
     date = DateConstraint(mode="exact", start_date="2026-10-13")

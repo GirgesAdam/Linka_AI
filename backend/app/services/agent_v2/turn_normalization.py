@@ -38,6 +38,48 @@ def _scope_component_device(
     )
 
 
+def _constraint_signature(operation: TurnOperation) -> tuple[object, ...]:
+    entities = operation.entities
+    date = entities.date.model_dump(mode="json") if entities.date is not None else None
+    time = entities.time.model_dump(mode="json") if entities.time is not None else None
+    branch_ref = entities.branch.ref if entities.branch is not None else None
+    return (date, time, branch_ref)
+
+
+def _implicit_multi_book_visit_group(
+    operations: list[TurnOperation],
+) -> dict[int, str]:
+    # Preserve one same-visit request when interpretation emits separate book ops.
+    if len(operations) < 2:
+        return {}
+    if any(
+        operation.type != "book"
+        or operation.execution_intent != "execute"
+        or operation.entities.service is None
+        or operation.entities.service.ref is None
+        or operation.source_appointment is not None
+        for operation in operations
+    ):
+        return {}
+    service_refs = {operation.entities.service.ref for operation in operations}
+    if len(service_refs) != len(operations):
+        return {}
+    signatures = {
+        repr(_constraint_signature(operation))
+        for operation in operations
+    }
+    if len(signatures) != 1:
+        return {}
+    actions = {operation.grouped_booking_action for operation in operations}
+    if len(actions) != 1 or next(iter(actions)) not in {
+        "preserve_group",
+        "remove_other_components",
+    }:
+        return {}
+    group_key = "semantic-multi-book:0"
+    return {index: group_key for index in range(len(operations))}
+
+
 def expand_multi_service_operations(
     turn: TiaTurnUnderstanding,
     *,
@@ -96,6 +138,8 @@ def expand_multi_service_operations(
             visit_groups[len(expanded)] = group_key
             expanded.append(component)
 
+    if not visit_groups:
+        visit_groups = _implicit_multi_book_visit_group(expanded)
     if not visit_groups and expanded == turn.operations:
         return turn, {}
     return turn.model_copy(update={"operations": expanded}), visit_groups
