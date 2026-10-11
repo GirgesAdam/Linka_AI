@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from datetime import datetime
@@ -62,6 +62,7 @@ from app.agents.v2.service_info_composer import (
 from app.agents.v2.terminal_composer import (
     compose_terminal_contract_reply,
     deterministic_terminal_fallback,
+    format_customer_datetime,
 )
 from app.core.config import settings
 from app.services.agent_v2.outcome import TurnOutcome
@@ -872,6 +873,46 @@ def _commercial_projection(unit: CustomerResponseUnit) -> CustomerResponseUnit |
     return projected if is_pure_supported_price_device_contract(contract) else None
 
 
+def _deterministic_booking_proposal_reply(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+) -> str | None:
+    if unit.response_goal != "booking_proposal":
+        return None
+    summary = _fact_value(unit, "booking_proposal_summary")
+    if not isinstance(summary, dict):
+        return None
+    services = summary.get("services")
+    service_names = (
+        [str(item).strip() for item in services if str(item).strip()]
+        if isinstance(services, list)
+        else []
+    )
+    start_local = summary.get("start_local")
+    doctor_name = str(summary.get("doctor_name") or "").strip()
+    branch_name = str(summary.get("branch_name") or "").strip()
+    details: list[str] = []
+    if service_names:
+        details.append(("الخدمات: " if arabic else "Services: ") + "، ".join(service_names))
+    if start_local:
+        details.append(format_customer_datetime(start_local, arabic=arabic))
+    if doctor_name:
+        details.append(("مع د. " if arabic else "with Dr. ") + doctor_name)
+    if branch_name:
+        details.append(("في " if arabic else "at ") + branch_name)
+    if arabic:
+        prefix = "الموعد المقترح: "
+        suffix = " تحبي تأكدي الحجز ولا تعدّلي حاجة؟"
+        empty = "جاهز للمراجعة"
+    else:
+        prefix = "Proposed appointment: "
+        suffix = " Would you like to confirm or change anything?"
+        empty = "ready for review"
+    body = "، ".join(details) if details else empty
+    return prefix + body + "." + suffix
+
+
 def _deterministic_typed_unit_reply(
     *,
     history: list[BaseMessage],
@@ -881,6 +922,9 @@ def _deterministic_typed_unit_reply(
     contract = CustomerResponseContract(units=(unit,))
     arabic = _latest_customer_is_arabic(history)
 
+    proposal_reply = _deterministic_booking_proposal_reply(unit, arabic=arabic)
+    if proposal_reply is not None:
+        return proposal_reply
     if is_pure_supported_terminal_contract(contract):
         return deterministic_terminal_fallback(contract, arabic=arabic)
     if is_pure_supported_availability_contract(contract):

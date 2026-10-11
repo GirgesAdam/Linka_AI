@@ -141,13 +141,23 @@ def collapse_booking_service_sets(
             or getattr(operation, "execution_intent", "execute") != "execute"
             or entity is None
             or entity.candidate_mode != "set"
-            or not entity.candidate_refs
         ):
             normalized.append(operation)
             continue
 
+        service_refs = list(
+            dict.fromkeys(
+                ref
+                for ref in [entity.ref, *entity.candidate_refs]
+                if isinstance(ref, str) and ref
+            )
+        )
+        if not service_refs:
+            normalized.append(operation)
+            continue
+
         resolved: list[tuple[str, str]] = []
-        for ref in entity.candidate_refs:
+        for ref in service_refs:
             canonical = semantic_context.resolve(ref, expected_kind="service")
             if canonical is not None and all(item[1] != canonical for item in resolved):
                 resolved.append((ref, canonical))

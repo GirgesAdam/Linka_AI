@@ -118,6 +118,38 @@ def test_longest_service_is_main_and_request_order_breaks_ties() -> None:
     assert select_main_service_id(tied, [BIKINI, UNDERARM]) == BIKINI
 
 
+def test_real_interpreter_combo_only_set_with_ref_is_preserved_as_service_set() -> None:
+    semantic = build_semantic_context(_catalog())
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        ref="S3",
+                        candidate_refs=[],
+                        candidate_mode="set",
+                    )
+                ),
+                execution_intent="execute",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=semantic,
+        catalog=_catalog(),
+    )
+
+    assert service_sets == {0: [COMBO]}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert service.ref == "S3"
+    assert service.candidate_refs == []
+
+
 def test_combo_only_set_stays_one_canonical_service() -> None:
     context = build_semantic_context(_catalog())
     turn = TiaTurnUnderstanding(
