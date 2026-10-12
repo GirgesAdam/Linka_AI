@@ -38,7 +38,11 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import interpret_customer_turn_v2, merge_verified_read_context
+from app.agents.v2.turn_interpreter import (
+    interpret_customer_turn_v2,
+    merge_presented_availability_context,
+    merge_verified_read_context,
+)
 from app.integrations.clinic.base import ClinicAdapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
@@ -854,6 +858,19 @@ def _auto_resolve_single_booking_device(
                 or device.get("price") not in (None, "")
             )
         )
+    compatible = step.facts.get("compatible_visit_device_keys")
+    allowed = (
+        {str(item) for item in compatible if item not in (None, "")}
+        if isinstance(compatible, list)
+        else None
+    )
+    unique: dict[str, dict[str, object]] = {}
+    for candidate in candidates:
+        key = str(candidate.get("device_key") or "").strip()
+        if not key or (allowed is not None and key not in allowed):
+            continue
+        unique.setdefault(key, candidate)
+    candidates = list(unique.values())
     if len(candidates) != 1:
         return step
     return step.model_copy(
@@ -1934,6 +1951,12 @@ def orchestrate_v2_turn(
                     continues_previous=True,
                 )
             ]
+        )
+        # The narrow resolver understands only the changed clock. Rebind the
+        # unchanged service/doctor/device/date from the current server-owned
+        # displayed availability before planning the fresh canonical read.
+        understanding = merge_presented_availability_context(
+            understanding, semantic_context
         )
         understanding = merge_verified_read_context(understanding, semantic_context)
         full_interpreter_called = False

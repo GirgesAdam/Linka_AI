@@ -315,6 +315,7 @@ def _priced_laser_devices(service: dict[str, object]) -> list[dict[str, object]]
                 "device_key": device.get("device_key"),
                 "device_name": device.get("device_name"),
                 "price": price,
+                "duration_minutes": device.get("duration_minutes"),
             }
         )
     return priced
@@ -355,12 +356,14 @@ def _service_catalog_facts(
                 shaped["selected_laser_device"] = {
                     "device_name": selected.get("device_name"),
                     "price": selected["price"],
+                    "duration_minutes": selected.get("duration_minutes"),
                 }
             elif selected_device_key is None and priced_devices:
                 shaped["laser_devices"] = [
                     {
                         "device_name": device.get("device_name"),
                         "price": device["price"],
+                        "duration_minutes": device.get("duration_minutes"),
                     }
                     for device in priced_devices
                 ]

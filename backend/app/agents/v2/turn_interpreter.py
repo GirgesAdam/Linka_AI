@@ -826,6 +826,18 @@ def merge_presented_availability_context(
                 if inherited_service is not None:
                     updates["service"] = inherited_service
 
+            # A related new-search continuation changes only the dimensions the
+            # customer actually expressed. Preserve the server-owned displayed
+            # date when omitted (for example an unavailable exact-time probe),
+            # while deliberately never inheriting the old displayed time.
+            if operation.entities.date is None:
+                inherited_date = raw.get("date")
+                if isinstance(inherited_date, dict):
+                    try:
+                        updates["date"] = DateConstraint.model_validate(inherited_date)
+                    except ValueError:
+                        pass
+
             recent_verified = semantic_context.model_input.get("recent_verified_read")
             recent_verified = recent_verified if isinstance(recent_verified, dict) else {}
             for field, key in (("doctor", "doctor_ref"), ("device", "device_ref")):

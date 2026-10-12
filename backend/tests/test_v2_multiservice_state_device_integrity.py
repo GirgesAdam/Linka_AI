@@ -220,8 +220,10 @@ def test_d8_add_service_invalidates_device_when_it_is_not_common_anymore() -> No
     updated = _mutate_services(state, [UNDERARM, FULL_ARMS], catalog=catalog)
 
     assert updated.constraints.service_id == FULL_ARMS
-    assert updated.constraints.device_key is None
-    assert updated.service_device_keys == {}
+    # Candela is invalidated, then the only common visit device (DEKA) is
+    # selected canonically instead of creating a redundant device question.
+    assert updated.constraints.device_key == DEKA
+    assert updated.service_device_keys == {UNDERARM: DEKA, FULL_ARMS: DEKA}
     assert updated.derived.availability_snapshot_id is None
     assert updated.derived.selected_slot_ref is None
     assert updated.proposal is None

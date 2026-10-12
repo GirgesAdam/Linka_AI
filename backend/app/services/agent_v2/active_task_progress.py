@@ -773,18 +773,30 @@ def _booking_progress(
         and state.constraints.device_key is not None
         and state.constraints.device_key not in common_device_keys
     ):
+        device_anchor_service_id = laser_service_ids[0]
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
-            disposition="clarify",
+            disposition="read",
+            reads=[
+                ReadRequest(
+                    kind="service_catalog",
+                    parameters={
+                        "service_id": device_anchor_service_id,
+                        "device_keys": list(common_device_keys),
+                    },
+                )
+            ],
             state_action="update_active",
-            response_goal="clarification",
-            clarification_field="device",
+            response_goal="answer_price",
             facts={
                 **params,
                 "device_key": None,
                 "service_requires_laser_device": True,
                 "multi_service_device_invalid": True,
+                "booking_device_price_step": True,
+                "compatible_visit_device_keys": list(common_device_keys),
+                "device_anchor_service_id": device_anchor_service_id,
             },
         )
     if requires_device and state.constraints.device_key is None:
