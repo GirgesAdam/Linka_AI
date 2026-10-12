@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sys
@@ -293,7 +293,8 @@ def main():
                 flush=True,
             )
         results.append(result)
-    summary = {item["case"]: item["proposal_status"] for item in results}`r`n    print("RA_G5_MATRIX_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
+    summary = {item["case"]: item["proposal_status"] for item in results}
+    print("RA_G5_MATRIX_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
     return 0
 
 
