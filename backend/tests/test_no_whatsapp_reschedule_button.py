@@ -20,4 +20,4 @@ def test_legacy_reschedule_button_reply_remains_parseable() -> None:
     source = (backend / "app/services/whatsapp_interactions.py").read_text(encoding="utf-8")
     parser = source.split("def parse_whatsapp_booking_action", 1)[1].split("def _uuid", 1)[0]
 
-    assert '_RESCHEDULE_PREFIX, "reschedule"' in parser
+    assert 'RESCHEDULE_PREFIX, "reschedule"' in parser

@@ -252,7 +252,7 @@ def test_reminder_plan_claim_execute_payload_and_dedupe(case):
     assert [p["text"] for p in params] == ["Gate", "Gate service", expected_date, expected_time]
     buttons = [component for component in components if component["type"] == "button"]
     assert [button["parameters"][0]["payload"] for button in buttons] == [
-        f"tia.booking.confirm:{case.appointment.id}",
+        f"tia.appointment.attendance_confirm:{case.appointment.id}",
         f"tia.booking.reschedule:{case.appointment.id}",
     ]
     assert claim(case) == []

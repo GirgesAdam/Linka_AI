@@ -82,7 +82,6 @@ def initial_confirmation_decision(
     start_at: datetime,
     now: datetime | None = None,
 ) -> AppointmentConfirmationDecision:
-    occurred_at = (now or datetime.now(UTC)).astimezone(UTC)
     timezone = confirmation_timezone(
         db,
         workspace_id=workspace_id,
@@ -92,14 +91,14 @@ def initial_confirmation_decision(
         start_at=start_at,
         timezone=timezone,
     )
-    confirmed = confirmation_window_is_open(
-        start_at=start_at,
-        now=occurred_at,
-        timezone=timezone,
-    )
+    # Creating or rescheduling an appointment records the booking; it does not
+    # confirm that the patient will attend. Attendance confirmation is a separate,
+    # explicit transition through confirm_appointment_operation(). The window
+    # metadata is still returned so reminder delivery and later customer
+    # confirmation use the clinic's canonical local-date policy.
     return AppointmentConfirmationDecision(
-        status="confirmed" if confirmed else "pending",
-        confirmed_at=occurred_at if confirmed else None,
+        status="pending",
+        confirmed_at=None,
         timezone=timezone.key,
         window_opens_on=opens_on,
         appointment_date=appointment_date,
@@ -166,5 +165,59 @@ def clamp_confirmation_delivery_time(
         branch_timezone=branch.timezone if branch is not None else None,
         workspace_timezone=workspace.timezone if workspace is not None else None,
         start_at=start_at,
+        scheduled_for=scheduled_for,
+    )
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        # SQLAlchemy/SQLite fixtures and legacy rows can surface UTC timestamps as
+        # naive datetimes. Treat those values as UTC instead of inheriting the host
+        # machine timezone through datetime.astimezone().
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def confirmation_ticket_delivery_time_for_timezones(
+    *,
+    branch_timezone: str | None,
+    workspace_timezone: str | None,
+    start_at: datetime,
+    appointment_created_at: datetime,
+    scheduled_for: datetime,
+) -> datetime:
+    window_safe = clamp_confirmation_delivery_time_for_timezones(
+        branch_timezone=branch_timezone,
+        workspace_timezone=workspace_timezone,
+        start_at=start_at,
+        scheduled_for=scheduled_for,
+    )
+    # A pending booking created after its configured reminder time still needs a
+    # confirmation ticket. Schedule it for the first scheduler tick after creation
+    # instead of treating the already-past configured time as stale.
+    return max(window_safe, _as_utc(appointment_created_at))
+
+
+def confirmation_ticket_delivery_time(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    branch_id: UUID,
+    start_at: datetime,
+    appointment_created_at: datetime,
+    scheduled_for: datetime,
+) -> datetime:
+    branch = db.scalar(
+        select(Branch).where(
+            Branch.workspace_id == workspace_id,
+            Branch.id == branch_id,
+        )
+    )
+    workspace = db.get(Workspace, workspace_id)
+    return confirmation_ticket_delivery_time_for_timezones(
+        branch_timezone=branch.timezone if branch is not None else None,
+        workspace_timezone=workspace.timezone if workspace is not None else None,
+        start_at=start_at,
+        appointment_created_at=appointment_created_at,
         scheduled_for=scheduled_for,
     )

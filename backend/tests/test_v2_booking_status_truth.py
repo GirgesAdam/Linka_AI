@@ -21,6 +21,8 @@ from app.services.whatsapp_interactions import (
 )
 
 AR_PENDING = "\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631"
+AR_AWAITING_ATTENDANCE = "\u0641\u064a \u0627\u0646\u062a\u0638\u0627\u0631 \u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u0636\u0648\u0631"
+EN_AWAITING_ATTENDANCE = "awaiting attendance confirmation"
 AR_REGISTERED = "\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062d\u062c\u0632"
 AR_REGISTERED_COLLOQUIAL = "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644"
 AR_BOOKING_CONFIRM = "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u062c\u0632"
@@ -77,7 +79,7 @@ def _assert_no_en_confirmation(text: str) -> None:
 
 def test_s1_pending_booking_creation_uses_pending_truth_arabic() -> None:
     text = deterministic_terminal_fallback(_booking_contract("pending"), arabic=True)
-    assert AR_PENDING in text
+    assert AR_AWAITING_ATTENDANCE in text
     assert AR_REGISTERED in text or AR_REGISTERED_COLLOQUIAL in text
     _assert_no_ar_confirmation(text)
 
@@ -124,27 +126,27 @@ def test_s5_proposal_confirmation_is_not_existing_appointment_confirmation() -> 
 
 def test_s6_arabic_deterministic_fallback_never_confirms_pending_booking() -> None:
     text = deterministic_terminal_fallback(_booking_contract("pending"), arabic=True)
-    assert AR_PENDING in text
+    assert AR_AWAITING_ATTENDANCE in text
     _assert_no_ar_confirmation(text)
 
 
 def test_s7_arabic_terminal_composer_draft_never_confirms_pending_booking() -> None:
     contract = _booking_contract("pending")
     text = resolve_terminal_composer_draft(contract, _draft(), arabic=True)
-    assert AR_PENDING in text
+    assert AR_AWAITING_ATTENDANCE in text
     _assert_no_ar_confirmation(text)
 
 
 def test_s8_english_deterministic_fallback_never_confirms_pending_booking() -> None:
     text = deterministic_terminal_fallback(_booking_contract("pending"), arabic=False)
-    assert "pending" in text.lower()
+    assert EN_AWAITING_ATTENDANCE in text.lower()
     _assert_no_en_confirmation(text)
 
 
 def test_s9_english_terminal_composer_draft_never_confirms_pending_booking() -> None:
     contract = _booking_contract("pending")
     text = resolve_terminal_composer_draft(contract, _draft(), arabic=False)
-    assert "pending" in text.lower()
+    assert EN_AWAITING_ATTENDANCE in text.lower()
     _assert_no_en_confirmation(text)
 
 
@@ -160,7 +162,7 @@ def test_s10_multiservice_single_appointment_pending_truth_is_stated_once() -> N
     )
     contract = build_customer_response_contract([outcome])
     text = deterministic_terminal_fallback(contract, arabic=False)
-    assert text.lower().count("pending") == 1
+    assert text.lower().count(EN_AWAITING_ATTENDANCE) == 1
     _assert_no_en_confirmation(text)
 
 
@@ -173,7 +175,7 @@ def test_s11_package_backed_pending_booking_keeps_package_truth_without_confirma
         arabic=False,
     )
     assert "package_used" in fact_keys
-    assert "pending" in text.lower()
+    assert EN_AWAITING_ATTENDANCE in text.lower()
     assert "6 Sessions" in text
     _assert_no_en_confirmation(text)
 
@@ -199,7 +201,7 @@ def test_s12_repeat_booking_acknowledgment_drops_duplicate_write_intent() -> Non
 
 def test_structured_proposal_pending_reply_uses_persisted_status_truth() -> None:
     text = _booking_proposal_success_reply({"ok": True, "status": "pending"})
-    assert AR_PENDING in text
+    assert AR_AWAITING_ATTENDANCE in text
     _assert_no_ar_confirmation(text)
 
 

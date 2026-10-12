@@ -6,6 +6,7 @@ from uuid import uuid4
 from app.core.meta_whatsapp_templates import STANDARD_TEMPLATE_BY_RULE_KEY, template_create_payload
 from app.schemas.channel import DispatchClaimItem
 from app.services.meta_whatsapp_transport import build_meta_message_payload
+from app.services.whatsapp_interactions import parse_whatsapp_booking_action
 
 
 def _root() -> Path:
@@ -44,7 +45,7 @@ def test_template_dispatch_has_appointment_specific_quick_reply_payloads() -> No
                 "language_code": "ar_EG",
                 "body_parameters": ["مريم", "ليزر", "15/10/2026", "18:00"],
                 "button_payloads": [
-                    f"tia.booking.confirm:{appointment_id}",
+                    f"tia.appointment.attendance_confirm:{appointment_id}",
                     f"tia.booking.reschedule:{appointment_id}",
                 ],
             }
@@ -60,7 +61,7 @@ def test_template_dispatch_has_appointment_specific_quick_reply_payloads() -> No
             "type": "button",
             "sub_type": "quick_reply",
             "index": "0",
-            "parameters": [{"type": "payload", "payload": f"tia.booking.confirm:{appointment_id}"}],
+            "parameters": [{"type": "payload", "payload": f"tia.appointment.attendance_confirm:{appointment_id}"}],
         },
         {
             "type": "button",
@@ -69,6 +70,31 @@ def test_template_dispatch_has_appointment_specific_quick_reply_payloads() -> No
             "parameters": [{"type": "payload", "payload": f"tia.booking.reschedule:{appointment_id}"}],
         },
     ]
+
+
+def test_confirmation_action_id_is_semantic_and_legacy_ticket_ids_remain_accepted() -> None:
+    appointment_id = uuid4()
+    current = parse_whatsapp_booking_action(
+        {
+            "interactive_reply": {
+                "type": "button_reply",
+                "id": f"tia.appointment.attendance_confirm:{appointment_id}",
+                "title": "تأكيد الحضور",
+            }
+        }
+    )
+    legacy = parse_whatsapp_booking_action(
+        {
+            "interactive_reply": {
+                "type": "button_reply",
+                "id": f"tia.booking.confirm:{appointment_id}",
+                "title": "تأكيد الحضور",
+            }
+        }
+    )
+    assert current is not None and legacy is not None
+    assert current.action == legacy.action == "attendance_confirm"
+    assert current.appointment_id == legacy.appointment_id == str(appointment_id)
 
 
 def test_confirmation_ticket_reschedule_flow_has_server_owned_locks() -> None:
@@ -88,6 +114,13 @@ def test_frontend_appointment_pending_label_is_booked() -> None:
     presentation_block = source.split("const appointmentStatus", 1)[1].split("};", 1)[0]
     assert 'pending: "محجوز"' in appointment_block
     assert 'pending: status("محجوز"' in presentation_block
+
+
+def test_reception_pending_copy_is_an_explicit_stable_product_invariant() -> None:
+    source = (_root().parent / "frontend/src/lib/status.ts").read_text(encoding="utf-8")
+    status_block = source.split("export const statusLabels", 1)[1].split("};", 1)[0]
+    assert 'pending: "قيد الانتظار"' in status_block
+    assert 'reception-facing "قيد الانتظار" copy is intentionally stable' in source
 
 
 def test_reconciliation_migration_is_future_only_and_uses_branch_workspace_timezone() -> None:
@@ -116,7 +149,7 @@ def test_template_quick_reply_webhook_uses_structured_payload_not_visible_text()
                     "from": "201000000000",
                     "type": "button",
                     "button": {
-                        "payload": f"tia.booking.confirm:{appointment_id}",
+                        "payload": f"tia.appointment.attendance_confirm:{appointment_id}",
                         "text": "تأكيد الحضور",
                     },
                 }
@@ -126,6 +159,6 @@ def test_template_quick_reply_webhook_uses_structured_payload_not_visible_text()
     assert len(inbound) == 1
     assert inbound[0].metadata["interactive_reply"] == {
         "type": "button_reply",
-        "id": f"tia.booking.confirm:{appointment_id}",
+        "id": f"tia.appointment.attendance_confirm:{appointment_id}",
         "title": "تأكيد الحضور",
     }

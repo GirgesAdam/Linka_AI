@@ -10,6 +10,9 @@ export const appointmentLabels: Record<string, string> = {
 };
 
 export const statusLabels: Record<string, string> = {
+  // Product invariant: reception-facing "قيد الانتظار" copy is intentionally stable.
+  // Appointment attendance-confirmation lifecycle changes must not rename this UI label
+  // unless Product explicitly approves a reception-copy change.
   active: "نشط",
   inactive: "غير نشط",
   open: "مفتوحة",

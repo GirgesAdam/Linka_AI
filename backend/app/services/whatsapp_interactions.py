@@ -9,6 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
+from app.core.whatsapp_booking_actions import (
+    ATTENDANCE_CONFIRM_PREFIX,
+    LEGACY_BOOKING_CONFIRM_PREFIX,
+    RESCHEDULE_PREFIX,
+)
 from app.integrations.clinic.authority import require_tia_workspace_domain_write
 from app.models.appointment import Appointment
 from app.models.conversation import Conversation
@@ -45,8 +50,6 @@ from app.services.conversation_flows import start_flow
 from app.services.conversation_ownership import OWNER_HUMAN, agent_can_reply
 from app.services.handoffs import get_active_handoff
 
-_CONFIRM_PREFIX = "tia.booking.confirm:"
-_RESCHEDULE_PREFIX = "tia.booking.reschedule:"
 _PROPOSAL_CONFIRM_PREFIX = "tia.booking.proposal.confirm:"
 _PROPOSAL_EDIT_PREFIX = "tia.booking.proposal.edit:"
 _MAX_APPOINTMENT_REF_LENGTH = 180
@@ -74,8 +77,11 @@ def parse_whatsapp_booking_action(metadata: object) -> WhatsAppBookingAction | N
     for prefix, action in (
         (_PROPOSAL_CONFIRM_PREFIX, "proposal_confirm"),
         (_PROPOSAL_EDIT_PREFIX, "proposal_edit"),
-        (_CONFIRM_PREFIX, "confirm"),
-        (_RESCHEDULE_PREFIX, "reschedule"),
+        (ATTENDANCE_CONFIRM_PREFIX, "attendance_confirm"),
+        # Backward compatibility for confirmation tickets already delivered before
+        # the action ID was renamed to describe attendance confirmation explicitly.
+        (LEGACY_BOOKING_CONFIRM_PREFIX, "attendance_confirm"),
+        (RESCHEDULE_PREFIX, "reschedule"),
     ):
         if not raw_id.startswith(prefix):
             continue
@@ -209,7 +215,7 @@ def _booking_proposal_success_reply(result: dict[str, object]) -> str:
     if status == "confirmed":
         return "تم تأكيد الحجز بكل الخدمات المطلوبة ✅"
     if status == "pending":
-        return "تم تسجيل الحجز بكل الخدمات المطلوبة، وحالته قيد الانتظار ✅"
+        return "تم تسجيل الحجز بكل الخدمات المطلوبة، وهو في انتظار تأكيد الحضور ✅"
     return "تم تسجيل الحجز بكل الخدمات المطلوبة ✅"
 
 
@@ -448,7 +454,7 @@ def process_whatsapp_booking_action(
             action=action.action,
         )
 
-    if action.action == "confirm":
+    if action.action == "attendance_confirm":
         if appointment.status == "confirmed" and appointment.start_at > now:
             reply = "تمام 💛 موعدك متأكد بالفعل، ومستنيينك في ميعادك."
         elif appointment.status != "pending" or appointment.start_at <= now:
@@ -490,7 +496,7 @@ def process_whatsapp_booking_action(
             inbound=inbound,
             run_id=run_id,
             reply=reply,
-            action="confirm",
+            action="attendance_confirm",
         )
 
     if appointment.status not in {"pending", "confirmed"} or appointment.start_at <= now:
