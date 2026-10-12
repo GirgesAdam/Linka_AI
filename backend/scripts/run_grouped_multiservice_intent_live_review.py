@@ -409,13 +409,33 @@ def validate_g4(records, ids):
 
 def validate_g5(records, ids):
     expected = {ids["underarm"], ids["bikini"]}
+    assert len(records) == 3
     assert set(_task_ids(records[0])) == expected
-    final = records[-1]
+
+    commercial = records[1]
+    assert set(_task_ids(commercial)) == expected
+    assert commercial.get("proposal") is None
+    active_task = commercial.get("active_task")
+    assert isinstance(active_task, dict)
+    authorization = active_task.get("write_authorization")
+    assert isinstance(authorization, dict)
+    assert authorization.get("authorized") is True
+    assert any(
+        isinstance(outcome, dict)
+        and isinstance(outcome.get("facts"), dict)
+        and outcome["facts"].get("booking_commercial_basis_step") is True
+        for outcome in commercial.get("outcomes") or []
+    )
+    commercial_reply = str(commercial.get("reply") or "")
+    assert "جنيه" in commercial_reply or "EGP" in commercial_reply
+
+    final = records[2]
     assert set(_task_ids(final)) == expected
     proposal = final.get("proposal")
     assert isinstance(proposal, dict), "RA-G5 must create a proposal before any clinic write"
     assert set(proposal.get("service_ids") or []) == expected
     assert len(proposal.get("additional_service_ids") or []) == 1
+    assert str(proposal.get("start_at") or "").startswith("2026-10-17T15:00:00")
     assert final["pending_write"] is None
 
 
@@ -439,7 +459,11 @@ def main() -> int:
         run_scenario("RA-G4", [ORIGINAL, "خليها ليزر إبط بس", TOTAL], validate_g4)
     run_scenario(
         "RA-G5",
-        [ORIGINAL, "السبت الساعة 6 مساء مناسب، احجزيه ووريني التفاصيل قبل التأكيد النهائي"],
+        [
+            ORIGINAL,
+            "السبت الساعة 6 مساء مناسب، احجزيه ووريني التفاصيل قبل التأكيد النهائي",
+            "تمام، السعر مناسب. كملي نفس الحجز يوم السبت الساعة 6 مساء ووريني التفاصيل قبل التأكيد النهائي",
+        ],
         validate_g5,
     )
     print(f"RA_G_SUMMARY={{\"mode\":\"{MODE}\",\"status\":\"PASS\"}}", flush=True)
