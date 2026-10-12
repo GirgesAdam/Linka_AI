@@ -41,6 +41,7 @@ DEFAULT_CATALOG: dict[str, object] = {
             "requires_laser_device": True,
             "price_minor": 50_000,
             "currency": "EGP",
+            "duration_minutes": 15,
             "customer_duration_text": "حوالي 15 دقيقة",
             "laser_devices": [
                 {
@@ -67,6 +68,7 @@ DEFAULT_CATALOG: dict[str, object] = {
             "requires_laser_device": True,
             "price_minor": 70_000,
             "currency": "EGP",
+            "duration_minutes": 20,
             "customer_duration_text": "حوالي 20 دقيقة",
             "laser_devices": [
                 {
@@ -86,6 +88,7 @@ DEFAULT_CATALOG: dict[str, object] = {
             "requires_laser_device": False,
             "price_minor": 120_000,
             "currency": "EGP",
+            "duration_minutes": 45,
             "customer_duration_text": "حوالي 45 دقيقة",
         },
     ],
