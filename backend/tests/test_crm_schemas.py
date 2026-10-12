@@ -5,6 +5,7 @@ from app.schemas.crm import (
     ConversationRead,
     MessageCreate,
     PatientCreate,
+    PatientUpdate,
     normalize_patient_identity_phone,
     normalize_phone,
 )
@@ -31,6 +32,24 @@ def test_phone_normalization_canonicalizes_egyptian_mobile_variants() -> None:
 def test_patient_rejects_invalid_phone() -> None:
     with pytest.raises(ValidationError):
         PatientCreate(first_name="Adam", phone="abc")
+
+
+def test_manually_entered_patient_phone_must_be_exactly_11_digits() -> None:
+    patient = PatientCreate(first_name="Adam", phone="01012345678")
+    assert patient.phone == "01012345678"
+
+    for invalid in ("0101234567", "010123456789", "+201012345678"):
+        with pytest.raises(ValidationError, match="exactly 11 digits"):
+            PatientCreate(first_name="Adam", phone=invalid)
+
+    with pytest.raises(ValidationError, match="exactly 11 digits"):
+        PatientUpdate(phone="0101234567")
+
+
+def test_general_phone_normalizer_stays_flexible_for_channels_and_imports() -> None:
+    display, normalized = normalize_phone("+20 100-123-4567")
+    assert display == "+20 100-123-4567"
+    assert normalized == "+201001234567"
 
 
 def test_patient_message_must_be_inbound() -> None:

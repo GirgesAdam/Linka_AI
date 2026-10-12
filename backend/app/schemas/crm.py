@@ -64,6 +64,22 @@ def normalize_phone(value: str | None) -> tuple[str | None, str | None]:
     return display, normalized
 
 
+def normalize_patient_entry_phone(value: str | None) -> tuple[str | None, str | None]:
+    """Validate manually entered patient phones as exactly 11 local digits.
+
+    This is intentionally narrower than normalize_phone(), which stays flexible for
+    channel identities, imports, analytics lookups, and legacy data.
+    """
+
+    display, normalized = normalize_phone(value)
+    if display is None:
+        return None, None
+    compact = re.sub(r"[\s().-]", "", display)
+    if compact.startswith("+") or not compact.isdigit() or len(compact) != 11:
+        raise ValueError("Patient phone must contain exactly 11 digits.")
+    return display, normalized
+
+
 def normalize_patient_identity_phone(value: str | None) -> tuple[str | None, str | None]:
     """Return a stable phone identity key for clinic imports without rewriting legacy CRM storage.
 
@@ -122,7 +138,7 @@ class PatientCreate(BaseModel):
     @classmethod
     def validate_phone(cls, value: object) -> object:
         if value is None or isinstance(value, str):
-            display, _ = normalize_phone(value)
+            display, _ = normalize_patient_entry_phone(value)
             return display
         return value
 
@@ -160,7 +176,7 @@ class PatientUpdate(BaseModel):
     @classmethod
     def validate_phone(cls, value: object) -> object:
         if value is None or isinstance(value, str):
-            display, _ = normalize_phone(value)
+            display, _ = normalize_patient_entry_phone(value)
             return display
         return value
 
