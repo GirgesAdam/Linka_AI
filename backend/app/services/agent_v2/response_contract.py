@@ -405,6 +405,27 @@ def _choice_contract(choice: OutcomeChoice, goal: ResponseGoal) -> ResponseChoic
     return ResponseChoice(label=choice.label, facts=choice_facts)
 
 
+def _service_price_projection(
+    raw_service: dict[str, object],
+    facts: dict[str, object],
+) -> dict[str, object] | None:
+    """Project only visit-compatible device prices to the language boundary."""
+    projected = dict(raw_service)
+    compatible = facts.get("compatible_visit_device_keys")
+    if isinstance(compatible, list) and compatible:
+        allowed = {str(item) for item in compatible if item not in (None, "")}
+        raw_devices = projected.get("laser_devices")
+        if isinstance(raw_devices, list):
+            projected["laser_devices"] = [
+                dict(row)
+                for row in raw_devices
+                if isinstance(row, dict)
+                and str(row.get("device_key") or "") in allowed
+            ]
+    safe = _safe_value(projected)
+    return safe if isinstance(safe, dict) else None
+
+
 def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     visit_price = facts.get("visit_price")
     if isinstance(visit_price, dict):
@@ -433,8 +454,8 @@ def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[R
     service_wrapper = catalog.get("service")
     if not isinstance(service_wrapper, dict):
         return []
-    service = _safe_value(service_wrapper)
-    if not isinstance(service, dict):
+    service = _service_price_projection(service_wrapper, facts)
+    if service is None:
         return []
 
     result: list[ResponseFact] = []
@@ -614,8 +635,8 @@ def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | Non
     raw_service = catalog.get("service")
     if not isinstance(raw_service, dict):
         return None
-    service = _safe_value(raw_service)
-    if not isinstance(service, dict):
+    service = _service_price_projection(raw_service, facts)
+    if service is None:
         return None
     service_name = str(service.get("name") or "").strip()
     if not service_name:
