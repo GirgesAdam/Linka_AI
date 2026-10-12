@@ -913,6 +913,46 @@ def _deterministic_booking_proposal_reply(
     return prefix + body + "." + suffix
 
 
+def _deterministic_same_booking_ack_reply(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+) -> str | None:
+    if unit.response_goal != "social_ack":
+        return None
+    acknowledgment = _fact_value(unit, "acknowledgment")
+    if not isinstance(acknowledgment, dict) or not (
+        acknowledgment.get("action") == "booking"
+        and acknowledgment.get("already_completed") is True
+        and acknowledgment.get("same_booking") is True
+    ):
+        return None
+
+    appointment_truth = _fact_value(unit, "appointments")
+    statuses: set[str] = set()
+    if isinstance(appointment_truth, dict):
+        for key in ("visits", "appointments"):
+            rows = appointment_truth.get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                status = str(row.get("status") or "").strip().casefold()
+                if status:
+                    statuses.add(status)
+
+    if statuses == {"confirmed"}:
+        return "\u0627\u0644\u062d\u062c\u0632 \u0645\u062a\u0623\u0643\u062f \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already confirmed."
+    if statuses == {"pending"}:
+        return (
+            "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0648\u062d\u0627\u0644\u062a\u0647 \u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631."
+            if arabic
+            else "The booking is already registered and is pending."
+        )
+    return "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already registered."
+
+
 def _deterministic_typed_unit_reply(
     *,
     history: list[BaseMessage],
@@ -925,6 +965,9 @@ def _deterministic_typed_unit_reply(
     proposal_reply = _deterministic_booking_proposal_reply(unit, arabic=arabic)
     if proposal_reply is not None:
         return proposal_reply
+    booking_ack_reply = _deterministic_same_booking_ack_reply(unit, arabic=arabic)
+    if booking_ack_reply is not None:
+        return booking_ack_reply
     if is_pure_supported_terminal_contract(contract):
         return deterministic_terminal_fallback(contract, arabic=arabic)
     if is_pure_supported_availability_contract(contract):

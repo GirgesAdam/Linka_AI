@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 from uuid import uuid4
 
+from app.agents.v2.responder import _deterministic_same_booking_ack_reply
 from app.agents.v2.terminal_composer import (
     TerminalComposerDraft,
     TerminalComposerUnitDraft,
@@ -216,3 +217,58 @@ def test_structured_proposal_missing_status_is_conservative() -> None:
 def test_structured_proposal_confirm_callsite_uses_actual_write_result_status() -> None:
     source = inspect.getsource(_process_booking_proposal_action)
     assert "reply=_booking_proposal_success_reply(result)" in source
+
+def _same_booking_ack_unit(status: str | None):
+    appointment_row: dict[str, object] = {
+        "service_name": "Underarm",
+        "doctor_name": "Youssef",
+        "start_local": "2026-10-20T16:00:00+03:00",
+        "laser_device_name": "Candela",
+    }
+    if status is not None:
+        appointment_row["status"] = status
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="social_ack",
+        facts={
+            "acknowledgment": {
+                "action": "booking",
+                "already_completed": True,
+                "same_booking": True,
+            },
+            "appointments": {
+                "appointments": [appointment_row],
+                "visits": [dict(appointment_row)],
+                "visit_count": 1,
+                "presentation_unit": "visit",
+            },
+        },
+    )
+    return build_customer_response_contract([outcome]).units[0]
+
+
+def test_repeat_booking_acknowledgment_pending_status_is_truthful() -> None:
+    text = _deterministic_same_booking_ack_reply(
+        _same_booking_ack_unit("pending"),
+        arabic=True,
+    )
+    assert text is not None
+    assert AR_PENDING in text
+    _assert_no_ar_confirmation(text)
+
+
+def test_repeat_booking_acknowledgment_confirmed_status_allows_confirmation() -> None:
+    text = _deterministic_same_booking_ack_reply(
+        _same_booking_ack_unit("confirmed"),
+        arabic=False,
+    )
+    assert text == "The booking is already confirmed."
+
+
+def test_repeat_booking_acknowledgment_missing_status_is_conservative() -> None:
+    text = _deterministic_same_booking_ack_reply(
+        _same_booking_ack_unit(None),
+        arabic=False,
+    )
+    assert text == "The booking is already registered."
+    _assert_no_en_confirmation(text)
