@@ -417,9 +417,6 @@ def validate_g5(records, ids):
     assert commercial.get("proposal") is None
     active_task = commercial.get("active_task")
     assert isinstance(active_task, dict)
-    authorization = active_task.get("write_authorization")
-    assert isinstance(authorization, dict)
-    assert authorization.get("authorized") is True
     assert any(
         isinstance(outcome, dict)
         and isinstance(outcome.get("facts"), dict)
@@ -431,6 +428,11 @@ def validate_g5(records, ids):
 
     final = records[2]
     assert set(_task_ids(final)) == expected
+    final_task = final.get("active_task")
+    assert isinstance(final_task, dict)
+    final_authorization = final_task.get("write_authorization")
+    assert isinstance(final_authorization, dict)
+    assert final_authorization.get("authorized") is True
     proposal = final.get("proposal")
     assert isinstance(proposal, dict), "RA-G5 must create a proposal before any clinic write"
     assert set(proposal.get("service_ids") or []) == expected
