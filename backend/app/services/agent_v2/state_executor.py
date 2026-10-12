@@ -85,6 +85,34 @@ def _authorization(
     )
 
 
+def _promote_booking_authorization_for_explicit_continuation(
+    state: BookingTaskState,
+    *,
+    operation: TurnOperation,
+    turn_id: str,
+    now: datetime,
+) -> BookingTaskState:
+    if state.write_authorization.authorized:
+        return state
+    if (
+        operation.type != "book"
+        or operation.execution_intent != "execute"
+        or operation.active_task_relationship != "continue"
+    ):
+        return state
+    return state.model_copy(
+        update={
+            "write_authorization": _authorization(
+                operation="booking",
+                turn_id=turn_id,
+                now=now,
+                authorized=True,
+            ),
+            "version": state.version + 1,
+        }
+    )
+
+
 def _booking_constraints(step: PlanStep, operation: TurnOperation) -> CustomerConstraints:
     facts = step.facts
     return CustomerConstraints(
@@ -594,6 +622,12 @@ def apply_step_state(
         if isinstance(current, BookingTaskState):
             before_booking = current
             current = _apply_booking_updates(current, step=step, operation=operation)
+            current = _promote_booking_authorization_for_explicit_continuation(
+                current,
+                operation=operation,
+                turn_id=turn_id,
+                now=now,
+            )
             current = _preserve_verified_window_snapshot(
                 before_booking,
                 current,
