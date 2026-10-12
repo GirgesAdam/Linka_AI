@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from copy import deepcopy
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -15,6 +16,16 @@ from app.services.laser_slot_metadata import encode_laser_slot_branch
 TZ = "Africa/Cairo"
 NOW = datetime(2026, 9, 11, 20, 0, tzinfo=ZoneInfo(TZ))
 CONFIRM_NOW = datetime(2026, 9, 16, 12, 0, tzinfo=ZoneInfo(TZ))
+
+
+def _ascii_decimal_digits(value: object) -> str:
+    normalized: list[str] = []
+    for char in str(value):
+        try:
+            normalized.append(str(unicodedata.decimal(char)))
+        except (TypeError, ValueError):
+            normalized.append(char)
+    return "".join(normalized)
 
 
 def _task_evidence(task: ActiveTaskState | None) -> dict[str, object] | None:
@@ -159,7 +170,7 @@ def ra_h2_multiservice_total() -> None:
     )
     second = transcript[-1]
     assert any("service_catalog_set" in trace["reads"] for trace in second["canonical"]["traces"])
-    assert "1200" in str(second["agent"])
+    assert "1200" in _ascii_decimal_digits(second["agent"])
     assert "\u0623\u0646\u0647\u064a \u062e\u062f\u0645\u0629" not in str(second["agent"])
     task = second["canonical"]["active_task"]
     assert task is not None and task["requested_service_ids"] == ["svc-underarm", "svc-bikini"]
@@ -180,9 +191,12 @@ def ra_h3_long_continuation() -> None:
         env=_priced_env(),
     )
     price_turn = transcript[4]
-    assert "1200" in str(price_turn["agent"])
+    assert "1200" in _ascii_decimal_digits(price_turn["agent"])
     task = price_turn["canonical"]["active_task"]
     assert task is not None and set(task["requested_service_ids"]) == {"svc-underarm", "svc-bikini"}
+    selection_reply = str(transcript[5]["agent"])
+    assert "Candela" in selection_reply
+    assert "Prime Lase" not in selection_reply
     _assert_no_marker(transcript)
 
 
@@ -198,7 +212,7 @@ def ra_h4_one_device() -> None:
     joined = "\n".join(str(turn["agent"]) for turn in transcript)
     assert "Candela" in joined
     assert "\u062a\u062d\u0628 \u0623\u064a \u062c\u0647\u0627\u0632" not in joined
-    assert "700" in str(transcript[-1]["agent"])
+    assert "700" in _ascii_decimal_digits(transcript[-1]["agent"])
 
 
 def ra_h5_two_devices() -> None:
@@ -214,7 +228,7 @@ def ra_h5_two_devices() -> None:
     first = str(transcript[0]["agent"])
     assert "Candela" in first and "Prime Lase" in first
     final = str(transcript[-1]["agent"])
-    assert "500" in final and "Candela" in final
+    assert "500" in _ascii_decimal_digits(final) and "Candela" in final
 
 
 def ra_h6_service_correction() -> None:
@@ -229,7 +243,7 @@ def ra_h6_service_correction() -> None:
     )
     corrected = transcript[1]["canonical"]["active_task"]
     assert corrected is not None and corrected["requested_service_ids"] == ["svc-underarm"]
-    assert "1200" not in str(transcript[-1]["agent"])
+    assert "1200" not in _ascii_decimal_digits(transcript[-1]["agent"])
 
 
 def ra_h7_booking_completion() -> None:
