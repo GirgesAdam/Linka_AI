@@ -204,6 +204,15 @@ def _action_appointment(
     )
 
 
+def _booking_proposal_success_reply(result: dict[str, object]) -> str:
+    status = str(result.get("status") or "").strip().casefold()
+    if status == "confirmed":
+        return "تم تأكيد الحجز بكل الخدمات المطلوبة ✅"
+    if status == "pending":
+        return "تم تسجيل الحجز بكل الخدمات المطلوبة، وحالته قيد الانتظار ✅"
+    return "تم تسجيل الحجز بكل الخدمات المطلوبة ✅"
+
+
 def _confirmation_reply(
     db: Session,
     *,
