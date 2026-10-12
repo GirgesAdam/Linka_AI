@@ -506,3 +506,104 @@ def test_new_booking_snapshot_never_persists_pulse_billing_choice() -> None:
     assert all(
         "pulse_usage" not in option.payload for option in state.option_snapshot.options
     )
+
+def test_explicit_booking_continuation_promotes_read_only_booking_authority() -> None:
+    state = _booking_state().model_copy(
+        update={
+            "requested_service_ids": ["svc-underarm", "svc-bikini"],
+            "write_authorization": WriteAuthorization(
+                operation="booking",
+                authorized=False,
+            ),
+        }
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        package_usage="unspecified",
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="update_active",
+        response_goal="answer_price",
+        facts={
+            "service_id": "svc-underarm",
+            "requested_service_ids": ["svc-underarm", "svc-bikini"],
+            "date": operation.entities.date.model_dump(mode="json"),
+            "time": operation.entities.time.model_dump(mode="json"),
+        },
+    )
+
+    transition = apply_step_state(
+        state,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-explicit-book",
+    )
+
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.write_authorization.authorized is True
+    assert transition.active_task.write_authorization.source_turn_id == "turn-explicit-book"
+    assert transition.active_task.write_authorization.granted_at == NOW
+    assert transition.active_task.requested_service_ids == ["svc-underarm", "svc-bikini"]
+    assert transition.active_task.constraints.date == operation.entities.date
+    assert transition.active_task.constraints.time == operation.entities.time
+
+
+def test_booking_authority_is_not_promoted_without_explicit_execute_continuation() -> None:
+    state = _booking_state().model_copy(
+        update={
+            "write_authorization": WriteAuthorization(
+                operation="booking",
+                authorized=False,
+            )
+        }
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="update_active",
+        response_goal="present_availability",
+        facts={"service_id": "svc-underarm"},
+    )
+    informational = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        package_usage="unspecified",
+        execution_intent="informational",
+        active_task_relationship="continue",
+    )
+    unrelated_execute = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        package_usage="unspecified",
+        execution_intent="execute",
+        active_task_relationship="unspecified",
+    )
+
+    for turn_id, operation in (
+        ("turn-informational", informational),
+        ("turn-unrelated", unrelated_execute),
+    ):
+        transition = apply_step_state(
+            state,
+            step=step,
+            operation=operation,
+            reads=None,
+            now=NOW,
+            turn_id=turn_id,
+        )
+        assert isinstance(transition.active_task, BookingTaskState)
+        assert transition.active_task.write_authorization.authorized is False
+        assert transition.active_task.write_authorization.source_turn_id is None

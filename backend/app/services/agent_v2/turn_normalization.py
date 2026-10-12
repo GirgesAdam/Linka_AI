@@ -138,9 +138,19 @@ def collapse_booking_service_sets(
     service_sets: dict[int, list[str]] = {}
     for index, operation in enumerate(turn.operations):
         entity = operation.entities.service
+        operation_type = getattr(operation, "type", None)
+        execution_intent = getattr(operation, "execution_intent", "execute")
+        executable_booking_set = (
+            operation_type in {"book", "continue_active"}
+            and execution_intent == "execute"
+        )
+        fresh_grouped_availability = (
+            operation_type == "availability"
+            and execution_intent == "informational"
+            and active_task is None
+        )
         if (
-            getattr(operation, "type", None) not in {"book", "continue_active"}
-            or getattr(operation, "execution_intent", "execute") != "execute"
+            not (executable_booking_set or fresh_grouped_availability)
             or entity is None
             or entity.candidate_mode != "set"
         ):
@@ -249,7 +259,27 @@ def tag_booking_service_sets(
                     }
                 }
             )
-        steps.append(step.model_copy(update={"facts": facts, "write_intent": write_intent}))
+        state_action = step.state_action
+        if (
+            step.operation_type == "availability"
+            and len(requested) > 1
+            and state_action == "none"
+        ):
+            # A fresh informational availability request for an intentional service set
+            # is still a durable same-visit booking task. The read stays read-only; the
+            # resulting task is deliberately not write-authorized until a later explicit
+            # booking/confirmation turn.
+            state_action = "start_booking"
+            facts["grouped_availability_task"] = True
+        steps.append(
+            step.model_copy(
+                update={
+                    "facts": facts,
+                    "write_intent": write_intent,
+                    "state_action": state_action,
+                }
+            )
+        )
     return plan.model_copy(update={"steps": steps})
 
 

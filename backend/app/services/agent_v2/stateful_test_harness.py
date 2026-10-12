@@ -16,6 +16,7 @@ from app.services.agent_v2.active_task_progress import (
     persist_initial_task_intent,
     plan_active_task_progress,
 )
+from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -26,7 +27,7 @@ from app.services.agent_v2.planner import (
     plan_turn,
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle
-from app.services.agent_v2.state import ActiveTaskState
+from app.services.agent_v2.state import ActiveTaskState, BookingTaskState
 from app.services.agent_v2.state_executor import (
     apply_step_state,
     complete_state_after_action,
@@ -36,6 +37,13 @@ from app.services.agent_v2.test_harness import (
     V2FixtureEnvironment,
     V2HarnessStepTrace,
     execute_fixture_reads,
+)
+from app.services.agent_v2.turn_normalization import (
+    collapse_booking_service_sets,
+    expand_multi_service_operations,
+    guard_multiple_booking_writes,
+    merge_same_visit_booking_operations,
+    tag_booking_service_sets,
 )
 
 
@@ -103,6 +111,7 @@ def _execute_step(
         reads=bundle if bundle.results else None,
         now=local_now,
         turn_id=turn_id,
+        catalog=fixture.catalog,
     )
     advanced = finalize_step_after_state_transition(advanced, transition)
     task_after_transition = transition.active_task
@@ -165,6 +174,19 @@ def run_v2_stateful_fixture_turn(
         timezone_name=timezone_name,
         local_now=local_now,
     )
+    understanding = merge_same_visit_booking_operations(understanding)
+    initial_booking_task = active_task if isinstance(active_task, BookingTaskState) else None
+    understanding, booking_service_sets = collapse_booking_service_sets(
+        understanding,
+        semantic_context=semantic_context,
+        catalog=fixture.catalog,
+        active_task=initial_booking_task,
+    )
+    understanding, semantic_visit_groups = expand_multi_service_operations(
+        understanding,
+        semantic_context=semantic_context,
+        booking_service_sets=booking_service_sets,
+    )
     plan = plan_turn(
         understanding,
         PlannerContext(
@@ -173,6 +195,13 @@ def run_v2_stateful_fixture_turn(
             now=local_now,
         ),
     )
+    plan = tag_booking_service_sets(plan, service_sets=booking_service_sets)
+    plan = normalize_compound_turn_plan(
+        plan,
+        catalog=fixture.catalog,
+        operation_visit_groups=semantic_visit_groups,
+    )
+    plan = guard_multiple_booking_writes(plan)
     resolved_turn_id = turn_id or f"fixture-turn-{len(history)}"
 
     if plan.handoff_category is not None:
@@ -220,6 +249,7 @@ def run_v2_stateful_fixture_turn(
                 reads=None,
                 now=local_now,
                 turn_id=resolved_turn_id,
+                catalog=fixture.catalog,
             )
             current_task = initial_transition.active_task
             if current_task is None:
