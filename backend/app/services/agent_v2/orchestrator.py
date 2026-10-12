@@ -1473,7 +1473,10 @@ def _bare_recent_booking_confirmation_ack(
         or operation.active_task_explicit_fields
         or operation.fresh_task_explicit_fields
         or operation.appointment_action_explicit_fields
-        or operation.entities.appointment is not None
+        or (
+            operation.entities.appointment is not None
+            and operation.entities.appointment.text not in (None, "")
+        )
     ):
         return False
 

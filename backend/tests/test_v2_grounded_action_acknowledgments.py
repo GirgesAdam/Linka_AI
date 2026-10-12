@@ -719,13 +719,37 @@ def _repeat_confirmation_operation(
     return TurnOperation(
         type="confirm_appointment",
         entities=TurnEntities(
-            appointment=EntityReference(ref="A1") if explicit_target else None,
+            appointment=(
+                EntityReference(ref="A1", text="the appointment")
+                if explicit_target
+                else None
+            ),
         ),
         source_appointment=AppointmentSelector(
             appointment=EntityReference(ref="A1", text=source_text),
         ),
         execution_intent="execute",
         continues_previous=continues_previous,
+    )
+
+
+def test_context_inferred_appointment_ref_does_not_authorize_repeat_confirmation() -> None:
+    operation = _repeat_confirmation_operation().model_copy(
+        update={
+            "entities": TurnEntities(
+                appointment=EntityReference(ref="A1"),
+            )
+        }
+    )
+    request = _recent_booking_confirmation_ack_validation_request(
+        _repeat_confirmation_step(),
+        operation,
+        _recent_booking(status="pending"),
+    )
+
+    assert request == ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": "appointment-1"},
     )
 
 
