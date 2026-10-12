@@ -18,6 +18,7 @@ from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.clinic_integration import ClinicIntegration
 from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
+from app.models.conversation import Conversation
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -325,6 +326,20 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
             "doctor": str(doctor.id),
         }
         conversation_id = uuid4()
+        db.add(
+            Conversation(
+                id=conversation_id,
+                workspace_id=workspace.id,
+                patient_id=patient.id,
+                channel="web",
+                status="open",
+                owner_type="ai",
+                unread_count=0,
+                started_at=NOW,
+                last_message_at=NOW,
+            )
+        )
+        db.flush()
         history = []
         before = appointment_count(db, workspace.id)
         records: list[dict[str, object]] = []
