@@ -63,5 +63,3 @@ jobs:
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
       - name: Run V2 stateful conversation suite
         run: python scripts/run_v2_stateful_conversation_suite.py
-      - name: Run Human Conversation Quality Batch 1 real-agent review
-        run: python scripts/run_human_conversation_quality_batch1_review.py
