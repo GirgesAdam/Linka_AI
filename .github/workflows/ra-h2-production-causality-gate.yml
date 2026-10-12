@@ -1,0 +1,69 @@
+name: RA-H2 Production Causality Gate
+
+on:
+  push:
+    branches: [audit/ra-h2-causality-gate-20261012]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-production:
+    name: Production Probe ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: BASE, sha: 46703fa668edf4523e0996d4e29ca0845e36b470}
+          - {label: HEAD, sha: bed1e53dc0130312a5eb794bd441a3a450b58cb9}
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ra_h2_prod_unused
+      SUPABASE_SECRET_KEY: sb_secret_ra_h2_prod_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      AGENT_V2_LIVE_ENABLED: "true"
+      PROBE_LABEL: ${{ matrix.label }}
+      PROBE_SHA: ${{ matrix.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ matrix.sha }}", fetch-depth: 1}
+      - name: Verify exact revision
+        run: test "$(git rev-parse HEAD)" = "$PROBE_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify staging secrets
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$DATABASE_URL"
+      - name: Run production-orchestrator samples
+        run: python scripts/ra_h2_production_causality_probe.py
