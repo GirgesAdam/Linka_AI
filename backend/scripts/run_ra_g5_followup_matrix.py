@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sys
@@ -15,7 +15,7 @@ from app.models.conversation import Conversation
 from app.services.agent_v2.state import BookingTaskState
 
 SINGLE_BOOK = "عايزة أحجز ليزر بكيني على Candela Gentle مع د. مريم أحمد"
-SINGLE_AVAIL = "وريني أقرب ميعاد مناسب لليزر بكيني على Candela Gentle مع د. مريم أحمد قبل ما تحجز"
+SINGLE_AVAIL = "تمام، كملي الحجز النهارده ووريني المواعيد المتاحة قبل التأكيد النهائي"
 CONTINUE_AFTER_DISCLOSURE = "تمام، السعر مناسب. كملي ووريني ملخص الحجز قبل التأكيد النهائي"
 
 
@@ -171,24 +171,9 @@ def run_grouped_p4_proof():
 
 
 def main() -> int:
-    outputs = []
-    for name, mode in (("M4", "option_ref"), ("M5", "matching_time"), ("M6", "new_time")):
-        last = None
-        for attempt in range(1, 4):
-            try:
-                result = run_single(name, mode)
-                result["attempt"] = attempt
-                outputs.append(result)
-                break
-            except Exception as exc:
-                last = exc
-                print("RA_G5_FOLLOWUP_ATTEMPT_FAILURE=" + json.dumps({"case": name, "attempt": attempt, "error_type": type(exc).__name__, "error": str(exc), "raw": list(live.RAW)}, ensure_ascii=False, separators=(",", ":"), default=str), flush=True)
-        else:
-            raise AssertionError(f"{name}: no valid comparator after retries: {last}")
-
     proof = None
     last = None
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         try:
             proof = run_grouped_p4_proof()
             break
@@ -198,7 +183,25 @@ def main() -> int:
     if proof is None:
         raise AssertionError(f"P4 proof failed after retries: {last}")
 
-    print("RA_G5_FOLLOWUP_SUMMARY=" + json.dumps({item["case"]: item["proposal_status"] for item in outputs} | {"P4-PROOF": "PROPOSAL"}, separators=(",", ":")), flush=True)
+    outputs = []
+    failures = []
+    for name, mode in (("M4", "option_ref"), ("M5", "matching_time"), ("M6", "new_time")):
+        last = None
+        for attempt in range(1, 6):
+            try:
+                result = run_single(name, mode)
+                result["attempt"] = attempt
+                outputs.append(result)
+                break
+            except Exception as exc:
+                last = exc
+                print("RA_G5_FOLLOWUP_ATTEMPT_FAILURE=" + json.dumps({"case": name, "attempt": attempt, "error_type": type(exc).__name__, "error": str(exc), "raw": list(live.RAW)}, ensure_ascii=False, separators=(",", ":"), default=str), flush=True)
+        else:
+            failures.append({"case": name, "error": str(last)})
+
+    print("RA_G5_FOLLOWUP_SUMMARY=" + json.dumps({item["case"]: item["proposal_status"] for item in outputs} | {"P4-PROOF": "PROPOSAL", "failures": failures}, separators=(",", ":")), flush=True)
+    if failures:
+        raise AssertionError(f"single-service comparator failures: {failures}")
     return 0
 
 

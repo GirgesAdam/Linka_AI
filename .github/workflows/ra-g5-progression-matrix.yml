@@ -85,5 +85,5 @@ jobs:
       - name: Apply clean migrations
         run: python -m alembic upgrade head
       - name: Run M1-M6
-        run: python scripts/run_ra_g5_p4_proof.py
+        run: python scripts/run_ra_g5_single_matrix.py
 
