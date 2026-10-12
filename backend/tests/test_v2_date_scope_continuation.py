@@ -233,9 +233,10 @@ def test_d4_explicit_service_and_date_change_does_not_retain_old_service() -> No
     operation, step = _merge_and_plan(
         semantic,
         raw,
-        _operation(semantic, service_id=FULL_ARMS),
+        _operation(semantic, service_id=FULL_ARMS, carry_old_device_ref=True),
     )
     assert semantic.resolve(operation.entities.service.ref, expected_kind="service") == FULL_ARMS
+    assert semantic.resolve(operation.entities.device.ref, expected_kind="device") == CANDELA
     assert step.disposition == "read"
     assert step.reads[0].parameters["service_id"] == FULL_ARMS
     assert step.reads[0].parameters["date"]["start_date"] == WEDNESDAY

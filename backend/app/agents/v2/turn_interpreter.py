@@ -752,6 +752,31 @@ def _is_bare_reference_to(value: EntityReference | None, ref: object) -> bool:
         and not (isinstance(value.text, str) and value.text.strip())
     )
 
+def _reference_compatible_with_service(
+    semantic_context: SemanticContext,
+    *,
+    service_ref: str | None,
+    identity_ref: object,
+    field: str,
+) -> bool | None:
+    if not isinstance(service_ref, str) or not service_ref:
+        return None
+    if not isinstance(identity_ref, str) or not identity_ref:
+        return None
+    if field == "device":
+        mapping = semantic_context.model_input.get("service_device_refs")
+        allowed = mapping.get(service_ref) if isinstance(mapping, dict) else None
+    elif field == "doctor":
+        focus = semantic_context.server_metadata.get("focus_details")
+        service_detail = focus.get(service_ref) if isinstance(focus, dict) else None
+        allowed = service_detail.get("doctor_refs") if isinstance(service_detail, dict) else None
+    else:
+        return None
+    if not isinstance(allowed, list):
+        return None
+    return identity_ref in allowed
+
+
 def merge_presented_availability_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
@@ -811,10 +836,22 @@ def merge_presented_availability_context(
 
                 if service_changed:
                     # A bare technical ref matching the previous verified scope is
-                    # inherited context, not an explicit customer override. Never
-                    # carry it into a newly selected service.
+                    # inherited context, not an explicit customer override. Retain it
+                    # only when the server-owned relationship map proves compatibility
+                    # with the newly selected service; otherwise fail closed.
                     if _is_bare_reference_to(current, prior_ref):
-                        updates[field] = None
+                        compatible = _reference_compatible_with_service(
+                            semantic_context,
+                            service_ref=(
+                                current_service.ref
+                                if current_service is not None
+                                else None
+                            ),
+                            identity_ref=prior_ref,
+                            field=field,
+                        )
+                        if compatible is not True:
+                            updates[field] = None
                     continue
 
                 if _entity_reference_has_identity(current):
