@@ -356,14 +356,13 @@ def _service_catalog_facts(
                 shaped["selected_laser_device"] = {
                     "device_name": selected.get("device_name"),
                     "price": selected["price"],
-                    "duration_minutes": selected.get("duration_minutes"),
                 }
             elif selected_device_key is None and priced_devices:
                 shaped["laser_devices"] = [
                     {
                         "device_name": device.get("device_name"),
                         "price": device["price"],
-                        "duration_minutes": device.get("duration_minutes"),
+                        **({"duration_minutes": device.get("duration_minutes")} if device.get("duration_minutes") is not None else {}),
                     }
                     for device in priced_devices
                 ]
