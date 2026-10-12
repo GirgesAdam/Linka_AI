@@ -150,6 +150,32 @@ _ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
     },
 }
 
+_BOOKING_PHRASES_AR_BY_STATUS: dict[str, dict[ComposerStyle, str]] = {
+    "pending": {
+        "plain": "تم تسجيل الحجز وحالته قيد الانتظار",
+        "warm": "الحجز اتسجل وحالته قيد الانتظار",
+        "friendly": "سجلنالك الحجز وحالته قيد الانتظار",
+    },
+    "neutral": {
+        "plain": "تم تسجيل الحجز",
+        "warm": "الحجز اتسجل",
+        "friendly": "سجلنالك الحجز",
+    },
+}
+
+_BOOKING_PHRASES_EN_BY_STATUS: dict[str, dict[ComposerStyle, str]] = {
+    "pending": {
+        "plain": "Your booking was registered and is pending",
+        "warm": "Your booking is registered and pending",
+        "friendly": "I've registered your booking; it's pending",
+    },
+    "neutral": {
+        "plain": "Your booking was registered",
+        "warm": "Your booking is registered",
+        "friendly": "I've registered your booking",
+    },
+}
+
 _ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
     "booking_completed": {
         "plain": "Your booking is confirmed",
@@ -594,6 +620,13 @@ def _deduplicate_time_facts(keys: list[str]) -> list[str]:
     return [key for key in keys if key not in {"date", "time"}]
 
 
+def _booking_status(unit: CustomerResponseUnit) -> str | None:
+    for fact in unit.facts:
+        if fact.key == "status" and fact.value not in (None, ""):
+            return str(fact.value).strip().casefold() or None
+    return None
+
+
 def _action_phrase(
     unit: CustomerResponseUnit,
     *,
@@ -603,7 +636,20 @@ def _action_phrase(
 ) -> str:
     phrases = _ACTION_PHRASES_AR if arabic else _ACTION_PHRASES_EN
     try:
-        phrase = phrases[unit.response_goal][style]
+        if unit.response_goal == "booking_completed":
+            status = _booking_status(unit)
+            if status == "confirmed":
+                phrase = phrases[unit.response_goal][style]
+            else:
+                status_key = "pending" if status == "pending" else "neutral"
+                booking_phrases = (
+                    _BOOKING_PHRASES_AR_BY_STATUS
+                    if arabic
+                    else _BOOKING_PHRASES_EN_BY_STATUS
+                )
+                phrase = booking_phrases[status_key][style]
+        else:
+            phrase = phrases[unit.response_goal][style]
     except KeyError as exc:
         raise TerminalComposerValidationError(
             "Unsupported terminal action phrase."

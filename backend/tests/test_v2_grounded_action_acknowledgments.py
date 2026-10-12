@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.v2.turn_contract import (
+    AppointmentSelector,
     DateConstraint,
     EntityReference,
     Selection,
@@ -19,6 +20,7 @@ from app.services.agent_v2.orchestrator import (
     _canonical_recent_reschedule_is_current,
     _completed_action_context,
     _normalize_recent_action_acknowledgments,
+    _recent_booking_confirmation_ack_validation_request,
     _recent_booking_validation_request,
     _recent_reschedule_validation_request,
     _reschedule_acknowledgment_step,
@@ -690,3 +692,108 @@ def test_failed_or_unverified_write_never_creates_acknowledgment_context() -> No
             "status": "confirmed",
         },
     ) is None
+
+def _repeat_confirmation_step() -> PlanStep:
+    return PlanStep(
+        operation_index=0,
+        operation_type="confirm_appointment",
+        disposition="read",
+        reads=[ReadRequest(kind="appointments", parameters={"appointment_id": "appointment-1"})],
+        write_intent=WriteIntent(
+            kind="confirm_appointment",
+            authorized=True,
+            parameters={"appointment_id": "appointment-1"},
+            requires_verification=True,
+        ),
+        response_goal="appointment_confirmed",
+        facts={"source_appointment": {"appointment_id": "appointment-1"}},
+    )
+
+
+def _repeat_confirmation_operation(
+    *,
+    continues_previous: bool = True,
+    explicit_target: bool = False,
+    source_text: str | None = None,
+) -> TurnOperation:
+    return TurnOperation(
+        type="confirm_appointment",
+        entities=TurnEntities(
+            appointment=(
+                EntityReference(ref="A1", text="the appointment")
+                if explicit_target
+                else None
+            ),
+        ),
+        source_appointment=AppointmentSelector(
+            appointment=EntityReference(ref="A1", text=source_text),
+        ),
+        execution_intent="execute",
+        continues_previous=continues_previous,
+    )
+
+
+def test_context_inferred_appointment_ref_does_not_authorize_repeat_confirmation() -> None:
+    operation = _repeat_confirmation_operation().model_copy(
+        update={
+            "entities": TurnEntities(
+                appointment=EntityReference(ref="A1"),
+            )
+        }
+    )
+    request = _recent_booking_confirmation_ack_validation_request(
+        _repeat_confirmation_step(),
+        operation,
+        _recent_booking(status="pending"),
+    )
+
+    assert request == ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": "appointment-1"},
+    )
+
+
+def test_bare_repeat_confirmation_after_recent_booking_requires_canonical_read() -> None:
+    request = _recent_booking_confirmation_ack_validation_request(
+        _repeat_confirmation_step(),
+        _repeat_confirmation_operation(),
+        _recent_booking(status="pending"),
+    )
+
+    assert request == ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": "appointment-1"},
+    )
+    assert _canonical_recent_booking_is_current(
+        _recent_booking(status="pending"),
+        _booking_validation_bundle(status="pending"),
+    ) is True
+    acknowledged = _booking_acknowledgment_step(_repeat_confirmation_step())
+    assert acknowledged.disposition == "respond"
+    assert acknowledged.write_intent is None
+    assert acknowledged.response_goal == "social_ack"
+
+
+@pytest.mark.parametrize(
+    ("operation", "reason"),
+    [
+        (_repeat_confirmation_operation(continues_previous=False), "not a continuation"),
+        (_repeat_confirmation_operation(explicit_target=True), "explicit appointment target"),
+        (
+            _repeat_confirmation_operation(source_text="the appointment"),
+            "explicit source appointment text",
+        ),
+    ],
+)
+def test_explicit_existing_appointment_confirmation_is_not_collapsed_to_booking_ack(
+    operation: TurnOperation,
+    reason: str,
+) -> None:
+    assert (
+        _recent_booking_confirmation_ack_validation_request(
+            _repeat_confirmation_step(),
+            operation,
+            _recent_booking(status="pending"),
+        )
+        is None
+    ), reason

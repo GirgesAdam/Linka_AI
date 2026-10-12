@@ -1449,6 +1449,64 @@ def _acknowledgment_facts(action: str, *, same_booking: bool = False) -> dict[st
     }
 
 
+def _bare_recent_booking_confirmation_ack(
+    step: PlanStep,
+    operation: TurnOperation,
+    recent_action: dict[str, object],
+) -> bool:
+    """Treat a bare post-booking confirmation as an acknowledgment, not a status mutation.
+
+    The model may semantically classify a short continuation such as a repeated
+    confirmation as ``confirm_appointment`` after the booking write has already
+    succeeded.  Recent action context identifies that just-completed booking, but
+    it is not lifecycle authority.  Only collapse the turn when the customer did
+    not explicitly target an appointment or appointment field; the caller then
+    revalidates the recent appointment canonically before suppressing the write.
+    """
+
+    if (
+        step.operation_type != "confirm_appointment"
+        or recent_action.get("operation_type") != "book"
+        or recent_action.get("status") not in {"pending", "confirmed"}
+        or not operation.continues_previous
+        or operation.selection is not None
+        or operation.active_task_explicit_fields
+        or operation.fresh_task_explicit_fields
+        or operation.appointment_action_explicit_fields
+        or (
+            operation.entities.appointment is not None
+            and operation.entities.appointment.text not in (None, "")
+        )
+    ):
+        return False
+
+    source = operation.source_appointment
+    source_appointment = source.appointment if source is not None else None
+    if source_appointment is not None and source_appointment.text not in (None, ""):
+        return False
+    return True
+
+
+def _recent_booking_confirmation_ack_validation_request(
+    step: PlanStep,
+    operation: TurnOperation,
+    recent_action: dict[str, object] | None,
+) -> ReadRequest | None:
+    if not isinstance(recent_action, dict) or not _bare_recent_booking_confirmation_ack(
+        step,
+        operation,
+        recent_action,
+    ):
+        return None
+    appointment_id = recent_action.get("appointment_id")
+    if appointment_id in (None, ""):
+        return None
+    return ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": str(appointment_id)},
+    )
+
+
 def _recent_booking_validation_request(
     step: PlanStep,
     operation: TurnOperation,
@@ -2425,6 +2483,12 @@ def orchestrate_v2_turn(
             recent_action_context,
             timezone_name=timezone_name,
         )
+        if recent_booking_validation is None:
+            recent_booking_validation = _recent_booking_confirmation_ack_validation_request(
+                effective_step,
+                operation,
+                recent_action_context,
+            )
         recent_reschedule_validation = _recent_reschedule_validation_request(
             effective_step,
             operation,

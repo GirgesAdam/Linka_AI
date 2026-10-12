@@ -168,7 +168,7 @@ def test_booking_exact_values_are_backend_resolved_from_fact_refs() -> None:
         arabic=True,
     )
 
-    assert "حجزك اتأكد" in text
+    assert "الحجز اتسجل" in text
     assert "Full Legs Laser" in text
     assert "Prime Lase" in text
     assert "الاثنين 28 سبتمبر" in text
@@ -212,7 +212,7 @@ def test_package_backed_booking_acknowledges_package_without_pulse_claim() -> No
     )
     text = deterministic_terminal_fallback(contract, arabic=True)
 
-    assert "حجزك اتأكد" in text
+    assert "الحجز اتسجل" in text
     assert "الباكدج الحالية" in text
     assert "Pulse" not in text
     assert "دفع" not in text
@@ -226,7 +226,7 @@ def test_minimal_booking_still_has_successful_action_acknowledgment() -> None:
 
     text = deterministic_terminal_fallback(contract, arabic=True)
 
-    assert text == "تمام، حجزك اتأكد."
+    assert text == "تمام، الحجز اتسجل."
 
 
 def test_booking_availability_evidence_never_becomes_availability_response() -> None:
@@ -735,7 +735,7 @@ def test_provider_failure_uses_terminal_contract_fallback(
     )
 
     assert source == "deterministic:terminal-contract-fallback"
-    assert "حجزك اتأكد" in text
+    assert "الحجز اتسجل" in text
     assert "Laser" in text
 
 
@@ -766,7 +766,7 @@ def test_invalid_structured_draft_uses_terminal_contract_fallback(
     )
 
     assert source == "deterministic:terminal-contract-fallback"
-    assert "حجزك اتأكد" in text
+    assert "الحجز اتسجل" in text
 
 
 def test_valid_composer_source_is_observable(
@@ -889,7 +889,7 @@ def test_mixed_terminal_and_nonterminal_preserves_terminal_truth_without_model(
     )
 
     assert source == "deterministic:mixed-typed-contract"
-    assert "حجزك اتأكد" in text
+    assert "الحجز اتسجل" in text
     assert "123" not in text
 
 def test_active_task_cancelled_stays_on_legacy_responder(
