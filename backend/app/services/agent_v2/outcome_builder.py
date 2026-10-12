@@ -315,6 +315,7 @@ def _priced_laser_devices(service: dict[str, object]) -> list[dict[str, object]]
                 "device_key": device.get("device_key"),
                 "device_name": device.get("device_name"),
                 "price": price,
+                "duration_minutes": device.get("duration_minutes"),
             }
         )
     return priced
@@ -361,6 +362,7 @@ def _service_catalog_facts(
                     {
                         "device_name": device.get("device_name"),
                         "price": device["price"],
+                        **({"duration_minutes": device.get("duration_minutes")} if device.get("duration_minutes") is not None else {}),
                     }
                     for device in priced_devices
                 ]

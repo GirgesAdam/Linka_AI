@@ -78,6 +78,7 @@ class CommercialPriceOption(StrictResponseContractModel):
     amount: str
     currency: str
     device_name: str | None = None
+    duration_minutes: int | None = None
     sessions_count: int | None = None
 
 
@@ -512,6 +513,7 @@ def _commercial_option(
     price: object,
     currency_hint: object = None,
     device_name: object = None,
+    duration_minutes: object = None,
     sessions_count: object = None,
 ) -> CommercialPriceOption | None:
     clean_service = str(service_name or "").strip()
@@ -520,6 +522,14 @@ def _commercial_option(
         return None
     amount, currency = parts
     clean_device = str(device_name or "").strip() or None
+    duration: int | None = None
+    if duration_minutes not in (None, ""):
+        try:
+            duration = int(duration_minutes)
+        except (TypeError, ValueError):
+            return None
+        if duration <= 0:
+            return None
     sessions: int | None = None
     if sessions_count not in (None, ""):
         try:
@@ -538,6 +548,7 @@ def _commercial_option(
         amount=amount,
         currency=currency,
         device_name=clean_device,
+        duration_minutes=duration,
         sessions_count=sessions,
     )
 
@@ -563,6 +574,7 @@ def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | Non
             service_name=service_name,
             price=_price_value(selected),
             device_name=selected.get("device_name"),
+            duration_minutes=selected.get("duration_minutes"),
         )
         if option is not None:
             return CommercialTruth(
@@ -584,6 +596,7 @@ def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | Non
                     service_name=service_name,
                     price=_price_value(row),
                     device_name=row.get("device_name"),
+                    duration_minutes=row.get("duration_minutes"),
                 )
             )
             is not None
@@ -686,6 +699,7 @@ def _device_clarification_commercial_truth(
                 service_name=service_name,
                 price=_price_value(raw),
                 device_name=raw.get("device_name"),
+                duration_minutes=raw.get("duration_minutes"),
             )
         )
         is not None

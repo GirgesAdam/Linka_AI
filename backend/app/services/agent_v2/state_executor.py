@@ -220,9 +220,18 @@ def reconcile_booking_service_set_state(
             current = apply_booking_device_change(current, device_key=None)
         visit_devices: dict[str, str] = {}
     elif selected_device is not None and selected_device not in common_devices:
-        current = apply_booking_device_change(current, device_key=None)
-        visit_devices = {}
+        replacement_device = common_devices[0] if len(common_devices) == 1 else None
+        current = apply_booking_device_change(current, device_key=replacement_device)
+        visit_devices = (
+            {service_id: replacement_device for service_id in laser_ids}
+            if replacement_device is not None
+            else {}
+        )
     elif selected_device is not None:
+        visit_devices = {service_id: selected_device for service_id in laser_ids}
+    elif len(common_devices) == 1:
+        selected_device = common_devices[0]
+        current = apply_booking_device_change(current, device_key=selected_device)
         visit_devices = {service_id: selected_device for service_id in laser_ids}
     else:
         visit_devices = {}
