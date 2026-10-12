@@ -89,6 +89,10 @@ from app.services.agent_v2.read_executor import (
     ReadExecutionContext,
     execute_step_reads,
 )
+from app.services.agent_v2.reference_resolution import (
+    resolve_verified_availability_reference,
+    resolve_verified_availability_scope,
+)
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingProposal,
@@ -2047,6 +2051,44 @@ def orchestrate_v2_turn(
                     )
                 ]
             )
+            if (
+                initial_task is None
+                and decision.selection_scope != "none"
+                and availability_reference_context is not None
+            ):
+                verified_scope = resolve_verified_availability_scope(
+                    option_ref=decision.option_ref,
+                    selection_scope=decision.selection_scope,
+                    read_context=availability_reference_context,
+                )
+                resolution_status = resolve_verified_availability_reference(
+                    Selection(kind="ref", ref=decision.option_ref),
+                    availability_reference_context,
+                    explicit_user_time=selection_time,
+                ).get("status")
+                if (
+                    verified_scope.get("status") == "resolved"
+                    and resolution_status == "window_ambiguous"
+                ):
+                    reference_plan_override = TurnPlan(
+                        steps=[
+                            PlanStep(
+                                operation_index=0,
+                                operation_type="availability",
+                                disposition="clarify",
+                                response_goal="clarification",
+                                clarification_field="availability_reference",
+                                facts={
+                                    "verified_availability_reference": True,
+                                    "availability_reference_reason": "window_ambiguous",
+                                    "availability_reference_index": verified_scope.get("index"),
+                                    "availability_reference_option_ref": decision.option_ref,
+                                    "availability_reference_scope_field": verified_scope.get("field"),
+                                    "availability_reference_scope_value": verified_scope.get("value"),
+                                },
+                            )
+                        ]
+                    )
         full_interpreter_called = False
     elif decision is not None and decision.action == "clarify":
         understanding = TiaTurnUnderstanding(

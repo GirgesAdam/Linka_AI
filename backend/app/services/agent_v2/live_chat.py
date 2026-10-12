@@ -733,6 +733,14 @@ def _availability_reference_context_from_turn(
         context = dict(previous_context)
         selected_ref = step.facts.get("availability_reference_option_ref")
         pending_time = step.facts.get("availability_reference_pending_time")
+        scope_field = step.facts.get("availability_reference_scope_field")
+        scope_value = step.facts.get("availability_reference_scope_value")
+        if (
+            scope_field in {"doctor_id", "device_key"}
+            and isinstance(scope_value, str)
+            and scope_value
+        ):
+            context[str(scope_field)] = scope_value
         if isinstance(selected_ref, str) and selected_ref:
             context["last_selected_option_ref"] = selected_ref
             context.pop("pending_exact_time", None)

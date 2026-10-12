@@ -74,6 +74,51 @@ def _safe_slot(slot: dict[str, object]) -> dict[str, object]:
     return {key: slot[key] for key in keys if slot.get(key) not in (None, "")}
 
 
+def _one_shared_value(
+    rows: list[dict[str, object]],
+    key: str,
+) -> object | None:
+    values = {str(row.get(key)) for row in rows if row.get(key) not in (None, "")}
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def resolve_verified_availability_scope(
+    *,
+    option_ref: str,
+    selection_scope: str,
+    read_context: dict[str, Any] | None,
+) -> dict[str, object]:
+    """Resolve one semantic doctor/device choice against current server-owned options."""
+    field = {"doctor": "doctor_id", "device": "device_key"}.get(selection_scope)
+    if field is None:
+        return {"status": "unavailable"}
+    raw_options = (read_context or {}).get("availability_reference_options")
+    options = (
+        [dict(item) for item in raw_options if isinstance(item, dict)]
+        if isinstance(raw_options, list)
+        else []
+    )
+    matches = [
+        option
+        for option in options
+        if str(option.get("option_ref") or "") == option_ref
+    ]
+    if len(matches) != 1:
+        return {"status": "unavailable"}
+    option = matches[0]
+    value = option.get(field)
+    raw_index = option.get("index")
+    if value in (None, "") or not isinstance(raw_index, int) or isinstance(raw_index, bool):
+        return {"status": "unavailable"}
+    return {
+        "status": "resolved",
+        "index": raw_index,
+        "option_ref": option_ref,
+        "field": field,
+        "value": str(value),
+    }
+
+
 def build_availability_reference_options(
     *,
     displayed_windows: list[dict[str, object]],
@@ -113,6 +158,12 @@ def build_availability_reference_options(
             "laser_device_name": window.get("laser_device_name"),
             "canonical_slot_count": len(candidates),
         }
+        shared_doctor_id = _one_shared_value(candidates, "doctor_id")
+        shared_device_key = _one_shared_value(candidates, "laser_device_key")
+        if shared_doctor_id is not None:
+            option["doctor_id"] = shared_doctor_id
+        if shared_device_key is not None:
+            option["device_key"] = shared_device_key
         if concrete:
             option["slot"] = _safe_slot(exact[0])
         options.append({key: value for key, value in option.items() if value not in (None, "")})

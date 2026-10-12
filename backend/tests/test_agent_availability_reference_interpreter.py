@@ -49,7 +49,19 @@ def _context(*, selected: str | None = None) -> dict[str, object]:
 
 
 def test_reference_decision_contract_is_tiny_and_rejects_invalid_ref_shape() -> None:
-    assert ReferenceDecision(action="select_presented_option", option_ref="opt_2").option_ref == "opt_2"
+    selected = ReferenceDecision(action="select_presented_option", option_ref="opt_2")
+    assert selected.option_ref == "opt_2"
+    assert selected.selection_scope == "none"
+    assert ReferenceDecision(
+        action="select_presented_option",
+        option_ref="opt_2",
+        selection_scope="device",
+    ).selection_scope == "device"
+    assert ReferenceDecision(
+        action="select_presented_option",
+        option_ref="opt_2",
+        selection_scope="doctor",
+    ).selection_scope == "doctor"
     assert ReferenceDecision(action="refresh_availability", option_ref=None).option_ref is None
     exact = ReferenceDecision(action="new_search", option_ref=None, exact_time="03:00")
     assert exact.exact_time == "03:00"
@@ -71,6 +83,8 @@ def test_reference_decision_contract_is_tiny_and_rejects_invalid_ref_shape() -> 
     assert clarified_exact.exact_time == "16:00"
     with pytest.raises(ValueError):
         ReferenceDecision(action="normal", option_ref=None, exact_time="03:00")
+    with pytest.raises(ValueError):
+        ReferenceDecision(action="normal", option_ref=None, selection_scope="device")
 
 
 def test_presented_option_ref_normalizes_only_redundant_provider_coordinates() -> None:

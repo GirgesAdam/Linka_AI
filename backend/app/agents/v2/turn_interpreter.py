@@ -731,6 +731,52 @@ def _presented_option_by_ref(
     return dict(matches[0]) if len(matches) == 1 else None
 
 
+
+def _entity_reference_has_identity(value: EntityReference | None) -> bool:
+    if value is None:
+        return False
+    return bool(
+        value.ref
+        or value.candidate_refs
+        or (isinstance(value.text, str) and value.text.strip())
+    )
+
+
+def _is_bare_reference_to(value: EntityReference | None, ref: object) -> bool:
+    return bool(
+        value is not None
+        and isinstance(ref, str)
+        and ref
+        and value.ref == ref
+        and not value.candidate_refs
+        and not (isinstance(value.text, str) and value.text.strip())
+    )
+
+def _reference_compatible_with_service(
+    semantic_context: SemanticContext,
+    *,
+    service_ref: str | None,
+    identity_ref: object,
+    field: str,
+) -> bool | None:
+    if not isinstance(service_ref, str) or not service_ref:
+        return None
+    if not isinstance(identity_ref, str) or not identity_ref:
+        return None
+    if field == "device":
+        mapping = semantic_context.model_input.get("service_device_refs")
+        allowed = mapping.get(service_ref) if isinstance(mapping, dict) else None
+    elif field == "doctor":
+        focus = semantic_context.server_metadata.get("focus_details")
+        service_detail = focus.get(service_ref) if isinstance(focus, dict) else None
+        allowed = service_detail.get("doctor_refs") if isinstance(service_detail, dict) else None
+    else:
+        return None
+    if not isinstance(allowed, list):
+        return None
+    return identity_ref in allowed
+
+
 def merge_presented_availability_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
@@ -746,9 +792,104 @@ def merge_presented_availability_context(
         isinstance(followup, dict)
         and followup.get("action") == "refresh_availability"
     )
+    replace_search_scope = (
+        isinstance(followup, dict)
+        and followup.get("action") == "new_search"
+    )
     operations: list = []
     changed = False
     for operation in turn.operations:
+        if (
+            operation.type == "availability"
+            and replace_search_scope
+            and operation.continues_previous
+        ):
+            updates: dict[str, object] = {}
+            current_service = operation.entities.service
+            previous_service_ref = raw.get("service_ref")
+            service_has_identity = _entity_reference_has_identity(current_service)
+            service_changed = bool(
+                service_has_identity
+                and (
+                    not isinstance(previous_service_ref, str)
+                    or not previous_service_ref
+                    or current_service is None
+                    or current_service.ref != previous_service_ref
+                )
+            )
+
+            if not service_has_identity:
+                inherited_service = _reference_from_verified(
+                    raw,
+                    single_key="service_ref",
+                )
+                if inherited_service is not None:
+                    updates["service"] = inherited_service
+
+            recent_verified = semantic_context.model_input.get("recent_verified_read")
+            recent_verified = recent_verified if isinstance(recent_verified, dict) else {}
+            for field, key in (("doctor", "doctor_ref"), ("device", "device_ref")):
+                current = getattr(operation.entities, field)
+                prior_ref = raw.get(key)
+                if not isinstance(prior_ref, str) or not prior_ref:
+                    prior_ref = recent_verified.get(key)
+
+                if service_changed:
+                    # A bare technical ref matching the previous verified scope is
+                    # inherited context, not an explicit customer override. Retain it
+                    # only when the server-owned relationship map proves compatibility
+                    # with the newly selected service; otherwise fail closed.
+                    if _is_bare_reference_to(current, prior_ref):
+                        compatible = _reference_compatible_with_service(
+                            semantic_context,
+                            service_ref=(
+                                current_service.ref
+                                if current_service is not None
+                                else None
+                            ),
+                            identity_ref=prior_ref,
+                            field=field,
+                        )
+                        if compatible is not True:
+                            updates[field] = None
+                    continue
+
+                if _entity_reference_has_identity(current):
+                    continue
+                inherited = _reference_from_verified(raw, single_key=key)
+                if inherited is None and isinstance(prior_ref, str) and prior_ref:
+                    inherited = EntityReference(ref=prior_ref)
+                if inherited is not None:
+                    updates[field] = inherited
+
+            entities = (
+                operation.entities.model_copy(update=updates)
+                if updates
+                else operation.entities
+            )
+            package_usage = raw.get("package_usage")
+            normalized = operation.model_copy(
+                update={
+                    "entities": entities,
+                    "package_usage": (
+                        package_usage
+                        if operation.package_usage == "unspecified"
+                        and package_usage in {
+                            "unspecified",
+                            "use_existing",
+                            "avoid_existing",
+                        }
+                        else operation.package_usage
+                    ),
+                    "continues_previous": True,
+                    "fresh_task": False,
+                    "fresh_task_explicit_fields": [],
+                }
+            )
+            changed = changed or normalized != operation
+            operations.append(normalized)
+            continue
+
         if operation.type == "availability" and refresh_same_search:
             refresh_updates: dict[str, object] = {}
             inherited = (
