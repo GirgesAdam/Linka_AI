@@ -17,7 +17,6 @@ from app.services.whatsapp_interactions import (
     parse_whatsapp_booking_action,
 )
 
-
 AR_PENDING = "\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631"
 AR_REGISTERED = "\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062d\u062c\u0632"
 AR_REGISTERED_COLLOQUIAL = "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644"
