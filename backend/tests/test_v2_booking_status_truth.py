@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from uuid import uuid4
 
 from app.agents.v2.terminal_composer import (
@@ -14,6 +15,7 @@ from app.services.agent_v2.planner import PlanStep, WriteIntent
 from app.services.agent_v2.response_contract import build_customer_response_contract
 from app.services.whatsapp_interactions import (
     _booking_proposal_success_reply,
+    _process_booking_proposal_action,
     parse_whatsapp_booking_action,
 )
 
@@ -209,3 +211,8 @@ def test_structured_proposal_missing_status_is_conservative() -> None:
     text = _booking_proposal_success_reply({"ok": True})
     assert AR_REGISTERED in text
     _assert_no_ar_confirmation(text)
+
+
+def test_structured_proposal_confirm_callsite_uses_actual_write_result_status() -> None:
+    source = inspect.getsource(_process_booking_proposal_action)
+    assert "reply=_booking_proposal_success_reply(result)" in source

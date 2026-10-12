@@ -378,7 +378,7 @@ def _process_booking_proposal_action(
         conversation=conversation,
         inbound=inbound,
         run_id=run_id,
-        reply="تم تأكيد الحجز بكل الخدمات المطلوبة ✅",
+        reply=_booking_proposal_success_reply(result),
         action="proposal_confirm",
     )
 
