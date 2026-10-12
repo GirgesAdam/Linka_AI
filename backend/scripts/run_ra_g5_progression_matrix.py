@@ -19,7 +19,7 @@ SINGLE = (
     "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0639\u0644\u0649 Candela Gentle \u0645\u0639 \u062f. \u0645\u0631\u064a\u0645 \u0623\u062d\u0645\u062f\u060c "
     "\u0648\u0631\u064a\u0646\u064a \u0623\u0642\u0631\u0628 \u0645\u064a\u0639\u0627\u062f \u0645\u0646\u0627\u0633\u0628 \u0642\u0628\u0644 \u0645\u0627 \u062a\u062d\u062c\u0632"
 )
-PICK_FIRST = "\u0627\u0644\u0623\u0648\u0644 \u0645\u0646\u0627\u0633\u0628\u060c \u0627\u062d\u062c\u0632\u064a\u0647 \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
+PICK_FIRST = "\u0627\u0644\u0627\u062e\u062a\u064a\u0627\u0631 \u0631\u0642\u0645 1 \u0645\u0646\u0627\u0633\u0628\u060c \u0627\u062d\u062c\u0632\u064a\u0647 \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
 PICK_NEW = "\u0627\u0644\u0633\u0628\u062a \u0627\u0644\u0633\u0627\u0639\u0629 6 \u0645\u0633\u0627\u0621 \u0645\u0646\u0627\u0633\u0628\u060c \u0627\u062d\u062c\u0632\u064a\u0647 \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
 
 
@@ -250,11 +250,53 @@ def main():
         ("M5", False, "matching_time"),
         ("M6", False, "new_time"),
     ]
-    results = [run_case(*item) for item in matrix]
-    summary = {item["case"]: item["proposal_status"] for item in results}
-    print("RA_G5_MATRIX_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
+    results = []
+    for item in matrix:
+        case_name = item[0]
+        last_error = None
+        result = None
+        for attempt in range(1, 4):
+            try:
+                result = run_case(*item)
+                result["semantic_attempt"] = attempt
+                result["structured_output_failures_before_success"] = attempt - 1
+                break
+            except Exception as exc:
+                last_error = exc
+                print(
+                    "RA_G5_MATRIX_ATTEMPT_FAILURE="
+                    + json.dumps(
+                        {
+                            "case": case_name,
+                            "attempt": attempt,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                            "raw": list(live.RAW),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    ),
+                    flush=True,
+                )
+        if result is None:
+            result = {
+                "case": case_name,
+                "proposal_status": "STRUCTURED OUTPUT FAILURE",
+                "error_type": type(last_error).__name__ if last_error else None,
+                "error": str(last_error) if last_error else None,
+                "structured_output_failures_before_success": 3,
+            }
+            print(
+                "RA_G5_MATRIX="
+                + json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str),
+                flush=True,
+            )
+        results.append(result)
+    summary = {item["case"]: item["proposal_status"] for item in results}    print("RA_G5_MATRIX_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
