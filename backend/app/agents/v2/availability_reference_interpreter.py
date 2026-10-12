@@ -22,6 +22,7 @@ ReferenceAction = Literal[
     "clarify",
     "normal",
 ]
+ReferenceSelectionScope = Literal["none", "doctor", "device"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -56,6 +57,14 @@ class ReferenceDecision(BaseModel):
             "Python validates every carried clock against the current snapshot."
         ),
     )
+    selection_scope: ReferenceSelectionScope = Field(
+        default="none",
+        description=(
+            "For select_presented_option only: set doctor when the customer selected the displayed option "
+            "by doctor identity, device when they selected it by device identity, otherwise none. Python "
+            "validates the corresponding canonical value from the current server-owned option."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_option_ref(self) -> ReferenceDecision:
@@ -71,6 +80,10 @@ class ReferenceDecision(BaseModel):
         }:
             raise ValueError(
                 "exact_time is valid only for new_search, select_presented_option, or clarify."
+            )
+        if self.selection_scope != "none" and self.action != "select_presented_option":
+            raise ValueError(
+                "selection_scope is valid only for select_presented_option."
             )
         return self
 
@@ -95,6 +108,9 @@ Actions:
 - select_presented_option: the customer is selecting/correcting/referencing one displayed option and
   the intended option is unambiguous. Return that supplied option_ref. This includes references by
   position, displayed clock time, doctor/device when they identify one displayed window, or relative wording.
+  Set selection_scope=device only when the customer selected that option by its displayed device identity;
+  set selection_scope=doctor only when they selected it by displayed doctor identity; otherwise use none.
+  Do not infer a scope dimension merely because the displayed option happens to contain one.
   For a compressed window plus a customer clock, exact_time may carry the semantically understood 24-hour
   clock; Python validates it against the current server-owned exact slots.
 - refresh_availability: the customer wants Linka to check availability again / refresh the same search.
@@ -232,7 +248,7 @@ def interpret_availability_reference_turn(
     if last_provider_error is not None and not saw_structured_error:
         raise last_provider_error
     return ReferenceInterpretation(
-        decision=ReferenceDecision(action="clarify", option_ref=None),
+        decision=ReferenceDecision(action="clarify", option_ref=None, selection_scope="none"),
         model_name=None,
         structured_output_error=saw_structured_error,
     )

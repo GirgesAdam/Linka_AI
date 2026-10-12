@@ -42,7 +42,9 @@ from app.services.agent_v2.planner import (
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.reference_resolution import (
     build_availability_reference_options,
+    customer_safe_reference_option,
     resolve_verified_availability_reference,
+    resolve_verified_availability_scope,
 )
 from app.services.agent_v2.state import (
     BookingTaskState,
@@ -237,6 +239,153 @@ def test_compressed_availability_window_never_becomes_invented_slot() -> None:
         {"availability_reference_options": options},
     )
     assert resolved["status"] == "window_ambiguous"
+
+
+def test_compressed_window_exposes_only_internal_unique_scope_authority() -> None:
+    first = _slot("14:15", end="14:45")
+    second = _slot("14:45", end="15:15")
+    compressed = {
+        "start_local": first["start_local"],
+        "end_local": second["start_local"],
+        "start_time_24h": "14:15",
+        "end_time_24h": "14:45",
+        "doctor_name": "يوسف",
+        "laser_device_name": "Candela",
+    }
+    options = build_availability_reference_options(
+        displayed_windows=[compressed],
+        verified_slots=[first, second],
+    )
+    option = options[0]
+    assert option["concrete"] is False
+    assert option["doctor_id"] == DOCTOR_ID
+    assert option["device_key"] == DEVICE_KEY
+    assert "slot" not in option
+
+    safe = customer_safe_reference_option(option)
+    assert "doctor_id" not in safe
+    assert "device_key" not in safe
+    assert safe["doctor_name"] == "يوسف"
+    assert safe["laser_device_name"] == "Candela"
+
+    device = resolve_verified_availability_scope(
+        option_ref="opt_1",
+        selection_scope="device",
+        read_context={"availability_reference_options": options},
+    )
+    assert device == {
+        "status": "resolved",
+        "index": 1,
+        "option_ref": "opt_1",
+        "field": "device_key",
+        "value": DEVICE_KEY,
+    }
+    doctor = resolve_verified_availability_scope(
+        option_ref="opt_1",
+        selection_scope="doctor",
+        read_context={"availability_reference_options": options},
+    )
+    assert doctor["status"] == "resolved"
+    assert doctor["field"] == "doctor_id"
+    assert doctor["value"] == DOCTOR_ID
+
+
+def test_compressed_scope_resolution_fails_closed_when_candidate_scope_is_not_unique() -> None:
+    first = _slot("14:15", end="14:45")
+    second = _slot("14:45", end="15:15")
+    second["doctor_id"] = "doctor-other"
+    second["laser_device_key"] = "device-other"
+    compressed = {
+        "start_local": first["start_local"],
+        "end_local": second["start_local"],
+        "start_time_24h": "14:15",
+        "end_time_24h": "14:45",
+        "doctor_name": "mixed",
+        "laser_device_name": "mixed",
+    }
+    options = build_availability_reference_options(
+        displayed_windows=[compressed],
+        verified_slots=[first, second],
+    )
+    assert "doctor_id" not in options[0]
+    assert "device_key" not in options[0]
+    context = {"availability_reference_options": options}
+    assert resolve_verified_availability_scope(
+        option_ref="opt_1",
+        selection_scope="device",
+        read_context=context,
+    )["status"] == "unavailable"
+    assert resolve_verified_availability_scope(
+        option_ref="opt_1",
+        selection_scope="doctor",
+        read_context=context,
+    )["status"] == "unavailable"
+
+
+def test_verified_compressed_device_selection_persists_canonical_device_scope() -> None:
+    previous = _reference_context()
+    previous.pop("device_key", None)
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="clarify",
+        response_goal="clarification",
+        clarification_field="availability_reference",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_reason": "window_ambiguous",
+            "availability_reference_index": 1,
+            "availability_reference_option_ref": "opt_1",
+            "availability_reference_scope_field": "device_key",
+            "availability_reference_scope_value": DEVICE_KEY,
+        },
+    )
+    turn = SimpleNamespace(
+        plan=TurnPlan(steps=[step]),
+        outcomes=(TurnOutcome(status="needs_input", response_goal="clarification"),),
+    )
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    )
+    assert updated is not None
+    assert updated["device_key"] == DEVICE_KEY
+    assert updated["last_selected_option_ref"] == "opt_1"
+    assert updated["availability_reference_options"] == previous["availability_reference_options"]
+
+
+def test_verified_doctor_scope_does_not_invent_device_scope() -> None:
+    previous = _reference_context()
+    previous.pop("doctor_id", None)
+    previous.pop("device_key", None)
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="clarify",
+        response_goal="clarification",
+        clarification_field="availability_reference",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_reason": "window_ambiguous",
+            "availability_reference_index": 1,
+            "availability_reference_option_ref": "opt_1",
+            "availability_reference_scope_field": "doctor_id",
+            "availability_reference_scope_value": DOCTOR_ID,
+        },
+    )
+    turn = SimpleNamespace(
+        plan=TurnPlan(steps=[step]),
+        outcomes=(TurnOutcome(status="needs_input", response_goal="clarification"),),
+    )
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    )
+    assert updated is not None
+    assert updated["doctor_id"] == DOCTOR_ID
+    assert "device_key" not in updated
 
 
 def test_new_verified_date_context_replaces_old_reference_options() -> None:
