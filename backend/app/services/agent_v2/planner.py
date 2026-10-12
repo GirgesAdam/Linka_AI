@@ -208,6 +208,45 @@ def _base_parameters(
     return values, ambiguous
 
 
+def _verified_reference_parameters(resolution: dict[str, object]) -> dict[str, object]:
+    """Bind one Python-verified displayed option back to canonical booking facts."""
+    option = resolution.get("option")
+    slot = option.get("slot") if isinstance(option, dict) else None
+    if not isinstance(option, dict) or not isinstance(slot, dict):
+        return {}
+
+    params: dict[str, object] = {}
+    for source, target in (
+        ("service_id", "service_id"),
+        ("doctor_id", "doctor_id"),
+        ("branch_id", "branch_id"),
+        ("laser_device_key", "device_key"),
+    ):
+        value = slot.get(source)
+        if value not in (None, ""):
+            params[target] = str(value)
+
+    start_local = slot.get("start_local") or slot.get("start_at")
+    if isinstance(start_local, str) and start_local:
+        try:
+            selected_at = datetime.fromisoformat(start_local)
+        except ValueError:
+            selected_at = None
+        if selected_at is not None:
+            params["date"] = {
+                "mode": "exact",
+                "start_date": selected_at.date().isoformat(),
+                "end_date": None,
+            }
+            params["time"] = {
+                "mode": "exact",
+                "start_time": selected_at.strftime("%H:%M"),
+                "end_time": None,
+                "start_time_ambiguity": "none",
+            }
+    return params
+
+
 _EXPLICIT_TIME_AUTHORITY_PARAM = "_explicit_user_time_24h"
 
 
@@ -850,6 +889,9 @@ def _plan_operation(
                     ),
                 },
             )
+        params.update(_verified_reference_parameters(resolution))
+        params["verified_availability_reference"] = True
+        params["selected_option_ref"] = operation.selection.ref
 
     if operation.type == "human_support":
         financial = operation.financial_ownership == "reception"

@@ -455,6 +455,73 @@ def _availability_option_count_for_step(
     return None
 
 
+def _displayed_booking_availability_context_from_outcome(
+    turn: V2OrchestratedTurn,
+) -> dict[str, Any] | None:
+    """Recover displayed booking availability from runtime truth + task snapshot."""
+    task = turn.active_task
+    if not isinstance(task, BookingTaskState):
+        return None
+    snapshot = task.option_snapshot
+    if snapshot is None or snapshot.task_version != task.version or not snapshot.options:
+        return None
+
+    presented = next(
+        (
+            outcome
+            for outcome in reversed(turn.outcomes)
+            if outcome.response_goal == "present_availability"
+        ),
+        None,
+    )
+    if presented is None:
+        return None
+    service_name, windows = availability_windows_from_outcome_facts(presented.facts)
+    if not windows:
+        return None
+
+    selected_windows, selected_keys, has_more = select_availability_window_page(
+        windows,
+        service_name=service_name,
+    )
+    verified_slots: list[dict[str, object]] = []
+    for choice in snapshot.options:
+        payload = dict(choice.payload)
+        if payload.get("device_key") not in (None, ""):
+            payload.setdefault("laser_device_key", payload["device_key"])
+        verified_slots.append(payload)
+    reference_options = build_availability_reference_options(
+        displayed_windows=selected_windows,
+        verified_slots=verified_slots,
+    )
+    if not reference_options:
+        return None
+
+    constraints = task.constraints
+    context: dict[str, Any] = {
+        "operation_type": "book",
+        "availability_reference_options": reference_options,
+        "availability_presented_window_keys": sorted(selected_keys),
+        "availability_presentation_has_more": has_more,
+    }
+    for key in ("service_id", "doctor_id", "branch_id", "device_key"):
+        value = getattr(constraints, key, None)
+        if value not in (None, ""):
+            context[key] = str(value)
+    if constraints.date is not None:
+        context["date"] = constraints.date.model_dump(mode="json")
+    if constraints.time is not None:
+        context["time"] = constraints.time.model_dump(mode="json")
+    if constraints.package_usage not in (None, ""):
+        context["package_usage"] = constraints.package_usage
+    availability = presented.facts.get("availability")
+    if isinstance(availability, dict):
+        count = availability.get("available_option_count")
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            context["availability_option_count"] = count
+    return context
+
+
 def _verified_read_context_from_turn(
     db: Session,
     *,
@@ -463,15 +530,19 @@ def _verified_read_context_from_turn(
     previous_read_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Keep only the last read-only canonical scope plus a minimal verified result summary."""
-    for step in reversed(turn.plan.steps):
-        if step.facts.get("verified_availability_reference") is True and isinstance(
-            previous_read_context, dict
-        ):
-            context = dict(previous_read_context)
-            selected_index = step.facts.get("availability_reference_index")
-            if isinstance(selected_index, int) and not isinstance(selected_index, bool):
-                context["availability_reference_anchor_index"] = selected_index
-            return context
+    availability_presented = any(
+        outcome.response_goal == "present_availability" for outcome in getattr(turn, "outcomes", ())
+    )
+    if not availability_presented:
+        for step in reversed(turn.plan.steps):
+            if step.facts.get("verified_availability_reference") is True and isinstance(
+                previous_read_context, dict
+            ):
+                context = dict(previous_read_context)
+                selected_index = step.facts.get("availability_reference_index")
+                if isinstance(selected_index, int) and not isinstance(selected_index, bool):
+                    context["availability_reference_anchor_index"] = selected_index
+                return context
 
     for step in reversed(turn.plan.steps):
         if step.disposition != "read" or step.write_intent is not None or not step.reads:
@@ -613,8 +684,7 @@ def _verified_read_context_from_turn(
                 if ids:
                     context["doctor_ids"] = ids
         return context
-    return None
-
+    return _displayed_booking_availability_context_from_outcome(turn)
 
 def _availability_reference_context_from_turn(
     turn: V2OrchestratedTurn,
@@ -630,6 +700,31 @@ def _availability_reference_context_from_turn(
     ):
         return None
 
+    availability_presented = any(
+        outcome.response_goal == "present_availability" for outcome in getattr(turn, "outcomes", ())
+    )
+    if availability_presented and isinstance(verified_read_context, dict):
+        raw_options = verified_read_context.get("availability_reference_options")
+        if isinstance(raw_options, list) and raw_options:
+            context: dict[str, Any] = {
+                "availability_reference_options": [
+                    dict(item) for item in raw_options if isinstance(item, dict)
+                ]
+            }
+            for key in (
+                "service_id",
+                "doctor_id",
+                "doctor_ids",
+                "device_key",
+                "date",
+                "time",
+                "package_usage",
+            ):
+                value = verified_read_context.get(key)
+                if value not in (None, "", [], {}):
+                    context[key] = value
+            return context
+
     for step in reversed(turn.plan.steps):
         if step.facts.get("verified_availability_reference") is not True:
             continue
@@ -637,8 +732,14 @@ def _availability_reference_context_from_turn(
             return None
         context = dict(previous_context)
         selected_ref = step.facts.get("availability_reference_option_ref")
+        pending_time = step.facts.get("availability_reference_pending_time")
         if isinstance(selected_ref, str) and selected_ref:
             context["last_selected_option_ref"] = selected_ref
+            context.pop("pending_exact_time", None)
+        elif isinstance(pending_time, str) and pending_time:
+            context["pending_exact_time"] = pending_time
+        elif step.facts.get("availability_reference_reason") == "semantic_clarification":
+            context.pop("pending_exact_time", None)
         return context
 
     availability_read = any(
@@ -646,7 +747,7 @@ def _availability_reference_context_from_turn(
         for step in turn.plan.steps
         for request in step.reads
     )
-    if availability_read:
+    if availability_read or availability_presented:
         if not isinstance(verified_read_context, dict):
             return None
         raw_options = verified_read_context.get("availability_reference_options")

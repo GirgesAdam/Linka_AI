@@ -470,6 +470,16 @@ def adapt_matching_active_task_step(
                 context=context,
                 now=now,
             )
+            if step.facts.get("verified_availability_window_narrowing") is True:
+                for key in (
+                    "doctor_id",
+                    "device_key",
+                    "verified_availability_window_narrowing",
+                    "verified_availability_reference",
+                    "availability_reference_option_ref",
+                ):
+                    if key in step.facts:
+                        params[key] = step.facts[key]
             return step.model_copy(update={"facts": params})
         if operation.type == "book":
             # A persisted booking task is the single authoritative in-progress booking.
@@ -483,6 +493,19 @@ def adapt_matching_active_task_step(
                 context=context,
                 now=now,
             )
+            if step.facts.get("verified_availability_reference") is True:
+                for key in (
+                    "service_id",
+                    "doctor_id",
+                    "branch_id",
+                    "device_key",
+                    "date",
+                    "time",
+                    "selected_option_ref",
+                    "verified_availability_reference",
+                ):
+                    if key in step.facts:
+                        params[key] = step.facts[key]
             return PlanStep(
                 operation_index=step.operation_index,
                 operation_type=operation.type,
@@ -717,6 +740,16 @@ def _booking_progress(
             clarification_field="service",
             facts=params,
         )
+    if not state.requested_service_ids and state.derived.selected_slot_ref is not None:
+        # A customer selecting one server-owned availability option is a workflow
+        # selection, not an instruction to bypass the proposal/confirmation gate.
+        # Represent the single service as a one-item proposal set only for this
+        # already-verified selected-slot continuation.
+        params = {
+            **params,
+            "requested_service_ids": [service_id],
+            "booking_proposal_required": True,
+        }
     main_requires_device = _service_requires_device(service_id, context)
     laser_service_ids = _booking_laser_service_ids(state, context)
     requires_device = bool(laser_service_ids)

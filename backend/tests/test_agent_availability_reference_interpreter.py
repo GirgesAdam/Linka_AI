@@ -57,8 +57,20 @@ def test_reference_decision_contract_is_tiny_and_rejects_invalid_ref_shape() -> 
         ReferenceDecision(action="select_presented_option", option_ref=None)
     with pytest.raises(ValueError):
         ReferenceDecision(action="normal", option_ref="opt_1")
+    selected_exact = ReferenceDecision(
+        action="select_presented_option",
+        option_ref="opt_1",
+        exact_time="16:00",
+    )
+    assert selected_exact.exact_time == "16:00"
+    clarified_exact = ReferenceDecision(
+        action="clarify",
+        option_ref=None,
+        exact_time="16:00",
+    )
+    assert clarified_exact.exact_time == "16:00"
     with pytest.raises(ValueError):
-        ReferenceDecision(action="select_presented_option", option_ref="opt_1", exact_time="03:00")
+        ReferenceDecision(action="normal", option_ref=None, exact_time="03:00")
 
 
 def test_presented_option_ref_normalizes_only_redundant_provider_coordinates() -> None:
