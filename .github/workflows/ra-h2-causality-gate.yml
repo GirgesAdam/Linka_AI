@@ -1,0 +1,222 @@
+﻿name: RA-H2 Causality Gate
+
+on:
+  push:
+    branches:
+      - audit/ra-h2-causality-gate-20261012
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: BASE
+            sha: 46703fa668edf4523e0996d4e29ca0845e36b470
+          - label: HEAD
+            sha: bed1e53dc0130312a5eb794bd441a3a450b58cb9
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://ycuxjlkhnubztgqmhtom.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_ra_h2_unused
+      SUPABASE_SECRET_KEY: sb_secret_ra_h2_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      PROBE_LABEL: ${{ matrix.label }}
+      PROBE_SHA: ${{ matrix.sha }}
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 1
+      - name: Verify exact revision
+        run: |
+          test "$(git rev-parse HEAD)" = "$PROBE_SHA"
+          git status --short --branch
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify staging secret
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+      - name: Run 5 identical RA-H2 samples
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          from langchain_core.messages import AIMessage, HumanMessage
+
+          import app.agents.v2.turn_interpreter as ti
+          from app.services.agent_v2.state import BookingTaskState
+          from app.services.agent_v2.stateful_test_harness import run_v2_stateful_fixture_turn
+          from app.services.agent_v2.test_harness import V2FixtureEnvironment
+
+          LABEL = os.environ["PROBE_LABEL"]
+          SHA = os.environ["PROBE_SHA"]
+          TZ = "Africa/Cairo"
+          NOW = datetime(2026, 9, 11, 20, 0, tzinfo=ZoneInfo(TZ))
+          FIRST = "عايزة أحجز ليزر إبط وليزر بكيني مع بعض في نفس الزيارة، اختار دكتور واحد يعمل الاتنين ووريني أقرب ميعاد مناسب قبل ما تحجز"
+          SECOND = "السعر الإجمالي كام؟"
+          EXPECTED = {"svc-underarm", "svc-bikini"}
+
+          original_invoke = ti.invoke_typed_structured_output
+          raw_attempts = []
+
+          def dump(value):
+              if value is None:
+                  return None
+              if hasattr(value, "model_dump"):
+                  return value.model_dump(mode="json")
+              return str(value)
+
+          def capturing_invoke(*args, **kwargs):
+              model = kwargs.get("model") if "model" in kwargs else (args[0] if args else None)
+              model_name = getattr(model, "model_name", None) or getattr(model, "model", None) or type(model).__name__
+              try:
+                  value = original_invoke(*args, **kwargs)
+              except Exception as exc:
+                  raw_attempts.append({"status": "error", "model": str(model_name), "error_type": type(exc).__name__, "error": str(exc)})
+                  raise
+              raw_attempts.append({"status": "ok", "model": str(model_name), "structured": dump(value)})
+              return value
+
+          ti.invoke_typed_structured_output = capturing_invoke
+
+          def task_dump(task):
+              return dump(task)
+
+          def trace_dump(trace):
+              return {
+                  "operation_type": trace.operation_type,
+                  "disposition_before": trace.disposition_before,
+                  "disposition_after": trace.disposition_after,
+                  "read_kinds": list(trace.read_kinds),
+                  "simulated_write": trace.simulated_write,
+                  "outcome": dump(trace.outcome),
+              }
+
+          def run_turn(history, active_task, message, run_no, turn_no):
+              raw_attempts.clear()
+              before = task_dump(active_task)
+              history.append(HumanMessage(content=message))
+              result = run_v2_stateful_fixture_turn(
+                  history=history,
+                  local_now=NOW,
+                  timezone_name=TZ,
+                  clinic_name="Linka Test Clinic",
+                  env=V2FixtureEnvironment(),
+                  active_task=active_task,
+                  simulate_writes=True,
+                  turn_id=f"causality-{LABEL.lower()}-{run_no}-{turn_no}",
+              )
+              record = {
+                  "revision": LABEL,
+                  "sha": SHA,
+                  "sample": run_no,
+                  "turn": turn_no,
+                  "customer": message,
+                  "raw_model_structured_attempts": list(raw_attempts),
+                  "final_understanding": dump(result.understanding),
+                  "planner": dump(result.plan),
+                  "state_before": before,
+                  "state_after": task_dump(result.active_task),
+                  "traces": [trace_dump(t) for t in result.traces],
+                  "final_reply": result.reply,
+                  "responder_model": result.responder_model,
+              }
+              print("CAUSALITY_TRACE=" + json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str), flush=True)
+              history.append(AIMessage(content=result.reply))
+              return result
+
+          grouped = 0
+          clarifications = 0
+          structured_errors = 0
+          samples = []
+          for run_no in range(1, 6):
+              history = []
+              active = None
+              first = run_turn(history, active, FIRST, run_no, 1)
+              active = first.active_task
+              first_ids = list(active.requested_service_ids) if isinstance(active, BookingTaskState) else []
+              first_grouped = isinstance(active, BookingTaskState) and set(first_ids) == EXPECTED
+              if first_grouped:
+                  grouped += 1
+              first_service_clarify = any(
+                  step.disposition == "clarify" and step.clarification_field == "service"
+                  for step in first.plan.steps
+              )
+              if first_service_clarify:
+                  clarifications += 1
+
+              second = run_turn(history, active, SECOND, run_no, 2)
+              second_service_clarify = any(
+                  step.disposition == "clarify" and step.clarification_field == "service"
+                  for step in second.plan.steps
+              )
+              if second_service_clarify:
+                  clarifications += 1
+
+              samples.append({
+                  "sample": run_no,
+                  "first_grouped": first_grouped,
+                  "first_operation_types": [op.type for op in first.understanding.operations],
+                  "first_requested_service_ids": first_ids,
+                  "first_reply": first.reply,
+                  "second_operation_types": [op.type for op in second.understanding.operations],
+                  "second_requested_service_ids": list(second.active_task.requested_service_ids) if isinstance(second.active_task, BookingTaskState) else [],
+                  "second_reads": [kind for trace in second.traces for kind in trace.read_kinds],
+                  "second_reply": second.reply,
+              })
+
+          summary = {
+              "revision": LABEL,
+              "sha": SHA,
+              "runs": 5,
+              "grouped_success_count": grouped,
+              "grouped_success_rate": grouped / 5,
+              "service_clarification_turn_count": clarifications,
+              "structured_output_failures": structured_errors,
+              "samples": samples,
+          }
+          print("CAUSALITY_SUMMARY=" + json.dumps(summary, ensure_ascii=False, separators=(",", ":")), flush=True)
+          PY
