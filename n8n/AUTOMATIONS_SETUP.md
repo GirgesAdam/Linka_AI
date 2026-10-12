@@ -25,9 +25,12 @@ of a workflow builder:
   not completed a booking yet.
 
 There is no separate automatic booking-confirmation rule. A successful booking is
-confirmed immediately by the customer AI in the booking conversation after the
-deterministic booking operation succeeds. This avoids a duplicate delayed system
-message for the same action.
+not attendance confirmation, and there is no delayed automation that re-confirms **booking creation**. A successful
+booking conversation records the appointment as `pending` and acknowledges that the
+booking was registered. Attendance confirmation is a separate lifecycle event. The
+pre-appointment `appointment_reminder_6h` rule (historical database key) sends the
+current attendance-confirmation ticket, and only an explicit validated confirmation
+action changes the appointment to `confirmed`.
 
 Only the appointment reminder is enabled by default. Other optional features can
 be enabled or disabled independently by the admin.
@@ -135,7 +138,7 @@ shows every template and its live Meta status, for example `approved`, `pending`
 
 Current standard template names:
 
-- `tia_reminder_01` — configurable appointment reminder;
+- `tia_appointment_confirmation_01` — configurable attendance-confirmation ticket;
 - `tia_post_visit_01` — post-visit follow-up;
 - `tia_cancellation_recovery_ar` — cancellation/no-show recovery;
 - `tia_ai_followup_ar` — lead/AI CRM proactive follow-up outside the 24-hour window.
@@ -143,7 +146,7 @@ Current standard template names:
 The WhatsApp transport sends the exact number of positional body parameters
 required by the selected template. Current variable contracts are:
 
-- appointment reminder — **3 parameters**: customer name, service, appointment time;
+- attendance-confirmation ticket — **4 parameters**: customer name, service, appointment date, appointment time;
 - post-visit follow-up — **3 parameters**: customer name, service, session date;
 - cancellation recovery — **4 parameters**: customer name, service,
   cancelled/no-show appointment date, appointment time;
@@ -152,12 +155,14 @@ required by the selected template. Current variable contracts are:
 
 The reminder copy must stay timing-neutral because the admin controls when it is
 sent. Do not hardcode "6 hours" or any other delay inside the approved template.
-The current single-location experience also omits branch and appointment-date
-placeholders from the reminder itself.
+The current single-location experience omits the branch placeholder. The attendance-confirmation
+ticket intentionally includes the appointment date and time, but never hardcodes a relative delay.
 
 Canonical Arabic reminder and post-visit copy:
 
-- `tia_reminder_01`: `أهلًا {{1}} 👋 بفكرك إن عندك جلسة {{2}} الساعة {{3}}. مستنيينك 💛`
+- `tia_appointment_confirmation_01`: `أهلًا {{1}} 👋 ميعاد {{2}} بتاعك يوم {{3}} الساعة {{4}}. ياريت تأكد حضورك من الزر تحت، ولو محتاج تغيّر الميعاد اختار تغيير الميعاد 💛`
+  - quick replies: `تأكيد الحضور` and `تغيير الميعاد`
+  - action routing uses opaque structured payloads; button text is never write authority.
 - `tia_post_visit_01`: `إزيك {{1}}؟ حبيت أطمن عليكي بعد {{2}} اللي كانت يوم {{3}}. كل حاجة تمام؟`
 
 A toggle never creates or submits a template to Meta. Template provisioning is a
@@ -246,8 +251,8 @@ Do not create one n8n workflow or WhatsApp credential per clinic.
   second no-show automation;
 - changing a rule timing replans queued jobs;
 - disabling an optional rule cancels pending jobs;
-- successful booking confirmation belongs to the AI booking response, not the
-  automation scheduler;
+- successful booking creation is acknowledged by the AI booking response; attendance
+  confirmation remains a separate explicit appointment transition;
 - manual cancellation stays terminal;
 - duplicate scheduler ticks do not create duplicate jobs;
 - proactive WhatsApp routing can use the CRM patient phone when there is exactly

@@ -111,16 +111,19 @@ def test_automation_ui_exposes_configurable_reminder_timing() -> None:
 def test_setup_documents_timing_neutral_template_contract() -> None:
     setup = (_root() / "n8n/AUTOMATIONS_SETUP.md").read_text(encoding="utf-8")
 
-    assert "tia_reminder_01" in setup
+    assert "tia_appointment_confirmation_01" in setup
     assert "admin controls the timing" in setup
     assert 'Do not hardcode "6 hours"' in setup
     reminder_line = next(
         line for line in setup.splitlines()
-        if "tia_reminder_01" in line and "أهلًا" in line
+        if "tia_appointment_confirmation_01" in line and "أهلًا" in line
     )
-    assert "جلسة {{2}}" in reminder_line
+    assert "ميعاد {{2}}" in reminder_line
     assert "{{3}}" in reminder_line
-    assert "{{4}}" not in reminder_line and "{{5}}" not in reminder_line
+    assert "{{4}}" in reminder_line
+    assert "{{5}}" not in reminder_line
+    assert "تأكد حضورك" in reminder_line
+    assert "تغيير الميعاد" in reminder_line
     assert "فاضل" not in reminder_line
     assert "النهارده" not in reminder_line
 

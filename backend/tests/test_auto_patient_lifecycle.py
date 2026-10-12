@@ -130,7 +130,7 @@ def test_setup_documents_exact_template_contract_and_optional_care_messages() ->
     assert "exact number of positional body parameters" in setup
     assert "**4 parameters**" in setup
     assert "**3 parameters**" in setup
-    assert "tia_reminder_01" in setup
+    assert "tia_appointment_confirmation_01" in setup
     assert "tia_post_visit_01" in setup
     assert "Only the appointment reminder is enabled by default" in setup
     assert "post-visit" in setup.lower()

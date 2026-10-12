@@ -12,6 +12,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.automation_rules import DEFAULT_AUTOMATION_RULES, scheduled_for
+from app.core.whatsapp_booking_actions import (
+    attendance_confirm_action_id,
+    reschedule_action_id,
+)
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
@@ -34,8 +38,8 @@ from app.schemas.automation import AutomationClaimedJob, AutomationOperationsOve
 from app.schemas.crm import normalize_patient_identity_phone
 from app.services.activity import record_activity_event
 from app.services.appointment_confirmation import (
-    clamp_confirmation_delivery_time,
-    clamp_confirmation_delivery_time_for_timezones,
+    confirmation_ticket_delivery_time,
+    confirmation_ticket_delivery_time_for_timezones,
 )
 from app.services.conversation_ownership import record_outbound_activity, return_to_ai
 from app.services.crm_tasks import create_crm_task, sync_lead_next_follow_up
@@ -388,10 +392,11 @@ def _scheduled_for_candidate_state(rule: AutomationRule, state) -> datetime | No
         return None
     when = when.astimezone(UTC)
     if rule.key == "appointment_reminder_6h":
-        when = clamp_confirmation_delivery_time_for_timezones(
+        when = confirmation_ticket_delivery_time_for_timezones(
             branch_timezone=state.branch_timezone,
             workspace_timezone=state.workspace_timezone,
             start_at=state.start_at,
+            appointment_created_at=state.created_at,
             scheduled_for=when,
         )
     return when
@@ -956,11 +961,12 @@ def plan_automation_jobs(
                 continue
             when = when.astimezone(UTC)
             if rule.key == "appointment_reminder_6h":
-                when = clamp_confirmation_delivery_time(
+                when = confirmation_ticket_delivery_time(
                     db,
                     workspace_id=workspace_id,
                     branch_id=appointment.branch_id,
                     start_at=appointment.start_at,
+                    appointment_created_at=appointment.created_at,
                     scheduled_for=when,
                 )
             if when + timedelta(minutes=rule.max_lateness_minutes) < now:
@@ -2636,11 +2642,12 @@ def execute_job(
         return ExecutionResult(job=job, reason=job.result_json["reason"])
 
     if rule.key == "appointment_reminder_6h":
-        safe_scheduled_for = clamp_confirmation_delivery_time(
+        safe_scheduled_for = confirmation_ticket_delivery_time(
             db,
             workspace_id=workspace_id,
             branch_id=appointment.branch_id,
             start_at=appointment.start_at,
+            appointment_created_at=appointment.created_at,
             scheduled_for=job.scheduled_for,
         )
         if now < safe_scheduled_for:
@@ -2709,8 +2716,8 @@ def execute_job(
             "variant_count": template_variant_count,
             "button_payloads": (
                 [
-                    f"tia.booking.confirm:{appointment.id}",
-                    f"tia.booking.reschedule:{appointment.id}",
+                    attendance_confirm_action_id(appointment.id),
+                    reschedule_action_id(appointment.id),
                 ]
                 if rule.key == "appointment_reminder_6h"
                 else []

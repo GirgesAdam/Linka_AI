@@ -123,7 +123,9 @@ def test_reminder_and_post_visit_fallback_copy_match_current_template_contract()
     assert "تغيير الميعاد" in reminder
     assert "حبيت أطمن عليكي بعد {data['service_name']}" in post
     assert "كل حاجة تمام؟" in post
-    assert "جلسة {{2}}" in setup
+    assert "ميعاد {{2}}" in setup
+    assert "تأكد حضورك" in setup
+    assert "تغيير الميعاد" in setup
     assert "بعد {{2}}" in setup
 
 

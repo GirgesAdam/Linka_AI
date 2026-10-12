@@ -152,9 +152,9 @@ _ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
 
 _BOOKING_PHRASES_AR_BY_STATUS: dict[str, dict[ComposerStyle, str]] = {
     "pending": {
-        "plain": "تم تسجيل الحجز وحالته قيد الانتظار",
-        "warm": "الحجز اتسجل وحالته قيد الانتظار",
-        "friendly": "سجلنالك الحجز وحالته قيد الانتظار",
+        "plain": "تم تسجيل الحجز، وهو في انتظار تأكيد الحضور",
+        "warm": "الحجز اتسجل، ولسه في انتظار تأكيد الحضور",
+        "friendly": "سجلنالك الحجز، ولسه في انتظار تأكيد الحضور",
     },
     "neutral": {
         "plain": "تم تسجيل الحجز",
@@ -165,9 +165,9 @@ _BOOKING_PHRASES_AR_BY_STATUS: dict[str, dict[ComposerStyle, str]] = {
 
 _BOOKING_PHRASES_EN_BY_STATUS: dict[str, dict[ComposerStyle, str]] = {
     "pending": {
-        "plain": "Your booking was registered and is pending",
-        "warm": "Your booking is registered and pending",
-        "friendly": "I've registered your booking; it's pending",
+        "plain": "Your booking was registered and is awaiting attendance confirmation",
+        "warm": "Your booking is registered and awaiting attendance confirmation",
+        "friendly": "I've registered your booking; it's awaiting attendance confirmation",
     },
     "neutral": {
         "plain": "Your booking was registered",

@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.services.appointment_confirmation import (
     can_customer_confirm_appointment,
     clamp_confirmation_delivery_time,
+    confirmation_ticket_delivery_time_for_timezones,
     initial_confirmation_decision,
 )
 
@@ -32,7 +33,7 @@ def test_far_booking_is_pending() -> None:
     assert decision.confirmed_at is None
 
 
-def test_previous_local_calendar_day_booking_is_confirmed() -> None:
+def test_previous_local_calendar_day_booking_still_requires_explicit_attendance_confirmation() -> None:
     db = _db(branch_timezone="Africa/Cairo", workspace_timezone="UTC")
     now = datetime(2026, 10, 9, 9, 0, tzinfo=UTC)
     decision = initial_confirmation_decision(
@@ -42,20 +43,37 @@ def test_previous_local_calendar_day_booking_is_confirmed() -> None:
         start_at=datetime(2026, 10, 10, 16, 0, tzinfo=UTC),
         now=now,
     )
-    assert decision.status == "confirmed"
-    assert decision.confirmed_at == now
-
-
-def test_same_local_calendar_day_booking_is_confirmed() -> None:
-    db = _db(branch_timezone="Africa/Cairo", workspace_timezone="UTC")
-    decision = initial_confirmation_decision(
+    assert decision.status == "pending"
+    assert decision.confirmed_at is None
+    assert can_customer_confirm_appointment(
         db,
         workspace_id=uuid4(),
         branch_id=uuid4(),
         start_at=datetime(2026, 10, 10, 16, 0, tzinfo=UTC),
-        now=datetime(2026, 10, 10, 6, 0, tzinfo=UTC),
+        now=now,
     )
-    assert decision.status == "confirmed"
+
+
+def test_same_local_calendar_day_booking_still_requires_explicit_attendance_confirmation() -> None:
+    db = _db(branch_timezone="Africa/Cairo", workspace_timezone="UTC")
+    now = datetime(2026, 10, 10, 6, 0, tzinfo=UTC)
+    start = datetime(2026, 10, 10, 16, 0, tzinfo=UTC)
+    decision = initial_confirmation_decision(
+        db,
+        workspace_id=uuid4(),
+        branch_id=uuid4(),
+        start_at=start,
+        now=now,
+    )
+    assert decision.status == "pending"
+    assert decision.confirmed_at is None
+    assert can_customer_confirm_appointment(
+        db,
+        workspace_id=uuid4(),
+        branch_id=uuid4(),
+        start_at=start,
+        now=now,
+    )
 
 
 def test_timezone_boundary_uses_branch_local_date_not_utc_date() -> None:
@@ -71,7 +89,15 @@ def test_timezone_boundary_uses_branch_local_date_not_utc_date() -> None:
         start_at=start,
         now=now,
     )
-    assert decision.status == "confirmed"
+    assert decision.status == "pending"
+    assert decision.confirmed_at is None
+    assert can_customer_confirm_appointment(
+        db,
+        workspace_id=uuid4(),
+        branch_id=uuid4(),
+        start_at=start,
+        now=now,
+    )
 
 
 def test_workspace_timezone_is_fallback_when_branch_timezone_missing() -> None:
@@ -85,8 +111,16 @@ def test_workspace_timezone_is_fallback_when_branch_timezone_missing() -> None:
         start_at=start,
         now=now,
     )
-    assert decision.status == "confirmed"
+    assert decision.status == "pending"
+    assert decision.confirmed_at is None
     assert decision.timezone == "Asia/Dubai"
+    assert can_customer_confirm_appointment(
+        db,
+        workspace_id=uuid4(),
+        branch_id=uuid4(),
+        start_at=start,
+        now=now,
+    )
 
 
 def test_customer_confirmation_rejected_too_early_and_after_start() -> None:
@@ -119,6 +153,43 @@ def test_confirmation_delivery_is_clamped_to_previous_local_midnight() -> None:
         scheduled_for=datetime(2026, 10, 8, 16, 0, tzinfo=UTC),
     )
     assert clamped == datetime(2026, 10, 8, 21, 0, tzinfo=UTC)  # Oct 9 00:00 Cairo
+
+
+def test_confirmation_ticket_created_after_configured_time_sends_from_creation_time() -> None:
+    start = datetime(2026, 10, 10, 16, 0, tzinfo=UTC)
+    created_at = datetime(2026, 10, 10, 14, 0, tzinfo=UTC)
+    scheduled = confirmation_ticket_delivery_time_for_timezones(
+        branch_timezone="Africa/Cairo",
+        workspace_timezone="UTC",
+        start_at=start,
+        appointment_created_at=created_at,
+        scheduled_for=datetime(2026, 10, 10, 10, 0, tzinfo=UTC),
+    )
+    assert scheduled == created_at
+
+
+def test_confirmation_ticket_accepts_legacy_naive_utc_creation_timestamp() -> None:
+    created_at = datetime(2026, 10, 10, 14, 0)
+    scheduled = confirmation_ticket_delivery_time_for_timezones(
+        branch_timezone="Africa/Cairo",
+        workspace_timezone="UTC",
+        start_at=datetime(2026, 10, 10, 16, 0, tzinfo=UTC),
+        appointment_created_at=created_at,
+        scheduled_for=datetime(2026, 10, 10, 10, 0, tzinfo=UTC),
+    )
+    assert scheduled == created_at.replace(tzinfo=UTC)
+
+
+def test_confirmation_ticket_keeps_later_configured_time_when_booking_exists_early() -> None:
+    scheduled_for = datetime(2026, 10, 10, 10, 0, tzinfo=UTC)
+    scheduled = confirmation_ticket_delivery_time_for_timezones(
+        branch_timezone="Africa/Cairo",
+        workspace_timezone="UTC",
+        start_at=datetime(2026, 10, 10, 16, 0, tzinfo=UTC),
+        appointment_created_at=datetime(2026, 10, 8, 12, 0, tzinfo=UTC),
+        scheduled_for=scheduled_for,
+    )
+    assert scheduled == scheduled_for
 
 
 def test_invalid_branch_timezone_falls_back_to_workspace_timezone() -> None:
