@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -42,6 +43,13 @@ from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.reference_resolution import (
     build_availability_reference_options,
     resolve_verified_availability_reference,
+)
+from app.services.agent_v2.state import (
+    BookingTaskState,
+    CustomerConstraints,
+    OptionChoice,
+    OptionSnapshot,
+    WriteAuthorization,
 )
 
 NOW = datetime(2026, 10, 9, 21, 0, tzinfo=UTC)
@@ -919,3 +927,187 @@ def test_new_search_semantic_turn_invalidates_stale_presented_snapshot() -> None
         verified_read_context=None,
     )
     assert updated is None
+
+
+def test_clarifying_availability_turn_still_persists_displayed_verified_options() -> None:
+    turn = _availability_turn_for_context(
+        date_value="2026-10-10",
+        times=["12:00", "14:00", "15:30"],
+    )
+    raw_slots = [dict(item) for item in turn.traces[0].availability_slots]
+    choices = []
+    for index, row in enumerate(raw_slots, start=1):
+        payload = dict(row)
+        if payload.get("laser_device_key") not in (None, ""):
+            payload["device_key"] = payload["laser_device_key"]
+        choices.append(OptionChoice(ref=f"slot-{index}", label=str(index), payload=payload))
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-presented",
+            granted_at=NOW,
+        ),
+        constraints=CustomerConstraints(
+            service_id=SERVICE_ID,
+            doctor_id=DOCTOR_ID,
+            device_key=DEVICE_KEY,
+            date={"mode": "exact", "start_date": "2026-10-10"},
+        ),
+        option_snapshot=OptionSnapshot(
+            snapshot_id="snapshot-presented",
+            purpose="booking_slot",
+            task_version=4,
+            created_at=NOW,
+            expires_at=datetime(2026, 10, 10, 23, 0, tzinfo=UTC),
+            options=choices,
+        ),
+        version=4,
+    )
+    original = turn.plan.steps[0]
+    clarify_step = original.model_copy(
+        update={
+            "disposition": "clarify",
+            "reads": [],
+            "response_goal": "clarification",
+            "clarification_field": "service",
+        }
+    )
+    turn = replace(
+        turn,
+        plan=TurnPlan(steps=[clarify_step]),
+        active_task=task,
+        persisted_task=task,
+    )
+
+    context = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=turn,
+    )
+
+    assert context is not None
+    assert context["service_id"] == SERVICE_ID
+    assert context["doctor_id"] == DOCTOR_ID
+    assert context["device_key"] == DEVICE_KEY
+    options = context["availability_reference_options"]
+    assert [item["slot"]["start_time_24h"] for item in options] == [
+        "12:00",
+        "14:00",
+        "15:30",
+    ]
+
+    carried = _availability_reference_context_from_turn(
+        turn,
+        previous_context=None,
+        verified_read_context=context,
+    )
+    assert carried is not None
+    assert [
+        item["slot"]["start_time_24h"]
+        for item in carried["availability_reference_options"]
+    ] == ["12:00", "14:00", "15:30"]
+
+
+def test_reference_clarification_carries_only_verified_pending_exact_time() -> None:
+    previous = _reference_context()
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="clarify",
+        response_goal="clarification",
+        clarification_field="availability_reference",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_reason": "semantic_clarification",
+            "availability_reference_pending_time": "16:00",
+        },
+    )
+    turn = SimpleNamespace(
+        plan=TurnPlan(steps=[step]),
+        outcomes=(),
+        active_task=None,
+        reference_semantic_path_used=True,
+        reference_action="clarify",
+    )
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    )
+    assert updated is not None
+    assert updated["pending_exact_time"] == "16:00"
+    assert updated["availability_reference_options"] == previous["availability_reference_options"]
+
+
+def test_successful_reference_selection_clears_pending_exact_time() -> None:
+    previous = _reference_context()
+    previous["pending_exact_time"] = "16:00"
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        response_goal="clarification",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_option_ref": "opt_2",
+        },
+    )
+    turn = SimpleNamespace(
+        plan=TurnPlan(steps=[step]),
+        outcomes=(),
+        active_task=None,
+        reference_semantic_path_used=True,
+        reference_action="select_presented_option",
+    )
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=None,
+    )
+    assert updated is not None
+    assert updated["last_selected_option_ref"] == "opt_2"
+    assert "pending_exact_time" not in updated
+
+
+def test_newly_presented_availability_replaces_stale_reference_context_after_selection() -> None:
+    previous = _reference_context()
+    turn = _availability_turn_for_context(
+        date_value="2026-10-11",
+        times=["17:00", "17:15"],
+    )
+    original = turn.plan.steps[0]
+    selected_step = original.model_copy(
+        update={
+            "facts": {
+                **original.facts,
+                "verified_availability_reference": True,
+                "availability_reference_option_ref": "opt_2",
+            }
+        }
+    )
+    turn = replace(turn, plan=TurnPlan(steps=[selected_step]))
+    verified = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=turn,
+        previous_read_context=previous,
+    )
+    assert verified is not None
+    assert [
+        item["slot"]["start_time_24h"]
+        for item in verified["availability_reference_options"]
+    ] == ["17:00", "17:15"]
+
+    updated = _availability_reference_context_from_turn(
+        turn,
+        previous_context=previous,
+        verified_read_context=verified,
+    )
+    assert updated is not None
+    assert [
+        item["slot"]["start_time_24h"]
+        for item in updated["availability_reference_options"]
+    ] == ["17:00", "17:15"]
+    assert "last_selected_option_ref" not in updated

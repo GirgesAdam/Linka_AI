@@ -454,6 +454,54 @@ def _attach_availability_snapshot(
     )
 
 
+def _preserve_verified_window_snapshot(
+    before: BookingTaskState,
+    current: BookingTaskState,
+    *,
+    step: PlanStep,
+    now: datetime,
+) -> BookingTaskState:
+    if step.facts.get("verified_availability_window_narrowing") is not True:
+        return current
+    snapshot = before.option_snapshot
+    if snapshot is None or not snapshot.is_current(task_version=before.version, now=now):
+        return current
+    doctor_id = step.facts.get("doctor_id")
+    device_key = step.facts.get("device_key")
+    if doctor_id in (None, "") and device_key in (None, ""):
+        return current
+    choices = []
+    for choice in snapshot.options:
+        payload = choice.payload
+        if doctor_id not in (None, "") and str(payload.get("doctor_id") or "") != str(doctor_id):
+            continue
+        payload_device = payload.get("device_key") or payload.get("laser_device_key")
+        if device_key not in (None, "") and str(payload_device or "") != str(device_key):
+            continue
+        choices.append(choice)
+    if not choices:
+        return current
+    snapshot_id = f"{snapshot.snapshot_id}:narrow:{current.version}"
+    narrowed = snapshot.model_copy(
+        update={
+            "snapshot_id": snapshot_id,
+            "task_version": current.version,
+            "options": choices,
+        }
+    )
+    return current.model_copy(
+        update={
+            "status": "awaiting_choice",
+            "option_snapshot": narrowed,
+            "derived": current.derived.model_copy(
+                update={
+                    "availability_snapshot_id": snapshot_id,
+                    "selected_slot_ref": None,
+                }
+            ),
+        }
+    )
+
 def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTaskState:
     verified_reference_selection = (
         step.facts.get("verified_availability_reference") is True
@@ -535,7 +583,14 @@ def apply_step_state(
             return StateTransition(active_task=before, changed=False, reason="reschedule_target_unverified")
     elif step.state_action == "update_active":
         if isinstance(current, BookingTaskState):
+            before_booking = current
             current = _apply_booking_updates(current, step=step, operation=operation)
+            current = _preserve_verified_window_snapshot(
+                before_booking,
+                current,
+                step=step,
+                now=now,
+            )
         elif isinstance(current, RescheduleTaskState):
             current = _apply_reschedule_updates(current, step=step, operation=operation)
         else:

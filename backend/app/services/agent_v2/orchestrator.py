@@ -575,6 +575,129 @@ def _active_task_reference_option_context(
     return context
 
 
+def _active_task_reference_window_facts(
+    task: ActiveTaskState,
+    *,
+    option_ref: str,
+    availability_context: dict[str, Any] | None,
+    now: datetime,
+) -> dict[str, object] | None:
+    """Narrow a current compressed availability window without inventing a slot."""
+    snapshot = task.option_snapshot
+    if snapshot is None or not snapshot.is_current(task_version=task.version, now=now):
+        return None
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+    matches = [
+        item
+        for item in raw_options
+        if isinstance(item, dict) and item.get("option_ref") == option_ref
+    ]
+    if len(matches) != 1 or matches[0].get("concrete") is True:
+        return None
+    option = matches[0]
+    try:
+        window_start = datetime.fromisoformat(str(option.get("start_local") or ""))
+        window_end = datetime.fromisoformat(str(option.get("end_local") or ""))
+    except ValueError:
+        return None
+
+    candidates: list[OptionChoice] = []
+    for choice in snapshot.options:
+        payload = choice.payload
+        try:
+            slot_start = datetime.fromisoformat(str(payload.get("start_local") or ""))
+        except ValueError:
+            continue
+        if not window_start <= slot_start <= window_end:
+            continue
+        if option.get("doctor_name") not in (None, "") and str(
+            payload.get("doctor_name") or ""
+        ) != str(option.get("doctor_name")):
+            continue
+        if option.get("laser_device_name") not in (None, "") and str(
+            payload.get("laser_device_name") or ""
+        ) != str(option.get("laser_device_name")):
+            continue
+        candidates.append(choice)
+    if not candidates:
+        return None
+
+    facts: dict[str, object] = {}
+    doctor_ids = {
+        str(choice.payload.get("doctor_id"))
+        for choice in candidates
+        if choice.payload.get("doctor_id") not in (None, "")
+    }
+    if option.get("doctor_name") not in (None, ""):
+        if len(doctor_ids) != 1:
+            return None
+        facts["doctor_id"] = next(iter(doctor_ids))
+    device_keys = {
+        str(choice.payload.get("device_key") or choice.payload.get("laser_device_key"))
+        for choice in candidates
+        if (choice.payload.get("device_key") or choice.payload.get("laser_device_key"))
+        not in (None, "")
+    }
+    if option.get("laser_device_name") not in (None, ""):
+        if len(device_keys) != 1:
+            return None
+        facts["device_key"] = next(iter(device_keys))
+    return facts or None
+
+def _verified_pending_reference_time(
+    task: ActiveTaskState,
+    *,
+    availability_context: dict[str, Any] | None,
+    exact_time: str | None,
+    now: datetime,
+) -> str | None:
+    """Keep an explicit semantic clock only while multiple current displayed slots share it."""
+    snapshot = task.option_snapshot
+    if snapshot is None or not snapshot.is_current(task_version=task.version, now=now):
+        return None
+    explicit = str(exact_time or "").strip()[:5]
+    try:
+        datetime.strptime(explicit, "%H:%M")
+    except ValueError:
+        return None
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+
+    identities: set[tuple[str, ...]] = set()
+    for choice in snapshot.options:
+        payload = choice.payload
+        try:
+            slot_start = datetime.fromisoformat(str(payload.get("start_local") or ""))
+        except ValueError:
+            continue
+        if slot_start.strftime("%H:%M") != explicit:
+            continue
+        for option in raw_options:
+            if not isinstance(option, dict):
+                continue
+            try:
+                window_start = datetime.fromisoformat(str(option.get("start_local") or ""))
+                window_end = datetime.fromisoformat(str(option.get("end_local") or ""))
+            except ValueError:
+                continue
+            if not window_start <= slot_start <= window_end:
+                continue
+            if option.get("doctor_name") not in (None, "") and str(
+                payload.get("doctor_name") or ""
+            ) != str(option.get("doctor_name")):
+                continue
+            if option.get("laser_device_name") not in (None, "") and str(
+                payload.get("laser_device_name") or ""
+            ) != str(option.get("laser_device_name")):
+                continue
+            identities.add(_availability_slot_identity(payload))
+            break
+    return explicit if len(identities) >= 2 else None
+
+
 def _active_task_reference_option_is_current(
     task: ActiveTaskState,
     *,
@@ -1768,6 +1891,23 @@ def orchestrate_v2_turn(
         if decision is not None and decision.exact_time is not None
         else None
     )
+    carried_pending_time = (
+        str((availability_reference_context or {}).get("pending_exact_time") or "").strip()[:5]
+        or None
+    )
+    verified_pending_time = (
+        _verified_pending_reference_time(
+            initial_task,
+            availability_context=availability_reference_context,
+            exact_time=exact_reference_time,
+            now=local_now,
+        )
+        if initial_task is not None
+        and decision is not None
+        and decision.action == "clarify"
+        and exact_reference_time is not None
+        else None
+    )
     if (
         decision is not None
         and decision.action == "new_search"
@@ -1801,18 +1941,35 @@ def orchestrate_v2_turn(
             if isinstance(initial_task, RescheduleTaskState)
             else "availability"
         )
+        selection_time = explicit_user_time or exact_reference_time or carried_pending_time
         validated_reference_context = (
             _active_task_reference_option_context(
                 initial_task,
                 option_ref=decision.option_ref,
                 availability_context=availability_reference_context,
-                explicit_user_time=explicit_user_time,
+                explicit_user_time=selection_time,
                 now=local_now,
             )
             if initial_task is not None
             else availability_reference_context
         )
-        stale_active_selection = initial_task is not None and validated_reference_context is None
+        window_narrowing_facts = (
+            _active_task_reference_window_facts(
+                initial_task,
+                option_ref=decision.option_ref,
+                availability_context=availability_reference_context,
+                now=local_now,
+            )
+            if initial_task is not None
+            and validated_reference_context is None
+            and selection_time is None
+            else None
+        )
+        stale_active_selection = (
+            initial_task is not None
+            and validated_reference_context is None
+            and window_narrowing_facts is None
+        )
         if stale_active_selection:
             understanding = TiaTurnUnderstanding(
                 operations=[
@@ -1835,6 +1992,34 @@ def orchestrate_v2_turn(
                         facts={
                             "verified_availability_reference": True,
                             "availability_reference_reason": "stale_task_option_snapshot",
+                        },
+                    )
+                ]
+            )
+        elif window_narrowing_facts is not None:
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="continue_active",
+                        entities=TurnEntities(),
+                        execution_intent="execute",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                    )
+                ]
+            )
+            reference_plan_override = TurnPlan(
+                steps=[
+                    PlanStep(
+                        operation_index=0,
+                        operation_type="continue_active",
+                        disposition="state_update",
+                        state_action="update_active",
+                        facts={
+                            **window_narrowing_facts,
+                            "verified_availability_window_narrowing": True,
+                            "verified_availability_reference": True,
+                            "availability_reference_option_ref": decision.option_ref,
                         },
                     )
                 ]
@@ -1885,6 +2070,11 @@ def orchestrate_v2_turn(
                     facts={
                         "verified_availability_reference": True,
                         "availability_reference_reason": "semantic_clarification",
+                        **(
+                            {"availability_reference_pending_time": verified_pending_time}
+                            if verified_pending_time is not None
+                            else {}
+                        ),
                     },
                 )
             ]

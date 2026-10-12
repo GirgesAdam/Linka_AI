@@ -3,11 +3,21 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import Selection, TiaTurnUnderstanding, TurnEntities, TurnOperation
-from app.services.agent_v2.active_task_progress import adapt_matching_active_task_step
+from app.agents.v2.turn_contract import (
+    Selection,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
+from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
+    plan_active_task_progress,
+)
 from app.services.agent_v2.orchestrator import (
     _active_task_reference_option_context,
     _active_task_reference_option_is_current,
+    _verified_pending_reference_time,
 )
 from app.services.agent_v2.planner import PlannerContext, plan_turn
 from app.services.agent_v2.state import (
@@ -284,3 +294,221 @@ def test_unknown_ref_never_binds_or_mutates_active_booking() -> None:
     assert step.disposition == "clarify"
     assert step.state_action == "none"
     assert step.facts["availability_reference_reason"] == "unavailable"
+
+
+def test_verified_doctor_window_narrowing_preserves_only_matching_current_slots() -> None:
+    from app.services.agent_v2.orchestrator import _active_task_reference_window_facts
+    from app.services.agent_v2.planner import PlanStep
+
+    task = _task()
+    assert task.option_snapshot is not None
+    maryam = OptionChoice(
+        ref="slot-maryam",
+        label="16:00 · Maryam",
+        payload={
+            **task.option_snapshot.options[0].payload,
+            "doctor_id": "doctor-maryam",
+            "doctor_name": "Maryam Hassan",
+        },
+    )
+    task = task.model_copy(
+        update={
+            "option_snapshot": task.option_snapshot.model_copy(
+                update={"options": [maryam, *task.option_snapshot.options]}
+            )
+        }
+    )
+    compressed = {
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_youssef",
+                "index": 2,
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T22:00:00+03:00",
+                "doctor_name": "Youssef Samir",
+                "laser_device_name": "Candela",
+            }
+        ]
+    }
+    facts = _active_task_reference_window_facts(
+        task,
+        option_ref="opt_youssef",
+        availability_context=compressed,
+        now=NOW,
+    )
+    assert facts is not None
+    assert facts["doctor_id"] == "doctor-youssef"
+
+    step = PlanStep(
+        operation_index=0,
+        operation_type="continue_active",
+        disposition="state_update",
+        state_action="update_active",
+        facts={
+            **facts,
+            "verified_availability_window_narrowing": True,
+            "verified_availability_reference": True,
+            "availability_reference_option_ref": "opt_youssef",
+        },
+    )
+    operation = TurnOperation(
+        type="continue_active",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        continues_previous=True,
+    )
+    adapted = adapt_matching_active_task_step(
+        step,
+        operation=operation,
+        active_task=task,
+        context=SemanticContext(model_input={}, reference_map={}, server_metadata={}),
+        now=NOW,
+    )
+    assert adapted.facts["doctor_id"] == "doctor-youssef"
+    assert adapted.facts["verified_availability_window_narrowing"] is True
+
+    transition = apply_step_state(
+        task,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-window",
+    )
+    updated = transition.active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.doctor_id == "doctor-youssef"
+    assert updated.option_snapshot is not None
+    assert updated.option_snapshot.is_current(task_version=updated.version, now=NOW)
+    assert updated.option_snapshot.options
+    assert {
+        choice.payload.get("doctor_id") for choice in updated.option_snapshot.options
+    } == {"doctor-youssef"}
+    assert updated.constraints.device_key == "candela"
+    assert updated.requested_service_ids == ["svc-main", "svc-additional"]
+
+
+def test_ambiguous_explicit_time_is_carried_only_when_multiple_current_displayed_slots_share_it() -> None:
+    task = _task()
+    assert task.option_snapshot is not None
+    maryam = OptionChoice(
+        ref="slot-maryam",
+        label="16:00 ? Maryam",
+        payload={
+            **task.option_snapshot.options[0].payload,
+            "doctor_id": "doctor-maryam",
+            "doctor_name": "Maryam Hassan",
+        },
+    )
+    task = task.model_copy(
+        update={
+            "option_snapshot": task.option_snapshot.model_copy(
+                update={"options": [maryam, *task.option_snapshot.options]}
+            )
+        }
+    )
+    displayed = {
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_maryam",
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T16:15:00+03:00",
+                "doctor_name": "Maryam Hassan",
+                "laser_device_name": "Candela",
+            },
+            {
+                "option_ref": "opt_youssef",
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T16:15:00+03:00",
+                "doctor_name": "Youssef Samir",
+                "laser_device_name": "Candela",
+            },
+        ]
+    }
+    assert _verified_pending_reference_time(
+        task,
+        availability_context=displayed,
+        exact_time="16:00",
+        now=NOW,
+    ) == "16:00"
+    assert _verified_pending_reference_time(
+        task,
+        availability_context=displayed,
+        exact_time="16:15",
+        now=NOW,
+    ) is None
+    assert _verified_pending_reference_time(
+        _task(expired=True),
+        availability_context=displayed,
+        exact_time="16:00",
+        now=NOW,
+    ) is None
+
+
+def test_carried_pending_time_materializes_selected_doctor_window_to_one_current_slot() -> None:
+    compressed = {
+        "pending_exact_time": "16:00",
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_youssef",
+                "concrete": False,
+                "start_local": "2026-10-13T16:00:00+03:00",
+                "end_local": "2026-10-13T16:15:00+03:00",
+                "doctor_name": "Youssef Samir",
+                "laser_device_name": "Candela",
+            }
+        ],
+    }
+    resolved = _active_task_reference_option_context(
+        _task(),
+        option_ref="opt_youssef",
+        availability_context=compressed,
+        explicit_user_time=compressed["pending_exact_time"],
+        now=NOW,
+    )
+    assert resolved is not None
+    option = resolved["availability_reference_options"][0]
+    assert option["concrete"] is True
+    assert option["slot"]["doctor_id"] == "doctor-youssef"
+    assert option["slot"]["start_time_24h"] == "16:00"
+
+
+def test_verified_selected_slot_requires_proposal_gate_for_single_service_progress() -> None:
+    task = _task()
+    task = task.model_copy(
+        update={
+            "constraints": task.constraints.model_copy(
+                update={
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-youssef",
+                    "time": TimeConstraint(
+                        mode="exact",
+                        start_time="16:00",
+                        start_time_ambiguity="none",
+                    ),
+                }
+            ),
+            "requested_service_ids": [],
+            "service_device_keys": {},
+            "derived": task.derived.model_copy(
+                update={
+                    "selected_slot_ref": "opt_youssef",
+                    "commercial_basis_presented_key": "svc-main|candela|standalone",
+                    "commercial_basis_presented_device_key": "candela",
+                }
+            ),
+        }
+    )
+    step = plan_active_task_progress(
+        task,
+        operation_index=0,
+        context=SemanticContext(model_input={}, reference_map={}, server_metadata={}),
+    )
+    assert step.operation_type == "book"
+    assert step.write_intent is not None
+    assert step.facts["booking_proposal_required"] is True
+    assert step.facts["requested_service_ids"] == ["svc-main"]
