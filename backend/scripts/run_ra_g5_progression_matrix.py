@@ -293,10 +293,9 @@ def main():
                 flush=True,
             )
         results.append(result)
-    summary = {item["case"]: item["proposal_status"] for item in results}    print("RA_G5_MATRIX_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
+    summary = {item["case"]: item["proposal_status"] for item in results}`r`n    print("RA_G5_MATRIX_SUMMARY=" + json.dumps(summary, separators=(",", ":")), flush=True)
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
