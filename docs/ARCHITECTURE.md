@@ -24,7 +24,7 @@ Booking creation and attendance confirmation are separate product events. A newl
 
 The pre-appointment automation uses the historical database key `appointment_reminder_6h`, but its current product meaning is an **attendance-confirmation ticket**. It may ask the patient to confirm attendance or start the locked reschedule flow; it is not a delayed duplicate booking-success message. Structured action IDs, not visible Arabic text, authorize those writes.
 
-**Reception UI invariant:** the reception-facing Arabic label `قيد الانتظار` is intentional stable product copy. Backend appointment/attendance-confirmation refactors must not rename or reinterpret that visible label. Change it only as a separate, explicit Product-approved UI copy decision.
+**Appointment lifecycle / reception copy invariant:** the backend appointment lifecycle remains `pending -> confirmed`. Reception-facing appointment UI maps `pending -> محجوز` and `confirmed -> مؤكد`. `محجوز` means the appointment exists and its slot is reserved; it does **not** mean attendance has been confirmed. Attendance confirmation remains a distinct later canonical transition from `pending` to `confirmed`. This mapping is appointment-specific: unrelated domains that also use `pending` keep their own domain copy.
 
 Key domains include workspaces/auth, clinic configuration, CRM, appointments, payments/allocations, packages/usage, messaging/channels, automations, analytics, historical import/provenance, and integration sync state.
 

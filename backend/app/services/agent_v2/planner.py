@@ -37,6 +37,7 @@ PlanDisposition = Literal[
 ]
 ReadKind = Literal[
     "service_catalog",
+    "service_catalog_set",
     "clinic_info",
     "doctors",
     "availability",
@@ -989,6 +990,73 @@ def _plan_operation(
                 response_goal="answer_price",
                 facts=params,
             )
+        if "service_id" not in params and isinstance(context.active_task, BookingTaskState):
+            task = context.active_task
+            active_service_ids = list(task.requested_service_ids)
+            if not active_service_ids and task.grouped is not None:
+                active_service_ids = [
+                    component.service_id
+                    for component in task.grouped.components
+                    if component.service_id is not None
+                ]
+            if not active_service_ids and task.constraints.service_id is not None:
+                active_service_ids = [task.constraints.service_id]
+            active_service_ids = list(dict.fromkeys(active_service_ids))
+            grouped_device_keys = (
+                [component.device_key for component in task.grouped.components]
+                if task.grouped is not None
+                else []
+            )
+            device_candidates = {
+                key
+                for key in [*task.service_device_keys.values(), *grouped_device_keys]
+                if key is not None
+            }
+            visit_device_key = (
+                task.proposal.device_key
+                if task.proposal is not None and task.proposal.device_key is not None
+                else task.constraints.device_key
+                if task.constraints.device_key is not None
+                else next(iter(device_candidates))
+                if len(device_candidates) == 1
+                else None
+            )
+            if len(active_service_ids) == 1:
+                params = {**params, "service_id": active_service_ids[0]}
+                if visit_device_key is not None:
+                    params["device_key"] = visit_device_key
+            elif len(active_service_ids) > 1:
+                read_parameters: dict[str, object] = {
+                    "service_ids": active_service_ids,
+                }
+                if visit_device_key is not None:
+                    read_parameters["device_key"] = visit_device_key
+                return PlanStep(
+                    operation_index=index,
+                    operation_type=operation.type,
+                    disposition="read",
+                    reads=[
+                        ReadRequest(
+                            kind="service_catalog_set",
+                            parameters=read_parameters,
+                        )
+                    ],
+                    state_action="none",
+                    response_goal="answer_price",
+                    facts={
+                        **params,
+                        "requested_service_ids": active_service_ids,
+                        **(
+                            {"device_key": visit_device_key}
+                            if visit_device_key is not None
+                            else {}
+                        ),
+                        "visit_total_price": True,
+                        "listed_total_not_settlement": (
+                            task.constraints.package_usage == "use_existing"
+                        ),
+                    },
+                )
         if "service_id" not in params:
             return _clarify(index=index, operation=operation, field="service")
         return PlanStep(

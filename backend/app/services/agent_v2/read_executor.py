@@ -25,6 +25,7 @@ from app.services.agent_v2.branch_resolution import resolve_single_location_bran
 from app.services.agent_v2.planner import PlanStep, ReadKind, ReadRequest, VerificationFacts
 from app.services.booking import BookingCompatibilityError, BookingRuleError
 from app.services.clinic_knowledge_base import relevant_knowledge_context
+from app.services.laser_slot_metadata import decode_laser_slot_branch
 from app.services.package_offers import list_package_offers
 from app.services.package_refund_quotes import list_patient_package_refund_quotes
 from app.services.patient_history import build_patient_history_context
@@ -354,9 +355,13 @@ def _slot_payload(slot: AvailabilitySlot, *, timezone_name: str) -> dict[str, ob
     tz = ZoneInfo(timezone_name)
     local_start = slot.start_at.astimezone(tz)
     local_end = slot.end_at.astimezone(tz)
+    metadata = decode_laser_slot_branch(slot.branch_name)
     return {
         "branch_id": slot.branch_id,
-        "branch_name": slot.branch_name,
+        # The TIA database adapter may carry legacy laser metadata in branch_name.
+        # Decode it exactly once at the V2 read boundary so no internal marker can
+        # reach response contracts/composers while preserving first-class device facts.
+        "branch_name": metadata.branch_name,
         "service_id": slot.service_id,
         "service_name": slot.service_name,
         "doctor_id": slot.doctor_id,
@@ -370,8 +375,8 @@ def _slot_payload(slot: AvailabilitySlot, *, timezone_name: str) -> dict[str, ob
         "duration_minutes": slot.duration_minutes,
         "price_minor": int(slot.price_minor),
         "currency": slot.currency,
-        "laser_device_key": slot.laser_device_key,
-        "laser_device_name": slot.laser_device_name,
+        "laser_device_key": slot.laser_device_key or metadata.device_key,
+        "laser_device_name": slot.laser_device_name or metadata.device_name,
     }
 
 
@@ -554,6 +559,161 @@ def _read_service_catalog(
         if knowledge:
             service["description"] = knowledge
     return ReadResult(kind=request.kind, ok=True, payload={"service": service})
+
+
+def _read_service_catalog_set(
+    request: ReadRequest,
+    context: ReadExecutionContext,
+) -> ReadResult:
+    """Read canonical prices for the active same-visit service set.
+
+    The service set comes from server-owned booking state. For laser services this
+    returns every common compatible device total unless the visit device is already
+    selected. The response layer can therefore distinguish one truthful total from
+    device-dependent totals without asking which already-known service was meant.
+    """
+    raw_ids = request.parameters.get("service_ids")
+    service_ids = (
+        list(dict.fromkeys(str(item) for item in raw_ids if item not in (None, "")))
+        if isinstance(raw_ids, list)
+        else []
+    )
+    if len(service_ids) < 2:
+        return ReadResult(
+            kind=request.kind,
+            ok=False,
+            payload={},
+            error_code="service_set_required",
+        )
+
+    services: list[dict[str, object]] = []
+    for service_id in service_ids:
+        row = _catalog_row(_catalog(context), "services", service_id)
+        if row is None:
+            return ReadResult(
+                kind=request.kind,
+                ok=False,
+                payload={},
+                error_code="service_not_found",
+            )
+        services.append(dict(row))
+
+    selected_device_key = str(request.parameters.get("device_key") or "").strip() or None
+    laser_services = [
+        service
+        for service in services
+        if service.get("requires_laser_device") is True
+        or isinstance(service.get("laser_devices"), list)
+        and bool(service.get("laser_devices"))
+    ]
+
+    common_device_keys: list[str] = []
+    if laser_services:
+        first_devices = laser_services[0].get("laser_devices")
+        if not isinstance(first_devices, list):
+            first_devices = []
+        common_device_keys = [
+            str(row.get("device_key"))
+            for row in first_devices
+            if isinstance(row, dict)
+            and row.get("configured") is not False
+            and row.get("device_key") not in (None, "")
+        ]
+        for service in laser_services[1:]:
+            raw_devices = service.get("laser_devices")
+            device_rows = raw_devices if isinstance(raw_devices, list) else []
+            allowed = {
+                str(row.get("device_key"))
+                for row in device_rows
+                if isinstance(row, dict)
+                and row.get("configured") is not False
+                and row.get("device_key") not in (None, "")
+            }
+            common_device_keys = [key for key in common_device_keys if key in allowed]
+
+    candidate_device_keys: list[str | None]
+    if selected_device_key is not None:
+        candidate_device_keys = (
+            [selected_device_key]
+            if not laser_services or selected_device_key in common_device_keys
+            else []
+        )
+    elif laser_services:
+        candidate_device_keys = list(common_device_keys)
+    else:
+        candidate_device_keys = [None]
+
+    variants: list[dict[str, object]] = []
+    for device_key in candidate_device_keys:
+        components: list[dict[str, object]] = []
+        currency: str | None = None
+        total_minor = 0
+        device_name: str | None = None
+        valid = True
+        for service in services:
+            service_name = str(service.get("name") or "").strip()
+            requires_device = service.get("requires_laser_device") is True or bool(
+                service.get("laser_devices")
+            )
+            if requires_device:
+                raw_devices = service.get("laser_devices")
+                device_rows = raw_devices if isinstance(raw_devices, list) else []
+                matched = next(
+                    (
+                        row
+                        for row in device_rows
+                        if isinstance(row, dict)
+                        and row.get("configured") is not False
+                        and str(row.get("device_key") or "") == str(device_key or "")
+                    ),
+                    None,
+                )
+                if matched is None or matched.get("price_minor") is None:
+                    valid = False
+                    break
+                price_minor = int(matched["price_minor"])
+                row_currency = str(matched.get("currency") or service.get("currency") or "").upper()
+                current_device_name = str(matched.get("device_name") or "").strip() or None
+                if device_name is None:
+                    device_name = current_device_name
+            else:
+                if service.get("price_minor") is None:
+                    valid = False
+                    break
+                price_minor = int(service["price_minor"])
+                row_currency = str(service.get("currency") or "").upper()
+            if not row_currency or (currency is not None and row_currency != currency):
+                valid = False
+                break
+            currency = row_currency
+            total_minor += price_minor
+            components.append(
+                {
+                    "service_name": service_name,
+                    "price_minor": price_minor,
+                    "currency": row_currency,
+                }
+            )
+        if valid and currency is not None and len(components) == len(services):
+            variants.append(
+                {
+                    "device_name": device_name,
+                    "components": components,
+                    "total_price_minor": total_minor,
+                    "currency": currency,
+                }
+            )
+
+    return ReadResult(
+        kind=request.kind,
+        ok=True,
+        payload={
+            "service_names": [str(service.get("name") or "") for service in services],
+            "variants": variants,
+            "device_required": bool(laser_services),
+            "device_resolved": selected_device_key is not None,
+        },
+    )
 
 
 def _read_clinic_info(request: ReadRequest, context: ReadExecutionContext) -> ReadResult:
@@ -1559,6 +1719,8 @@ def execute_step_reads(
                     include_explanation=step.operation_type == "service_info",
                 )
             )
+        elif request.kind == "service_catalog_set":
+            results.append(_read_service_catalog_set(request, context))
         elif request.kind == "clinic_info":
             results.append(_read_clinic_info(request, context))
         elif request.kind == "doctors":

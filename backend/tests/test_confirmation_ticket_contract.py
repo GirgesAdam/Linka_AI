@@ -116,11 +116,15 @@ def test_frontend_appointment_pending_label_is_booked() -> None:
     assert 'pending: status("محجوز"' in presentation_block
 
 
-def test_reception_pending_copy_is_an_explicit_stable_product_invariant() -> None:
+def test_appointment_pending_copy_is_isolated_from_other_pending_domains() -> None:
     source = (_root().parent / "frontend/src/lib/status.ts").read_text(encoding="utf-8")
+    appointment_block = source.split("export const appointmentLabels", 1)[1].split("};", 1)[0]
     status_block = source.split("export const statusLabels", 1)[1].split("};", 1)[0]
+    label_function = source.split("export function labelForStatus", 1)[1].split("}", 1)[0]
+    assert 'pending: "محجوز"' in appointment_block
     assert 'pending: "قيد الانتظار"' in status_block
-    assert 'reception-facing "قيد الانتظار" copy is intentionally stable' in source
+    assert "appointmentLabels[value]" not in label_function
+    assert "statusLabels[value]" in label_function
 
 
 def test_reconciliation_migration_is_future_only_and_uses_branch_workspace_timezone() -> None:
