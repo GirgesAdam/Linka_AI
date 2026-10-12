@@ -71,8 +71,24 @@ jobs:
           pip install -r requirements.txt
       - name: Verify real-model secret
         run: test -n "$OPENAI_API_KEY"
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
       - name: Apply clean migrations
-        run: alembic upgrade head
+        run: python -m alembic upgrade head
       - name: Run RA-G1 and RA-G5 on standalone #241 tree
         run: python scripts/run_grouped_multiservice_intent_live_review.py
 
@@ -144,7 +160,23 @@ jobs:
           pip install -r requirements.txt
       - name: Verify real-model secret
         run: test -n "$OPENAI_API_KEY"
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
       - name: Apply clean migrations
-        run: alembic upgrade head
+        run: python -m alembic upgrade head
       - name: Run RA-G1 through RA-G5 on audit-only #241 + #249 overlay
         run: python scripts/run_grouped_multiservice_intent_live_review.py
