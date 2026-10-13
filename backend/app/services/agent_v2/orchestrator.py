@@ -879,7 +879,9 @@ def _auto_resolve_single_booking_device(
             "facts": {
                 **step.facts,
                 "device_key": str(candidates[0]["device_key"]),
-                "booking_next_field": "date",
+                # Device resolution must not rewrite booking progression. The planner
+                # already owns whether the next field is date vs booking based on the
+                # customer's canonical constraints and same-turn availability read.
                 "device_auto_resolved": True,
             }
         }

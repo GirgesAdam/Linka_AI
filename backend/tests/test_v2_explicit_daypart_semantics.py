@@ -20,7 +20,10 @@ from app.agents.v2.turn_interpreter import (
     _validate_explicit_period_provenance_v2,
 )
 from app.agents.v2.turn_normalization import normalize_semantic_invariants
-from app.services.agent_v2.orchestrator import _prepare_booking_proposal
+from app.services.agent_v2.orchestrator import (
+    _auto_resolve_single_booking_device,
+    _prepare_booking_proposal,
+)
 from app.services.agent_v2.planner import PlannerContext, PlanStep, WriteIntent, plan_turn
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import (
@@ -320,3 +323,47 @@ def test_t12_conflicting_typed_period_fails_closed_to_time_clarification() -> No
     assert step.disposition == "clarify"
     assert step.write_intent is None
     assert step.facts["time_period_conflict"] is True
+
+
+@pytest.mark.parametrize("next_field", ["date", "booking"])
+def test_single_device_auto_resolution_preserves_planner_booking_progression(
+    next_field: str,
+) -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        response_goal="answer_price",
+        facts={
+            "booking_device_price_step": True,
+            "booking_next_field": next_field,
+            "service_id": SERVICE_ID,
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": SERVICE_ID,
+                        "laser_devices": [
+                            {
+                                "device_key": "candela_gentle",
+                                "device_name": "Candela Gentle",
+                                "configured": True,
+                                "price_minor": 70000,
+                            }
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    resolved = _auto_resolve_single_booking_device(step, reads)
+
+    assert resolved.facts["device_key"] == "candela_gentle"
+    assert resolved.facts["device_auto_resolved"] is True
+    assert resolved.facts["booking_next_field"] == next_field
