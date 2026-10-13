@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
@@ -13,7 +14,12 @@ import app.agents.v2.time_resolution as time_resolution
 from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from scripts import run_explicit_daypart_live_review as base
 
-REPORT_PATH = Path("artifacts/clinic-hours-clock-live-review.json")
+REPORT_PATH = Path(
+    os.environ.get(
+        "CLOCK_RT_REPORT_PATH",
+        "artifacts/clinic-hours-clock-live-review.json",
+    )
+)
 
 SAFETY_COUNTERS = {
     "wrong_time_writes": 0,
@@ -534,21 +540,143 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
     }
 
 
+def _task_constraint_facts(record: dict[str, Any]) -> dict[str, Any]:
+    task = record.get("active_task")
+    if not isinstance(task, dict):
+        return {}
+    constraints = task.get("constraints")
+    return constraints if isinstance(constraints, dict) else {}
+
+
+def _validate_rt3_night_continuation(
+    first: dict[str, Any],
+    continued: dict[str, Any],
+    ctx: base.Context,
+) -> None:
+    first_constraints = _task_constraint_facts(first)
+    _require(
+        bool(first_constraints),
+        counter="lost_services",
+        message="RT3: clarification did not preserve active booking state",
+    )
+    _require(
+        str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
+        counter="lost_services",
+        message="RT3: clarification lost requested service",
+    )
+    _require(
+        str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
+        counter="wrong_writes",
+        message="RT3: clarification lost branch",
+    )
+    first_date = first_constraints.get("date")
+    _require(
+        isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
+        counter="wrong_time_writes",
+        message="RT3: clarification lost requested date",
+    )
+
+    operation = _semantic_operation(continued)
+    _require(
+        str(operation.get("clock_source") or "unspecified") == "explicit_period",
+        counter="silent_am_pm_mutation",
+        message="RT3: night answer did not produce typed explicit-period authority",
+    )
+    canonical = next(
+        (
+            value
+            for value in (
+                _availability_clock(continued),
+                base._task_time(continued),
+                _proposal_clock(continued),
+                base._appointment_clock(continued),
+            )
+            if value
+        ),
+        None,
+    )
+    _require(
+        canonical == "22:00",
+        counter="wrong_time_writes",
+        message=f"RT3: night continuation canonical clock={canonical}, expected 22:00",
+    )
+    availability = continued.get("availability_requests") or []
+    if availability:
+        _require(
+            _availability_clock(continued) == "22:00",
+            counter="wrong_time_writes",
+            message="RT3: continuation availability did not use 22:00",
+        )
+    appointments = continued.get("appointments") or []
+    _require(
+        len(appointments) <= 1,
+        counter="duplicate_appointments",
+        message="RT3: night continuation created duplicate appointments",
+    )
+    _require(
+        len(continued.get("proposals_created") or []) <= 1,
+        counter="duplicate_proposals",
+        message="RT3: night continuation created duplicate proposals",
+    )
+    if appointments:
+        _require(
+            base._appointment_clock(continued) == "22:00",
+            counter="wrong_time_writes",
+            message="RT3: night continuation wrote a non-22:00 appointment",
+        )
+        _require(
+            str(appointments[0].get("service_id") or "") == str(ctx.bikini.id),
+            counter="lost_services",
+            message="RT3: night continuation changed requested service",
+        )
+
+    continued["rt3_continuation_evidence"] = {
+        "CUSTOMER": continued.get("customer"),
+        "AGENT": continued.get("agent"),
+        "canonical_time": canonical,
+        "availability_request": availability,
+        "proposal": base._proposal(continued) or continued.get("booking_proposal"),
+        "DB_effect": continued.get("db_effect"),
+        "same_service_id": str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
+        "same_branch_id": str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
+        "same_date": isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
+    }
+
+
 def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     _set_operating_hours(ctx, start=spec.start, end=spec.end)
     CLOCK_TRACE.clear()
     record = base._chat(ctx, spec.customer)
     _validate_record(record, spec, ctx)
+    if spec.name != "RT3":
+        return
+
+    CLOCK_TRACE.clear()
+    continued = base._chat(ctx, "??????")
+    _validate_rt3_night_continuation(record, continued, ctx)
 
 
 def _persisted_appointments(workspace_id: UUID) -> int:
     return base._persisted_appointments(workspace_id)
 
 
+def _selected_scenarios() -> list[ScenarioSpec]:
+    raw = os.environ.get("CLOCK_RT_SCENARIOS", "").strip()
+    if not raw:
+        return list(SCENARIOS)
+    requested = {item.strip() for item in raw.split(",") if item.strip()}
+    selected = [spec for spec in SCENARIOS if spec.name in requested]
+    missing = requested - {spec.name for spec in selected}
+    if missing:
+        raise ValueError(f"Unknown CLOCK_RT_SCENARIOS: {sorted(missing)}")
+    return selected
+
+
 def main() -> int:
     results: list[dict[str, Any]] = []
     failures = 0
-    for spec in SCENARIOS:
+    scenarios = _selected_scenarios()
+    for spec in scenarios:
         workspace_id: UUID | None = None
         ctx: base.Context | None = None
         turns: list[dict[str, Any]] = []

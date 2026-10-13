@@ -50,6 +50,7 @@ from app.services.agent_v2.active_task_progress import (
     adapt_matching_active_task_step,
     persist_initial_task_intent,
     plan_active_task_progress,
+    prepare_active_task_clock_progress,
 )
 from app.services.agent_v2.compound_turn_policy import (
     apply_compound_runtime_cursor,
@@ -2460,7 +2461,12 @@ def orchestrate_v2_turn(
             )
             current_task = initial_transition.active_task
             if current_task is not None and effective_step.disposition != "clarify":
-                effective_step = plan_active_task_progress(
+                current_task, clock_gate = prepare_active_task_clock_progress(
+                    current_task,
+                    operation_index=effective_step.operation_index,
+                    context=semantic_context,
+                )
+                effective_step = clock_gate or plan_active_task_progress(
                     current_task,
                     operation_index=effective_step.operation_index,
                     context=semantic_context,
@@ -2635,7 +2641,12 @@ def orchestrate_v2_turn(
             and isinstance(current_task, BookingTaskState)
             and step_group_key is None
         ):
-            continuation_step = plan_active_task_progress(
+            current_task, clock_gate = prepare_active_task_clock_progress(
+                current_task,
+                operation_index=advanced.operation_index,
+                context=semantic_context,
+            )
+            continuation_step = clock_gate or plan_active_task_progress(
                 current_task,
                 operation_index=advanced.operation_index,
                 context=semantic_context,
