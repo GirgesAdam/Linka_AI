@@ -7,7 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
+from app.agents.v2.time_resolution import classify_operation_bare_clock
+from app.agents.v2.turn_contract import DateConstraint, TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters
 from app.services.agent_v2.outcome import ResponseGoal
 from app.services.agent_v2.reference_resolution import (
@@ -207,6 +208,71 @@ def _base_parameters(
         values["follow_up_at_local"] = operation.entities.follow_up_at_local
     values["package_usage"] = operation.package_usage
     return values, ambiguous
+
+
+def _apply_bare_clock_policy(
+    *,
+    index: int,
+    operation: TurnOperation,
+    params: dict[str, object],
+    context: PlannerContext,
+) -> tuple[dict[str, object], PlanStep | None]:
+    """Apply clinic-hours-aware bare-clock authority after branch/date resolution."""
+    if operation.clock_source != "bare_spoken_12h" or operation.entities.time is None:
+        return params, None
+
+    raw_date = params.get("date")
+    date_constraint: DateConstraint | None = None
+    if isinstance(raw_date, dict):
+        try:
+            date_constraint = DateConstraint.model_validate(raw_date)
+        except ValueError:
+            date_constraint = None
+    raw_branch = params.get("branch_id")
+    branch_id = str(raw_branch) if raw_branch not in (None, "") else None
+    resolution = classify_operation_bare_clock(
+        operation,
+        context.semantic_context,
+        date_constraint=date_constraint,
+        branch_id=branch_id,
+    )
+    facts = {
+        "clock_source": operation.clock_source,
+        "bare_clock_resolution_status": resolution.status,
+        "candidate_clocks": list(resolution.candidate_clocks),
+        "valid_operating_hour_candidates": list(
+            resolution.valid_operating_hour_candidates
+        ),
+        "effective_operating_hours": [
+            {"weekday": weekday, "start": start, "end": end}
+            for weekday, start, end in resolution.operating_hours
+        ],
+        "resolved_branch_id": resolution.branch_id,
+        "requested_date": resolution.requested_date,
+    }
+    if resolution.status == "resolved" and resolution.constraint is not None:
+        return {
+            **params,
+            "time": resolution.constraint.model_dump(mode="json"),
+        }, None
+    if resolution.status == "clarify_period":
+        return params, _clarify(
+            index=index,
+            operation=operation,
+            field="time",
+            facts={**params, **facts, "clock_period_clarification": True},
+        )
+    if resolution.status == "outside_operating_hours":
+        return params, PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="blocked",
+            response_goal="requested_time_unavailable",
+            facts={**params, **facts, "clock_outside_operating_hours": True},
+        )
+    # Missing date/branch context is not an AM/PM question. Preserve the semantic
+    # clock and let the normal planner gather the missing canonical constraint.
+    return params, None
 
 
 def _verified_reference_parameters(resolution: dict[str, object]) -> dict[str, object]:
@@ -831,6 +897,17 @@ def _plan_operation(
 ) -> PlanStep:
     params, ambiguous = _base_parameters(operation, context)
 
+    if (
+        operation.time_period_provenance == "conflict"
+        or operation.selection_time_period_provenance == "conflict"
+    ):
+        return _clarify(
+            index=index,
+            operation=operation,
+            field="time",
+            facts={"time_period_conflict": True},
+        )
+
     if operation.type == "confirm_booking_proposal":
         task = context.active_task
         if not isinstance(task, BookingTaskState) or task.proposal is None:
@@ -1138,6 +1215,14 @@ def _plan_operation(
                     "branch_resolution_reason": branch_reason,
                 },
             )
+        params, bare_clock_step = _apply_bare_clock_policy(
+            index=index,
+            operation=operation,
+            params=params,
+            context=context,
+        )
+        if bare_clock_step is not None:
+            return bare_clock_step
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
@@ -1193,6 +1278,14 @@ def _plan_operation(
                         "branch_resolution_reason": branch_reason,
                     },
                 )
+        params, bare_clock_step = _apply_bare_clock_policy(
+            index=index,
+            operation=operation,
+            params=params,
+            context=context,
+        )
+        if bare_clock_step is not None:
+            return bare_clock_step
         if not compound_book:
             commercial_path = (
                 "package" if operation.package_usage == "use_existing" else "standalone"

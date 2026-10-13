@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agents.v2.turn_contract import DateConstraint, PackageUsage, TimeConstraint
+from app.agents.v2.turn_contract import ClockSource, DateConstraint, PackageUsage, TimeConstraint
 
 TaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
 LegacyPulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
@@ -50,6 +50,7 @@ class CustomerConstraints(StrictStateModel):
     device_key: str | None = None
     date: DateConstraint | None = None
     time: TimeConstraint | None = None
+    time_clock_source: ClockSource = "unspecified"
     package_usage: PackageUsage = "unspecified"
     # Backward-compatibility only. New turns never populate or consume this field.
     pulse_usage: LegacyPulseUsage = "unspecified"

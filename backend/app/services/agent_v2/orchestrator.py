@@ -50,6 +50,8 @@ from app.services.agent_v2.active_task_progress import (
     adapt_matching_active_task_step,
     persist_initial_task_intent,
     plan_active_task_progress,
+    prepare_active_task_clock_progress,
+    resolve_pending_bare_clock_period,
 )
 from app.services.agent_v2.compound_turn_policy import (
     apply_compound_runtime_cursor,
@@ -879,7 +881,9 @@ def _auto_resolve_single_booking_device(
             "facts": {
                 **step.facts,
                 "device_key": str(candidates[0]["device_key"]),
-                "booking_next_field": "date",
+                # Device resolution must not rewrite booking progression. The planner
+                # already owns whether the next field is date vs booking based on the
+                # customer's canonical constraints and same-turn availability read.
                 "device_auto_resolved": True,
             }
         }
@@ -1945,13 +1949,45 @@ def orchestrate_v2_turn(
         semantic_context,
         automation_context=automation_context,
     )
+    contextual_period_understanding: TiaTurnUnderstanding | None = None
+    contextual_period_resolution = resolve_pending_bare_clock_period(
+        initial_task,
+        latest_customer_text,
+        context=semantic_context,
+    )
+    if contextual_period_resolution is not None:
+        initial_task, _resolved_period = contextual_period_resolution
+        semantic_context = with_safe_task_context(
+            semantic_context,
+            active_task=_task_dict(initial_task),
+            pending_choice=(
+                pending_choice.model_dump(mode="json") if pending_choice is not None else None
+            ),
+        )
+        contextual_period_understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="continue_active",
+                    entities=TurnEntities(),
+                    execution_intent="execute",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+
     reference_interpretation: ReferenceInterpretation | None = None
     reference_plan_override: TurnPlan | None = None
     full_interpreter_called = True
     raw_reference_options = (availability_reference_context or {}).get(
         "availability_reference_options"
     )
-    if latest_customer_text and isinstance(raw_reference_options, list) and raw_reference_options:
+    if (
+        contextual_period_understanding is None
+        and latest_customer_text
+        and isinstance(raw_reference_options, list)
+        and raw_reference_options
+    ):
         reference_interpretation = interpret_availability_reference_turn(
             latest_customer_text=latest_customer_text,
             availability_context=availability_reference_context or {},
@@ -1988,7 +2024,10 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    if (
+    if contextual_period_understanding is not None:
+        understanding = contextual_period_understanding
+        full_interpreter_called = False
+    elif (
         decision is not None
         and decision.action == "new_search"
         and exact_reference_time is not None
@@ -2458,7 +2497,12 @@ def orchestrate_v2_turn(
             )
             current_task = initial_transition.active_task
             if current_task is not None and effective_step.disposition != "clarify":
-                effective_step = plan_active_task_progress(
+                current_task, clock_gate = prepare_active_task_clock_progress(
+                    current_task,
+                    operation_index=effective_step.operation_index,
+                    context=semantic_context,
+                )
+                effective_step = clock_gate or plan_active_task_progress(
                     current_task,
                     operation_index=effective_step.operation_index,
                     context=semantic_context,
@@ -2627,6 +2671,81 @@ def orchestrate_v2_turn(
             replaced_existing_task_reason = "fresh_customer_task_replaced_active_task"
             outgoing_pending_choice = None
         current_task = transition.active_task
+
+        if (
+            advanced.facts.get("device_auto_resolved") is True
+            and isinstance(current_task, BookingTaskState)
+            and step_group_key is None
+        ):
+            current_task, clock_gate = prepare_active_task_clock_progress(
+                current_task,
+                operation_index=advanced.operation_index,
+                context=semantic_context,
+            )
+            continuation_step = clock_gate or plan_active_task_progress(
+                current_task,
+                operation_index=advanced.operation_index,
+                context=semantic_context,
+            )
+            continuation_reads = (
+                execute_step_reads(continuation_step, read_context)
+                if continuation_step.reads
+                else ReadExecutionBundle()
+            )
+            continuation_compatibility = _compatibility_failure_step(
+                continuation_step,
+                continuation_reads,
+            )
+            continuation_advanced = (
+                continuation_compatibility
+                if continuation_compatibility is not None
+                else _advance_after_reads(continuation_step, continuation_reads)
+            )
+            if continuation_reads.results:
+                reads = ReadExecutionBundle(
+                    results=[*reads.results, *continuation_reads.results],
+                    verification=continuation_reads.verification,
+                )
+            advanced = continuation_advanced
+            operation_reads[effective_step.operation_index] = reads
+            advanced, pending_proposal_for_step = _prepare_booking_proposal(
+                advanced,
+                reads=reads,
+                current_task=current_task,
+                db=db,
+                workspace=workspace,
+                patient=patient,
+                catalog=canonical_catalog,
+                now=local_now,
+                turn_id=resolved_turn_id,
+            )
+            continuation_transition = apply_step_state(
+                current_task,
+                step=advanced,
+                operation=operation,
+                reads=reads if reads.results else None,
+                now=local_now,
+                turn_id=resolved_turn_id,
+                catalog=canonical_catalog,
+            )
+            if (
+                pending_proposal_for_step is not None
+                and isinstance(continuation_transition.active_task, BookingTaskState)
+            ):
+                proposal_task = attach_booking_proposal(
+                    continuation_transition.active_task,
+                    proposal=pending_proposal_for_step,
+                )
+                continuation_transition = continuation_transition.__class__(
+                    active_task=proposal_task,
+                    changed=True,
+                    reason="booking_proposal_created",
+                )
+            advanced = finalize_step_after_state_transition(
+                advanced,
+                continuation_transition,
+            )
+            current_task = continuation_transition.active_task
 
         if advanced.disposition == "write_ready":
             if write_executor is None:

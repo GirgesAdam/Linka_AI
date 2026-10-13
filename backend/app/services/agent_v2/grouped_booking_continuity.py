@@ -21,7 +21,11 @@ from app.services.agent_v2.state import (
 _BOOKING_OPERATION_TYPES = frozenset({"book", "continue_active"})
 
 
-def _constraints_from_step(step: PlanStep) -> CustomerConstraints:
+def _constraints_from_step(
+    step: PlanStep,
+    *,
+    operation: TurnOperation,
+) -> CustomerConstraints:
     facts = step.facts
     return CustomerConstraints.model_validate(
         {
@@ -31,6 +35,7 @@ def _constraints_from_step(step: PlanStep) -> CustomerConstraints:
             "device_key": str(facts["device_key"]) if facts.get("device_key") else None,
             "date": facts.get("date"),
             "time": facts.get("time"),
+            "time_clock_source": operation.clock_source,
             "package_usage": facts.get("package_usage") or "unspecified",
         }
     )
@@ -80,7 +85,13 @@ def grouped_booking_task_from_plan(
     if steps is None:
         return None
 
-    components = [_constraints_from_step(step) for step in steps]
+    components = [
+        _constraints_from_step(
+            step,
+            operation=understanding.operations[step.operation_index],
+        )
+        for step in steps
+    ]
     grouped = GroupedBookingState(components=components)
     if existing is not None and existing.grouped is not None:
         if existing.grouped == grouped and existing.constraints == components[0]:
