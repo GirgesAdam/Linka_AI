@@ -326,6 +326,59 @@ def test_g9_singleton_retained_ref_updates_grouped_canonical_set() -> None:
     assert transition.active_task.constraints.service_id == A
 
 
+def test_g9_informational_book_continuation_narrows_without_write_authority() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="informational",
+                active_task_relationship="continue",
+                grouped_booking_action="remove_other_components",
+                entities=TurnEntities(service=EntityReference(ref=refs[A])),
+            )
+        ]
+    )
+
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    plan = tag_booking_service_sets(
+        plan_turn(
+            normalized,
+            PlannerContext(semantic_context=context, active_task=state, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+
+    assert service_sets == {0: [A]}
+    assert plan.steps[0].state_action == "update_active"
+
+    transition = apply_step_state(
+        state,
+        step=plan.steps[0],
+        operation=normalized.operations[0],
+        reads=None,
+        now=NOW,
+        turn_id="g9-informational-book",
+        catalog=catalog,
+    )
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.requested_service_ids == [A]
+    assert transition.active_task.constraints.service_id == A
+    assert transition.active_task.write_authorization.authorized is False
+
+
 def test_g9_informational_continue_active_narrows_grouped_set() -> None:
     catalog = _catalog()
     context = build_semantic_context(catalog)
