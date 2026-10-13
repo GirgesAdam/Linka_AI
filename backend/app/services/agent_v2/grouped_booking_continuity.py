@@ -291,28 +291,42 @@ def explicitly_narrow_grouped_booking_task(
     context: SemanticContext,
 ) -> BookingTaskState | None:
     """Collapse a group only when structured semantics explicitly authorize narrowing."""
-    if active_task is None or active_task.grouped is None:
+    if active_task is None:
         return None
-    executable = [
+    has_legacy_group = active_task.grouped is not None
+    has_requested_set = len(active_task.requested_service_ids) > 1
+    if not has_legacy_group and not has_requested_set:
+        return None
+    corrections = [
         operation
         for operation in turn.operations
         if operation.type in _BOOKING_OPERATION_TYPES
-        and operation.execution_intent == "execute"
     ]
-    if not executable or not any(
+    if not corrections or not any(
         operation.grouped_booking_action == "remove_other_components"
-        for operation in executable
+        for operation in corrections
     ):
         return None
 
-    components_by_service = {
-        component.service_id: component
-        for component in active_task.grouped.components
-        if component.service_id is not None
-    }
+    if active_task.grouped is not None:
+        components_by_service = {
+            component.service_id: component
+            for component in active_task.grouped.components
+            if component.service_id is not None
+        }
+    else:
+        components_by_service: dict[str, CustomerConstraints] = {}
+        for service_id in active_task.requested_service_ids:
+            device_key = active_task.service_device_keys.get(service_id)
+            if device_key is None and active_task.constraints.service_id == service_id:
+                device_key = active_task.constraints.device_key
+            components_by_service[service_id] = active_task.constraints.model_copy(
+                update={"service_id": service_id, "device_key": device_key}
+            )
+
     narrowed_components: list[CustomerConstraints] = []
     seen_services: set[str] = set()
-    for operation in executable:
+    for operation in corrections:
         params = resolved_operation_parameters(operation, context=context)
         service_id = params.get("service_id")
         if not isinstance(service_id, str) or service_id in seen_services:
@@ -332,16 +346,37 @@ def explicitly_narrow_grouped_booking_task(
 
     if not narrowed_components:
         return None
+    retained_service_ids = [
+        component.service_id
+        for component in narrowed_components
+        if component.service_id is not None
+    ]
     narrowed_group = (
         GroupedBookingState(components=narrowed_components)
-        if len(narrowed_components) > 1
+        if has_legacy_group and len(narrowed_components) > 1
         else None
     )
+    retained_device_keys = {
+        component.service_id: component.device_key
+        for component in narrowed_components
+        if component.service_id is not None and component.device_key is not None
+    }
     return active_task.model_copy(
         update={
             "status": "collecting",
             "constraints": narrowed_components[0],
+            "requested_service_ids": (
+                retained_service_ids
+                if has_requested_set
+                else active_task.requested_service_ids
+            ),
+            "service_device_keys": (
+                retained_device_keys
+                if has_requested_set
+                else active_task.service_device_keys
+            ),
             "grouped": narrowed_group,
+            "proposal": None,
             "derived": DerivedBookingState(),
             "option_snapshot": None,
             "version": active_task.version + 1,
