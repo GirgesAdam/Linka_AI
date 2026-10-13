@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import BaseMessage
@@ -21,8 +22,14 @@ from app.services.agent_v2.planner import (
     advance_step_after_verification,
     plan_turn,
 )
-from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
+from app.services.agent_v2.read_executor import (
+    ReadExecutionBundle,
+    ReadExecutionContext,
+    ReadResult,
+    _read_service_catalog_set,
+)
 from app.services.agent_v2.state import ActiveTaskState
+from app.services.laser_slot_metadata import decode_laser_slot_branch
 
 DEFAULT_CATALOG: dict[str, object] = {
     "services": [
@@ -34,10 +41,23 @@ DEFAULT_CATALOG: dict[str, object] = {
             "requires_laser_device": True,
             "price_minor": 50_000,
             "currency": "EGP",
+            "duration_minutes": 15,
             "customer_duration_text": "حوالي 15 دقيقة",
             "laser_devices": [
-                {"device_key": "candela_gentle", "device_name": "Candela Gentle"},
-                {"device_key": "prime_lase", "device_name": "Prime Lase"},
+                {
+                    "device_key": "candela_gentle",
+                    "device_name": "Candela Gentle",
+                    "price_minor": 50_000,
+                    "currency": "EGP",
+                    "configured": True,
+                },
+                {
+                    "device_key": "prime_lase",
+                    "device_name": "Prime Lase",
+                    "price_minor": 60_000,
+                    "currency": "EGP",
+                    "configured": True,
+                },
             ],
         },
         {
@@ -48,9 +68,16 @@ DEFAULT_CATALOG: dict[str, object] = {
             "requires_laser_device": True,
             "price_minor": 70_000,
             "currency": "EGP",
+            "duration_minutes": 20,
             "customer_duration_text": "حوالي 20 دقيقة",
             "laser_devices": [
-                {"device_key": "candela_gentle", "device_name": "Candela Gentle"}
+                {
+                    "device_key": "candela_gentle",
+                    "device_name": "Candela Gentle",
+                    "price_minor": 70_000,
+                    "currency": "EGP",
+                    "configured": True,
+                }
             ],
         },
         {
@@ -61,6 +88,7 @@ DEFAULT_CATALOG: dict[str, object] = {
             "requires_laser_device": False,
             "price_minor": 120_000,
             "currency": "EGP",
+            "duration_minutes": 45,
             "customer_duration_text": "حوالي 45 دقيقة",
         },
     ],
@@ -308,11 +336,27 @@ def _matches_time(local_value: object, constraint: object) -> bool:
     return True
 
 
-def _service_payload(env: V2FixtureEnvironment, service_id: object) -> dict[str, object]:
+def _service_payload(
+    env: V2FixtureEnvironment,
+    params: dict[str, object],
+) -> dict[str, object]:
+    service_id = params.get("service_id")
     row = next((item for item in _rows(env.catalog, "services") if item.get("id") == service_id), None)
     if row is None:
         return {"services": []}
-    return {"service": row}
+    service = dict(row)
+    allowed_device_keys = params.get("device_keys")
+    if isinstance(allowed_device_keys, list):
+        allowed = {str(item) for item in allowed_device_keys if item not in (None, "")}
+        raw_devices = service.get("laser_devices")
+        if isinstance(raw_devices, list):
+            service["laser_devices"] = [
+                dict(device)
+                for device in raw_devices
+                if isinstance(device, dict)
+                and str(device.get("device_key") or "") in allowed
+            ]
+    return {"service": service}
 
 
 def _doctor_payload(env: V2FixtureEnvironment, params: dict[str, object]) -> dict[str, object]:
@@ -331,6 +375,14 @@ def _availability_bundle(
     params: dict[str, object],
 ) -> tuple[ReadResult, VerificationFacts]:
     rows = [dict(row) for row in env.slots]
+    for row in rows:
+        branch_name = row.get("branch_name")
+        if not isinstance(branch_name, str):
+            continue
+        metadata = decode_laser_slot_branch(branch_name)
+        row["branch_name"] = metadata.branch_name
+        row["laser_device_key"] = row.get("laser_device_key") or metadata.device_key
+        row["laser_device_name"] = row.get("laser_device_name") or metadata.device_name
     service_id = params.get("service_id")
     doctor_id = params.get("doctor_id")
     device_key = params.get("device_key")
@@ -462,7 +514,21 @@ def execute_fixture_reads(step: PlanStep, env: V2FixtureEnvironment) -> ReadExec
                 ReadResult(
                     kind=request.kind,
                     ok=True,
-                    payload=_service_payload(env, params.get("service_id")),
+                    payload=_service_payload(env, params),
+                )
+            )
+        elif request.kind == "service_catalog_set":
+            results.append(
+                _read_service_catalog_set(
+                    request,
+                    ReadExecutionContext(
+                        db=SimpleNamespace(),
+                        workspace=SimpleNamespace(),
+                        patient=SimpleNamespace(),
+                        now=datetime.now().astimezone(),
+                        catalog=env.catalog,
+                        adapter=None,
+                    ),
                 )
             )
         elif request.kind == "clinic_info":

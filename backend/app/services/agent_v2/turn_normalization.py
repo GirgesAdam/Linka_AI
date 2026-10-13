@@ -144,15 +144,34 @@ def collapse_booking_service_sets(
             operation_type in {"book", "continue_active"}
             and execution_intent == "execute"
         )
+        explicit_grouped_service_correction = (
+            operation_type in {"book", "continue_active"}
+            and active_task is not None
+            and len(active_task.requested_service_ids) > 1
+            and operation.active_task_relationship != "replace"
+            and not operation.fresh_task
+            and operation.grouped_booking_action == "remove_other_components"
+        )
         fresh_grouped_availability = (
             operation_type == "availability"
             and execution_intent == "informational"
             and active_task is None
         )
+        explicit_singleton_narrowing = (
+            explicit_grouped_service_correction
+            and entity is not None
+            and isinstance(entity.ref, str)
+            and bool(entity.ref)
+            and not entity.candidate_refs
+        )
         if (
-            not (executable_booking_set or fresh_grouped_availability)
+            not (
+                executable_booking_set
+                or explicit_grouped_service_correction
+                or fresh_grouped_availability
+            )
             or entity is None
-            or entity.candidate_mode != "set"
+            or (entity.candidate_mode != "set" and not explicit_singleton_narrowing)
         ):
             normalized.append(operation)
             continue

@@ -159,6 +159,44 @@ def test_device_price_relationship_is_kept_as_one_required_complete_fact() -> No
     assert fact.value == pairs
 
 
+def test_grouped_price_projects_only_visit_compatible_devices() -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "compatible_visit_device_keys": ["candela_gentle"],
+            "service_catalog": {
+                "service": {
+                    "name": "Laser Underarm",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                            "price": "500.00 EGP",
+                        },
+                        {
+                            "device_key": "prime_lase",
+                            "device_name": "Prime Lase",
+                            "price": "600.00 EGP",
+                        },
+                    ],
+                }
+            },
+        },
+    )
+
+    unit = build_customer_response_contract([outcome]).units[0]
+    fact = _fact_map(unit)["device_price_options"]
+
+    assert [row["device_name"] for row in fact.value] == ["Candela Gentle"]
+    assert unit.commercial_truth is not None
+    assert unit.commercial_truth.kind == "service_device_price"
+    assert [option.device_name for option in unit.commercial_truth.options] == [
+        "Candela Gentle"
+    ]
+
+
 def test_doctor_list_is_a_complete_required_set() -> None:
     doctors = [{"name": "Dr. Mary"}, {"name": "Dr. Sara"}]
     outcome = TurnOutcome(

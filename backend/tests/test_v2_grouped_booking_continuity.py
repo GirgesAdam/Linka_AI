@@ -459,6 +459,37 @@ def test_explicit_component_removal_can_collapse_to_single_booking() -> None:
     assert narrowed.write_authorization.authorized is True
 
 
+def test_explicit_component_removal_narrows_requested_service_set_state() -> None:
+    legacy = _grouped_state()
+    state = legacy.model_copy(
+        update={
+            "constraints": legacy.grouped.components[1],
+            "grouped": None,
+            "requested_service_ids": ["svc-a", "svc-b"],
+            "service_device_keys": {"svc-b": "prime_lase"},
+        }
+    )
+    correction = _operation(
+        "svc-a",
+        time=TIME_A,
+        grouped_booking_action="remove_other_components",
+    ).model_copy(update={"execution_intent": "informational"})
+
+    narrowed = explicitly_narrow_grouped_booking_task(
+        TiaTurnUnderstanding(operations=[correction]),
+        active_task=state,
+        context=_context(),
+    )
+
+    assert narrowed is not None
+    assert narrowed.grouped is None
+    assert narrowed.requested_service_ids == ["svc-a"]
+    assert narrowed.constraints.service_id == "svc-a"
+    assert narrowed.service_device_keys == {}
+    assert narrowed.proposal is None
+    assert narrowed.version == state.version + 1
+
+
 def test_explicit_subset_correction_removes_stale_group_component() -> None:
     state = _grouped_state()
     assert state.grouped is not None

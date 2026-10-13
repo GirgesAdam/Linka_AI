@@ -434,6 +434,7 @@ def _prepare_booking_proposal(
         "start_local": slot.get("start_local"),
         "doctor_name": slot.get("doctor_name"),
         "branch_name": slot.get("branch_name"),
+        "device_name": slot.get("laser_device_name"),
     }
     return step.model_copy(
         update={

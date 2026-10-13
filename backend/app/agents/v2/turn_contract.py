@@ -164,17 +164,24 @@ class Selection(StrictContractModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_presented_option_ref(cls, value: object) -> object:
-        """Canonicalize redundant model coordinates only for server-owned availability refs.
+        """Canonicalize redundant provider coordinates without adding selection authority.
 
-        ``opt_*`` is an opaque technical namespace whose canonical meaning is validated
-        later against the server-owned presented availability snapshot. The model may
-        redundantly echo a displayed index/clock alongside that ref because provider
-        schemas require every selection field. Those echoes are not authority. Keep the
-        ref and discard only those redundant coordinates; all other refs keep the strict
-        fail-closed validator below.
+        A ``time`` selection is resolved only when exactly one server-owned presented slot
+        matches that clock, so index/ref/relative echoes are never needed as authority.
+        Likewise, ``opt_*`` is an opaque technical namespace validated later against the
+        server-owned presented availability snapshot. Provider schemas may redundantly
+        populate unrelated selection fields; discard only those non-authoritative echoes
+        and keep the strict fail-closed validator for the selected coordinate itself.
         """
         if not isinstance(value, dict):
             return value
+        if value.get("kind") == "time" and value.get("time") not in (None, ""):
+            return {
+                **value,
+                "index": None,
+                "ref": None,
+                "relative": None,
+            }
         ref = value.get("ref")
         if value.get("kind") != "ref" or not isinstance(ref, str) or not ref.startswith("opt_"):
             return value
@@ -443,10 +450,12 @@ class TurnOperation(StrictContractModel):
             "For an active unfinished same-visit multi-service booking, preserve_group means the current "
             "service set remains part of the visit while the operation adds/edits constraints. Use "
             "remove_other_components whenever the customer explicitly narrows the service set, including "
-            "removing one or more services while keeping the others. In that case entities.service must "
-            "represent the COMPLETE retained canonical set after the correction, never the removed service "
-            "as a delta and never the stale pre-correction set. Never infer narrowing merely because the "
-            "customer mentions or edits one component."
+            "removing one or more services while keeping the others. Singleton narrowing is included: if "
+            "the active set is A+B and the customer explicitly keeps only A, the complete retained set is "
+            "A and this field must be remove_other_components. In that case entities.service must represent "
+            "the COMPLETE retained canonical set after the correction, never the removed service as a delta "
+            "and never the stale pre-correction set. Never infer narrowing merely because the customer "
+            "mentions or edits one component."
         ),
     )
     cleared_verified_read_fields: list[VerifiedReadClearField] = Field(
@@ -496,6 +505,17 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_irrelevant_active_task_explicit_fields(cls, value: object) -> object:
+        """Ignore non-authoritative task provenance emitted on non-task operations."""
+        if not isinstance(value, dict):
+            return value
+        explicit = value.get("active_task_explicit_fields")
+        if explicit and value.get("type") not in {"book", "reschedule"}:
+            return {**value, "active_task_explicit_fields": []}
+        return value
 
     @model_validator(mode="after")
     def validate_active_task_explicit_fields(self) -> TurnOperation:

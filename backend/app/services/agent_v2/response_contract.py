@@ -38,6 +38,7 @@ CommercialPriceKind = Literal[
     "service_base_price",
     "service_device_price",
     "service_device_price_options",
+    "visit_service_total",
     "package_price_options",
     "device_price_clarification",
     "price_unavailable",
@@ -404,15 +405,57 @@ def _choice_contract(choice: OutcomeChoice, goal: ResponseGoal) -> ResponseChoic
     return ResponseChoice(label=choice.label, facts=choice_facts)
 
 
+def _service_price_projection(
+    raw_service: dict[str, object],
+    facts: dict[str, object],
+) -> dict[str, object] | None:
+    """Project only visit-compatible device prices to the language boundary."""
+    projected = dict(raw_service)
+    compatible = facts.get("compatible_visit_device_keys")
+    if isinstance(compatible, list) and compatible:
+        allowed = {str(item) for item in compatible if item not in (None, "")}
+        raw_devices = projected.get("laser_devices")
+        if isinstance(raw_devices, list):
+            projected["laser_devices"] = [
+                dict(row)
+                for row in raw_devices
+                if isinstance(row, dict)
+                and str(row.get("device_key") or "") in allowed
+            ]
+    safe = _safe_value(projected)
+    return safe if isinstance(safe, dict) else None
+
+
 def _service_price_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
+    visit_price = facts.get("visit_price")
+    if isinstance(visit_price, dict):
+        result = [
+            _make_fact(
+                goal=goal,
+                key="visit_price",
+                value=visit_price,
+                required=True,
+                complete_set=True,
+            )
+        ]
+        if facts.get("listed_total_not_settlement") is True:
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="listed_total_not_settlement",
+                    value=True,
+                )
+            )
+        return result
+
     catalog = facts.get("service_catalog")
     if not isinstance(catalog, dict):
         return []
     service_wrapper = catalog.get("service")
     if not isinstance(service_wrapper, dict):
         return []
-    service = _safe_value(service_wrapper)
-    if not isinstance(service, dict):
+    service = _service_price_projection(service_wrapper, facts)
+    if service is None:
         return []
 
     result: list[ResponseFact] = []
@@ -554,14 +597,46 @@ def _commercial_option(
 
 
 def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | None:
+    visit_price = facts.get("visit_price")
+    if isinstance(visit_price, dict):
+        raw_names = visit_price.get("service_names")
+        service_names = (
+            [str(item).strip() for item in raw_names if str(item).strip()]
+            if isinstance(raw_names, list)
+            else []
+        )
+        raw_variants = visit_price.get("variants")
+        options: list[CommercialPriceOption] = []
+        if isinstance(raw_variants, list) and service_names:
+            joined_name = " + ".join(service_names)
+            for raw in raw_variants:
+                if not isinstance(raw, dict):
+                    continue
+                device_name = str(raw.get("device_name") or "").strip() or None
+                option = _commercial_option(
+                    qualifier="device" if device_name is not None else "base",
+                    service_name=joined_name,
+                    price=raw.get("total_price"),
+                    currency_hint=raw.get("currency"),
+                    device_name=device_name,
+                )
+                if option is not None:
+                    options.append(option)
+        return CommercialTruth(
+            kind="visit_service_total" if options else "price_unavailable",
+            service_name=" + ".join(service_names) or None,
+            options=tuple(options),
+            complete_set=True,
+        )
+
     catalog = facts.get("service_catalog")
     if not isinstance(catalog, dict):
         return None
     raw_service = catalog.get("service")
     if not isinstance(raw_service, dict):
         return None
-    service = _safe_value(raw_service)
-    if not isinstance(service, dict):
+    service = _service_price_projection(raw_service, facts)
+    if service is None:
         return None
     service_name = str(service.get("name") or "").strip()
     if not service_name:

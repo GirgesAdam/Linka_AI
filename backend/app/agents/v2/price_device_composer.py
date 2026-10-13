@@ -327,6 +327,59 @@ def _render_option_list(
             return rendered + (" هتحب أكمل بعد ما أأكد المواعيد المتاحة؟" if arabic else " Shall I continue after I verify the available times?")
         return rendered
 
+    if truth.kind == "visit_service_total":
+        service_names = [
+            item.strip()
+            for item in str(truth.service_name or "").split("+")
+            if item.strip()
+        ]
+        joined = (" \u0648 ".join(service_names) if arabic else " + ".join(service_names)) or (
+            "\u0627\u0644\u062e\u062f\u0645\u0627\u062a" if arabic else "the services"
+        )
+        if not options:
+            return (
+                "\u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a \u0627\u0644\u0645\u0624\u0643\u062f \u0644\u0644\u062e\u062f\u0645\u0627\u062a \u0627\u0644\u062d\u0627\u0644\u064a\u0629 \u0645\u0634 \u0645\u062a\u0627\u062d \u0641\u064a \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0639\u064a\u0627\u062f\u0629 \u0627\u0644\u062d\u0627\u0644\u064a\u0629."
+                if arabic
+                else "The verified total for the current services is not available in the clinic data."
+            )
+        totals = {(option.amount, option.currency) for option in options}
+        settlement_note = any(
+            fact.key == "listed_total_not_settlement" and fact.value is True
+            for fact in unit.facts
+        )
+        note = (
+            " \u062f\u0647 \u0625\u062c\u0645\u0627\u0644\u064a \u0623\u0633\u0639\u0627\u0631 \u0627\u0644\u062e\u062f\u0645\u0627\u062a \u0642\u0628\u0644 \u062a\u0633\u0648\u064a\u0629 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0623\u0648 \u0637\u0631\u064a\u0642\u0629 \u0627\u0644\u062f\u0641\u0639."
+            if arabic and settlement_note
+            else " This is the listed service total before package/payment settlement."
+            if settlement_note
+            else ""
+        )
+        if len(totals) == 1:
+            price = _visible_money(options[0], arabic=arabic)
+            device = (
+                options[0].device_name
+                if len(options) == 1 and options[0].device_name
+                else None
+            )
+            if arabic:
+                device_text = f" \u0639\u0644\u0649 {device}" if device else ""
+                return f"\u0625\u062c\u0645\u0627\u0644\u064a {joined}{device_text} \u0647\u0648 {price}." + note
+            device_text = f" on {device}" if device else ""
+            return f"The total for {joined}{device_text} is {price}." + note
+
+        lines = [
+            f"{option.device_name} - {_visible_money(option, arabic=arabic)}"
+            for option in options
+            if option.device_name
+        ]
+        if arabic:
+            return "\n".join(
+                [f"\u0625\u062c\u0645\u0627\u0644\u064a {joined} \u062d\u0633\u0628 \u0627\u0644\u062c\u0647\u0627\u0632:", *lines, "\u062a\u062d\u0628 \u0623\u064a \u062c\u0647\u0627\u0632\u061f"]
+            ) + note
+        return "\n".join(
+            [f"The total for {joined} depends on the device:", *lines, "Which device would you like?"]
+        ) + note
+
     if truth.kind in {
         "service_device_price_options",
         "device_price_clarification",

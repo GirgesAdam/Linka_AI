@@ -10,9 +10,8 @@ export const appointmentLabels: Record<string, string> = {
 };
 
 export const statusLabels: Record<string, string> = {
-  // Product invariant: reception-facing "قيد الانتظار" copy is intentionally stable.
-  // Appointment attendance-confirmation lifecycle changes must not rename this UI label
-  // unless Product explicitly approves a reception-copy change.
+  // Generic/non-appointment statuses keep their domain meaning. Appointment copy is
+  // owned separately by appointmentLabels/appointmentStatus below.
   active: "نشط",
   inactive: "غير نشط",
   open: "مفتوحة",
@@ -206,7 +205,7 @@ export function statusPresentation(domain: StatusDomain, value: string | null | 
 
 export function labelForStatus(value: string | null | undefined) {
   if (!value) return "—";
-  return appointmentLabels[value] || statusLabels[value] || "غير محدد";
+  return statusLabels[value] || "غير محدد";
 }
 
 export function labelForPriority(priority: string | null | undefined) {

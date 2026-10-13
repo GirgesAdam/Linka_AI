@@ -419,6 +419,56 @@ def _read_facts(
                 selected_device_key=selected_device_key,
             )
         }
+    if result.kind == "service_catalog_set":
+        raw_variants = result.payload.get("variants")
+        variants: list[dict[str, object]] = []
+        if isinstance(raw_variants, list):
+            for raw in raw_variants:
+                if not isinstance(raw, dict):
+                    continue
+                currency = str(raw.get("currency") or "").upper()
+                total = _money(raw.get("total_price_minor"), currency)
+                raw_components = raw.get("components")
+                if total is None or not isinstance(raw_components, list):
+                    continue
+                components: list[dict[str, object]] = []
+                for component in raw_components:
+                    if not isinstance(component, dict):
+                        continue
+                    component_currency = str(component.get("currency") or "").upper()
+                    price = _money(component.get("price_minor"), component_currency)
+                    service_name = str(component.get("service_name") or "").strip()
+                    if price is None or not service_name:
+                        continue
+                    components.append(
+                        {
+                            "service_name": service_name,
+                            "price": price,
+                            "currency": component_currency,
+                        }
+                    )
+                if len(components) != len(raw_components):
+                    continue
+                variants.append(
+                    {
+                        "device_name": str(raw.get("device_name") or "").strip() or None,
+                        "components": components,
+                        "total_price": total,
+                        "currency": currency,
+                    }
+                )
+        return {
+            "visit_price": {
+                "service_names": [
+                    str(item)
+                    for item in result.payload.get("service_names", [])
+                    if str(item).strip()
+                ],
+                "variants": variants,
+                "device_required": result.payload.get("device_required") is True,
+                "device_resolved": result.payload.get("device_resolved") is True,
+            }
+        }
     return {result.kind: _visible_value(result.payload)}
 
 

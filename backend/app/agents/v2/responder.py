@@ -892,6 +892,7 @@ def _deterministic_booking_proposal_reply(
     start_local = summary.get("start_local")
     doctor_name = str(summary.get("doctor_name") or "").strip()
     branch_name = str(summary.get("branch_name") or "").strip()
+    device_name = str(summary.get("device_name") or "").strip()
     details: list[str] = []
     if service_names:
         details.append(("الخدمات: " if arabic else "Services: ") + "، ".join(service_names))
@@ -901,6 +902,8 @@ def _deterministic_booking_proposal_reply(
         details.append(("مع د. " if arabic else "with Dr. ") + doctor_name)
     if branch_name:
         details.append(("في " if arabic else "at ") + branch_name)
+    if device_name:
+        details.append(("على جهاز " if arabic else "on ") + device_name)
     if arabic:
         prefix = "الموعد المقترح: "
         suffix = " تحبي تأكدي الحجز ولا تعدّلي حاجة؟"
