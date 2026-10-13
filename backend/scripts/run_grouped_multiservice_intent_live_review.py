@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 import app.agents.v2.turn_interpreter as turn_interpreter
+import app.services.agent_v2.orchestrator as orchestrator_module
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.booking_settings import BookingSettings
@@ -38,6 +39,8 @@ ORIGINAL = (
 )
 TOTAL = "السعر الإجمالي كام؟"
 MODE = os.environ.get("RA_G_MODE", "standalone").strip().lower()
+C7_INITIAL = "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0648\u0625\u0628\u0637 \u0645\u0639 \u0628\u0639\u0636 \u0639\u0644\u0649 Candela Gentle \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a 17 \u0623\u0643\u062a\u0648\u0628\u0631"
+C7_REPLACEMENT = "\u0628\u062f\u0644 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u062e\u0644\u064a\u0647\u0627 Full Arms \u0648\u062e\u0644\u064a \u0644\u064a\u0632\u0631 \u0627\u0644\u0625\u0628\u0637 \u0632\u064a \u0645\u0627 \u0647\u0648"
 
 
 @contextmanager
@@ -287,6 +290,41 @@ def capture_invoke(*args, **kwargs):
 turn_interpreter.invoke_typed_structured_output = capture_invoke
 
 
+STAGES: list[dict[str, object]] = []
+_original_collapse = orchestrator_module.collapse_booking_service_sets
+_original_expand = orchestrator_module.expand_multi_service_operations
+
+
+def capture_collapse(*args, **kwargs):
+    before = args[0] if args else kwargs.get("turn")
+    value = _original_collapse(*args, **kwargs)
+    understanding, service_sets = value
+    STAGES.append({
+        "stage": "collapse_booking_service_sets",
+        "input_understanding": dump(before),
+        "output_understanding": dump(understanding),
+        "canonical_service_sets": service_sets,
+    })
+    return value
+
+
+def capture_expand(*args, **kwargs):
+    before = args[0] if args else kwargs.get("turn")
+    value = _original_expand(*args, **kwargs)
+    understanding, visit_groups = value
+    STAGES.append({
+        "stage": "expand_multi_service_operations",
+        "input_understanding": dump(before),
+        "output_understanding": dump(understanding),
+        "visit_groups": visit_groups,
+    })
+    return value
+
+
+orchestrator_module.collapse_booking_service_sets = capture_collapse
+orchestrator_module.expand_multi_service_operations = capture_expand
+
+
 def appointment_count(db: Session, workspace_id: UUID) -> int:
     return int(
         db.scalar(
@@ -296,12 +334,14 @@ def appointment_count(db: Session, workspace_id: UUID) -> int:
     )
 
 
-def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, object]]) -> dict[str, object]:
+def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, object]], stages: list[dict[str, object]], active_task_before) -> dict[str, object]:
     task = turn.active_task
     return {
         "customer": customer,
         "raw_model_structured": raw,
+        "normalization_stages": stages,
         "understanding": dump(turn.understanding),
+        "active_task_before": dump(active_task_before),
         "plan": dump(turn.plan),
         "traces": [dump(trace) for trace in turn.traces],
         "outcomes": [dump(outcome) for outcome in turn.outcomes],
@@ -343,9 +383,11 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
         history = []
         before = appointment_count(db, workspace.id)
         records: list[dict[str, object]] = []
+        previous_task = None
         for index, customer in enumerate(messages, start=1):
             history.append(HumanMessage(content=customer))
             RAW.clear()
+            STAGES.clear()
             result = orchestrate_v2_turn(
                 db=db,
                 workspace=workspace,
@@ -359,7 +401,8 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
                 turn_id=f"{name.lower()}-{index}",
                 write_executor=None,
             )
-            records.append(turn_record(result, customer=customer, raw=list(RAW)))
+            records.append(turn_record(result, customer=customer, raw=list(RAW), stages=list(STAGES), active_task_before=previous_task))
+            previous_task = result.active_task
             if result.reply:
                 history.append(AIMessage(content=result.reply))
         after = appointment_count(db, workspace.id)
@@ -378,6 +421,18 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
 
 def _task_ids(record: dict[str, object]) -> list[str]:
     return list(record.get("requested_service_ids") or [])
+
+
+def validate_c7_replacement(records, ids):
+    assert len(records) == 2
+    before, replaced = records
+    assert set(_task_ids(before)) == {ids["underarm"], ids["bikini"]}
+    expected = {ids["underarm"], ids["arms"]}
+    assert set(_task_ids(replaced)) == expected, (
+        "C7 replacement must authoritatively remove Bikini and retain Underarm while adding Full Arms"
+    )
+    assert ids["bikini"] not in _task_ids(replaced)
+    assert replaced["pending_write"] is None
 
 
 def validate_g1(records, ids):
@@ -445,6 +500,7 @@ def main() -> int:
     if MODE not in {"standalone", "batch1-overlay"}:
         raise RuntimeError(f"Unsupported RA_G_MODE={MODE}")
 
+    run_scenario("RA-C7-REPLACEMENT", [C7_INITIAL, C7_REPLACEMENT], validate_c7_replacement)
     run_scenario("RA-G1", [ORIGINAL], validate_g1)
     if MODE == "batch1-overlay":
         run_scenario("RA-G2", [ORIGINAL, TOTAL], validate_g2)
