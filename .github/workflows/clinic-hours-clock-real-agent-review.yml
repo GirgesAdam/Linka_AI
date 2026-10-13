@@ -127,10 +127,17 @@ jobs:
         run: |
           python -m alembic heads
           python -m alembic upgrade head
-      - name: Run focused RT3 ambiguity + continuation
+      - name: Run focused RT3 night continuation
         env:
           CLOCK_RT_SCENARIOS: RT3
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-rt3-focused.json
+          CLOCK_RT3_CONTINUATION: night
+          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-rt3-night-focused.json
+        run: python scripts/run_clinic_hours_clock_live_review.py
+      - name: Run focused RT3 morning continuation
+        env:
+          CLOCK_RT_SCENARIOS: RT3
+          CLOCK_RT3_CONTINUATION: morning
+          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-rt3-morning-focused.json
         run: python scripts/run_clinic_hours_clock_live_review.py
       - name: Run RT1-RT9 through real Agent path
         run: python scripts/run_clinic_hours_clock_live_review.py
@@ -140,7 +147,8 @@ jobs:
         with:
           name: clinic-hours-clock-real-agent-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
-            backend/artifacts/clinic-hours-clock-rt3-focused.json
+            backend/artifacts/clinic-hours-clock-rt3-night-focused.json
+            backend/artifacts/clinic-hours-clock-rt3-morning-focused.json
             backend/artifacts/clinic-hours-clock-live-review.json
           if-no-files-found: warn
           retention-days: 14

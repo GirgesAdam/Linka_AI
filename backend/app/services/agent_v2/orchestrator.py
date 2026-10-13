@@ -51,6 +51,7 @@ from app.services.agent_v2.active_task_progress import (
     persist_initial_task_intent,
     plan_active_task_progress,
     prepare_active_task_clock_progress,
+    resolve_pending_bare_clock_period,
 )
 from app.services.agent_v2.compound_turn_policy import (
     apply_compound_runtime_cursor,
@@ -1948,13 +1949,45 @@ def orchestrate_v2_turn(
         semantic_context,
         automation_context=automation_context,
     )
+    contextual_period_understanding: TiaTurnUnderstanding | None = None
+    contextual_period_resolution = resolve_pending_bare_clock_period(
+        initial_task,
+        latest_customer_text,
+        context=semantic_context,
+    )
+    if contextual_period_resolution is not None:
+        initial_task, _resolved_period = contextual_period_resolution
+        semantic_context = with_safe_task_context(
+            semantic_context,
+            active_task=_task_dict(initial_task),
+            pending_choice=(
+                pending_choice.model_dump(mode="json") if pending_choice is not None else None
+            ),
+        )
+        contextual_period_understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="continue_active",
+                    entities=TurnEntities(),
+                    execution_intent="execute",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+
     reference_interpretation: ReferenceInterpretation | None = None
     reference_plan_override: TurnPlan | None = None
     full_interpreter_called = True
     raw_reference_options = (availability_reference_context or {}).get(
         "availability_reference_options"
     )
-    if latest_customer_text and isinstance(raw_reference_options, list) and raw_reference_options:
+    if (
+        contextual_period_understanding is None
+        and latest_customer_text
+        and isinstance(raw_reference_options, list)
+        and raw_reference_options
+    ):
         reference_interpretation = interpret_availability_reference_turn(
             latest_customer_text=latest_customer_text,
             availability_context=availability_reference_context or {},
@@ -1991,7 +2024,10 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    if (
+    if contextual_period_understanding is not None:
+        understanding = contextual_period_understanding
+        full_interpreter_called = False
+    elif (
         decision is not None
         and decision.action == "new_search"
         and exact_reference_time is not None

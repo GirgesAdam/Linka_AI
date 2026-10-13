@@ -28,6 +28,7 @@ SAFETY_COUNTERS = {
     "silent_am_pm_mutation": 0,
     "unnecessary_10_11_clarification": 0,
     "arbitrary_10_11_resolution": 0,
+    "contextual_period_misresolution": 0,
     "wrong_device": 0,
     "cross_device_visits": 0,
     "lost_services": 0,
@@ -548,10 +549,13 @@ def _task_constraint_facts(record: dict[str, Any]) -> dict[str, Any]:
     return constraints if isinstance(constraints, dict) else {}
 
 
-def _validate_rt3_night_continuation(
+def _validate_rt3_continuation(
     first: dict[str, Any],
     continued: dict[str, Any],
     ctx: base.Context,
+    *,
+    expected_clock: str,
+    expected_period: str,
 ) -> None:
     first_constraints = _task_constraint_facts(first)
     _require(
@@ -576,12 +580,42 @@ def _validate_rt3_night_continuation(
         message="RT3: clarification lost requested date",
     )
 
-    operation = _semantic_operation(continued)
-    _require(
-        str(operation.get("clock_source") or "unspecified") == "explicit_period",
-        counter="silent_am_pm_mutation",
-        message="RT3: night answer did not produce typed explicit-period authority",
-    )
+    continued_constraints = _task_constraint_facts(continued)
+    if continued_constraints:
+        continued_time = continued_constraints.get("time")
+        _require(
+            isinstance(continued_time, dict)
+            and continued_time.get("start_time") == expected_clock
+            and continued_time.get("start_time_ambiguity") == "none",
+            counter="contextual_period_misresolution",
+            message=(
+                "RT3: contextual period resolution did not persist canonical time "
+                f"{expected_clock}: {continued_time!r}"
+            ),
+        )
+        _require(
+            str(continued_constraints.get("time_clock_source") or "") == "explicit_period",
+            counter="contextual_period_misresolution",
+            message="RT3: resolved follow-up did not persist explicit period authority",
+        )
+        _require(
+            str(continued_constraints.get("service_id") or "") == str(ctx.bikini.id),
+            counter="lost_services",
+            message="RT3: continuation changed requested service",
+        )
+        _require(
+            str(continued_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
+            counter="wrong_writes",
+            message="RT3: continuation changed branch",
+        )
+        continued_date = continued_constraints.get("date")
+        _require(
+            isinstance(continued_date, dict)
+            and continued_date.get("start_date") == "2026-10-15",
+            counter="wrong_time_writes",
+            message="RT3: continuation changed requested date",
+        )
+
     canonical = next(
         (
             value
@@ -596,44 +630,51 @@ def _validate_rt3_night_continuation(
         None,
     )
     _require(
-        canonical == "22:00",
-        counter="wrong_time_writes",
-        message=f"RT3: night continuation canonical clock={canonical}, expected 22:00",
+        canonical == expected_clock,
+        counter="contextual_period_misresolution",
+        message=(
+            f"RT3: {expected_period} continuation canonical clock={canonical}, "
+            f"expected {expected_clock}"
+        ),
     )
     availability = continued.get("availability_requests") or []
     if availability:
         _require(
-            _availability_clock(continued) == "22:00",
+            _availability_clock(continued) == expected_clock,
             counter="wrong_time_writes",
-            message="RT3: continuation availability did not use 22:00",
+            message=f"RT3: continuation availability did not use {expected_clock}",
         )
     appointments = continued.get("appointments") or []
     _require(
         len(appointments) <= 1,
         counter="duplicate_appointments",
-        message="RT3: night continuation created duplicate appointments",
+        message="RT3: continuation created duplicate appointments",
     )
     _require(
         len(continued.get("proposals_created") or []) <= 1,
         counter="duplicate_proposals",
-        message="RT3: night continuation created duplicate proposals",
+        message="RT3: continuation created duplicate proposals",
     )
     if appointments:
         _require(
-            base._appointment_clock(continued) == "22:00",
+            base._appointment_clock(continued) == expected_clock,
             counter="wrong_time_writes",
-            message="RT3: night continuation wrote a non-22:00 appointment",
+            message=f"RT3: continuation wrote a non-{expected_clock} appointment",
         )
         _require(
             str(appointments[0].get("service_id") or "") == str(ctx.bikini.id),
             counter="lost_services",
-            message="RT3: night continuation changed requested service",
+            message="RT3: continuation changed requested service",
         )
 
     continued["rt3_continuation_evidence"] = {
         "CUSTOMER": continued.get("customer"),
         "AGENT": continued.get("agent"),
+        "model": continued.get("model"),
+        "raw_structured": continued.get("raw_structured") or [],
+        "expected_period": expected_period,
         "canonical_time": canonical,
+        "persisted_constraints": continued_constraints,
         "availability_request": availability,
         "proposal": base._proposal(continued) or continued.get("booking_proposal"),
         "DB_effect": continued.get("db_effect"),
@@ -651,9 +692,27 @@ def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     if spec.name != "RT3":
         return
 
+    mode = os.environ.get("CLOCK_RT3_CONTINUATION", "night").strip().lower()
+    if mode == "night":
+        reply = "بالليل"
+        expected_clock = "22:00"
+        expected_period = "pm"
+    elif mode == "morning":
+        reply = "الصبح"
+        expected_clock = "10:00"
+        expected_period = "am"
+    else:
+        raise ValueError(f"Unknown CLOCK_RT3_CONTINUATION: {mode}")
+
     CLOCK_TRACE.clear()
-    continued = base._chat(ctx, "??????")
-    _validate_rt3_night_continuation(record, continued, ctx)
+    continued = base._chat(ctx, reply)
+    _validate_rt3_continuation(
+        record,
+        continued,
+        ctx,
+        expected_clock=expected_clock,
+        expected_period=expected_period,
+    )
 
 
 def _persisted_appointments(workspace_id: UUID) -> int:

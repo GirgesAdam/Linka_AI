@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import unicodedata
 from datetime import datetime, time
 from typing import Literal
 
@@ -689,6 +691,131 @@ def _sync_grouped_clock(
     return state.model_copy(
         update={"grouped": state.grouped.model_copy(update={"components": components})}
     )
+
+
+_AM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
+    {
+        "الصبح",
+        "صباح",
+        "صباحا",
+        "am",
+        "الصبح طبعا",
+        "صباح طبعا",
+        "صباحا طبعا",
+        "am طبعا",
+    }
+)
+_PM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
+    {
+        "بالليل",
+        "بليل",
+        "الليل",
+        "مساء",
+        "مساءا",
+        "pm",
+        "بالليل طبعا",
+        "بليل طبعا",
+        "الليل طبعا",
+        "مساء طبعا",
+        "مساءا طبعا",
+        "pm طبعا",
+    }
+)
+_ARABIC_DIACRITICS = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭ]")
+_PERIOD_REPLY_PUNCTUATION = re.compile(r"[\s،,!?؟;؛:]+")
+
+
+def _normalize_contextual_period_reply(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).strip().lower().replace("ـ", "")
+    normalized = _ARABIC_DIACRITICS.sub("", normalized)
+    normalized = normalized.replace(".", "")
+    return _PERIOD_REPLY_PUNCTUATION.sub(" ", normalized).strip()
+
+
+def _contextual_period_reply(text: str) -> Literal["am", "pm"] | None:
+    normalized = _normalize_contextual_period_reply(text)
+    if normalized in _AM_CONTEXTUAL_PERIOD_REPLIES:
+        return "am"
+    if normalized in _PM_CONTEXTUAL_PERIOD_REPLIES:
+        return "pm"
+    return None
+
+
+def resolve_pending_bare_clock_period(
+    state: ActiveTaskState | None,
+    customer_text: str,
+    *,
+    context: SemanticContext,
+) -> tuple[ActiveTaskState, Literal["am", "pm"]] | None:
+    """Resolve a narrow 10/11 AM/PM follow-up only at the persisted clock gate.
+
+    The customer text has no authority by itself. The active task must still contain
+    an unresolved bare 10/11 clock, and the canonical clinic-hours resolver must
+    independently prove that both AM and PM candidates are operationally valid.
+    """
+    if state is None or not customer_text.strip():
+        return None
+    constraints = state.constraints if state.task_type == "booking" else state.replacement
+    clock = constraints.time
+    if (
+        clock is None
+        or clock.mode != "exact"
+        or clock.start_time is None
+        or clock.start_time_ambiguity != "twelve_hour"
+        or constraints.time_clock_source != "bare_spoken_12h"
+        or constraints.date is None
+        or constraints.date.mode != "exact"
+        or constraints.branch_id is None
+    ):
+        return None
+
+    raw_clock = str(clock.start_time).strip()
+    try:
+        parts = raw_clock.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+    except (TypeError, ValueError):
+        return None
+    if hour not in {10, 11} or minute != 0:
+        return None
+
+    resolution = resolve_bare_clock_constraint(
+        clock,
+        date_constraint=constraints.date,
+        context=context,
+        branch_id=constraints.branch_id,
+    )
+    if resolution.status != "clarify_period" or len(resolution.valid_operating_hour_candidates) != 2:
+        return None
+
+    period = _contextual_period_reply(customer_text)
+    if period is None:
+        return None
+    canonical_time = f"{hour:02d}:00" if period == "am" else f"{hour + 12:02d}:00"
+    if canonical_time not in resolution.valid_operating_hour_candidates:
+        return None
+
+    canonical = clock.model_copy(
+        update={"start_time": canonical_time, "start_time_ambiguity": "none"}
+    )
+    if isinstance(state, BookingTaskState):
+        updated: ActiveTaskState = apply_booking_time_change(
+            state,
+            time=canonical,
+            clock_source="explicit_period",
+        )
+        updated = _sync_grouped_clock(
+            updated,
+            time_constraint=canonical,
+            clock_source="explicit_period",
+        )
+    else:
+        updated = apply_reschedule_time_change(
+            state,
+            time=canonical,
+            clock_source="explicit_period",
+        )
+    return updated, period
 
 
 def prepare_active_task_clock_progress(
