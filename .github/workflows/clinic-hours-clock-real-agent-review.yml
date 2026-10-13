@@ -1,0 +1,132 @@
+name: Clinic Hours Clock Real Agent Review
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/clinic-hours-clock-real-agent-review.yml
+      - backend/scripts/run_clinic_hours_clock_live_review.py
+      - backend/tests/test_v2_clinic_hours_clock_semantics.py
+      - backend/tests/test_v2_explicit_daypart_semantics.py
+      - backend/app/agents/v2/turn_contract.py
+      - backend/app/agents/v2/turn_interpreter.py
+      - backend/app/agents/v2/time_resolution.py
+      - backend/app/services/agent_v2/planner.py
+      - backend/app/services/agent_v2/orchestrator.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-agent:
+    name: RT1-RT9 clinic-hours clock boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_clock_unused
+      SUPABASE_SECRET_KEY: sb_secret_clock_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      AGENT_V2_LIVE_ENABLED: "true"
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Verify exact base and head
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$EXPECTED_HEAD" ]; then
+            test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          fi
+          git fetch origin main
+          if [ -n "$EXPECTED_BASE" ]; then
+            test "$(git rev-parse origin/main)" = "$EXPECTED_BASE"
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify real-model secret
+        run: test -n "$OPENAI_API_KEY"
+      - name: Validate focused semantics and tooling
+        run: |
+          ruff check app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/agents/v2/time_resolution.py app/services/agent_v2/planner.py tests/test_v2_clinic_hours_clock_semantics.py tests/test_v2_explicit_daypart_semantics.py scripts/run_clinic_hours_clock_live_review.py
+          python -m compileall -q app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/agents/v2/time_resolution.py app/services/agent_v2/planner.py tests/test_v2_clinic_hours_clock_semantics.py tests/test_v2_explicit_daypart_semantics.py scripts/run_clinic_hours_clock_live_review.py
+          python -m pytest -q tests/test_v2_clinic_hours_clock_semantics.py tests/test_v2_explicit_daypart_semantics.py tests/test_agent_explicit_time_safety.py tests/test_v2_business_hour_time_resolution.py tests/test_v2_booking_time_correction_authority.py tests/test_v2_device_write_safety.py tests/test_v2_date_scope_continuation.py tests/test_v2_availability_device_cardinality_integrity.py tests/test_v2_booking_status_truth.py tests/test_appointment_confirmation_policy.py tests/test_v2_grouped_multiservice_intent_reliability.py tests/test_agent_v2_orchestrator.py tests/test_provider_schema_compatibility.py
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Apply clean migrations
+        run: |
+          python -m alembic heads
+          python -m alembic upgrade head
+      - name: Run RT1-RT9 through real Agent path
+        run: python scripts/run_clinic_hours_clock_live_review.py
+      - name: Upload clock-boundary report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinic-hours-clock-real-agent-${{ github.event.pull_request.head.sha || github.sha }}
+          path: backend/artifacts/clinic-hours-clock-live-review.json
+          if-no-files-found: warn
+          retention-days: 14
