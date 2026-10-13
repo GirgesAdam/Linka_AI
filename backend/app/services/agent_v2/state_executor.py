@@ -221,25 +221,6 @@ def _apply_booking_updates(
             time=operation.entities.time,
             clock_source=operation.clock_source,
         )
-    if (
-        facts.get("verified_time_period_selection") is True
-        and updated.grouped is not None
-        and updated.constraints.time is not None
-    ):
-        components = [
-            component.model_copy(
-                update={
-                    "time": updated.constraints.time,
-                    "time_clock_source": updated.constraints.time_clock_source,
-                }
-            )
-            for component in updated.grouped.components
-        ]
-        updated = updated.model_copy(
-            update={
-                "grouped": updated.grouped.model_copy(update={"components": components})
-            }
-        )
     if operation.package_usage != "unspecified":
         updated = apply_booking_package_usage_change(
             updated,
@@ -557,49 +538,6 @@ def _attach_availability_snapshot(
     )
 
 
-def _attach_time_period_snapshot(
-    state: ActiveTaskState,
-    *,
-    step: PlanStep,
-    now: datetime,
-    turn_id: str,
-) -> ActiveTaskState:
-    if step.facts.get("clock_period_clarification") is not True:
-        return state
-    raw = step.facts.get("valid_operating_hour_candidates")
-    if not isinstance(raw, list) or len(raw) != 2:
-        return state
-    clocks = [str(value).strip()[:5] for value in raw if value not in (None, "")]
-    if len(clocks) != 2 or len(set(clocks)) != 2:
-        return state
-    choices: list[OptionChoice] = []
-    for index, clock in enumerate(clocks, start=1):
-        try:
-            hour = int(clock.split(":", 1)[0])
-        except (ValueError, IndexError):
-            return state
-        period = "am" if hour < 12 else "pm"
-        choices.append(
-            OptionChoice(
-                ref=f"period-{index}",
-                label=f"{period.upper()} interpretation ? {clock}",
-                payload={
-                    "canonical_time": clock,
-                    "start_time_24h": clock,
-                    "period": period,
-                },
-            )
-        )
-    return attach_option_snapshot(
-        state,
-        snapshot_id=f"{turn_id}:{step.operation_index}:time-period:{state.version + 1}",
-        purpose="time_period",
-        choices=choices,
-        created_at=now,
-        expires_at=now + _OPTION_TTL,
-    )
-
-
 def _preserve_verified_window_snapshot(
     before: BookingTaskState,
     current: BookingTaskState,
@@ -801,12 +739,6 @@ def apply_step_state(
                 commercial_key=commercial_key,
             )
 
-    current = _attach_time_period_snapshot(
-        current,
-        step=step,
-        now=now,
-        turn_id=turn_id,
-    )
     current = _attach_availability_snapshot(
         current,
         step=step,

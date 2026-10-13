@@ -19,7 +19,6 @@ ChoicePurpose = Literal[
     "package",
     "booking_slot",
     "reschedule_slot",
-    "time_period",
 ]
 LifecycleAction = Literal["cancel_appointment", "confirm_appointment", "reschedule"]
 WriteOperation = Literal["booking", "reschedule"]

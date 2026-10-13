@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -592,39 +592,6 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
         return _clarify(index=index, operation=operation, field="selection")
 
     purpose = snapshot.purpose
-    if purpose == "time_period":
-        if state is None or state.option_snapshot is None or state.option_snapshot != snapshot:
-            return _clarify(index=index, operation=operation, field="selection")
-        canonical_time = str(selected.payload.get("canonical_time") or "").strip()[:5]
-        period = str(selected.payload.get("period") or "").strip().lower()
-        if not canonical_time or period not in {"am", "pm"}:
-            return _clarify(index=index, operation=operation, field="selection")
-        try:
-            time.fromisoformat(canonical_time)
-        except ValueError:
-            return _clarify(index=index, operation=operation, field="selection")
-        return PlanStep(
-            operation_index=index,
-            operation_type=operation.type,
-            disposition="respond",
-            state_action="update_active",
-            response_goal="clarification",
-            facts={
-                "choice_purpose": purpose,
-                "selected_option_ref": selected.ref,
-                "verified_time_period_selection": True,
-                "selected_period": period,
-                "time_clock_source": "explicit_period",
-                "time": {
-                    "mode": "exact",
-                    "start_time": canonical_time,
-                    "end_time": None,
-                    "start_time_ambiguity": "none",
-                    "end_time_ambiguity": "none",
-                },
-            },
-        )
-
     if purpose == "appointment" and snapshot.lifecycle_action is not None:
         return PlanStep(
             operation_index=index,

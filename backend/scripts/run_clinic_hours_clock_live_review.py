@@ -34,10 +34,6 @@ SAFETY_COUNTERS = {
     "duplicate_appointments": 0,
     "duplicate_proposals": 0,
     "persisted_audit_writes": 0,
-    "partial_writes": 0,
-    "fabricated_period_selection": 0,
-    "stale_period_selection": 0,
-    "lost_task_context": 0,
 }
 
 CLOCK_TRACE: list[dict[str, Any]] = []
@@ -248,19 +244,6 @@ def _semantic_operation(record: dict[str, Any]) -> dict[str, Any]:
             entities = operation.get("entities")
             time_value = entities.get("time") if isinstance(entities, dict) else None
             if isinstance(time_value, dict) and time_value.get("start_time") not in (None, ""):
-                return operation
-    return {}
-
-
-def _semantic_operation_any(record: dict[str, Any]) -> dict[str, Any]:
-    for payload in reversed(record.get("raw_structured") or []):
-        if not isinstance(payload, dict):
-            continue
-        operations = payload.get("operations")
-        if not isinstance(operations, list):
-            continue
-        for operation in operations:
-            if isinstance(operation, dict):
                 return operation
     return {}
 
@@ -565,91 +548,16 @@ def _task_constraint_facts(record: dict[str, Any]) -> dict[str, Any]:
     return constraints if isinstance(constraints, dict) else {}
 
 
-def _task_snapshot(record: dict[str, Any]) -> dict[str, Any]:
-    task = record.get("active_task")
-    if not isinstance(task, dict):
-        return {}
-    snapshot = task.get("option_snapshot")
-    return snapshot if isinstance(snapshot, dict) else {}
-
-
-def _selected_period_from_operation(
-    operation: dict[str, Any],
-    snapshot: dict[str, Any],
-) -> str | None:
-    selection = operation.get("selection")
-    if operation.get("type") != "select_active" or not isinstance(selection, dict):
-        return None
-    options = snapshot.get("options")
-    if not isinstance(options, list):
-        return None
-    selected: dict[str, Any] | None = None
-    kind = selection.get("kind")
-    if kind == "ref":
-        ref = selection.get("ref")
-        matches = [
-            option
-            for option in options
-            if isinstance(option, dict) and option.get("ref") == ref
-        ]
-        selected = matches[0] if len(matches) == 1 else None
-    elif kind == "index":
-        index = selection.get("index")
-        if isinstance(index, int) and not isinstance(index, bool) and 1 <= index <= len(options):
-            raw = options[index - 1]
-            selected = raw if isinstance(raw, dict) else None
-    elif kind == "time":
-        clock = str(selection.get("time") or "").strip()[:5]
-        matches = []
-        for option in options:
-            if not isinstance(option, dict):
-                continue
-            payload = option.get("payload")
-            if not isinstance(payload, dict):
-                continue
-            option_clock = str(
-                payload.get("canonical_time") or payload.get("start_time_24h") or ""
-            )[:5]
-            if option_clock == clock:
-                matches.append(option)
-        selected = matches[0] if len(matches) == 1 else None
-    if not isinstance(selected, dict):
-        return None
-    payload = selected.get("payload")
-    return str(payload.get("period") or "") if isinstance(payload, dict) else None
-
-
-def _validate_rt3_period_continuation(
+def _validate_rt3_night_continuation(
     first: dict[str, Any],
     continued: dict[str, Any],
     ctx: base.Context,
-    *,
-    expected_period: str,
-    expected_clock: str,
 ) -> None:
     first_constraints = _task_constraint_facts(first)
-    snapshot = _task_snapshot(first)
     _require(
         bool(first_constraints),
-        counter="lost_task_context",
+        counter="lost_services",
         message="RT3: clarification did not preserve active booking state",
-    )
-    _require(
-        snapshot.get("purpose") == "time_period",
-        counter="lost_task_context",
-        message="RT3: clarification did not persist a server-owned time_period choice",
-    )
-    options = snapshot.get("options")
-    option_clocks: list[str] = []
-    if isinstance(options, list):
-        for option in options:
-            payload = option.get("payload") if isinstance(option, dict) else None
-            if isinstance(payload, dict):
-                option_clocks.append(str(payload.get("canonical_time") or "")[:5])
-    _require(
-        option_clocks == ["10:00", "22:00"],
-        counter="fabricated_period_selection",
-        message=f"RT3: pending period candidates={option_clocks}, expected 10:00/22:00",
     )
     _require(
         str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
@@ -657,114 +565,81 @@ def _validate_rt3_period_continuation(
         message="RT3: clarification lost requested service",
     )
     _require(
-        str(first_constraints.get("branch_id") or "")
-        == str(ctx.workspace.primary_branch_id),
-        counter="lost_task_context",
+        str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
+        counter="wrong_writes",
         message="RT3: clarification lost branch",
     )
     first_date = first_constraints.get("date")
     _require(
         isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
-        counter="lost_task_context",
+        counter="wrong_time_writes",
         message="RT3: clarification lost requested date",
     )
-    _require(
-        not first.get("availability_requests")
-        and not (base._proposal(first) or first.get("booking_proposal"))
-        and int((first.get("db_effect") or {}).get("appointment_delta") or 0) == 0,
-        counter="partial_writes",
-        message="RT3: clarification boundary had scheduling side effects",
-    )
 
-    operation = _semantic_operation_any(continued)
-    selected_period = _selected_period_from_operation(operation, snapshot)
+    operation = _semantic_operation(continued)
     _require(
-        selected_period == expected_period,
-        counter="fabricated_period_selection",
-        message=(
-            f"RT3: continuation semantic selection={selected_period!r}, "
-            f"expected {expected_period!r}; operation={operation}"
-        ),
-    )
-    continued_constraints = _task_constraint_facts(continued)
-    continued_time = continued_constraints.get("time")
-    canonical = (
-        str(continued_time.get("start_time") or "")[:5]
-        if isinstance(continued_time, dict)
-        else None
-    )
-    ambiguity = (
-        str(continued_time.get("start_time_ambiguity") or "")
-        if isinstance(continued_time, dict)
-        else None
-    )
-    _require(
-        canonical == expected_clock and ambiguity == "none",
+        str(operation.get("clock_source") or "unspecified") == "explicit_period",
         counter="silent_am_pm_mutation",
-        message=(
-            f"RT3: continuation active-task time={canonical}/{ambiguity}, "
-            f"expected {expected_clock}/none"
+        message="RT3: night answer did not produce typed explicit-period authority",
+    )
+    canonical = next(
+        (
+            value
+            for value in (
+                _availability_clock(continued),
+                base._task_time(continued),
+                _proposal_clock(continued),
+                base._appointment_clock(continued),
+            )
+            if value
         ),
+        None,
     )
     _require(
-        continued_constraints.get("time_clock_source") == "explicit_period",
-        counter="silent_am_pm_mutation",
-        message="RT3: selected period did not become explicit_period canonical authority",
-    )
-    _require(
-        str(continued_constraints.get("service_id") or "")
-        == str(first_constraints.get("service_id") or "")
-        and str(continued_constraints.get("branch_id") or "")
-        == str(first_constraints.get("branch_id") or "")
-        and continued_constraints.get("date") == first_constraints.get("date"),
-        counter="lost_task_context",
-        message="RT3: period selection changed non-time active-task constraints",
+        canonical == "22:00",
+        counter="wrong_time_writes",
+        message=f"RT3: night continuation canonical clock={canonical}, expected 22:00",
     )
     availability = continued.get("availability_requests") or []
     if availability:
         _require(
-            _availability_clock(continued) == expected_clock,
+            _availability_clock(continued) == "22:00",
             counter="wrong_time_writes",
-            message=f"RT3: continuation availability did not use {expected_clock}",
+            message="RT3: continuation availability did not use 22:00",
         )
     appointments = continued.get("appointments") or []
     _require(
         len(appointments) <= 1,
         counter="duplicate_appointments",
-        message="RT3: period continuation created duplicate appointments",
+        message="RT3: night continuation created duplicate appointments",
     )
     _require(
         len(continued.get("proposals_created") or []) <= 1,
         counter="duplicate_proposals",
-        message="RT3: period continuation created duplicate proposals",
+        message="RT3: night continuation created duplicate proposals",
     )
     if appointments:
         _require(
-            base._appointment_clock(continued) == expected_clock,
+            base._appointment_clock(continued) == "22:00",
             counter="wrong_time_writes",
-            message=f"RT3: continuation wrote a non-{expected_clock} appointment",
+            message="RT3: night continuation wrote a non-22:00 appointment",
         )
         _require(
             str(appointments[0].get("service_id") or "") == str(ctx.bikini.id),
             counter="lost_services",
-            message="RT3: continuation changed requested service",
+            message="RT3: night continuation changed requested service",
         )
 
     continued["rt3_continuation_evidence"] = {
         "CUSTOMER": continued.get("customer"),
         "AGENT": continued.get("agent"),
-        "raw_semantic_operation": operation,
-        "selected_period": selected_period,
         "canonical_time": canonical,
-        "active_task_ambiguity": ambiguity,
         "availability_request": availability,
         "proposal": base._proposal(continued) or continued.get("booking_proposal"),
         "DB_effect": continued.get("db_effect"),
-        "same_service_id": str(continued_constraints.get("service_id") or "")
-        == str(first_constraints.get("service_id") or ""),
-        "same_branch_id": str(continued_constraints.get("branch_id") or "")
-        == str(first_constraints.get("branch_id") or ""),
-        "same_date": continued_constraints.get("date") == first_constraints.get("date"),
+        "same_service_id": str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
+        "same_branch_id": str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
+        "same_date": isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
     }
 
 
@@ -776,26 +651,9 @@ def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     if spec.name != "RT3":
         return
 
-    mode = os.environ.get("CLOCK_RT3_CONTINUATION", "night").strip().lower()
-    if mode == "night":
-        customer = "بالليل"
-        expected_period = "pm"
-        expected_clock = "22:00"
-    elif mode == "morning":
-        customer = "الصبح"
-        expected_period = "am"
-        expected_clock = "10:00"
-    else:
-        raise ValueError(f"Unknown CLOCK_RT3_CONTINUATION: {mode}")
     CLOCK_TRACE.clear()
-    continued = base._chat(ctx, customer)
-    _validate_rt3_period_continuation(
-        record,
-        continued,
-        ctx,
-        expected_period=expected_period,
-        expected_clock=expected_clock,
-    )
+    continued = base._chat(ctx, "??????")
+    _validate_rt3_night_continuation(record, continued, ctx)
 
 
 def _persisted_appointments(workspace_id: UUID) -> int:

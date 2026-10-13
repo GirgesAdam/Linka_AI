@@ -296,15 +296,7 @@ SEMANTIC PRINCIPLES
   request to avoid using an existing package can still book the same established service as a
   standalone appointment.
 - Use select_active only when structured pending/active options are actually supplied inside
-  SEMANTIC_CONTEXT. Recent assistant prose alone is not a verified option snapshot. When an active
-  pending_choice has purpose=time_period, it represents server-owned canonical interpretations of
-  one unresolved active-task clock. A short customer answer that semantically chooses one supplied
-  period/option is a select_active continuation with selection pointing only to that supplied option;
-  do not classify such an answer as social, do not restate or reconstruct the booking/reschedule
-  constraints, and do not invent a clock outside the supplied options. An acknowledgment, side
-  question, hesitation, or other response that does not semantically choose one option is not a
-  period selection; preserve the active task and let Python keep the pending choice unresolved.
-  For a pending
+  SEMANTIC_CONTEXT. Recent assistant prose alone is not a verified option snapshot. For a pending
   appointment choice, an ordinal/ref reply selects only that verified appointment; do not reconstruct
   cancel/reschedule or treat the selected appointment's current date/time as replacement authority.
   If pending_choice purpose=appointment_target, that single verified appointment is the lifecycle
