@@ -1009,23 +1009,181 @@ def scenario_c8(ctx: ScenarioContext) -> None:
     _scenario_pass(ctx)
 
 
-def scenario_c9(ctx: ScenarioContext) -> None:
-    _chat(ctx, "عايزة أحجز ليزر بكيني على Candela Gentle يوم الثلاثاء 20 أكتوبر 2026 الساعة 11 صباحًا")
-    corrected = _chat(ctx, "خليه 12 بدل 11")
-    task = corrected.get("active_task") or {}
-    time_constraint = json.dumps((task.get("constraints") or {}).get("time") or {}, ensure_ascii=False)
-    _require("12:00" in time_constraint and "11:00" not in time_constraint, ctx=ctx, defect_id="C9-task-time", message="Task time correction did not replace 11:00 with 12:00.", record=corrected)
-    final = _complete_booking_from_current_state(ctx)
-    rows = final["appointments"]
-    written_local = datetime.fromisoformat(rows[0]["start_at"]).astimezone(CAIRO) if len(rows) == 1 else None
-    _require(
-        written_local is not None and written_local.strftime("%H:%M") == "12:00",
-        ctx=ctx,
-        defect_id="C9-db-time",
-        message="DB write did not use corrected 12:00 Cairo-local time.",
-        safety_counter="wrong_time_writes",
-        record=final,
+@dataclass(frozen=True)
+class C9ValidationFailure:
+    defect_id: str
+    message: str
+    safety_counter: str | None = None
+
+
+def _c9_local_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(CAIRO)
+
+
+def _c9_agent_agrees_with_corrected_time(reply: str) -> bool:
+    normalized = (reply or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).lower()
+    wrong_time_claimed = any(marker in normalized for marker in ("11", "حداشر", "الحادية عشرة"))
+    correct_time_claimed = (
+        "12:00" in normalized
+        or ("12" in normalized and "ظهر" in normalized)
+        or ("اتناشر" in normalized and "ظهر" in normalized)
+        or ("الثانية عشرة" in normalized and "ظهر" in normalized)
+        or "12 pm" in normalized
+        or "12pm" in normalized
     )
+    return correct_time_claimed and not wrong_time_claimed
+
+
+def _c9_prewrite_failure(record: dict[str, Any]) -> C9ValidationFailure | None:
+    task = record.get("active_task")
+    if not isinstance(task, dict) or not task:
+        return C9ValidationFailure(
+            "C9-task-time",
+            "No active task remained before write, and no successful corrected appointment existed.",
+        )
+    time_constraint = json.dumps((task.get("constraints") or {}).get("time") or {}, ensure_ascii=False)
+    if "12:00" not in time_constraint or "11:00" in time_constraint:
+        return C9ValidationFailure(
+            "C9-task-time",
+            "Time correction did not authoritatively replace 11:00 with 12:00 before write.",
+        )
+    proposal = _proposal(record)
+    if proposal is not None:
+        proposal_local = _c9_local_datetime(proposal.get("start_at"))
+        if (
+            proposal_local is None
+            or proposal_local.strftime("%Y-%m-%d") != "2026-10-20"
+            or proposal_local.strftime("%H:%M") != "12:00"
+        ):
+            return C9ValidationFailure(
+                "C9-proposal-time",
+                "Proposal did not preserve the corrected 2026-10-20 12:00 Cairo-local time.",
+            )
+    return None
+
+
+def _c9_final_write_failure(
+    record: dict[str, Any],
+    *,
+    expected_service_id: str,
+    expected_device_key: str = "candela_gentle",
+) -> C9ValidationFailure | None:
+    rows = record.get("appointments") or []
+    if len(rows) != 1:
+        return C9ValidationFailure(
+            "C9-write-count",
+            "Time-corrected booking did not end as exactly one appointment.",
+            "duplicate_appointments" if len(rows) > 1 else "wrong_writes",
+        )
+    row = rows[0]
+    written_local = _c9_local_datetime(row.get("start_at"))
+    if (
+        written_local is None
+        or written_local.strftime("%Y-%m-%d") != "2026-10-20"
+        or written_local.strftime("%H:%M") != "12:00"
+    ):
+        return C9ValidationFailure(
+            "C9-db-time",
+            "DB write did not use corrected 2026-10-20 12:00 Cairo-local time.",
+            "wrong_time_writes",
+        )
+    if row.get("status") != "pending":
+        return C9ValidationFailure(
+            "C9-status",
+            "Time-corrected booking did not remain pending after creation.",
+            "accidental_pending_to_confirmed",
+        )
+    if str(row.get("service_id")) != expected_service_id or row.get("additional_service_ids"):
+        return C9ValidationFailure(
+            "C9-service",
+            "Time correction changed the canonical single-service Bikini booking context.",
+            "wrong_writes",
+        )
+    if row.get("laser_device_key") != expected_device_key or row.get("additional_device_keys"):
+        return C9ValidationFailure(
+            "C9-device",
+            "Time correction changed the canonical Candela device context.",
+            "wrong_device_writes",
+        )
+    if not _c9_agent_agrees_with_corrected_time(str(record.get("agent") or "")):
+        return C9ValidationFailure(
+            "C9-agent-time",
+            "Customer-facing booking result did not agree with corrected 12:00 noon time or still claimed 11:00.",
+            "false_success",
+        )
+    return None
+
+
+def _c9_validate_correction_record(
+    record: dict[str, Any],
+    *,
+    expected_service_id: str,
+    expected_device_key: str = "candela_gentle",
+) -> tuple[bool, C9ValidationFailure | None]:
+    if record.get("appointments"):
+        return True, _c9_final_write_failure(
+            record,
+            expected_service_id=expected_service_id,
+            expected_device_key=expected_device_key,
+        )
+    return False, _c9_prewrite_failure(record)
+
+
+def _c9_enforce(
+    ctx: ScenarioContext,
+    failure: C9ValidationFailure | None,
+    *,
+    record: dict[str, Any],
+) -> None:
+    if failure is None:
+        return
+    _require(
+        False,
+        ctx=ctx,
+        defect_id=failure.defect_id,
+        message=failure.message,
+        safety_counter=failure.safety_counter,
+        record=record,
+    )
+
+
+def scenario_c9(ctx: ScenarioContext) -> None:
+    first = _chat(ctx, "عايزة أحجز ليزر بكيني على Candela Gentle يوم الثلاثاء 20 أكتوبر 2026 الساعة 11 صباحًا")
+    _require(
+        not first["appointments"],
+        ctx=ctx,
+        defect_id="C9-premature-write",
+        message="Original 11:00 request wrote an appointment before the correction/authorization turn.",
+        safety_counter="wrong_time_writes",
+        record=first,
+    )
+
+    corrected = _chat(ctx, "خليه 12 بدل 11")
+    expected_service_id = str(ctx.services["bikini"].id)
+    already_written, failure = _c9_validate_correction_record(
+        corrected,
+        expected_service_id=expected_service_id,
+    )
+    _c9_enforce(ctx, failure, record=corrected)
+
+    if already_written:
+        final = corrected
+    else:
+        final = _complete_booking_from_current_state(ctx)
+        _c9_enforce(
+            ctx,
+            _c9_final_write_failure(final, expected_service_id=expected_service_id),
+            record=final,
+        )
+
     _scenario_pass(ctx, completed_booking=True)
 
 

@@ -63,7 +63,19 @@ jobs:
       - name: Checkout exact audit head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+      - name: Verify exact latest-main audit base and audit-only diff
+        working-directory: .
+        shell: bash
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$AUDIT_STARTING_MAIN"
+          test "$(git merge-base HEAD origin/main)" = "$AUDIT_STARTING_MAIN"
+          unexpected="$(git diff --name-only "$AUDIT_STARTING_MAIN"...HEAD | grep -Ev '^(\.github/workflows/final-agent-e2e-cost-baseline\.yml|backend/scripts/run_final_combined_agent_e2e_cost_audit\.py|backend/tests/test_final_combined_agent_e2e_cost_audit_tooling\.py)$' || true)"
+          test -z "$unexpected" || { echo "Unexpected production diff:"; echo "$unexpected"; exit 1; }
+          echo "Exact audited main: $AUDIT_STARTING_MAIN"
+          echo "Audit tooling head: $(git rev-parse HEAD)"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -97,15 +109,22 @@ jobs:
       - name: Validate audit tooling
         run: |
           ruff check scripts/run_final_combined_agent_e2e_cost_audit.py tests/test_final_combined_agent_e2e_cost_audit_tooling.py
-          python -m compileall -q scripts/run_final_combined_agent_e2e_cost_audit.py
+          python -m compileall -q scripts/run_final_combined_agent_e2e_cost_audit.py tests/test_final_combined_agent_e2e_cost_audit_tooling.py
           pytest -q tests/test_final_combined_agent_e2e_cost_audit_tooling.py
+          git diff --check "$AUDIT_STARTING_MAIN"...HEAD
       - name: Run final combined Real Agent E2E + cost audit
+        id: audit
+        continue-on-error: true
         run: python scripts/run_final_combined_agent_e2e_cost_audit.py
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: final-agent-e2e-cost-baseline-${{ github.sha }}
+          name: final-agent-e2e-cost-baseline-${{ github.event.pull_request.head.sha || github.sha }}
           path: backend/artifacts/final-combined-agent-e2e-cost-audit.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
+      - name: Enforce audit result
+        if: always()
+        shell: bash
+        run: test "${{ steps.audit.outcome }}" = "success"
