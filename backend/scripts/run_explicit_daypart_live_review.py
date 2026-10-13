@@ -499,7 +499,7 @@ def _quality_assessment(
     reply = str(record.get("agent") or "").strip()
     fallback = any(
         token in reply.lower()
-        for token in ("fallback", "system error", "internal error", "??? ???", "???? ?????")
+        for token in ("fallback", "system error", "internal error", "\u062d\u0635\u0644 \u062e\u0637\u0623", "\u062a\u0639\u0630\u0631 \u062a\u0646\u0641\u064a\u0630")
     )
     leak = any(
         token in reply
@@ -507,7 +507,7 @@ def _quality_assessment(
     )
     fragments = [
         item.strip()
-        for item in reply.replace("?", "\n").replace(".", "\n").splitlines()
+        for item in reply.replace("\u061f", "\n").replace(".", "\n").splitlines()
         if len(item.strip()) >= 8
     ]
     repeated = len(fragments) != len(set(fragments))
@@ -610,7 +610,7 @@ def _proposal_clock(proposal: dict[str, Any] | None) -> str | None:
 def _ra1(ctx: Context) -> None:
     record = _chat(
         ctx,
-        "????? ???? ????? ??? ?????? 15 ?????? 2026 ?????? 4:15 ????? ??????",
+        "\u0639\u0627\u064a\u0632\u0629 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 4:15 \u0627\u0644\u0639\u0635\u0631 \u0628\u0627\u0644\u0636\u0628\u0637",
     )
     _require(
         _task_time(record) == "16:15",
@@ -629,12 +629,12 @@ def _ra1(ctx: Context) -> None:
     )
     reply = str(record["agent"])
     _require(
-        any(token in reply for token in ("?? ????", "??? ????", "?? ????")),
+        any(token in reply for token in ("\u0645\u0634 \u0645\u062a\u0627\u062d", "\u063a\u064a\u0631 \u0645\u062a\u0627\u062d", "\u0645\u0634 \u0641\u0627\u0636\u064a")),
         counter="false_success",
         message="RA1 did not report requested time unavailable",
     )
     _require(
-        "??? ???? ??? ???" not in reply and "??? ???" not in reply,
+        "\u062a\u062d\u0628 \u062a\u062d\u062c\u0632 \u064a\u0648\u0645 \u0625\u064a\u0647" not in reply and "\u064a\u0648\u0645 \u0625\u064a\u0647" not in reply,
         counter="false_success",
         message="RA1 asked for a date already supplied by the customer",
     )
@@ -655,7 +655,7 @@ def _ra1(ctx: Context) -> None:
 def _ra2(ctx: Context) -> None:
     record = _chat(
         ctx,
-        "????? ???? ????? ??? ?????? 15 ?????? 2026 ?????? 4:15 ????? ??????",
+        "\u0639\u0627\u064a\u0632\u0629 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 4:15 \u0627\u0644\u0635\u0628\u062d \u0628\u0627\u0644\u0636\u0628\u0637",
     )
     _require(
         _task_time(record) == "04:15",
@@ -678,7 +678,7 @@ def _ra2(ctx: Context) -> None:
 def _ra3(ctx: Context) -> None:
     record = _chat(
         ctx,
-        "????? ???? ????? ??? ?????? 15 ?????? 2026 ?????? 16:15 ??????",
+        "\u0639\u0627\u064a\u0632\u0629 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 16:15 \u0628\u0627\u0644\u0636\u0628\u0637",
     )
     _require(
         _task_time(record) == "16:15",
@@ -701,7 +701,7 @@ def _ra3(ctx: Context) -> None:
 def _ra4(ctx: Context) -> None:
     record = _chat(
         ctx,
-        "????? ???? ????? ??? ?????? 15 ?????? 2026 ?????? 3",
+        "\u0639\u0627\u064a\u0632\u0629 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3",
     )
     _require(
         _task_time(record) == "15:00",
@@ -735,8 +735,8 @@ def _ra5(ctx: Context) -> None:
     expected_services = {str(ctx.underarm.id), str(ctx.bikini.id)}
     first = _chat(
         ctx,
-        "????? ???? ???? ??? ????? ????? ?? ??? ??? ?????? 15 ?????? 2026 ?????? 11? "
-        "?? ????? ???? ?????? ???????? ??? ??????? ???????",
+        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0648\u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0645\u0639 \u0628\u0639\u0636 \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11\u060c "
+        "\u0645\u0639 \u062f\u0643\u062a\u0648\u0631 \u0648\u0627\u062d\u062f \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a",
     )
     _require(
         _task_time(first) == "11:00",
@@ -757,7 +757,7 @@ def _ra5(ctx: Context) -> None:
         )
     _annotate(first)
 
-    corrected = _chat(ctx, "???? 12 ??? 11")
+    corrected = _chat(ctx, "\u062e\u0644\u064a\u0647 12 \u0628\u062f\u0644 11")
     _require(
         _task_time(corrected) == "12:00",
         counter="wrong_time_writes",
@@ -773,7 +773,7 @@ def _ra5(ctx: Context) -> None:
     if proposal is None:
         progressed = _chat(
             ctx,
-            "????? ???? ??? ????? ??? ?????? ?????? 12 ?????? ???????? ??? ??????? ???????",
+            "\u062a\u0645\u0627\u0645\u060c \u0643\u0645\u0644\u064a \u0646\u0641\u0633 \u0627\u0644\u062d\u062c\u0632 \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 \u0627\u0644\u0633\u0627\u0639\u0629 12 \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a",
         )
         _require(
             _task_time(progressed) == "12:00",
@@ -800,7 +800,7 @@ def _ra5(ctx: Context) -> None:
     if progressed is not corrected:
         _annotate(progressed)
 
-    confirmed = _chat(ctx, "????? ??? ?????")
+    confirmed = _chat(ctx, "\u062a\u0645\u0627\u0645\u060c \u0623\u0643\u062f \u0627\u0644\u062d\u062c\u0632")
     _require(
         len(confirmed["appointments"]) == 1,
         counter="duplicate_appointments",
@@ -828,8 +828,8 @@ def _ra6(ctx: Context) -> None:
     expected_services = {str(ctx.underarm.id), str(ctx.bikini.id)}
     first = _chat(
         ctx,
-        "????? ???? ???? ??? ????? ????? ?? ??? ?? ??? ??????? ??? ?????? 15 ?????? 2026 "
-        "?????? 4:30 ????? ??????? ?? ????? ???? ?????? ???????? ??? ??????? ???????",
+        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0648\u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0645\u0639 \u0628\u0639\u0636 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0632\u064a\u0627\u0631\u0629 \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 "
+        "\u0627\u0644\u0633\u0627\u0639\u0629 4:30 \u0627\u0644\u0639\u0635\u0631 \u0628\u0627\u0644\u0636\u0628\u0637\u060c \u0645\u0639 \u062f\u0643\u062a\u0648\u0631 \u0648\u0627\u062d\u062f \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a",
     )
     _require(
         _task_time(first) == "16:30",
@@ -865,8 +865,8 @@ def _ra6(ctx: Context) -> None:
     if proposal is None:
         progressed = _chat(
             ctx,
-            "????? ????? ?????. ???? ??? ????? ??? ?????? ?????? 4:30 ????? "
-            "?????? ???????? ??? ??????? ???????",
+            "\u062a\u0645\u0627\u0645\u060c \u0627\u0644\u0633\u0639\u0631 \u0645\u0646\u0627\u0633\u0628. \u0643\u0645\u0644\u064a \u0646\u0641\u0633 \u0627\u0644\u062d\u062c\u0632 \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 \u0627\u0644\u0633\u0627\u0639\u0629 4:30 \u0627\u0644\u0639\u0635\u0631 "
+            "\u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a",
         )
         _require(
             _task_time(progressed) == "16:30",
@@ -906,7 +906,7 @@ def _ra6(ctx: Context) -> None:
         message="RA6 proposal used wrong visit-level device",
     )
 
-    confirmed = _chat(ctx, "????? ??? ?????")
+    confirmed = _chat(ctx, "\u062a\u0645\u0627\u0645\u060c \u0623\u0643\u062f \u0627\u0644\u062d\u062c\u0632")
     _require(
         len(confirmed["appointments"]) == 1,
         counter="duplicate_appointments",
