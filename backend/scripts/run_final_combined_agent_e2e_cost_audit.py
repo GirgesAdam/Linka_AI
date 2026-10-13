@@ -644,15 +644,15 @@ def _human_flags(reply: str, active_task: dict[str, Any] | None) -> dict[str, st
     lowered = text.lower()
     marker = "FLAG" if "tia_laser_device" in lowered or "||" in text else "CLEAN"
     repeated = "CLEAN"
-    pieces = [part.strip() for part in text.replace("ØŸ", ".").replace("!", ".").split(".") if part.strip()]
+    pieces = [part.strip() for part in text.replace("Ã˜Å¸", ".").replace("!", ".").split(".") if part.strip()]
     normalized = [" ".join(part.split()).lower() for part in pieces]
     if len(normalized) != len(set(normalized)):
         repeated = "FLAG"
     clarifying = "CLEAN"
     requested = (active_task or {}).get("requested_service_ids") or []
-    if requested and any(phrase in text for phrase in ("Ø£Ù†Ù‡ÙŠ Ø®Ø¯Ù…Ø©", "Ø£ÙŠ Ø®Ø¯Ù…Ø©", "ØªÙ‚ØµØ¯ Ø®Ø¯Ù…Ø© Ø¥ÙŠÙ‡", "ØªÙ‚ØµØ¯ÙŠ Ø®Ø¯Ù…Ø© Ø¥ÙŠÙ‡")):
+    if requested and any(phrase in text for phrase in ("Ã˜Â£Ã™â€ Ã™â€¡Ã™Å  Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â©", "Ã˜Â£Ã™Å  Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â©", "Ã˜ÂªÃ™â€šÃ˜ÂµÃ˜Â¯ Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â© Ã˜Â¥Ã™Å Ã™â€¡", "Ã˜ÂªÃ™â€šÃ˜ÂµÃ˜Â¯Ã™Å  Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â© Ã˜Â¥Ã™Å Ã™â€¡")):
         clarifying = "FLAG"
-    fallback = "FLAG" if ("Ù…Ø¹Ù„ÙŠØ´" in text and ("ÙˆØ¶Ø­" in text or "ØªÙˆØ¶" in text)) else "CLEAN"
+    fallback = "FLAG" if ("Ã™â€¦Ã˜Â¹Ã™â€žÃ™Å Ã˜Â´" in text and ("Ã™Ë†Ã˜Â¶Ã˜Â­" in text or "Ã˜ÂªÃ™Ë†Ã˜Â¶" in text)) else "CLEAN"
     natural = "FLAG" if repeated == "FLAG" or fallback == "FLAG" else "CLEAN"
     return {
         "Functional": "PENDING_SCENARIO_VALIDATION",
@@ -805,7 +805,12 @@ def _require(
 
 def _service_ids(record: dict[str, Any]) -> list[str]:
     task = record.get("active_task") or {}
-    return [str(value) for value in task.get("requested_service_ids") or []]
+    requested = [str(value) for value in task.get("requested_service_ids") or []]
+    if requested:
+        return requested
+    constraints = task.get("constraints") or {}
+    service_id = constraints.get("service_id")
+    return [str(service_id)] if service_id else []
 
 
 def _proposal(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -909,8 +914,8 @@ def _complete_booking_from_current_state(
 
 
 def scenario_c1(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± Ø§Ù„Ø³Ø§Ø¹Ø© 8 Ù…Ø³Ø§Ø¡")
-    final = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 8 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
+    final = _chat(ctx, "Ã˜Â£Ã™Å Ã™Ë†Ã™â€¡ Ã˜Â£Ã™Æ’Ã˜Â¯ Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â¬Ã˜Â²")
     rows = final["appointments"]
     _require(len(rows) == 1, ctx=ctx, defect_id="C1-write-count", message="Simple booking did not create exactly one appointment.", safety_counter="wrong_writes", record=final)
     row = rows[0]
@@ -920,10 +925,10 @@ def scenario_c1(ctx: ScenarioContext) -> None:
 
 
 def scenario_c2(ctx: ScenarioContext) -> None:
-    first = _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± Ø§Ù„Ø³Ø§Ø¹Ø© 7 Ù…Ø³Ø§Ø¡")
+    first = _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 7 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
     _require("Candela" in first["agent"] and "Prime" in first["agent"], ctx=ctx, defect_id="C2-device-choice", message="Different-price multi-device choice was not grounded once.", record=first)
     _chat(ctx, "Candela Gentle")
-    third = _chat(ctx, "Ø§Ù„Ø³Ø¹Ø± ÙƒØ§Ù…ØŸ")
+    third = _chat(ctx, "Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
     task = third.get("active_task") or {}
     constraints = task.get("constraints") or {}
     _require(constraints.get("device_key") == "candela_gentle", ctx=ctx, defect_id="C2-device-persist", message="Selected device did not persist.", record=third)
@@ -933,7 +938,7 @@ def scenario_c2(ctx: ScenarioContext) -> None:
 
 
 def scenario_c3(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆÙ„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ø²ÙŠØ§Ø±Ø© Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± Ø§Ù„Ø³Ø§Ø¹Ø© 6 Ù…Ø³Ø§Ø¡")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã™ÂÃ™Å  Ã™â€ Ã™ÂÃ˜Â³ Ã˜Â§Ã™â€žÃ˜Â²Ã™Å Ã˜Â§Ã˜Â±Ã˜Â© Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 6 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
     final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
     count_counter = "duplicate_appointments" if len(rows) > 1 else "wrong_writes"
@@ -946,23 +951,23 @@ def scenario_c3(ctx: ScenarioContext) -> None:
 
 
 def scenario_c4(ctx: ScenarioContext) -> None:
-    first = _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆÙ„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ø²ÙŠØ§Ø±Ø© Ø¹Ù„Ù‰ Candela Gentle")
-    second = _chat(ctx, "Ø§Ù„Ø³Ø¹Ø± Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙƒØ§Ù…ØŸ")
+    first = _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã™ÂÃ™Å  Ã™â€ Ã™ÂÃ˜Â³ Ã˜Â§Ã™â€žÃ˜Â²Ã™Å Ã˜Â§Ã˜Â±Ã˜Â© Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle")
+    second = _chat(ctx, "Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¬Ã™â€¦Ã˜Â§Ã™â€žÃ™Å  Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
     expected = {str(ctx.services["underarm"].id), str(ctx.services["bikini"].id)}
     _require(set(_service_ids(second)) == expected, ctx=ctx, defect_id="C4-service-set", message="Known grouped service set was not preserved during total-price read.", safety_counter="lost_requested_services", record=second)
     _require("1200" in second["agent"].replace(",", ""), ctx=ctx, defect_id="C4-total", message="Canonical grouped total was not 1200 EGP.", safety_counter="wrong_price_claims", record=second)
-    _require("Ø£Ù†Ù‡ÙŠ Ø®Ø¯Ù…Ø©" not in second["agent"] and "Ø£ÙŠ Ø®Ø¯Ù…Ø©" not in second["agent"], ctx=ctx, defect_id="C4-unnecessary-clarification", message="Agent re-asked a known service during grouped total price.", record=second)
+    _require("Ã˜Â£Ã™â€ Ã™â€¡Ã™Å  Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â©" not in second["agent"] and "Ã˜Â£Ã™Å  Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â©" not in second["agent"], ctx=ctx, defect_id="C4-unnecessary-clarification", message="Agent re-asked a known service during grouped total price.", record=second)
     _require("TIA_LASER_DEVICE" not in first["agent"] + second["agent"] and "||" not in first["agent"] + second["agent"], ctx=ctx, defect_id="C4-marker", message="Internal device marker leaked.", safety_counter="internal_marker_leaks", record=second)
     _scenario_pass(ctx)
 
 
 def scenario_c5(ctx: ScenarioContext) -> None:
     expected = {str(ctx.services["underarm"].id), str(ctx.services["bikini"].id)}
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆØ¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø±")
-    _chat(ctx, "Ù…ÙŠÙ† Ø§Ù„Ø¯ÙƒØªÙˆØ± Ø§Ù„Ù„ÙŠ Ø¨ÙŠØ¹Ù…Ù„ Ø§Ù„Ø®Ø¯Ù…ØªÙŠÙ†ØŸ")
-    _chat(ctx, "Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø§Ù„Ø¹ÙŠØ§Ø¯Ø© Ø¥ÙŠÙ‡ØŸ")
-    price = _chat(ctx, "ÙˆØ§Ù„Ø³Ø¹Ø± Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙƒØ§Ù…ØŸ")
-    final = _chat(ctx, "ØªÙ…Ø§Ù… ÙƒÙ…Ù„ Ø§Ù„Ø­Ø¬Ø²")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â±")
+    _chat(ctx, "Ã™â€¦Ã™Å Ã™â€  Ã˜Â§Ã™â€žÃ˜Â¯Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â± Ã˜Â§Ã™â€žÃ™â€žÃ™Å  Ã˜Â¨Ã™Å Ã˜Â¹Ã™â€¦Ã™â€ž Ã˜Â§Ã™â€žÃ˜Â®Ã˜Â¯Ã™â€¦Ã˜ÂªÃ™Å Ã™â€ Ã˜Å¸")
+    _chat(ctx, "Ã™â€¦Ã™Ë†Ã˜Â§Ã˜Â¹Ã™Å Ã˜Â¯ Ã˜Â§Ã™â€žÃ˜Â¹Ã™Å Ã˜Â§Ã˜Â¯Ã˜Â© Ã˜Â¥Ã™Å Ã™â€¡Ã˜Å¸")
+    price = _chat(ctx, "Ã™Ë†Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¬Ã™â€¦Ã˜Â§Ã™â€žÃ™Å  Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
+    final = _chat(ctx, "Ã˜ÂªÃ™â€¦Ã˜Â§Ã™â€¦ Ã™Æ’Ã™â€¦Ã™â€ž Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â¬Ã˜Â²")
     for record in (price, final):
         _require(set(_service_ids(record)) == expected, ctx=ctx, defect_id="C5-context", message="Side question lost grouped booking context.", safety_counter="lost_requested_services", record=record)
     _require("1200" in price["agent"].replace(",", ""), ctx=ctx, defect_id="C5-price", message="Price side read lost grouped total truth.", safety_counter="wrong_price_claims", record=price)
@@ -970,9 +975,9 @@ def scenario_c5(ctx: ScenarioContext) -> None:
 
 
 def scenario_c6(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆØ¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± Ø§Ù„Ø³Ø§Ø¹Ø© 6 Ù…Ø³Ø§Ø¡")
-    narrowed = _chat(ctx, "Ø®Ù„ÙŠÙ‡Ø§ Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· Ø¨Ø³")
-    price = _chat(ctx, "Ø§Ù„Ø³Ø¹Ø± Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙƒØ§Ù…ØŸ")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 6 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
+    narrowed = _chat(ctx, "Ã˜Â®Ã™â€žÃ™Å Ã™â€¡Ã˜Â§ Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã˜Â¨Ã˜Â³")
+    price = _chat(ctx, "Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¬Ã™â€¦Ã˜Â§Ã™â€žÃ™Å  Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
     expected = [str(ctx.services["underarm"].id)]
     _require(_service_ids(narrowed) == expected and _service_ids(price) == expected, ctx=ctx, defect_id="C6-narrowing", message="Canonical narrowing did not reduce service set to Underarm only.", safety_counter="lost_requested_services", record=narrowed)
     _require(_proposal(narrowed) is None, ctx=ctx, defect_id="C6-stale-proposal", message="Old grouped proposal survived service narrowing.", safety_counter="wrong_writes", record=narrowed)
@@ -981,8 +986,8 @@ def scenario_c6(ctx: ScenarioContext) -> None:
 
 
 def scenario_c7(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆØ¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø±")
-    replaced = _chat(ctx, "Ø¨Ø¯Ù„ Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø®Ù„ÙŠÙ‡Ø§ Full Arms ÙˆØ®Ù„ÙŠ Ù„ÙŠØ²Ø± Ø§Ù„Ø¥Ø¨Ø· Ø²ÙŠ Ù…Ø§ Ù‡Ùˆ")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â±")
+    replaced = _chat(ctx, "Ã˜Â¨Ã˜Â¯Ã™â€ž Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã˜Â®Ã™â€žÃ™Å Ã™â€¡Ã˜Â§ Full Arms Ã™Ë†Ã˜Â®Ã™â€žÃ™Å  Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¨Ã˜Â· Ã˜Â²Ã™Å  Ã™â€¦Ã˜Â§ Ã™â€¡Ã™Ë†")
     expected = {str(ctx.services["underarm"].id), str(ctx.services["arms"].id)}
     _require(set(_service_ids(replaced)) == expected, ctx=ctx, defect_id="C7-replacement", message="Retained/replaced canonical service set is incorrect.", safety_counter="lost_requested_services", record=replaced)
     task = replaced.get("active_task") or {}
@@ -991,9 +996,9 @@ def scenario_c7(ctx: ScenarioContext) -> None:
 
 
 def scenario_c8(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ ÙŠÙˆÙ… Ø§Ù„Ø«Ù„Ø§Ø«Ø§Ø¡ 20 Ø£ÙƒØªÙˆØ¨Ø± 2026")
-    _chat(ctx, "Ù…ÙŠÙ† Ø§Ù„Ø¯ÙƒØªÙˆØ± Ø§Ù„Ù„ÙŠ Ø¨ÙŠØ¹Ù…Ù„ Ø§Ù„Ø®Ø¯Ù…Ø© Ø¯ÙŠØŸ")
-    corrected = _chat(ctx, "Ø®Ù„ÙŠÙ‡ Ø§Ù„Ø£Ø±Ø¨Ø¹Ø§Ø¡ 21 Ø£ÙƒØªÙˆØ¨Ø± 2026")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â«Ã™â€žÃ˜Â§Ã˜Â«Ã˜Â§Ã˜Â¡ 20 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026")
+    _chat(ctx, "Ã™â€¦Ã™Å Ã™â€  Ã˜Â§Ã™â€žÃ˜Â¯Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â± Ã˜Â§Ã™â€žÃ™â€žÃ™Å  Ã˜Â¨Ã™Å Ã˜Â¹Ã™â€¦Ã™â€ž Ã˜Â§Ã™â€žÃ˜Â®Ã˜Â¯Ã™â€¦Ã˜Â© Ã˜Â¯Ã™Å Ã˜Å¸")
+    corrected = _chat(ctx, "Ã˜Â®Ã™â€žÃ™Å Ã™â€¡ Ã˜Â§Ã™â€žÃ˜Â£Ã˜Â±Ã˜Â¨Ã˜Â¹Ã˜Â§Ã˜Â¡ 21 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026")
     task = corrected.get("active_task") or {}
     date_constraint = (task.get("constraints") or {}).get("date") or {}
     date_text = json.dumps(date_constraint, ensure_ascii=False)
@@ -1003,8 +1008,8 @@ def scenario_c8(ctx: ScenarioContext) -> None:
 
 
 def scenario_c9(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø«Ù„Ø§Ø«Ø§Ø¡ 20 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 11 ØµØ¨Ø§Ø­Ù‹Ø§")
-    corrected = _chat(ctx, "Ø®Ù„ÙŠÙ‡ 12 Ø¨Ø¯Ù„ 11")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â«Ã™â€žÃ˜Â§Ã˜Â«Ã˜Â§Ã˜Â¡ 20 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 11 Ã˜ÂµÃ˜Â¨Ã˜Â§Ã˜Â­Ã™â€¹Ã˜Â§")
+    corrected = _chat(ctx, "Ã˜Â®Ã™â€žÃ™Å Ã™â€¡ 12 Ã˜Â¨Ã˜Â¯Ã™â€ž 11")
     task = corrected.get("active_task") or {}
     time_constraint = json.dumps((task.get("constraints") or {}).get("time") or {}, ensure_ascii=False)
     _require("12:00" in time_constraint and "11:00" not in time_constraint, ctx=ctx, defect_id="C9-task-time", message="Task time correction did not replace 11:00 with 12:00.", record=corrected)
@@ -1024,7 +1029,7 @@ def _hole_setup(ctx: ScenarioContext) -> None:
 
 def scenario_c10(ctx: ScenarioContext) -> None:
     _hole_setup(ctx)
-    record = _chat(ctx, "ÙˆØ±ÙŠÙ†ÙŠ Ù…ÙˆØ§Ø¹ÙŠØ¯ Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ ÙŠÙˆÙ… Ø§Ù„Ø®Ù…ÙŠØ³ 15 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ù…Ù† Ø§Ù„Ø³Ø§Ø¹Ø© 4 Ø§Ù„Ø¹ØµØ±")
+    record = _chat(ctx, "Ã™Ë†Ã˜Â±Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã™Ë†Ã˜Â§Ã˜Â¹Ã™Å Ã˜Â¯ Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â®Ã™â€¦Ã™Å Ã˜Â³ 15 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã™â€¦Ã™â€  Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 4 Ã˜Â§Ã™â€žÃ˜Â¹Ã˜ÂµÃ˜Â±")
     starts = [_option_start(item) for item in _reference_options(record)]
     _require(any("T16:00" in value for value in starts), ctx=ctx, defect_id="C10-1600", message="16:00 valid slot was hidden.", safety_counter="hidden_availability_gaps", record=record)
     _require(not any("T16:15" in value for value in starts), ctx=ctx, defect_id="C10-gap", message="Blocked 16:15 appeared available.", safety_counter="fabricated_availability", record=record)
@@ -1034,55 +1039,55 @@ def scenario_c10(ctx: ScenarioContext) -> None:
 
 def scenario_c11(ctx: ScenarioContext) -> None:
     _hole_setup(ctx)
-    record = _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ ÙŠÙˆÙ… Ø§Ù„Ø®Ù…ÙŠØ³ 15 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 4:15 Ø§Ù„Ø¹ØµØ± Ø¨Ø§Ù„Ø¶Ø¨Ø·")
+    record = _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â®Ã™â€¦Ã™Å Ã˜Â³ 15 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 4:15 Ã˜Â§Ã™â€žÃ˜Â¹Ã˜ÂµÃ˜Â± Ã˜Â¨Ã˜Â§Ã™â€žÃ˜Â¶Ã˜Â¨Ã˜Â·")
     _require(not record["appointments"], ctx=ctx, defect_id="C11-write", message="Unavailable exact time caused a write.", safety_counter="wrong_writes", record=record)
-    _require("4:15" not in record["agent"] or any(word in record["agent"] for word in ("Ù…Ø´ Ù…ØªØ§Ø­", "ØºÙŠØ± Ù…ØªØ§Ø­", "Ù…Ø´ ÙØ§Ø¶ÙŠ")), ctx=ctx, defect_id="C11-false-slot", message="Agent silently accepted unavailable 16:15.", safety_counter="fabricated_availability", record=record)
+    _require("4:15" not in record["agent"] or any(word in record["agent"] for word in ("Ã™â€¦Ã˜Â´ Ã™â€¦Ã˜ÂªÃ˜Â§Ã˜Â­", "Ã˜ÂºÃ™Å Ã˜Â± Ã™â€¦Ã˜ÂªÃ˜Â§Ã˜Â­", "Ã™â€¦Ã˜Â´ Ã™ÂÃ˜Â§Ã˜Â¶Ã™Å ")), ctx=ctx, defect_id="C11-false-slot", message="Agent silently accepted unavailable 16:15.", safety_counter="fabricated_availability", record=record)
     _require(bool(_reference_options(record)), ctx=ctx, defect_id="C11-alternatives", message="Verified alternatives were not presented for unavailable exact time.", record=record)
     _scenario_pass(ctx)
 
 
 def scenario_c12(ctx: ScenarioContext) -> None:
-    availability = _chat(ctx, "ÙˆØ±ÙŠÙ†ÙŠ Ù…ÙˆØ§Ø¹ÙŠØ¯ Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ ÙŠÙˆÙ… Ø§Ù„Ø«Ù„Ø§Ø«Ø§Ø¡ 20 Ø£ÙƒØªÙˆØ¨Ø± 2026")
+    availability = _chat(ctx, "Ã™Ë†Ã˜Â±Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã™Ë†Ã˜Â§Ã˜Â¹Ã™Å Ã˜Â¯ Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â«Ã™â€žÃ˜Â§Ã˜Â«Ã˜Â§Ã˜Â¡ 20 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026")
     options = _reference_options(availability)
     _require(bool(options), ctx=ctx, defect_id="C12-options", message="No displayed option context to select later.", record=availability)
     selected_start = _option_start(options[0])
-    _chat(ctx, "Ø§Ù„Ø³Ø¹Ø± ÙƒØ§Ù…ØŸ")
+    _chat(ctx, "Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
     clock = selected_start.split("T", 1)[1][:5] if "T" in selected_start else "10:00"
-    selected = _chat(ctx, f"ØªÙ…Ø§Ù… Ø§Ø®ØªØ§Ø± Ø§Ù„Ù…ÙŠØ¹Ø§Ø¯ Ø§Ù„Ù„ÙŠ ÙƒØ§Ù† Ø¸Ø§Ù‡Ø± Ø§Ù„Ø³Ø§Ø¹Ø© {clock}")
+    selected = _chat(ctx, f"Ã˜ÂªÃ™â€¦Ã˜Â§Ã™â€¦ Ã˜Â§Ã˜Â®Ã˜ÂªÃ˜Â§Ã˜Â± Ã˜Â§Ã™â€žÃ™â€¦Ã™Å Ã˜Â¹Ã˜Â§Ã˜Â¯ Ã˜Â§Ã™â€žÃ™â€žÃ™Å  Ã™Æ’Ã˜Â§Ã™â€  Ã˜Â¸Ã˜Â§Ã™â€¡Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© {clock}")
     proposal = _proposal(selected)
     _require(proposal is not None and clock in str(proposal.get("start_at") or ""), ctx=ctx, defect_id="C12-selection", message="Displayed option was lost after side read.", record=selected)
     _scenario_pass(ctx)
 
 
 def scenario_c13(ctx: ScenarioContext) -> None:
-    proposal_turn = _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 8 Ù…Ø³Ø§Ø¡")
+    proposal_turn = _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 8 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
     proposal = _proposal(proposal_turn)
     _require(proposal is not None, ctx=ctx, defect_id="C13-proposal", message="Initial valid booking did not create a proposal.", record=proposal_turn)
     proposal_id = str(proposal["proposal_id"])
-    side = _chat(ctx, "Ø¹Ù†ÙˆØ§Ù† Ø§Ù„Ø¹ÙŠØ§Ø¯Ø© Ø¥ÙŠÙ‡ØŸ")
+    side = _chat(ctx, "Ã˜Â¹Ã™â€ Ã™Ë†Ã˜Â§Ã™â€  Ã˜Â§Ã™â€žÃ˜Â¹Ã™Å Ã˜Â§Ã˜Â¯Ã˜Â© Ã˜Â¥Ã™Å Ã™â€¡Ã˜Å¸")
     side_proposal = _proposal(side)
     _require(side_proposal is not None and str(side_proposal["proposal_id"]) == proposal_id, ctx=ctx, defect_id="C13-continuity", message="Valid proposal did not survive informational side read.", record=side)
     action_id = _proposal_confirm_button(ctx)
-    final = _button(ctx, customer_label="[ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø­Ø¬Ø²]", action_id=action_id)
+    final = _button(ctx, customer_label="[Ã˜ÂªÃ˜Â£Ã™Æ’Ã™Å Ã˜Â¯ Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â¬Ã˜Â²]", action_id=action_id)
     _require(len(final["appointments"]) == 1, ctx=ctx, defect_id="C13-duplicate", message="Proposal confirmation did not create exactly one appointment.", safety_counter="duplicate_appointments", record=final)
     _scenario_pass(ctx, completed_booking=True)
 
 
 def scenario_c14(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 7 Ù…Ø³Ø§Ø¡")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 7 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
     final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
     _require(len(rows) == 1 and rows[0]["status"] == "pending", ctx=ctx, defect_id="C14-status", message="Successful booking creation did not persist pending status.", safety_counter="accidental_pending_to_confirmed", record=final)
     lowered = final["agent"].lower()
-    _require("ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø­Ø¶ÙˆØ±" not in final["agent"] and "attendance confirmed" not in lowered, ctx=ctx, defect_id="C14-wording", message="Booking acknowledgment falsely claimed attendance confirmation.", safety_counter="false_success", record=final)
+    _require("Ã˜ÂªÃ˜Â£Ã™Æ’Ã™Å Ã˜Â¯ Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â¶Ã™Ë†Ã˜Â±" not in final["agent"] and "attendance confirmed" not in lowered, ctx=ctx, defect_id="C14-wording", message="Booking acknowledgment falsely claimed attendance confirmation.", safety_counter="false_success", record=final)
     _scenario_pass(ctx, completed_booking=True)
 
 
 def scenario_c15(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 5 Ù…Ø³Ø§Ø¡")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 5 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
     booked = _complete_booking_from_current_state(ctx)
     _require(len(booked["appointments"]) == 1 and booked["appointments"][0]["status"] == "pending", ctx=ctx, defect_id="C15-seed", message="Could not establish pending booking for repeat-confirm audit.", record=booked)
-    repeated = _chat(ctx, "Ø£ÙƒØ¯")
+    repeated = _chat(ctx, "Ã˜Â£Ã™Æ’Ã˜Â¯")
     rows = repeated["appointments"]
     _require(len(rows) == 1, ctx=ctx, defect_id="C15-duplicate", message="Bare repeat confirmation duplicated appointment.", safety_counter="duplicate_appointments", record=repeated)
     _require(rows[0]["status"] == "pending", ctx=ctx, defect_id="C15-attendance", message="Bare repeat confirmation mutated pending to confirmed.", safety_counter="accidental_pending_to_confirmed", record=repeated)
@@ -1097,7 +1102,7 @@ def scenario_c16(ctx: ScenarioContext) -> None:
     )
     _ensure_conversation(ctx)
     action_id = attendance_confirm_action_id(appointment.id)
-    final = _button(ctx, customer_label="[ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø­Ø¶ÙˆØ±]", action_id=action_id)
+    final = _button(ctx, customer_label="[Ã˜ÂªÃ˜Â£Ã™Æ’Ã™Å Ã˜Â¯ Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â¶Ã™Ë†Ã˜Â±]", action_id=action_id)
     ctx.db.refresh(appointment)
     _require(appointment.status == "confirmed", ctx=ctx, defect_id="C16-transition", message="Canonical attendance action did not transition pending to confirmed.", safety_counter="false_success", record=final)
     _require(bool(final["agent"].strip()), ctx=ctx, defect_id="C16-ack", message="Attendance confirmation had no natural acknowledgment.", record=final)
@@ -1105,21 +1110,21 @@ def scenario_c16(ctx: ScenarioContext) -> None:
 
 
 def scenario_c17(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ø¬Ù„Ø³Ø© Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· Ù…Ù† Ø§Ù„Ø¨Ø§ÙƒØ¯Ø¬ Ø¨ØªØ§Ø¹ØªÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 4 Ù…Ø³Ø§Ø¡")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã˜Â¬Ã™â€žÃ˜Â³Ã˜Â© Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™â€¦Ã™â€  Ã˜Â§Ã™â€žÃ˜Â¨Ã˜Â§Ã™Æ’Ã˜Â¯Ã˜Â¬ Ã˜Â¨Ã˜ÂªÃ˜Â§Ã˜Â¹Ã˜ÂªÃ™Å  Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026 Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© 4 Ã™â€¦Ã˜Â³Ã˜Â§Ã˜Â¡")
     final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
     _require(len(rows) == 1, ctx=ctx, defect_id="C17-write", message="Package-backed booking did not create one appointment.", safety_counter="wrong_writes", record=final)
     row = rows[0]
     _require(row["patient_package_id"] is not None and row["billing_context"] == "package_prepaid", ctx=ctx, defect_id="C17-package", message="Active package context was not used for booking.", safety_counter="wrong_writes", record=final)
     _require(row["status"] == "pending", ctx=ctx, defect_id="C17-status", message="Package-backed booking did not remain pending.", safety_counter="accidental_pending_to_confirmed", record=final)
-    _require("1200" not in final["agent"] and "500 Ø¬Ù†ÙŠÙ‡ Ù…Ø³ØªØ­Ù‚" not in final["agent"], ctx=ctx, defect_id="C17-payable", message="Package-backed booking made a false payable-total claim.", safety_counter="wrong_price_claims", record=final)
+    _require("1200" not in final["agent"] and "500 Ã˜Â¬Ã™â€ Ã™Å Ã™â€¡ Ã™â€¦Ã˜Â³Ã˜ÂªÃ˜Â­Ã™â€š" not in final["agent"], ctx=ctx, defect_id="C17-payable", message="Package-backed booking made a false payable-total claim.", safety_counter="wrong_price_claims", record=final)
     usage_count = int(ctx.db.scalar(select(func.count()).select_from(PackageUsage).where(PackageUsage.workspace_id == ctx.workspace.id)) or 0)
     _require(usage_count == 1, ctx=ctx, defect_id="C17-usage", message="Package reservation ledger did not contain exactly one usage.", safety_counter="partial_writes", record=final)
     _scenario_pass(ctx, completed_booking=True)
 
 
 def scenario_c18(ctx: ScenarioContext) -> None:
-    record = _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ùˆ Face Laser Prime Ù…Ø¹ Ø¨Ø¹Ø¶ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ø²ÙŠØ§Ø±Ø©")
+    record = _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Ë† Face Laser Prime Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã™ÂÃ™Å  Ã™â€ Ã™ÂÃ˜Â³ Ã˜Â§Ã™â€žÃ˜Â²Ã™Å Ã˜Â§Ã˜Â±Ã˜Â©")
     _require(not record["appointments"], ctx=ctx, defect_id="C18-write", message="Zero-common-device grouped request wrote an appointment.", safety_counter="cross_device_visits", record=record)
     proposal = _proposal(record)
     _require(proposal is None, ctx=ctx, defect_id="C18-proposal", message="Zero-common-device grouped request produced a proposal.", safety_counter="cross_device_visits", record=record)
@@ -1127,11 +1132,11 @@ def scenario_c18(ctx: ScenarioContext) -> None:
 
 
 def scenario_c19(ctx: ScenarioContext) -> None:
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆØ¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ø²ÙŠØ§Ø±Ø© Ø¹Ù„Ù‰ Candela Gentle")
-    replaced = _chat(ctx, "Ø¨Ø¯Ù„ Ø§Ù„Ø®Ø¯Ù…ØªÙŠÙ† Ø¨Ø®Ø¯Ù…Ø© Underarm + Bikini Laser Combo Ø¨Ø³")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã™ÂÃ™Å  Ã™â€ Ã™ÂÃ˜Â³ Ã˜Â§Ã™â€žÃ˜Â²Ã™Å Ã˜Â§Ã˜Â±Ã˜Â© Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle")
+    replaced = _chat(ctx, "Ã˜Â¨Ã˜Â¯Ã™â€ž Ã˜Â§Ã™â€žÃ˜Â®Ã˜Â¯Ã™â€¦Ã˜ÂªÃ™Å Ã™â€  Ã˜Â¨Ã˜Â®Ã˜Â¯Ã™â€¦Ã˜Â© Underarm + Bikini Laser Combo Ã˜Â¨Ã˜Â³")
     combo_id = str(ctx.services["combo"].id)
     _require(_service_ids(replaced) == [combo_id], ctx=ctx, defect_id="C19-set", message="Combo replacement retained covered constituent services.", safety_counter="lost_requested_services", record=replaced)
-    price = _chat(ctx, "Ø§Ù„Ø³Ø¹Ø± Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙƒØ§Ù…ØŸ")
+    price = _chat(ctx, "Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¬Ã™â€¦Ã˜Â§Ã™â€žÃ™Å  Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
     _require(_service_ids(price) == [combo_id], ctx=ctx, defect_id="C19-resurrect", message="Constituent services resurrected after combo replacement.", safety_counter="double_counted_prices", record=price)
     _require("1100" in price["agent"].replace(",", ""), ctx=ctx, defect_id="C19-price", message="Combo price was double-counted or incorrect.", safety_counter="double_counted_prices", record=price)
     _scenario_pass(ctx)
@@ -1139,12 +1144,12 @@ def scenario_c19(ctx: ScenarioContext) -> None:
 
 def scenario_c20(ctx: ScenarioContext) -> None:
     expected = {str(ctx.services["underarm"].id), str(ctx.services["bikini"].id)}
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆØ¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ø²ÙŠØ§Ø±Ø©")
-    _chat(ctx, "Ø¹Ù„Ù‰ Candela Gentle")
-    _chat(ctx, "ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026")
-    availability = _chat(ctx, "ÙˆØ±ÙŠÙ†ÙŠ Ø§Ù„Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø§Ù„Ù…ØªØ§Ø­Ø©")
-    _chat(ctx, "Ù…ÙŠÙ† Ø§Ù„Ø¯ÙƒØªÙˆØ± Ø§Ù„Ù„ÙŠ Ù‡ÙŠØ¹Ù…Ù„ Ø§Ù„Ø¬Ù„Ø³Ø©ØŸ")
-    price = _chat(ctx, "Ø§Ù„Ø³Ø¹Ø± Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ ÙƒØ§Ù…ØŸ")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¥Ã˜Â¨Ã˜Â· Ã™Ë†Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™â€¦Ã˜Â¹ Ã˜Â¨Ã˜Â¹Ã˜Â¶ Ã™ÂÃ™Å  Ã™â€ Ã™ÂÃ˜Â³ Ã˜Â§Ã™â€žÃ˜Â²Ã™Å Ã˜Â§Ã˜Â±Ã˜Â©")
+    _chat(ctx, "Ã˜Â¹Ã™â€žÃ™â€° Candela Gentle")
+    _chat(ctx, "Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª 17 Ã˜Â£Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â¨Ã˜Â± 2026")
+    availability = _chat(ctx, "Ã™Ë†Ã˜Â±Ã™Å Ã™â€ Ã™Å  Ã˜Â§Ã™â€žÃ™â€¦Ã™Ë†Ã˜Â§Ã˜Â¹Ã™Å Ã˜Â¯ Ã˜Â§Ã™â€žÃ™â€¦Ã˜ÂªÃ˜Â§Ã˜Â­Ã˜Â©")
+    _chat(ctx, "Ã™â€¦Ã™Å Ã™â€  Ã˜Â§Ã™â€žÃ˜Â¯Ã™Æ’Ã˜ÂªÃ™Ë†Ã˜Â± Ã˜Â§Ã™â€žÃ™â€žÃ™Å  Ã™â€¡Ã™Å Ã˜Â¹Ã™â€¦Ã™â€ž Ã˜Â§Ã™â€žÃ˜Â¬Ã™â€žÃ˜Â³Ã˜Â©Ã˜Å¸")
+    price = _chat(ctx, "Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¹Ã˜Â± Ã˜Â§Ã™â€žÃ˜Â¥Ã˜Â¬Ã™â€¦Ã˜Â§Ã™â€žÃ™Å  Ã™Æ’Ã˜Â§Ã™â€¦Ã˜Å¸")
     _require("1200" in price["agent"].replace(",", ""), ctx=ctx, defect_id="C20-price", message="Long continuation lost grouped price truth.", safety_counter="wrong_price_claims", record=price)
     options = _reference_options(availability)
     clock = "18:00"
@@ -1152,9 +1157,9 @@ def scenario_c20(ctx: ScenarioContext) -> None:
         start = _option_start(options[0])
         if "T" in start:
             clock = start.split("T", 1)[1][:5]
-    proposal_turn = _chat(ctx, f"Ø®Ù„ÙŠÙ‡ Ø§Ù„Ø³Ø§Ø¹Ø© {clock} Ø¨Ø¯Ù„ Ø£ÙŠ Ù…ÙŠØ¹Ø§Ø¯ ØªØ§Ù†ÙŠ")
+    proposal_turn = _chat(ctx, f"Ã˜Â®Ã™â€žÃ™Å Ã™â€¡ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â§Ã˜Â¹Ã˜Â© {clock} Ã˜Â¨Ã˜Â¯Ã™â€ž Ã˜Â£Ã™Å  Ã™â€¦Ã™Å Ã˜Â¹Ã˜Â§Ã˜Â¯ Ã˜ÂªÃ˜Â§Ã™â€ Ã™Å ")
     if _proposal(proposal_turn) is None:
-        proposal_turn = _chat(ctx, "ØªÙ…Ø§Ù… Ø¬Ù‡Ø² Ø§Ù„Ø­Ø¬Ø² Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙŠØ¹Ø§Ø¯ Ø¯Ù‡")
+        proposal_turn = _chat(ctx, "Ã˜ÂªÃ™â€¦Ã˜Â§Ã™â€¦ Ã˜Â¬Ã™â€¡Ã˜Â² Ã˜Â§Ã™â€žÃ˜Â­Ã˜Â¬Ã˜Â² Ã˜Â¹Ã™â€žÃ™â€° Ã˜Â§Ã™â€žÃ™â€¦Ã™Å Ã˜Â¹Ã˜Â§Ã˜Â¯ Ã˜Â¯Ã™â€¡")
     _require(_proposal(proposal_turn) is not None, ctx=ctx, defect_id="C20-proposal", message="Long realistic journey failed to reach a canonical proposal.", record=proposal_turn)
     final = _complete_booking_from_current_state(ctx, send_text_confirmation=False)
     rows = final["appointments"]
@@ -1169,11 +1174,11 @@ def scenario_relative_date(ctx: ScenarioContext) -> None:
         start_local=datetime(2026, 10, 17, 10, 0, tzinfo=CAIRO),
         end_local=datetime(2026, 10, 17, 22, 0, tzinfo=CAIRO),
     )
-    _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª")
-    next_sat = _chat(ctx, "Ø·Ø¨ Ø§Ù„Ø³Ø¨Øª Ø§Ù„Ù„ÙŠ Ø¨Ø¹Ø¯Ù‡")
+    _chat(ctx, "Ã˜Â¹Ã˜Â§Ã™Å Ã˜Â²Ã˜Â© Ã˜Â£Ã˜Â­Ã˜Â¬Ã˜Â² Ã™â€žÃ™Å Ã˜Â²Ã˜Â± Ã˜Â¨Ã™Æ’Ã™Å Ã™â€ Ã™Å  Ã™Å Ã™Ë†Ã™â€¦ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª")
+    next_sat = _chat(ctx, "Ã˜Â·Ã˜Â¨ Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª Ã˜Â§Ã™â€žÃ™â€žÃ™Å  Ã˜Â¨Ã˜Â¹Ã˜Â¯Ã™â€¡")
     task = next_sat.get("active_task") or {}
     date_constraint = json.dumps((task.get("constraints") or {}).get("date") or {}, ensure_ascii=False)
-    _require("2026-10-24" in date_constraint and "2026-10-18" not in date_constraint, ctx=ctx, defect_id="R1-next-saturday", message="'Ø§Ù„Ø³Ø¨Øª Ø§Ù„Ù„ÙŠ Ø¨Ø¹Ø¯Ù‡' resolved to next calendar day instead of next Saturday.", record=next_sat)
+    _require("2026-10-24" in date_constraint and "2026-10-18" not in date_constraint, ctx=ctx, defect_id="R1-next-saturday", message="'Ã˜Â§Ã™â€žÃ˜Â³Ã˜Â¨Ã˜Âª Ã˜Â§Ã™â€žÃ™â€žÃ™Å  Ã˜Â¨Ã˜Â¹Ã˜Â¯Ã™â€¡' resolved to next calendar day instead of next Saturday.", record=next_sat)
     _scenario_pass(ctx)
 
 
