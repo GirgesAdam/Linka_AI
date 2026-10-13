@@ -129,3 +129,98 @@ raise SystemExit(review.main())
     assert turn["read_batches"][0]["results"][0]["payload"]["nearest_alternative_slots"]
     assert turn["agent"] == "16:15 is unavailable; 16:00 or 16:30 are available."
     assert turn["db_effect"]["appointment_delta"] == 0
+
+
+def _run_ra1_assertion_probe(*, include_server_alternatives: bool) -> subprocess.CompletedProcess[str]:
+    backend_dir = Path(__file__).resolve().parents[1]
+    child = r'''
+import sys
+
+import scripts.run_explicit_daypart_live_review as review
+
+
+def record(include_server_alternatives):
+    nearest = []
+    if include_server_alternatives:
+        nearest = [
+            {"start_local": "2026-10-15T16:00:00+03:00"},
+            {"start_local": "2026-10-15T16:30:00+03:00"},
+        ]
+    return {
+        "agent": (
+            "الساعة 4:15 مساءً مش متاحة. "
+            "أقرب مواعيد متاحة الساعة 4 مساءً والساعة 4:30 مساءً."
+        ),
+        "raw_structured": [
+            {
+                "operations": [
+                    {
+                        "entities": {
+                            "time": {"start_time": "16:15"},
+                        },
+                        "time_period_provenance": "explicit_pm",
+                    }
+                ]
+            }
+        ],
+        "active_task": {
+            "constraints": {
+                "date": {"mode": "exact", "start_date": "2026-10-15"},
+                "time": {"mode": "exact", "start_time": "16:15"},
+            }
+        },
+        "appointments": [],
+        "availability_requests": [{"kind": "availability"}],
+        "availability_reference_context": {"availability_reference_options": []},
+        "read_context": None,
+        "read_batches": [
+            {
+                "results": [
+                    {
+                        "kind": "availability",
+                        "ok": True,
+                        "payload": {"nearest_alternative_slots": nearest},
+                    }
+                ]
+            }
+        ],
+        "db_effect": {
+            "appointments_before": [],
+            "appointments_after": [],
+            "appointment_delta": 0,
+        },
+    }
+
+
+probe = record(sys.argv[1] == "1")
+review._chat = lambda _ctx, _customer: probe
+try:
+    review._ra1(object())
+except AssertionError as exc:
+    print(str(exc))
+    raise SystemExit(2)
+raise SystemExit(0)
+'''
+    env = os.environ.copy()
+    env.setdefault("OPENAI_API_KEY", "test-reviewer-no-call")
+    return subprocess.run(
+        [sys.executable, "-c", child, "1" if include_server_alternatives else "0"],
+        cwd=backend_dir,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_ra1_accepts_grounded_server_owned_nearest_alternatives() -> None:
+    completed = _run_ra1_assertion_probe(include_server_alternatives=True)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_ra1_rejects_fabricated_reply_alternatives_without_server_evidence() -> None:
+    completed = _run_ra1_assertion_probe(include_server_alternatives=False)
+
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "RA1 verified same-day alternatives missing: []" in completed.stdout

@@ -428,6 +428,67 @@ def _reference_options(record: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _nearest_alternative_options(record: dict[str, Any]) -> list[dict[str, Any]]:
+    task = record.get("active_task") or {}
+    constraints = task.get("constraints") if isinstance(task, dict) else {}
+    date_value = constraints.get("date") if isinstance(constraints, dict) else {}
+    requested_date = (
+        str(date_value.get("start_date"))
+        if isinstance(date_value, dict) and date_value.get("start_date")
+        else None
+    )
+    options: list[dict[str, Any]] = []
+    for batch in record.get("read_batches") or []:
+        if not isinstance(batch, dict):
+            continue
+        results = batch.get("results")
+        if not isinstance(results, list):
+            continue
+        for result in results:
+            if (
+                not isinstance(result, dict)
+                or result.get("kind") != "availability"
+                or result.get("ok") is not True
+            ):
+                continue
+            payload = result.get("payload")
+            nearest = (
+                payload.get("nearest_alternative_slots")
+                if isinstance(payload, dict)
+                else None
+            )
+            if not isinstance(nearest, list):
+                continue
+            for item in nearest:
+                if not isinstance(item, dict):
+                    continue
+                start_local = str(item.get("start_local") or "")
+                if requested_date and not start_local.startswith(f"{requested_date}T"):
+                    continue
+                options.append(item)
+    return options
+
+
+def _reply_mentions_clock(reply: str, clock: str) -> bool:
+    try:
+        hour_text, minute = clock.split(":", 1)
+        hour = int(hour_text)
+    except (ValueError, AttributeError):
+        return False
+    hour_12 = hour % 12 or 12
+    variants = {clock, f"{hour_12}:{minute}"}
+    if minute == "00":
+        variants.update(
+            {
+                f"{hour_12} مساء",
+                f"{hour_12} العصر",
+                f"{hour_12}:00 مساء",
+                f"{hour_12}:00 العصر",
+            }
+        )
+    return any(value in reply for value in variants)
+
+
 def _option_clock(option: dict[str, Any]) -> str:
     payload = option.get("payload") if isinstance(option.get("payload"), dict) else option
     for key in ("start_local", "start_at", "start"):
@@ -638,11 +699,17 @@ def _ra1(ctx: Context) -> None:
         counter="false_success",
         message="RA1 asked for a date already supplied by the customer",
     )
-    clocks = {_option_clock(item) for item in _reference_options(record)}
+    clocks = {_option_clock(item) for item in _nearest_alternative_options(record)}
+    required_clocks = {"16:00", "16:30"}
     _require(
-        "16:00" in clocks and "16:30" in clocks,
+        required_clocks.issubset(clocks),
         counter="false_success",
         message=f"RA1 verified same-day alternatives missing: {sorted(clocks)}",
+    )
+    _require(
+        all(_reply_mentions_clock(reply, clock) for clock in required_clocks),
+        counter="false_success",
+        message="RA1 did not present the verified same-day alternatives",
     )
     _require(
         bool(record.get("availability_requests")),
