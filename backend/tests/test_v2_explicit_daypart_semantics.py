@@ -156,6 +156,26 @@ def test_english_explicit_period_uses_same_typed_contract(
     assert _time(result).start_time == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "value", "period", "expected"),
+    [
+        ("10 ?????", "10:00", "explicit_am", "10:00"),
+        ("10 ??????", "22:00", "explicit_pm", "22:00"),
+        ("11 ?????", "11:00", "explicit_am", "11:00"),
+        ("11 ??????", "23:00", "explicit_pm", "23:00"),
+        ("12 ?????", "12:00", "explicit_pm", "12:00"),
+        ("4:15 ?????", "16:15", "explicit_pm", "16:15"),
+    ],
+)
+def test_product_daypart_examples_preserve_typed_semantic_clock(
+    text: str, value: str, period: str, expected: str
+) -> None:
+    result = _pipeline(_turn(value, period=period), text=text)
+    assert _time(result).start_time == expected
+    assert _time(result).start_time_ambiguity == "none"
+    assert result.operations[0].time_period_provenance == period
+
+
 def test_t6_bare_colloquial_three_keeps_existing_clinic_hours_resolution() -> None:
     result = _pipeline(_turn("03:00", ambiguity="twelve_hour"), text="الساعة 3")
     assert _time(result).start_time == "15:00"

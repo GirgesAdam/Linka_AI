@@ -12,6 +12,10 @@ on:
       - backend/app/agents/v2/turn_interpreter.py
       - backend/app/agents/v2/time_resolution.py
       - backend/app/services/agent_v2/planner.py
+      - backend/app/services/agent_v2/orchestrator.py
+      - backend/tests/test_v2_single_device_same_turn_progression.py
+      - backend/tests/test_v2_grouped_booking_continuity.py
+      - backend/tests/test_v2_multi_service_single_appointment.py
   workflow_dispatch:
 
 permissions:
@@ -95,9 +99,9 @@ jobs:
         run: test -n "$OPENAI_API_KEY"
       - name: Validate focused tooling
         run: |
-          ruff check app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/services/agent_v2/planner.py tests/test_v2_explicit_daypart_semantics.py scripts/run_explicit_daypart_live_review.py
-          python -m compileall -q app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/services/agent_v2/planner.py tests/test_v2_explicit_daypart_semantics.py scripts/run_explicit_daypart_live_review.py
-          python -m pytest -q tests/test_v2_explicit_daypart_semantics.py tests/test_agent_explicit_time_safety.py tests/test_v2_business_hour_time_resolution.py tests/test_v2_booking_time_correction_authority.py
+          ruff check app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/services/agent_v2/planner.py app/services/agent_v2/orchestrator.py tests/test_v2_explicit_daypart_semantics.py tests/test_v2_single_device_same_turn_progression.py tests/test_v2_grouped_booking_continuity.py tests/test_v2_multi_service_single_appointment.py scripts/run_explicit_daypart_live_review.py
+          python -m compileall -q app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/services/agent_v2/planner.py app/services/agent_v2/orchestrator.py tests/test_v2_explicit_daypart_semantics.py tests/test_v2_single_device_same_turn_progression.py tests/test_v2_grouped_booking_continuity.py tests/test_v2_multi_service_single_appointment.py scripts/run_explicit_daypart_live_review.py
+          python -m pytest -q tests/test_v2_explicit_daypart_semantics.py tests/test_v2_single_device_same_turn_progression.py tests/test_agent_explicit_time_safety.py tests/test_v2_business_hour_time_resolution.py tests/test_v2_booking_time_correction_authority.py tests/test_v2_grouped_booking_continuity.py tests/test_v2_multi_service_single_appointment.py tests/test_v2_booking_status_truth.py tests/test_appointment_confirmation_policy.py tests/test_v2_multi_service_branch_continuation.py
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
