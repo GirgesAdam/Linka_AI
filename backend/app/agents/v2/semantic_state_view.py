@@ -114,6 +114,8 @@ def _safe_option_snapshot(
             for key in (
                 "start_time_24h",
                 "end_time_24h",
+                "canonical_time",
+                "period",
                 "start_local",
                 "doctor_name",
                 "laser_device_name",
@@ -293,6 +295,8 @@ def presented_availability_semantic_view(
                 "end_local",
                 "start_time_24h",
                 "end_time_24h",
+                "canonical_time",
+                "period",
                 "doctor_name",
                 "laser_device_name",
             )
