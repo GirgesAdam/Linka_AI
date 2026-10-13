@@ -75,12 +75,14 @@ def _turn(
     *,
     ambiguity: str = "none",
     period: str = "none",
+    clock_source: str = "unspecified",
     operation_type: str = "book",
 ) -> TiaTurnUnderstanding:
     return TiaTurnUnderstanding(
         operations=[
             TurnOperation(
                 type=operation_type,
+                clock_source=clock_source,
                 time_period_provenance=period,
                 entities=TurnEntities(
                     time=TimeConstraint(
@@ -324,9 +326,20 @@ def test_t11_available_explicit_period_time_builds_exact_matching_proposal(monke
     assert proposal.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M") == "16:30"
 
 
-def test_t12_conflicting_typed_period_fails_closed_to_time_clarification() -> None:
+def test_t12_typed_0415_explicit_pm_is_backend_canonicalized_to_1615() -> None:
+    canonical = _validate_explicit_period_provenance_v2(
+        _turn("04:15", period="explicit_pm", clock_source="explicit_period")
+    )
+    operation = canonical.operations[0]
+    assert operation.time_period_provenance == "explicit_pm"
+    assert operation.entities.time is not None
+    assert operation.entities.time.start_time == "16:15"
+    assert operation.entities.time.start_time_ambiguity == "none"
+
+
+def test_t12_literal_1615_plus_explicit_am_fails_closed_to_time_clarification() -> None:
     inconsistent = _validate_explicit_period_provenance_v2(
-        _turn("04:15", period="explicit_pm")
+        _turn("16:15", period="explicit_am", clock_source="literal_24h")
     )
     operation = inconsistent.operations[0]
     assert operation.time_period_provenance == "conflict"
@@ -336,7 +349,7 @@ def test_t12_conflicting_typed_period_fails_closed_to_time_clarification() -> No
             semantic_context=build_semantic_context(_catalog()),
             active_task=None,
             now=NOW,
-            explicit_user_time="04:15",
+            explicit_user_time="16:15",
         ),
     )
     step = plan.steps[0]
