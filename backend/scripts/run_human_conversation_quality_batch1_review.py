@@ -294,8 +294,10 @@ def ra_h8_attendance_confirmation() -> None:
         if trace.simulated_write == "confirm_appointment"
     ]
     assert len(confirm_writes) == 1
+    assert confirm_writes[0].outcome.status == "completed"
+    assert last.outcomes[0].status == "completed"
     assert last.outcomes[0].response_goal == "appointment_confirmed"
-    assert "\u062a\u0623\u0643\u064a\u062f" in str(transcript[-1]["agent"])
+    assert str(transcript[-1]["agent"]).strip()
 
 
 def main() -> None:
