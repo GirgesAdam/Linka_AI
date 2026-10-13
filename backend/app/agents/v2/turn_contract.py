@@ -164,17 +164,24 @@ class Selection(StrictContractModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_presented_option_ref(cls, value: object) -> object:
-        """Canonicalize redundant model coordinates only for server-owned availability refs.
+        """Canonicalize redundant provider coordinates without adding selection authority.
 
-        ``opt_*`` is an opaque technical namespace whose canonical meaning is validated
-        later against the server-owned presented availability snapshot. The model may
-        redundantly echo a displayed index/clock alongside that ref because provider
-        schemas require every selection field. Those echoes are not authority. Keep the
-        ref and discard only those redundant coordinates; all other refs keep the strict
-        fail-closed validator below.
+        A ``time`` selection is resolved only when exactly one server-owned presented slot
+        matches that clock, so index/ref/relative echoes are never needed as authority.
+        Likewise, ``opt_*`` is an opaque technical namespace validated later against the
+        server-owned presented availability snapshot. Provider schemas may redundantly
+        populate unrelated selection fields; discard only those non-authoritative echoes
+        and keep the strict fail-closed validator for the selected coordinate itself.
         """
         if not isinstance(value, dict):
             return value
+        if value.get("kind") == "time" and value.get("time") not in (None, ""):
+            return {
+                **value,
+                "index": None,
+                "ref": None,
+                "relative": None,
+            }
         ref = value.get("ref")
         if value.get("kind") != "ref" or not isinstance(ref, str) or not ref.startswith("opt_"):
             return value

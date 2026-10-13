@@ -85,6 +85,36 @@ def test_v2_date_time_and_selection_shapes_fail_closed() -> None:
         Selection(kind="index", index=0, time=None, ref=None)
 
 
+def test_time_selection_discards_redundant_provider_coordinates() -> None:
+    selection = Selection.model_validate(
+        {
+            "kind": "time",
+            "index": 2,
+            "time": "18:00",
+            "ref": "opt_2",
+            "relative": "next",
+            "time_ambiguity": "none",
+        }
+    )
+
+    assert selection.time == "18:00"
+    assert selection.index is None
+    assert selection.ref is None
+    assert selection.relative is None
+
+    with pytest.raises(ValidationError):
+        Selection.model_validate(
+            {
+                "kind": "time",
+                "index": 2,
+                "time": "not-a-time",
+                "ref": "opt_2",
+                "relative": "next",
+                "time_ambiguity": "none",
+            }
+        )
+
+
 def test_v2_provider_schema_exposes_typed_patient_profile_scope() -> None:
     schema = TiaTurnUnderstanding.model_json_schema()
     details = schema["$defs"]["TurnOperation"]["properties"]["requested_patient_details"]
