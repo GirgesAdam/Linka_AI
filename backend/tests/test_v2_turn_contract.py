@@ -129,3 +129,15 @@ def test_active_reschedule_explicit_fields_are_latest_message_provenance() -> No
             active_task_explicit_fields=["date"],
             entities=TurnEntities(date=DateConstraint(mode="next_available")),
         )
+
+
+def test_non_task_active_task_explicit_fields_are_discarded() -> None:
+    operation = TurnOperation(
+        type="availability",
+        execution_intent="informational",
+        active_task_explicit_fields=["date"],
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date="2026-09-12")),
+    )
+
+    assert operation.active_task_explicit_fields == []
+    assert operation.entities.date == DateConstraint(mode="exact", start_date="2026-09-12")

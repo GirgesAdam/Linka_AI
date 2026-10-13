@@ -499,6 +499,17 @@ class TurnOperation(StrictContractModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_irrelevant_active_task_explicit_fields(cls, value: object) -> object:
+        """Ignore non-authoritative task provenance emitted on non-task operations."""
+        if not isinstance(value, dict):
+            return value
+        explicit = value.get("active_task_explicit_fields")
+        if explicit and value.get("type") not in {"book", "reschedule"}:
+            return {**value, "active_task_explicit_fields": []}
+        return value
+
     @model_validator(mode="after")
     def validate_active_task_explicit_fields(self) -> TurnOperation:
         explicit = set(self.active_task_explicit_fields)
