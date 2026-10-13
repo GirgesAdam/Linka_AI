@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import unicodedata
 from datetime import datetime, time
 from typing import Literal
@@ -721,15 +720,20 @@ _PM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
         "pm طبعا",
     }
 )
-_ARABIC_DIACRITICS = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭ]")
-_PERIOD_REPLY_PUNCTUATION = re.compile(r"[\s،,!?؟;؛:]+")
-
-
 def _normalize_contextual_period_reply(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text).strip().lower().replace("ـ", "")
-    normalized = _ARABIC_DIACRITICS.sub("", normalized)
-    normalized = normalized.replace(".", "")
-    return _PERIOD_REPLY_PUNCTUATION.sub(" ", normalized).strip()
+    normalized = unicodedata.normalize("NFKC", text).strip().lower()
+    cleaned: list[str] = []
+    for char in normalized:
+        category = unicodedata.category(char)
+        if char == "ـ" or category.startswith("M"):
+            continue
+        if char == ".":
+            continue
+        if category.startswith("P"):
+            cleaned.append(" ")
+            continue
+        cleaned.append(char)
+    return " ".join("".join(cleaned).split())
 
 
 def _contextual_period_reply(text: str) -> Literal["am", "pm"] | None:
