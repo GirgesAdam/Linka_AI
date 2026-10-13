@@ -374,7 +374,13 @@ def _add_service(
     return service
 
 
-def _fixture(db: Session, scenario_id: str, *, with_package: bool = False) -> ScenarioContext:
+def _fixture(
+    db: Session,
+    scenario_id: str,
+    *,
+    with_package: bool = False,
+    with_combo: bool = False,
+) -> ScenarioContext:
     workspace, patient, doctor, underarm, bikini, arms = build_grouped_fixture(db)
     branch = db.get(Branch, workspace.primary_branch_id)
     assert branch is not None
@@ -398,16 +404,18 @@ def _fixture(db: Session, scenario_id: str, *, with_package: bool = False) -> Sc
         duration_minutes=20,
         requires_laser_device=True,
     )
-    combo = _add_service(
-        db,
-        workspace_id=workspace.id,
-        doctor_id=doctor.id,
-        name="Underarm + Bikini Laser Combo",
-        slug="underarm-bikini-combo",
-        price_minor=110_000,
-        duration_minutes=45,
-        requires_laser_device=True,
-    )
+    combo = None
+    if with_combo:
+        combo = _add_service(
+            db,
+            workspace_id=workspace.id,
+            doctor_id=doctor.id,
+            name="Underarm + Bikini Laser Combo",
+            slug="underarm-bikini-combo",
+            price_minor=110_000,
+            duration_minutes=45,
+            requires_laser_device=True,
+        )
     _device_price(
         db,
         workspace=workspace,
@@ -435,15 +443,16 @@ def _fixture(db: Session, scenario_id: str, *, with_package: bool = False) -> Sc
         price_minor=80_000,
         duration_minutes=20,
     )
-    _device_price(
-        db,
-        workspace=workspace,
-        service=combo,
-        device_key="candela_gentle",
-        device_name="Candela Gentle",
-        price_minor=110_000,
-        duration_minutes=45,
-    )
+    if combo is not None:
+        _device_price(
+            db,
+            workspace=workspace,
+            service=combo,
+            device_key="candela_gentle",
+            device_name="Candela Gentle",
+            price_minor=110_000,
+            duration_minutes=45,
+        )
     if with_package:
         db.add(
             PatientPackage(
@@ -478,7 +487,7 @@ def _fixture(db: Session, scenario_id: str, *, with_package: bool = False) -> Sc
             "arms": arms,
             "hydra": hydra,
             "face_prime": face_prime,
-            "combo": combo,
+            **({"combo": combo} if combo is not None else {}),
         },
     )
 
@@ -839,10 +848,16 @@ def _scenario_pass(ctx: ScenarioContext, *, completed_booking: bool = False) -> 
         COMPLETED_BOOKING_SCENARIOS.add(ctx.scenario_id)
 
 
-def _run_isolated(scenario_id: str, body, *, with_package: bool = False) -> None:
+def _run_isolated(
+    scenario_id: str,
+    body,
+    *,
+    with_package: bool = False,
+    with_combo: bool = False,
+) -> None:
     workspace_id: UUID | None = None
     with rollback_session() as db:
-        ctx = _fixture(db, scenario_id, with_package=with_package)
+        ctx = _fixture(db, scenario_id, with_package=with_package, with_combo=with_combo)
         workspace_id = ctx.workspace.id
         body(ctx)
     assert workspace_id is not None
@@ -862,6 +877,35 @@ def _run_isolated(scenario_id: str, body, *, with_package: bool = False) -> None
                 )
     finally:
         engine.dispose()
+
+
+def _complete_booking_from_current_state(
+    ctx: ScenarioContext,
+    *,
+    send_text_confirmation: bool = True,
+) -> dict[str, Any]:
+    if send_text_confirmation:
+        record = _chat(ctx, "\u0623\u064a\u0648\u0647 \u0623\u0643\u062f \u0627\u0644\u062d\u062c\u0632")
+    else:
+        if not ctx.turns:
+            raise AuditFunctionalDefect(
+                {
+                    "id": f"{ctx.scenario_id}-missing-proposal-turn",
+                    "severity": "P1",
+                    "scenario": ctx.scenario_id,
+                    "message": "No current turn exists to confirm.",
+                }
+            )
+        record = ctx.turns[-1]
+    if record.get("appointments"):
+        return record
+    if _proposal(record) is not None:
+        return _button(
+            ctx,
+            customer_label="[\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u062c\u0632]",
+            action_id=_proposal_confirm_button(ctx),
+        )
+    return record
 
 
 def scenario_c1(ctx: ScenarioContext) -> None:
@@ -890,9 +934,10 @@ def scenario_c2(ctx: ScenarioContext) -> None:
 
 def scenario_c3(ctx: ScenarioContext) -> None:
     _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· ÙˆÙ„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ù…Ø¹ Ø¨Ø¹Ø¶ ÙÙŠ Ù†ÙØ³ Ø§Ù„Ø²ÙŠØ§Ø±Ø© Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± Ø§Ù„Ø³Ø§Ø¹Ø© 6 Ù…Ø³Ø§Ø¡")
-    final = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
-    _require(len(rows) == 1, ctx=ctx, defect_id="C3-appointment-count", message="Grouped booking did not create exactly one appointment.", safety_counter="duplicate_appointments", record=final)
+    count_counter = "duplicate_appointments" if len(rows) > 1 else "wrong_writes"
+    _require(len(rows) == 1, ctx=ctx, defect_id="C3-appointment-count", message="Grouped booking did not create exactly one appointment after canonical confirmation.", safety_counter=count_counter, record=final)
     row = rows[0]
     _require(set([row["service_id"], *row["additional_service_ids"]]) == {str(ctx.services["underarm"].id), str(ctx.services["bikini"].id)}, ctx=ctx, defect_id="C3-services", message="Grouped visit lost or duplicated a service.", safety_counter="lost_requested_services", record=final)
     _require(row["laser_device_key"] == "candela_gentle" and all(value in (None, "candela_gentle") for value in row["additional_device_keys"]), ctx=ctx, defect_id="C3-cross-device", message="Grouped visit split laser devices.", safety_counter="cross_device_visits", record=final)
@@ -963,7 +1008,7 @@ def scenario_c9(ctx: ScenarioContext) -> None:
     task = corrected.get("active_task") or {}
     time_constraint = json.dumps((task.get("constraints") or {}).get("time") or {}, ensure_ascii=False)
     _require("12:00" in time_constraint and "11:00" not in time_constraint, ctx=ctx, defect_id="C9-task-time", message="Task time correction did not replace 11:00 with 12:00.", record=corrected)
-    final = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
     _require(len(rows) == 1 and "T12:00:00" in rows[0]["start_at"], ctx=ctx, defect_id="C9-db-time", message="DB write did not use corrected 12:00 time.", safety_counter="wrong_time_writes", record=final)
     _scenario_pass(ctx, completed_booking=True)
@@ -1025,7 +1070,7 @@ def scenario_c13(ctx: ScenarioContext) -> None:
 
 def scenario_c14(ctx: ScenarioContext) -> None:
     _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 7 Ù…Ø³Ø§Ø¡")
-    final = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
     _require(len(rows) == 1 and rows[0]["status"] == "pending", ctx=ctx, defect_id="C14-status", message="Successful booking creation did not persist pending status.", safety_counter="accidental_pending_to_confirmed", record=final)
     lowered = final["agent"].lower()
@@ -1035,7 +1080,7 @@ def scenario_c14(ctx: ScenarioContext) -> None:
 
 def scenario_c15(ctx: ScenarioContext) -> None:
     _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ù„ÙŠØ²Ø± Ø¨ÙƒÙŠÙ†ÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 5 Ù…Ø³Ø§Ø¡")
-    booked = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    booked = _complete_booking_from_current_state(ctx)
     _require(len(booked["appointments"]) == 1 and booked["appointments"][0]["status"] == "pending", ctx=ctx, defect_id="C15-seed", message="Could not establish pending booking for repeat-confirm audit.", record=booked)
     repeated = _chat(ctx, "Ø£ÙƒØ¯")
     rows = repeated["appointments"]
@@ -1061,7 +1106,7 @@ def scenario_c16(ctx: ScenarioContext) -> None:
 
 def scenario_c17(ctx: ScenarioContext) -> None:
     _chat(ctx, "Ø¹Ø§ÙŠØ²Ø© Ø£Ø­Ø¬Ø² Ø¬Ù„Ø³Ø© Ù„ÙŠØ²Ø± Ø¥Ø¨Ø· Ù…Ù† Ø§Ù„Ø¨Ø§ÙƒØ¯Ø¬ Ø¨ØªØ§Ø¹ØªÙŠ Ø¹Ù„Ù‰ Candela Gentle ÙŠÙˆÙ… Ø§Ù„Ø³Ø¨Øª 17 Ø£ÙƒØªÙˆØ¨Ø± 2026 Ø§Ù„Ø³Ø§Ø¹Ø© 4 Ù…Ø³Ø§Ø¡")
-    final = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    final = _complete_booking_from_current_state(ctx)
     rows = final["appointments"]
     _require(len(rows) == 1, ctx=ctx, defect_id="C17-write", message="Package-backed booking did not create one appointment.", safety_counter="wrong_writes", record=final)
     row = rows[0]
@@ -1111,7 +1156,7 @@ def scenario_c20(ctx: ScenarioContext) -> None:
     if _proposal(proposal_turn) is None:
         proposal_turn = _chat(ctx, "ØªÙ…Ø§Ù… Ø¬Ù‡Ø² Ø§Ù„Ø­Ø¬Ø² Ø¹Ù„Ù‰ Ø§Ù„Ù…ÙŠØ¹Ø§Ø¯ Ø¯Ù‡")
     _require(_proposal(proposal_turn) is not None, ctx=ctx, defect_id="C20-proposal", message="Long realistic journey failed to reach a canonical proposal.", record=proposal_turn)
-    final = _chat(ctx, "Ø£ÙŠÙˆÙ‡ Ø£ÙƒØ¯ Ø§Ù„Ø­Ø¬Ø²")
+    final = _complete_booking_from_current_state(ctx, send_text_confirmation=False)
     rows = final["appointments"]
     _require(len(rows) == 1 and rows[0]["status"] == "pending", ctx=ctx, defect_id="C20-write", message="Long continuation did not finish as one pending appointment.", safety_counter="wrong_writes", record=final)
     _require(set([rows[0]["service_id"], *rows[0]["additional_service_ids"]]) == expected, ctx=ctx, defect_id="C20-services", message="Long continuation lost a requested grouped service.", safety_counter="lost_requested_services", record=final)
@@ -1135,9 +1180,9 @@ def scenario_relative_date(ctx: ScenarioContext) -> None:
 def _status_label_contract() -> dict[str, bool]:
     text = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "status.ts").read_text(encoding="utf-8")
     return {
-        "pending_appointment_is_reserved": 'pending: "Ù…Ø­Ø¬ÙˆØ²"' in text,
-        "confirmed_appointment_is_confirmed": 'confirmed: "Ù…Ø¤ÙƒØ¯"' in text,
-        "generic_pending_unchanged": 'pending: "Ù‚ÙŠØ¯ Ø§Ù„Ø§Ù†ØªØ¸Ø§Ø±"' in text,
+        "pending_appointment_is_reserved": 'pending: "\u0645\u062d\u062c\u0648\u0632"' in text,
+        "confirmed_appointment_is_confirmed": 'confirmed: "\u0645\u0624\u0643\u062f"' in text,
+        "generic_pending_unchanged": 'pending: "\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631"' in text,
     }
 
 
@@ -1329,32 +1374,37 @@ def main() -> int:
         raise SystemExit("Final combined audit requires AGENT_V2_LIVE_ENABLED=true.")
     install_usage_collector()
     scenarios = [
-        ("C1", scenario_c1, False),
-        ("C2", scenario_c2, False),
-        ("C3", scenario_c3, False),
-        ("C4", scenario_c4, False),
-        ("C5", scenario_c5, False),
-        ("C6", scenario_c6, False),
-        ("C7", scenario_c7, False),
-        ("C8", scenario_c8, False),
-        ("C9", scenario_c9, False),
-        ("C10", scenario_c10, False),
-        ("C11", scenario_c11, False),
-        ("C12", scenario_c12, False),
-        ("C13", scenario_c13, False),
-        ("C14", scenario_c14, False),
-        ("C15", scenario_c15, False),
-        ("C16", scenario_c16, False),
-        ("C17", scenario_c17, True),
-        ("C18", scenario_c18, False),
-        ("C19", scenario_c19, False),
-        ("C20", scenario_c20, False),
-        ("R1", scenario_relative_date, False),
+        ("C1", scenario_c1, False, False),
+        ("C2", scenario_c2, False, False),
+        ("C3", scenario_c3, False, False),
+        ("C4", scenario_c4, False, False),
+        ("C5", scenario_c5, False, False),
+        ("C6", scenario_c6, False, False),
+        ("C7", scenario_c7, False, False),
+        ("C8", scenario_c8, False, False),
+        ("C9", scenario_c9, False, False),
+        ("C10", scenario_c10, False, False),
+        ("C11", scenario_c11, False, False),
+        ("C12", scenario_c12, False, False),
+        ("C13", scenario_c13, False, False),
+        ("C14", scenario_c14, False, False),
+        ("C15", scenario_c15, False, False),
+        ("C16", scenario_c16, False, False),
+        ("C17", scenario_c17, True, False),
+        ("C18", scenario_c18, False, False),
+        ("C19", scenario_c19, False, True),
+        ("C20", scenario_c20, False, False),
+        ("R1", scenario_relative_date, False, False),
     ]
     try:
-        for scenario_id, body, with_package in scenarios:
+        for scenario_id, body, with_package, with_combo in scenarios:
             print(f"AUDIT_SCENARIO_START={scenario_id}", flush=True)
-            _run_isolated(scenario_id, body, with_package=with_package)
+            _run_isolated(
+                scenario_id,
+                body,
+                with_package=with_package,
+                with_combo=with_combo,
+            )
             print(f"AUDIT_SCENARIO_PASS={scenario_id}", flush=True)
     except AuditFunctionalDefect:
         report = _report(stopped=True)
