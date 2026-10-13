@@ -23,7 +23,9 @@ from app.core.config import settings
 from app.core.whatsapp_booking_actions import attendance_confirm_action_id
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
+from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.conversation import Conversation
 from app.models.doctor_service import DoctorService
 from app.models.message import Message
@@ -1028,6 +1030,23 @@ def scenario_c9(ctx: ScenarioContext) -> None:
 
 
 def _hole_setup(ctx: ScenarioContext) -> None:
+    service = ctx.services["bikini"]
+    service.duration_minutes = 15
+    device_price = ctx.db.scalar(
+        select(ServiceDevicePrice).where(
+            ServiceDevicePrice.workspace_id == ctx.workspace.id,
+            ServiceDevicePrice.service_id == service.id,
+            ServiceDevicePrice.device_key == "candela_gentle",
+        )
+    )
+    assert device_price is not None
+    device_price.duration_minutes = 15
+    booking_settings = ctx.db.scalar(
+        select(BookingSettings).where(BookingSettings.workspace_id == ctx.workspace.id)
+    )
+    assert booking_settings is not None
+    booking_settings.slot_interval_minutes = 15
+    ctx.db.commit()
     _create_occupancy(
         ctx,
         start_local=datetime(2026, 10, 15, 16, 15, tzinfo=CAIRO),
@@ -1063,20 +1082,35 @@ def scenario_c12(ctx: ScenarioContext) -> None:
     clock = selected_start.split("T", 1)[1][:5] if "T" in selected_start else "10:00"
     selected = _chat(ctx, f"تمام اختار الميعاد اللي كان ظاهر الساعة {clock}")
     proposal = _proposal(selected)
-    _require(proposal is not None and clock in str(proposal.get("start_at") or ""), ctx=ctx, defect_id="C12-selection", message="Displayed option was lost after side read.", record=selected)
+    proposal_start = proposal.get("start_at") if proposal is not None else None
+    proposal_local = (
+        datetime.fromisoformat(str(proposal_start).replace("Z", "+00:00")).astimezone(CAIRO)
+        if proposal_start
+        else None
+    )
+    _require(
+        proposal_local is not None and proposal_local.strftime("%H:%M") == clock,
+        ctx=ctx,
+        defect_id="C12-selection",
+        message="Displayed option was lost after side read.",
+        record=selected,
+    )
     _scenario_pass(ctx)
 
 
 def scenario_c13(ctx: ScenarioContext) -> None:
-    proposal_turn = _chat(ctx, "عايزة أحجز ليزر بكيني على Candela Gentle يوم السبت 17 أكتوبر 2026 الساعة 8 مساء")
+    _chat(
+        ctx,
+        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0648\u0628\u0643\u064a\u0646\u064a \u0645\u0639 \u0628\u0639\u0636 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0632\u064a\u0627\u0631\u0629 \u0639\u0644\u0649 Candela Gentle \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a 17 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 8 \u0645\u0633\u0627\u0621",
+    )
+    proposal_turn = _chat(ctx, "\u0623\u064a\u0648\u0647 \u0623\u0643\u062f \u0627\u0644\u062d\u062c\u0632")
     proposal = _proposal(proposal_turn)
-    _require(proposal is not None, ctx=ctx, defect_id="C13-proposal", message="Initial valid booking did not create a proposal.", record=proposal_turn)
+    _require(proposal is not None, ctx=ctx, defect_id="C13-proposal", message="Grouped journey did not create a canonical proposal before side read.", record=proposal_turn)
     proposal_id = str(proposal["proposal_id"])
-    side = _chat(ctx, "عنوان العيادة إيه؟")
+    side = _chat(ctx, "\u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u0639\u064a\u0627\u062f\u0629 \u0625\u064a\u0647\u061f")
     side_proposal = _proposal(side)
     _require(side_proposal is not None and str(side_proposal["proposal_id"]) == proposal_id, ctx=ctx, defect_id="C13-continuity", message="Valid proposal did not survive informational side read.", record=side)
-    action_id = _proposal_confirm_button(ctx)
-    final = _button(ctx, customer_label="[تأكيد الحجز]", action_id=action_id)
+    final = _complete_booking_from_current_state(ctx)
     _require(len(final["appointments"]) == 1, ctx=ctx, defect_id="C13-duplicate", message="Proposal confirmation did not create exactly one appointment.", safety_counter="duplicate_appointments", record=final)
     _scenario_pass(ctx, completed_booking=True)
 
