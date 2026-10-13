@@ -336,11 +336,27 @@ def _matches_time(local_value: object, constraint: object) -> bool:
     return True
 
 
-def _service_payload(env: V2FixtureEnvironment, service_id: object) -> dict[str, object]:
+def _service_payload(
+    env: V2FixtureEnvironment,
+    params: dict[str, object],
+) -> dict[str, object]:
+    service_id = params.get("service_id")
     row = next((item for item in _rows(env.catalog, "services") if item.get("id") == service_id), None)
     if row is None:
         return {"services": []}
-    return {"service": row}
+    service = dict(row)
+    allowed_device_keys = params.get("device_keys")
+    if isinstance(allowed_device_keys, list):
+        allowed = {str(item) for item in allowed_device_keys if item not in (None, "")}
+        raw_devices = service.get("laser_devices")
+        if isinstance(raw_devices, list):
+            service["laser_devices"] = [
+                dict(device)
+                for device in raw_devices
+                if isinstance(device, dict)
+                and str(device.get("device_key") or "") in allowed
+            ]
+    return {"service": service}
 
 
 def _doctor_payload(env: V2FixtureEnvironment, params: dict[str, object]) -> dict[str, object]:
@@ -498,7 +514,7 @@ def execute_fixture_reads(step: PlanStep, env: V2FixtureEnvironment) -> ReadExec
                 ReadResult(
                     kind=request.kind,
                     ok=True,
-                    payload=_service_payload(env, params.get("service_id")),
+                    payload=_service_payload(env, params),
                 )
             )
         elif request.kind == "service_catalog_set":

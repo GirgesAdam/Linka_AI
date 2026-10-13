@@ -94,6 +94,28 @@ def test_v2_fixture_package_offer_is_deterministically_verifiable() -> None:
     assert bundle.verification.verified_parameters["package_sessions"] == 6
 
 
+def test_v2_fixture_service_catalog_respects_allowed_device_keys() -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type="continue_active",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="service_catalog",
+                parameters={
+                    "service_id": "svc-underarm",
+                    "device_keys": ["candela_gentle"],
+                },
+            )
+        ],
+        response_goal="answer_price",
+    )
+    bundle = execute_fixture_reads(step, V2FixtureEnvironment())
+
+    devices = bundle.results[0].payload["service"]["laser_devices"]
+    assert [device["device_key"] for device in devices] == ["candela_gentle"]
+
+
 def test_v2_only_runner_has_no_v1_or_database_runtime_dependencies() -> None:
     backend = Path(__file__).resolve().parent.parent
     harness = (backend / "app/services/agent_v2/test_harness.py").read_text(encoding="utf-8")
