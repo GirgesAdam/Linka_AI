@@ -1,0 +1,111 @@
+name: Final Agent E2E + Cost Baseline
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/final-agent-e2e-cost-baseline.yml
+      - backend/scripts/run_final_combined_agent_e2e_cost_audit.py
+      - backend/tests/test_final_combined_agent_e2e_cost_audit_tooling.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-agent-audit:
+    name: C1-C20 + relative date + provider usage
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_final_audit_unused
+      SUPABASE_SECRET_KEY: sb_secret_final_audit_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      AGENT_V2_LIVE_ENABLED: "true"
+      AUDIT_STARTING_MAIN: d4f00b45c8f0b318171b20079f29616841ffdbd2
+    steps:
+      - name: Checkout exact audit head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify real-model secret
+        run: test -n "$OPENAI_API_KEY"
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Apply clean migrations
+        run: python -m alembic upgrade head
+      - name: Validate audit tooling
+        run: |
+          ruff check scripts/run_final_combined_agent_e2e_cost_audit.py tests/test_final_combined_agent_e2e_cost_audit_tooling.py
+          python -m compileall -q scripts/run_final_combined_agent_e2e_cost_audit.py
+          pytest -q tests/test_final_combined_agent_e2e_cost_audit_tooling.py
+      - name: Run final combined Real Agent E2E + cost audit
+        run: python scripts/run_final_combined_agent_e2e_cost_audit.py
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-agent-e2e-cost-baseline-${{ github.sha }}
+          path: backend/artifacts/final-combined-agent-e2e-cost-audit.json
+          if-no-files-found: warn
+          retention-days: 14
