@@ -984,6 +984,7 @@ def main() -> int:
     failures = 0
     for name, hole, validator in SCENARIOS:
         workspace_id: UUID | None = None
+        ctx: Context | None = None
         turns: list[dict[str, Any]] = []
         error: str | None = None
         try:
@@ -991,10 +992,11 @@ def main() -> int:
                 ctx = _setup(db, name, hole=hole)
                 workspace_id = ctx.workspace.id
                 validator(ctx)
-                turns = list(ctx.turns)
         except Exception as exc:  # noqa: BLE001
             failures += 1
             error = f"{type(exc).__name__}: {exc}"
+        if ctx is not None:
+            turns = list(ctx.turns)
         persisted = _persisted_appointments(workspace_id) if workspace_id is not None else 0
         if persisted:
             SAFETY_COUNTERS["persisted_audit_writes"] += persisted
