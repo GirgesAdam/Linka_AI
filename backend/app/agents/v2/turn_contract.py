@@ -51,6 +51,21 @@ PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "fina
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
+TimePeriodProvenance = Literal[
+    "none",
+    "explicit_am",
+    "explicit_pm",
+    "explicit_noon",
+    "explicit_midnight",
+    "conflict",
+]
+ClockSource = Literal[
+    "unspecified",
+    "literal_24h",
+    "bare_spoken_12h",
+    "explicit_period",
+    "inherited",
+]
 SelectionKind = Literal["index", "time", "ref", "relative"]
 RelativeSelection = Literal["next", "previous", "first", "last"]
 EntityCandidateMode = Literal["ambiguous", "set"]
@@ -363,6 +378,41 @@ class TurnOperation(StrictContractModel):
             "customer's own account or appointment. General payment-method/timing/policy questions use "
             "payment_info with financial_ownership=none. This is a semantic ownership marker only and "
             "never authorizes a financial read or write. Service/package offer prices remain none."
+        ),
+    )
+    clock_source: ClockSource = Field(
+        default="unspecified",
+        description=(
+            "Typed source for entities.time.start_time. Use literal_24h only when the customer supplied "
+            "an exact 24-hour clock such as 03:00 or 16:15; bare_spoken_12h for a periodless spoken "
+            "1-12 clock such as '3' or '10'; explicit_period when the customer explicitly supplied "
+            "AM/PM/morning/afternoon/evening/noon/midnight semantics; inherited only when the clock "
+            "comes from authoritative task/verified state rather than this message. Use unspecified "
+            "only when there is no typed source evidence. Python owns canonicalization."
+        ),
+    )
+    selection_clock_source: ClockSource = Field(
+        default="unspecified",
+        description=(
+            "Same clock-source contract as clock_source, but only for selection.kind=time."
+        ),
+    )
+    time_period_provenance: TimePeriodProvenance = Field(
+        default="none",
+        description=(
+            "Typed period provenance for entities.time.start_time in the latest customer message. Use "
+            "explicit_am for an explicit AM/morning period, explicit_pm for an explicit PM/afternoon/"
+            "evening period, explicit_noon for explicit noon semantics, and explicit_midnight for "
+            "explicit midnight semantics. Use conflict only when typed customer evidence is genuinely "
+            "contradictory and cannot be safely canonicalized. Use none for literal 24-hour clocks, "
+            "bare periodless clocks, inherited task time, and clinic-hour inference. Python validates "
+            "this evidence and owns the canonical 24-hour value."
+        ),
+    )
+    selection_time_period_provenance: TimePeriodProvenance = Field(
+        default="none",
+        description=(
+            "Same provenance contract as time_period_provenance, but only for selection.kind=time."
         ),
     )
     # Required in provider schemas. The default preserves compatibility for direct

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.agents.v2.turn_contract import DateConstraint, PackageUsage, TimeConstraint
+from app.agents.v2.turn_contract import ClockSource, DateConstraint, PackageUsage, TimeConstraint
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingProposal,
@@ -187,10 +187,20 @@ def apply_booking_time_change(
     state: BookingTaskState,
     *,
     time: TimeConstraint | None,
+    clock_source: ClockSource | None = None,
 ) -> BookingTaskState:
-    if state.constraints.time == time:
+    source = (
+        "unspecified"
+        if time is None
+        else clock_source
+        if clock_source is not None
+        else state.constraints.time_clock_source
+    )
+    if state.constraints.time == time and state.constraints.time_clock_source == source:
         return state
-    constraints = state.constraints.model_copy(update={"time": time})
+    constraints = state.constraints.model_copy(
+        update={"time": time, "time_clock_source": source}
+    )
     derived = _booking_derived(state, clear_availability=True)
     return _next_booking_state(state, constraints=constraints, derived=derived)
 
@@ -481,13 +491,35 @@ def apply_reschedule_date_change(
     return _next_reschedule_state(state, replacement=replacement, derived=derived)
 
 
+def apply_reschedule_branch_change(
+    state: RescheduleTaskState,
+    *,
+    branch_id: str | None,
+) -> RescheduleTaskState:
+    if state.replacement.branch_id == branch_id:
+        return state
+    replacement = state.replacement.model_copy(update={"branch_id": branch_id})
+    derived = _reschedule_derived(state, clear_availability=True)
+    return _next_reschedule_state(state, replacement=replacement, derived=derived)
+
+
 def apply_reschedule_time_change(
     state: RescheduleTaskState,
     *,
     time: TimeConstraint | None,
+    clock_source: ClockSource | None = None,
 ) -> RescheduleTaskState:
-    if state.replacement.time == time:
+    source = (
+        "unspecified"
+        if time is None
+        else clock_source
+        if clock_source is not None
+        else state.replacement.time_clock_source
+    )
+    if state.replacement.time == time and state.replacement.time_clock_source == source:
         return state
-    replacement = state.replacement.model_copy(update={"time": time})
+    replacement = state.replacement.model_copy(
+        update={"time": time, "time_clock_source": source}
+    )
     derived = _reschedule_derived(state, clear_availability=True)
     return _next_reschedule_state(state, replacement=replacement, derived=derived)

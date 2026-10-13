@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, time
 from typing import Literal
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import TurnOperation
+from app.agents.v2.time_resolution import BareClockResolution, resolve_bare_clock_constraint
+from app.agents.v2.turn_contract import TimeConstraint, TurnOperation
 from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import ActiveTaskState, BookingTaskState, RescheduleTaskState
+from app.services.agent_v2.state_rules import (
+    apply_booking_branch_change,
+    apply_booking_time_change,
+    apply_reschedule_branch_change,
+    apply_reschedule_time_change,
+)
 
 
 def _canonical_ref(
@@ -633,11 +641,357 @@ def _constraint_parameters(state: BookingTaskState | RescheduleTaskState) -> dic
     constraints = state.constraints if state.task_type == "booking" else state.replacement
     dumped = constraints.model_dump(mode="json")
     dumped.pop("pulse_usage", None)
+    dumped.pop("time_clock_source", None)
     return {
         key: value
         for key, value in dumped.items()
         if value not in (None, "", {}, [])
     }
+
+
+def _clock_resolution_facts(
+    resolution: BareClockResolution,
+    *,
+    clock_source: str,
+) -> dict[str, object]:
+    return {
+        "clock_source": clock_source,
+        "bare_clock_resolution_status": resolution.status,
+        "candidate_clocks": list(resolution.candidate_clocks),
+        "valid_operating_hour_candidates": list(
+            resolution.valid_operating_hour_candidates
+        ),
+        "effective_operating_hours": [
+            {"weekday": weekday, "start": start, "end": end}
+            for weekday, start, end in resolution.operating_hours
+        ],
+        "resolved_branch_id": resolution.branch_id,
+        "requested_date": resolution.requested_date,
+    }
+
+
+def _sync_grouped_clock(
+    state: BookingTaskState,
+    *,
+    time_constraint: TimeConstraint,
+    clock_source: str,
+) -> BookingTaskState:
+    if state.grouped is None:
+        return state
+    components = [
+        component.model_copy(
+            update={
+                "time": time_constraint,
+                "time_clock_source": clock_source,
+            }
+        )
+        for component in state.grouped.components
+    ]
+    return state.model_copy(
+        update={"grouped": state.grouped.model_copy(update={"components": components})}
+    )
+
+
+_AM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
+    {
+        "الصبح",
+        "صباح",
+        "صباحا",
+        "am",
+        "الصبح طبعا",
+        "صباح طبعا",
+        "صباحا طبعا",
+        "am طبعا",
+    }
+)
+_PM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
+    {
+        "بالليل",
+        "بليل",
+        "الليل",
+        "مساء",
+        "مساءا",
+        "pm",
+        "بالليل طبعا",
+        "بليل طبعا",
+        "الليل طبعا",
+        "مساء طبعا",
+        "مساءا طبعا",
+        "pm طبعا",
+    }
+)
+def _normalize_contextual_period_reply(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).strip().lower()
+    cleaned: list[str] = []
+    for char in normalized:
+        category = unicodedata.category(char)
+        if char == "ـ" or category.startswith("M"):
+            continue
+        if char == ".":
+            continue
+        if category.startswith("P"):
+            cleaned.append(" ")
+            continue
+        cleaned.append(char)
+    return " ".join("".join(cleaned).split())
+
+
+def _contextual_period_reply(text: str) -> Literal["am", "pm"] | None:
+    normalized = _normalize_contextual_period_reply(text)
+    if normalized in _AM_CONTEXTUAL_PERIOD_REPLIES:
+        return "am"
+    if normalized in _PM_CONTEXTUAL_PERIOD_REPLIES:
+        return "pm"
+    return None
+
+
+def resolve_pending_bare_clock_period(
+    state: ActiveTaskState | None,
+    customer_text: str,
+    *,
+    context: SemanticContext,
+) -> tuple[ActiveTaskState, Literal["am", "pm"]] | None:
+    """Resolve a narrow 10/11 AM/PM follow-up only at the persisted clock gate.
+
+    The customer text has no authority by itself. The active task must still contain
+    an unresolved bare 10/11 clock, and the canonical clinic-hours resolver must
+    independently prove that both AM and PM candidates are operationally valid.
+    """
+    if state is None or not customer_text.strip():
+        return None
+    constraints = state.constraints if state.task_type == "booking" else state.replacement
+    clock = constraints.time
+    if (
+        clock is None
+        or clock.mode != "exact"
+        or clock.start_time is None
+        or clock.start_time_ambiguity != "twelve_hour"
+        or constraints.time_clock_source != "bare_spoken_12h"
+        or constraints.date is None
+        or constraints.date.mode != "exact"
+        or constraints.branch_id is None
+    ):
+        return None
+
+    raw_clock = str(clock.start_time).strip()
+    try:
+        parts = raw_clock.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+    except (TypeError, ValueError):
+        return None
+    if hour not in {10, 11} or minute != 0:
+        return None
+
+    resolution = resolve_bare_clock_constraint(
+        clock,
+        date_constraint=constraints.date,
+        context=context,
+        branch_id=constraints.branch_id,
+    )
+    if resolution.status != "clarify_period" or len(resolution.valid_operating_hour_candidates) != 2:
+        return None
+
+    period = _contextual_period_reply(customer_text)
+    if period is None:
+        return None
+    canonical_time = f"{hour:02d}:00" if period == "am" else f"{hour + 12:02d}:00"
+    if canonical_time not in resolution.valid_operating_hour_candidates:
+        return None
+
+    canonical = clock.model_copy(
+        update={"start_time": canonical_time, "start_time_ambiguity": "none"}
+    )
+    if isinstance(state, BookingTaskState):
+        updated: ActiveTaskState = apply_booking_time_change(
+            state,
+            time=canonical,
+            clock_source="explicit_period",
+        )
+        updated = _sync_grouped_clock(
+            updated,
+            time_constraint=canonical,
+            clock_source="explicit_period",
+        )
+    else:
+        updated = apply_reschedule_time_change(
+            state,
+            time=canonical,
+            clock_source="explicit_period",
+        )
+    return updated, period
+
+
+def prepare_active_task_clock_progress(
+    state: ActiveTaskState,
+    *,
+    operation_index: int,
+    context: SemanticContext,
+) -> tuple[ActiveTaskState, PlanStep | None]:
+    """Resolve or block persisted exact clock ambiguity before scheduling authority.
+
+    The product policy lives in ``resolve_bare_clock_constraint``. This boundary
+    only preserves typed provenance, persists a unique canonical result in memory,
+    and prevents unresolved clocks from reaching availability/proposal/write paths.
+    """
+    constraints = state.constraints if state.task_type == "booking" else state.replacement
+    time_constraint = constraints.time
+    if (
+        time_constraint is None
+        or time_constraint.mode != "exact"
+        or time_constraint.start_time is None
+        or time_constraint.start_time_ambiguity != "twelve_hour"
+    ):
+        return state, None
+
+    params = _constraint_parameters(state)
+    clock_source = constraints.time_clock_source
+    if clock_source != "bare_spoken_12h":
+        return state, PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="clarify",
+            state_action="update_active",
+            response_goal="clarification",
+            clarification_field="time",
+            facts={
+                **params,
+                "unresolved_exact_clock": True,
+                "clock_source": clock_source,
+                "clock_source_missing_or_inconsistent": True,
+            },
+        )
+
+    date_constraint = constraints.date
+    if date_constraint is None or date_constraint.mode != "exact":
+        resolution = resolve_bare_clock_constraint(
+            time_constraint,
+            date_constraint=date_constraint,
+            context=context,
+            branch_id=constraints.branch_id,
+        )
+        if resolution.status == "resolved" and resolution.constraint is not None:
+            updated: ActiveTaskState
+            if isinstance(state, BookingTaskState):
+                updated = apply_booking_time_change(
+                    state,
+                    time=resolution.constraint,
+                    clock_source="bare_spoken_12h",
+                )
+                updated = _sync_grouped_clock(
+                    updated,
+                    time_constraint=resolution.constraint,
+                    clock_source="bare_spoken_12h",
+                )
+            else:
+                updated = apply_reschedule_time_change(
+                    state,
+                    time=resolution.constraint,
+                    clock_source="bare_spoken_12h",
+                )
+            return updated, None
+        return state, PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="clarify",
+            state_action="update_active",
+            response_goal="clarification",
+            clarification_field="date",
+            facts={
+                **params,
+                **_clock_resolution_facts(resolution, clock_source=clock_source),
+                "bare_clock_context_required": "date",
+            },
+        )
+
+    branch_params, branch_refs, branch_reason = resolve_scheduling_branch_parameters(
+        params,
+        context=context,
+    )
+    if branch_reason is not None:
+        return state, PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="clarify",
+            state_action="update_active",
+            response_goal="clarification",
+            clarification_field="branch",
+            facts={
+                **branch_params,
+                "_verified_candidate_refs": branch_refs,
+                "branch_resolution_reason": branch_reason,
+                "bare_clock_context_required": "branch",
+            },
+        )
+
+    raw_branch = branch_params.get("branch_id")
+    branch_id = str(raw_branch) if raw_branch not in (None, "") else None
+    resolution = resolve_bare_clock_constraint(
+        time_constraint,
+        date_constraint=date_constraint,
+        context=context,
+        branch_id=branch_id,
+    )
+    facts = {
+        **branch_params,
+        **_clock_resolution_facts(resolution, clock_source=clock_source),
+    }
+
+    if resolution.status == "resolved" and resolution.constraint is not None:
+        updated = state
+        if isinstance(updated, BookingTaskState):
+            if branch_id != updated.constraints.branch_id:
+                updated = apply_booking_branch_change(updated, branch_id=branch_id)
+            updated = apply_booking_time_change(
+                updated,
+                time=resolution.constraint,
+                clock_source="bare_spoken_12h",
+            )
+            updated = _sync_grouped_clock(
+                updated,
+                time_constraint=resolution.constraint,
+                clock_source="bare_spoken_12h",
+            )
+        else:
+            if branch_id != updated.replacement.branch_id:
+                updated = apply_reschedule_branch_change(updated, branch_id=branch_id)
+            updated = apply_reschedule_time_change(
+                updated,
+                time=resolution.constraint,
+                clock_source="bare_spoken_12h",
+            )
+        return updated, None
+
+    if resolution.status == "clarify_period":
+        return state, PlanStep(
+            operation_index=operation_index,
+            operation_type="continue_active",
+            disposition="clarify",
+            state_action="update_active",
+            response_goal="clarification",
+            clarification_field="time",
+            facts={**facts, "clock_period_clarification": True},
+        )
+
+    if resolution.status == "outside_operating_hours":
+        return state, PlanStep(
+            operation_index=operation_index,
+            operation_type=("book" if state.task_type == "booking" else "reschedule"),
+            disposition="blocked",
+            state_action="update_active",
+            response_goal="requested_time_unavailable",
+            facts={**facts, "clock_outside_operating_hours": True},
+        )
+
+    return state, PlanStep(
+        operation_index=operation_index,
+        operation_type="continue_active",
+        disposition="clarify",
+        state_action="update_active",
+        response_goal="clarification",
+        clarification_field="branch" if branch_id is None else "time",
+        facts={**facts, "bare_clock_context_required": True},
+    )
 
 
 def _service_requires_device(service_id: str | None, context: SemanticContext) -> bool:
@@ -1002,6 +1356,13 @@ def plan_active_task_progress(
     context: SemanticContext,
 ) -> PlanStep:
     """Plan the next deterministic workflow step from persisted state only."""
-    if state.task_type == "booking":
-        return _booking_progress(state, operation_index=operation_index, context=context)
-    return _reschedule_progress(state, operation_index=operation_index, context=context)
+    prepared, clock_gate = prepare_active_task_clock_progress(
+        state,
+        operation_index=operation_index,
+        context=context,
+    )
+    if clock_gate is not None:
+        return clock_gate
+    if prepared.task_type == "booking":
+        return _booking_progress(prepared, operation_index=operation_index, context=context)
+    return _reschedule_progress(prepared, operation_index=operation_index, context=context)

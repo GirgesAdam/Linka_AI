@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.agents.v2.turn_contract import DateConstraint, TimeConstraint, TurnOperation
+from app.agents.v2.turn_contract import ClockSource, DateConstraint, TimeConstraint, TurnOperation
 from app.services.agent_v2.multi_service_booking import (
     common_laser_device_keys,
     laser_service_ids,
@@ -30,6 +30,7 @@ from app.services.agent_v2.state_rules import (
     apply_booking_requested_services_change,
     apply_booking_service_change,
     apply_booking_time_change,
+    apply_reschedule_branch_change,
     apply_reschedule_date_change,
     apply_reschedule_device_change,
     apply_reschedule_doctor_change,
@@ -68,6 +69,12 @@ def _time_constraint(value: object) -> TimeConstraint | None:
     if isinstance(value, dict):
         return TimeConstraint.model_validate(value)
     return None
+
+
+def _clock_source(value: object, *, fallback: ClockSource = "unspecified") -> ClockSource:
+    if value in {"literal_24h", "bare_spoken_12h", "explicit_period", "inherited", "unspecified"}:
+        return value  # type: ignore[return-value]
+    return fallback
 
 
 def _authorization(
@@ -122,6 +129,10 @@ def _booking_constraints(step: PlanStep, operation: TurnOperation) -> CustomerCo
         device_key=str(facts["device_key"]) if facts.get("device_key") else None,
         date=_date_constraint(facts.get("date") or operation.entities.date),
         time=_time_constraint(facts.get("time") or operation.entities.time),
+        time_clock_source=_clock_source(
+            facts.get("time_clock_source"),
+            fallback=operation.clock_source,
+        ),
         package_usage=operation.package_usage,
         pulse_usage="unspecified",
     )
@@ -196,9 +207,20 @@ def _apply_booking_updates(
     elif operation.entities.date is not None:
         updated = apply_booking_date_change(updated, date=operation.entities.date)
     if "time" in facts:
-        updated = apply_booking_time_change(updated, time=_time_constraint(facts.get("time")))
+        updated = apply_booking_time_change(
+            updated,
+            time=_time_constraint(facts.get("time")),
+            clock_source=_clock_source(
+                facts.get("time_clock_source"),
+                fallback=operation.clock_source,
+            ),
+        )
     elif operation.entities.time is not None:
-        updated = apply_booking_time_change(updated, time=operation.entities.time)
+        updated = apply_booking_time_change(
+            updated,
+            time=operation.entities.time,
+            clock_source=operation.clock_source,
+        )
     if operation.package_usage != "unspecified":
         updated = apply_booking_package_usage_change(
             updated,
@@ -332,8 +354,17 @@ def _new_reschedule_state(
         device_key=str(step.facts.get("device_key") or target.device_key)
         if step.facts.get("device_key") or target.device_key
         else None,
+        branch_id=(
+            str(step.facts.get("branch_id"))
+            if step.facts.get("branch_id") not in (None, "")
+            else None
+        ),
         date=_date_constraint(step.facts.get("date") or operation.entities.date),
         time=_time_constraint(step.facts.get("time") or operation.entities.time),
+        time_clock_source=_clock_source(
+            step.facts.get("time_clock_source"),
+            fallback=operation.clock_source,
+        ),
         package_usage=operation.package_usage,
         pulse_usage="unspecified",
     )
@@ -372,14 +403,30 @@ def _apply_reschedule_updates(
             updated,
             device_key=str(facts["device_key"]) if facts.get("device_key") else None,
         )
+    if "branch_id" in facts:
+        updated = apply_reschedule_branch_change(
+            updated,
+            branch_id=str(facts["branch_id"]) if facts.get("branch_id") else None,
+        )
     if "date" in facts:
         updated = apply_reschedule_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_reschedule_date_change(updated, date=operation.entities.date)
     if "time" in facts:
-        updated = apply_reschedule_time_change(updated, time=_time_constraint(facts.get("time")))
+        updated = apply_reschedule_time_change(
+            updated,
+            time=_time_constraint(facts.get("time")),
+            clock_source=_clock_source(
+                facts.get("time_clock_source"),
+                fallback=operation.clock_source,
+            ),
+        )
     elif operation.entities.time is not None:
-        updated = apply_reschedule_time_change(updated, time=operation.entities.time)
+        updated = apply_reschedule_time_change(
+            updated,
+            time=operation.entities.time,
+            clock_source=operation.clock_source,
+        )
     return updated
 
 
