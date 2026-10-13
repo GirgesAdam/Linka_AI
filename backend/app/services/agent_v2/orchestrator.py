@@ -2630,6 +2630,76 @@ def orchestrate_v2_turn(
             outgoing_pending_choice = None
         current_task = transition.active_task
 
+        if (
+            advanced.facts.get("device_auto_resolved") is True
+            and isinstance(current_task, BookingTaskState)
+            and step_group_key is None
+        ):
+            continuation_step = plan_active_task_progress(
+                current_task,
+                operation_index=advanced.operation_index,
+                context=semantic_context,
+            )
+            continuation_reads = (
+                execute_step_reads(continuation_step, read_context)
+                if continuation_step.reads
+                else ReadExecutionBundle()
+            )
+            continuation_compatibility = _compatibility_failure_step(
+                continuation_step,
+                continuation_reads,
+            )
+            continuation_advanced = (
+                continuation_compatibility
+                if continuation_compatibility is not None
+                else _advance_after_reads(continuation_step, continuation_reads)
+            )
+            if continuation_reads.results:
+                reads = ReadExecutionBundle(
+                    results=[*reads.results, *continuation_reads.results],
+                    verification=continuation_reads.verification,
+                )
+            advanced = continuation_advanced
+            operation_reads[effective_step.operation_index] = reads
+            advanced, pending_proposal_for_step = _prepare_booking_proposal(
+                advanced,
+                reads=reads,
+                current_task=current_task,
+                db=db,
+                workspace=workspace,
+                patient=patient,
+                catalog=canonical_catalog,
+                now=local_now,
+                turn_id=resolved_turn_id,
+            )
+            continuation_transition = apply_step_state(
+                current_task,
+                step=advanced,
+                operation=operation,
+                reads=reads if reads.results else None,
+                now=local_now,
+                turn_id=resolved_turn_id,
+                catalog=canonical_catalog,
+            )
+            if (
+                pending_proposal_for_step is not None
+                and isinstance(continuation_transition.active_task, BookingTaskState)
+            ):
+                proposal_task = attach_booking_proposal(
+                    continuation_transition.active_task,
+                    proposal=pending_proposal_for_step,
+                )
+                continuation_transition = continuation_transition.__class__(
+                    active_task=proposal_task,
+                    changed=True,
+                    reason="booking_proposal_created",
+                )
+            advanced = finalize_step_after_state_transition(
+                advanced,
+                continuation_transition,
+            )
+            current_task = continuation_transition.active_task
+
         if advanced.disposition == "write_ready":
             if write_executor is None:
                 pending_write = PendingV2Write(step=advanced, reads=reads)
