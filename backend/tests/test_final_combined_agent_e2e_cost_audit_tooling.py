@@ -90,3 +90,19 @@ def test_attempt_and_fallback_classification_is_per_stage_and_model(monkeypatch)
     assert collector.calls[1].retry is True
     assert collector.calls[2].attempt_number == 1
     assert collector.calls[2].fallback is True
+
+
+def test_real_agent_audit_source_uses_real_arabic_not_mojibake() -> None:
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "run_final_combined_agent_e2e_cost_audit.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    values = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    expected_prefix = "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632"
+    assert any(expected_prefix in value for value in values)
+    assert not any(any(marker in value for marker in ("\u00c3", "\u00c2", "\u00d8", "\u00d9")) for value in values)
