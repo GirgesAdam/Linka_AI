@@ -147,8 +147,12 @@ jobs:
         shell: bash
         run: |
           git fetch origin "$BATCH1_HEAD"
-          git -c user.name='RA-G Audit' -c user.email='audit@invalid.local' merge --no-commit --no-ff "$BATCH1_HEAD"
-          test "$(git rev-parse MERGE_HEAD)" = "$BATCH1_HEAD"
+          if git merge-base --is-ancestor "$BATCH1_HEAD" HEAD; then
+            echo "Batch-1 head already contained in current tree: $BATCH1_HEAD"
+          else
+            git -c user.name='RA-G Audit' -c user.email='audit@invalid.local' merge --no-commit --no-ff "$BATCH1_HEAD"
+            test "$(git rev-parse MERGE_HEAD)" = "$BATCH1_HEAD"
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

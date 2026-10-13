@@ -50,6 +50,21 @@ def _task_evidence(task: ActiveTaskState | None) -> dict[str, object] | None:
 def _turn_evidence(result) -> dict[str, object]:
     return {
         "operations": [operation.type for operation in result.understanding.operations],
+        "operation_details": [
+            {
+                "type": operation.type,
+                "execution_intent": operation.execution_intent,
+                "active_task_relationship": operation.active_task_relationship,
+                "fresh_task": operation.fresh_task,
+                "grouped_booking_action": operation.grouped_booking_action,
+                "service": (
+                    operation.entities.service.model_dump(mode="json")
+                    if operation.entities.service is not None
+                    else None
+                ),
+            }
+            for operation in result.understanding.operations
+        ],
         "traces": [
             {
                 "operation": trace.operation_type,
