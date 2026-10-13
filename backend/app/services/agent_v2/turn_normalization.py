@@ -279,12 +279,6 @@ def tag_booking_service_sets(
                 }
             )
         state_action = step.state_action
-        if step.operation_type in {"book", "continue_active"} and state_action == "none":
-            # An explicitly canonicalized correction of an existing grouped booking may
-            # remain informational/read-only while still mutating the task-local service
-            # set. This never grants write authorization; state_executor keeps that gated
-            # on execution_intent=execute.
-            state_action = "update_active"
         if (
             step.operation_type == "availability"
             and len(requested) > 1

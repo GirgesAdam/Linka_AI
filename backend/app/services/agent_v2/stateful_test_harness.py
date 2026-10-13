@@ -17,6 +17,10 @@ from app.services.agent_v2.active_task_progress import (
     plan_active_task_progress,
 )
 from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
+from app.services.agent_v2.grouped_booking_continuity import (
+    explicitly_narrow_grouped_booking_task,
+    restore_grouped_booking_understanding,
+)
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -187,11 +191,26 @@ def run_v2_stateful_fixture_turn(
         semantic_context=semantic_context,
         booking_service_sets=booking_service_sets,
     )
+    narrowed_booking_task = explicitly_narrow_grouped_booking_task(
+        understanding,
+        active_task=initial_booking_task,
+        context=semantic_context,
+    )
+    understanding, restored_visit_groups = restore_grouped_booking_understanding(
+        understanding,
+        active_task=initial_booking_task,
+        context=semantic_context,
+    )
+    semantic_visit_groups = {
+        **semantic_visit_groups,
+        **restored_visit_groups,
+    }
+    planner_active_task: ActiveTaskState | None = narrowed_booking_task or active_task
     plan = plan_turn(
         understanding,
         PlannerContext(
             semantic_context=semantic_context,
-            active_task=active_task,
+            active_task=planner_active_task,
             now=local_now,
         ),
     )
@@ -223,7 +242,7 @@ def run_v2_stateful_fixture_turn(
             active_task=active_task,
         )
 
-    current_task = active_task
+    current_task: ActiveTaskState | None = narrowed_booking_task or active_task
     traces: list[V2HarnessStepTrace] = []
     outcomes: list[TurnOutcome] = []
 
