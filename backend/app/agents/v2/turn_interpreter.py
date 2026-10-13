@@ -152,8 +152,11 @@ SEMANTIC PRINCIPLES
   remove_other_components, and do NOT emit B merely to identify what was removed. Singleton narrowing follows
   the exact same semantic rule: if the active set is A+B and the customer explicitly keeps only A, emit exactly
   A as the complete set and set grouped_booking_action=remove_other_components; never preserve B merely because
-  it existed in the active task. If the customer adds D, emit the resulting complete set A+B+C+D and
-  preserve_group. This is semantic set mutation, not wording or phrase matching.
+  it existed in the active task. Replacement is removal plus addition: if the active set is A+B and the customer
+  replaces A with C while keeping B, emit exactly B+C and set grouped_booking_action=remove_other_components.
+  Any explicit removal of an existing component takes precedence over preserve_group even when new services are
+  added in the same correction. Pure addition remains preserve_group: A+B plus D becomes A+B+D. This is semantic
+  set mutation, not wording or phrase matching.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
   reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the

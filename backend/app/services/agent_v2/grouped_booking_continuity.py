@@ -9,6 +9,11 @@ from app.services.agent_v2.compound_turn_policy import (
     compound_visit_group,
     compound_write_group,
 )
+from app.services.agent_v2.multi_service_booking import (
+    common_laser_device_keys,
+    laser_service_ids,
+    select_main_service_id,
+)
 from app.services.agent_v2.planner import PlanStep, TurnPlan
 from app.services.agent_v2.state import (
     BookingTaskState,
@@ -300,6 +305,8 @@ def explicitly_narrow_grouped_booking_task(
     *,
     active_task: BookingTaskState | None,
     context: SemanticContext,
+    catalog: dict[str, object] | None = None,
+    booking_service_sets: dict[int, list[str]] | None = None,
 ) -> BookingTaskState | None:
     """Collapse a group only when structured semantics explicitly authorize narrowing."""
     if active_task is None:
@@ -309,13 +316,13 @@ def explicitly_narrow_grouped_booking_task(
     if not has_legacy_group and not has_requested_set:
         return None
     corrections = [
-        operation
-        for operation in turn.operations
+        (index, operation)
+        for index, operation in enumerate(turn.operations)
         if operation.type in _BOOKING_OPERATION_TYPES
     ]
     if not corrections or not any(
         operation.grouped_booking_action == "remove_other_components"
-        for operation in corrections
+        for _, operation in corrections
     ):
         return None
 
@@ -337,23 +344,41 @@ def explicitly_narrow_grouped_booking_task(
 
     narrowed_components: list[CustomerConstraints] = []
     seen_services: set[str] = set()
-    for operation in corrections:
+    for operation_index, operation in corrections:
         params = resolved_operation_parameters(operation, context=context)
-        service_id = params.get("service_id")
-        if not isinstance(service_id, str) or service_id in seen_services:
-            return None
-        component = components_by_service.get(service_id)
-        if component is None:
-            return None
-        narrowed_components.append(
-            _merge_component(
-                component,
-                operation=operation,
-                params=params,
-                apply_to_all=False,
-            )
+        authoritative_ids = (booking_service_sets or {}).get(operation_index)
+        service_ids = (
+            list(authoritative_ids)
+            if operation.grouped_booking_action == "remove_other_components" and authoritative_ids
+            else [params.get("service_id")]
         )
-        seen_services.add(service_id)
+        for service_id in service_ids:
+            if not isinstance(service_id, str) or service_id in seen_services:
+                return None
+            component = components_by_service.get(service_id)
+            if component is None:
+                if catalog is None:
+                    return None
+                # A removal-authorized correction is an authoritative complete service set.
+                # New replacement components inherit only visit-level context; service-specific
+                # authority (device/package compatibility) is re-derived from the final set.
+                component = CustomerConstraints(
+                    service_id=service_id,
+                    doctor_id=active_task.constraints.doctor_id,
+                    branch_id=active_task.constraints.branch_id,
+                    date=active_task.constraints.date,
+                    time=active_task.constraints.time,
+                    time_clock_source=active_task.constraints.time_clock_source,
+                )
+            narrowed_components.append(
+                _merge_component(
+                    component,
+                    operation=operation,
+                    params=params,
+                    apply_to_all=False,
+                )
+            )
+            seen_services.add(service_id)
 
     if not narrowed_components:
         return None
@@ -362,20 +387,56 @@ def explicitly_narrow_grouped_booking_task(
         for component in narrowed_components
         if component.service_id is not None
     ]
+    if catalog is not None:
+        main_service_id = select_main_service_id(catalog, retained_service_ids)
+        laser_ids = laser_service_ids(catalog, retained_service_ids)
+        common_devices = common_laser_device_keys(catalog, retained_service_ids)
+        selected_device = active_task.constraints.device_key
+        if not laser_ids:
+            selected_device = None
+        elif selected_device not in common_devices:
+            selected_device = common_devices[0] if len(common_devices) == 1 else None
+
+        normalized_components = [
+            component.model_copy(
+                update={
+                    "device_key": (
+                        selected_device if component.service_id in laser_ids else None
+                    )
+                }
+            )
+            for component in narrowed_components
+        ]
+        components_by_service = {
+            component.service_id: component
+            for component in normalized_components
+            if component.service_id is not None
+        }
+        main_constraints = components_by_service[main_service_id]
+        retained_device_keys = (
+            {service_id: selected_device for service_id in laser_ids}
+            if selected_device is not None
+            else {}
+        )
+    else:
+        # Direct legacy callers without a catalog can still narrow only to already-known
+        # components. Production orchestration always supplies the canonical catalog.
+        normalized_components = narrowed_components
+        main_constraints = normalized_components[0]
+        retained_device_keys = {
+            component.service_id: component.device_key
+            for component in normalized_components
+            if component.service_id is not None and component.device_key is not None
+        }
     narrowed_group = (
-        GroupedBookingState(components=narrowed_components)
-        if has_legacy_group and len(narrowed_components) > 1
+        GroupedBookingState(components=normalized_components)
+        if has_legacy_group and len(normalized_components) > 1
         else None
     )
-    retained_device_keys = {
-        component.service_id: component.device_key
-        for component in narrowed_components
-        if component.service_id is not None and component.device_key is not None
-    }
     return active_task.model_copy(
         update={
             "status": "collecting",
-            "constraints": narrowed_components[0],
+            "constraints": main_constraints,
             "requested_service_ids": (
                 retained_service_ids
                 if has_requested_set

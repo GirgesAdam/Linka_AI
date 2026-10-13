@@ -529,6 +529,72 @@ def test_proposal_executor_creates_one_appointment_then_additional_rows(monkeypa
     assert result["reserved_duration_minutes"] == 45
 
 
+
+def test_replacement_final_set_executes_one_appointment_without_removed_service(monkeypatch) -> None:
+    proposal = _proposal(services=[UNDERARM, FULL_ARMS])
+    assert proposal.main_service_id == FULL_ARMS
+    assert BIKINI not in proposal.service_ids
+    appointment = SimpleNamespace(
+        id=UUID("88888888-8888-8888-8888-888888888888"),
+        service_id=UUID(FULL_ARMS),
+        status="pending",
+        duration_minutes=30,
+    )
+    created: list[str] = []
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_additional_services",
+        lambda *_args, **_kwargs: [
+            AdditionalServiceResolution(service_id=UUID(UNDERARM), device_key=None)
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_booking_package",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            package_id=None,
+            package_used=False,
+            package_name=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_create(*_args, **_kwargs):
+        created.append(f"appointment:{FULL_ARMS}")
+        return appointment
+
+    def fake_add(*_args, **kwargs):
+        created.append(f"additional:{kwargs['service_id']}")
+        return SimpleNamespace(
+            id=UUID("99999999-9999-9999-9999-999999999999"),
+            service_id=kwargs["service_id"],
+        )
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.create_appointment_operation",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.add_additional_service",
+        fake_add,
+    )
+    result = execute_booking_proposal(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        patient=SimpleNamespace(id=UUID(PATIENT_ID), status="active"),
+        proposal=proposal,
+        idempotency_key="replacement-final-set",
+    )
+
+    assert proposal.service_ids == [UNDERARM, FULL_ARMS]
+    assert created == [f"appointment:{FULL_ARMS}", f"additional:{UNDERARM}"]
+    assert not any(BIKINI in item for item in created)
+    assert result["main_service_id"] == FULL_ARMS
+    assert result["additional_service_ids"] == [UNDERARM]
+
+
 def test_d6_grouped_explicit_pm_executes_one_pending_appointment_with_shared_visit_device(monkeypatch) -> None:
     explicit_pm_start = datetime(2026, 10, 15, 13, 15, tzinfo=UTC)
     proposal = _proposal().model_copy(
