@@ -831,6 +831,17 @@ def _plan_operation(
 ) -> PlanStep:
     params, ambiguous = _base_parameters(operation, context)
 
+    if (
+        operation.time_period_provenance == "conflict"
+        or operation.selection_time_period_provenance == "conflict"
+    ):
+        return _clarify(
+            index=index,
+            operation=operation,
+            field="time",
+            facts={"time_period_conflict": True},
+        )
+
     if operation.type == "confirm_booking_proposal":
         task = context.active_task
         if not isinstance(task, BookingTaskState) or task.proposal is None:

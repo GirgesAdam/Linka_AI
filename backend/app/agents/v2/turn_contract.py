@@ -51,6 +51,7 @@ PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "fina
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
+TimePeriodProvenance = Literal["none", "explicit_am", "explicit_pm", "conflict"]
 SelectionKind = Literal["index", "time", "ref", "relative"]
 RelativeSelection = Literal["next", "previous", "first", "last"]
 EntityCandidateMode = Literal["ambiguous", "set"]
@@ -363,6 +364,26 @@ class TurnOperation(StrictContractModel):
             "customer's own account or appointment. General payment-method/timing/policy questions use "
             "payment_info with financial_ownership=none. This is a semantic ownership marker only and "
             "never authorizes a financial read or write. Service/package offer prices remain none."
+        ),
+    )
+    time_period_provenance: TimePeriodProvenance = Field(
+        default="none",
+        description=(
+            "Typed provenance for entities.time.start_time in the latest customer message. Use "
+            "explicit_am only when the customer explicitly supplied an AM/morning semantic period, "
+            "explicit_pm only when they explicitly supplied a PM/afternoon/evening semantic period, "
+            "and conflict when the latest message itself contains genuinely contradictory period "
+            "evidence that cannot be safely reconciled. Use none for literal 24-hour HH:MM clocks, "
+            "bare 12-hour clocks with no period, inherited task time, and model/clinic-hour inference. "
+            "This is semantic provenance only; Python validates it and owns time authority."
+        ),
+    )
+    selection_time_period_provenance: TimePeriodProvenance = Field(
+        default="none",
+        description=(
+            "Same provenance contract as time_period_provenance, but only for selection.kind=time. "
+            "Use explicit_am/explicit_pm only for a customer-explicit period attached to the selected "
+            "clock, conflict for irreconcilable explicit period evidence, otherwise none."
         ),
     )
     # Required in provider schemas. The default preserves compatibility for direct
