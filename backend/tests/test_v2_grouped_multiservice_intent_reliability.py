@@ -381,6 +381,61 @@ def test_g9_informational_continue_active_narrows_grouped_set() -> None:
     assert transition.active_task.constraints.service_id == A
 
 
+def test_g9_informational_continue_active_preserves_pure_addition() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="informational",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[ARMS]],
+                        candidate_mode="set",
+                    )
+                ),
+            )
+        ]
+    )
+
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    plan = tag_booking_service_sets(
+        plan_turn(
+            normalized,
+            PlannerContext(semantic_context=context, active_task=state, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    assert service_sets == {0: [A, B, ARMS]}
+
+    transition = apply_step_state(
+        state,
+        step=plan.steps[0],
+        operation=normalized.operations[0],
+        reads=None,
+        now=NOW,
+        turn_id="g9-informational-add",
+        catalog=catalog,
+    )
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.requested_service_ids == [A, B, ARMS]
+    assert transition.active_task.constraints.service_id == ARMS
+
+
 def test_g10_replace_one_service_keeps_retained_and_replacement_only() -> None:
     catalog = _catalog()
     context = build_semantic_context(catalog)

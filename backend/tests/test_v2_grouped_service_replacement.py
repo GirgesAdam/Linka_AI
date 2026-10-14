@@ -205,6 +205,36 @@ def test_sr3_pure_addition_preserves_existing_set() -> None:
     assert service_sets == {0: [A, B, C]}
 
 
+def test_sr3_continue_active_informational_shape_preserves_pure_addition() -> None:
+    state = _state([A, B], main=B)
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="informational",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[C]],
+                        candidate_mode="set",
+                    )
+                ),
+            )
+        ]
+    )
+    _collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B, C]}
+
+
 def test_sr4_replacement_with_multiple_retained_is_exact() -> None:
     narrowed, _ = _apply(_state([A, B, C], main=C), [A, C, D])
     assert narrowed is not None

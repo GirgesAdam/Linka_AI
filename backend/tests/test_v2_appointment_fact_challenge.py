@@ -297,6 +297,7 @@ def test_new_filtered_query_remains_exact_time_filter() -> None:
             "end_time": None,
             "start_time_ambiguity": "none",
             "end_time_ambiguity": "none",
+            "explicit_period": "none",
         }
     }
     assert step.write_intent is None
