@@ -61,11 +61,13 @@ RECOGNIZED_SHEETS = {
     "payments": "payment",
     "payment_allocations": "payment_allocation",
     "packages": "package",
-    "active_packages": "package",
+    "active_packages": "holding",
     "import_data": "holding",
 }
 ACTIVE_PACKAGE_CONTRACT = "active_packages_v2"
+ACTIVE_HOLDING_CONTRACT = "active_packages_holdings_v3"
 UNIFIED_HOLDING_CONTRACT = "unified_patient_holdings_v1"
+HOLDING_CONTRACTS = {ACTIVE_HOLDING_CONTRACT, UNIFIED_HOLDING_CONTRACT}
 ACTIVE_PACKAGE_HEADER_ALIASES = {
     "full_name": "full_name",
     "phone": "phone",
@@ -77,6 +79,10 @@ ACTIVE_PACKAGE_HEADER_ALIASES = {
     "package_price": "package_price",
     "laser_device_name": "laser_device_name",
     "device_name": "laser_device_name",
+    "pulses": "pulses_remaining",
+    "remaining_pulses": "pulses_remaining",
+    "pulses_remaining": "pulses_remaining",
+    "النبضات_المتبقية": "pulses_remaining",
     "اسم_العميل": "full_name",
     "رقم_الموبايل": "phone",
     "رقم_الهاتف": "phone",
@@ -672,7 +678,7 @@ def _active_package_payment_payload(
         "paid_at": payload["purchased_at"],
         "payment_method": "unknown",
         "package_source_record_id": package_source_record_id,
-        "import_contract": ACTIVE_PACKAGE_CONTRACT,
+        "import_contract": payload.get("import_contract") or ACTIVE_PACKAGE_CONTRACT,
     }
 
 
@@ -909,26 +915,335 @@ def _normalize_active_package(
     return payload, None, None
 
 
+
+def _normalize_active_holding(
+    row: dict[str, Any],
+    *,
+    services_by_id: dict[UUID, Service],
+    device_prices_by_service_id: dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]],
+    devices_by_name: dict[str, list[ClinicLaserDevice]],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Normalize the clinic-facing active_packages sheet with optional holdings.
+
+    Name + Egyptian mobile are the only unconditional required fields. Package and
+    pulse fields become conditionally required only when that holding is supplied.
+    """
+    full_name = _clean(row.get("full_name"))
+    if not full_name:
+        return None, "active_package_name_missing", "اسم العميل مطلوب."
+
+    try:
+        phone_display, phone_normalized = _normalize_active_package_egypt_phone(row.get("phone"))
+    except ValueError:
+        return (
+            None,
+            "active_package_phone_invalid",
+            "رقم الموبايل يجب أن يكون رقم موبايل مصري صحيح (010/011/012/015). لو Excel حذف الصفر الأول، Linka يصلحه تلقائيًا.",
+        )
+    identity = f"phone:{_digest(phone_normalized)[:24]}"
+
+    service_name = _clean(row.get("service_name"))
+    device_name = _clean(row.get("laser_device_name") or row.get("device_name"))
+    pulses_raw = _clean(row.get("pulses_remaining"))
+    pulses_remaining: int | None = None
+    if pulses_raw is not None:
+        parsed_pulses = _int_value(row.get("pulses_remaining"))
+        if parsed_pulses is None or parsed_pulses < 0:
+            return None, "active_holding_pulses_invalid", "النبضات المتبقية يجب أن تكون رقمًا صحيحًا صفر أو أكبر."
+        if parsed_pulses > 0:
+            pulses_remaining = parsed_pulses
+
+    package_field_values = [
+        row.get("sessions_total"),
+        row.get("sessions_remaining"),
+        row.get("amount_paid"),
+        row.get("purchased_at"),
+        row.get("package_price"),
+    ]
+    has_package_fields = any(_clean(value) is not None for value in package_field_values)
+    if not service_name and has_package_fields:
+        return (
+            None,
+            "active_holding_package_service_missing",
+            "يوجد بيانات باقة في الصف لكن اسم الخدمة فارغ. اختر اسم الخدمة أو امسح بيانات الباقة من الصف.",
+        )
+
+    service: Service | None = None
+    sessions_total: int | None = None
+    sessions_remaining: int | None = None
+    package_device_key: str | None = None
+    package_device_name: str | None = None
+    standalone_session_price_minor: int | None = None
+    package_price_minor: int | None = None
+    amount_paid_minor: int | None = None
+    purchased_at: datetime | None = None
+
+    if service_name:
+        matches = [
+            service_row
+            for service_row in services_by_id.values()
+            if _clean(service_row.name)
+            and _clean(service_row.name).casefold() == service_name.casefold()
+        ]
+        if not matches:
+            return None, "active_package_service_unknown", "اسم الخدمة غير موجود ضمن خدمات Linka النشطة."
+        if len(matches) > 1:
+            return None, "active_package_service_ambiguous", "اسم الخدمة يطابق أكثر من خدمة. عدّل أسماء الخدمات قبل الاستيراد."
+        service = matches[0]
+
+        sessions_total = _int_value(row.get("sessions_total"))
+        if sessions_total is None or sessions_total <= 0:
+            return None, "active_package_total_invalid", "عدد الجلسات الكلي يجب أن يكون رقمًا صحيحًا أكبر من صفر عند إدخال باقة."
+
+        sessions_remaining = _int_value(row.get("sessions_remaining"))
+        if sessions_remaining is None or sessions_remaining < 0:
+            return None, "active_package_remaining_invalid", "عدد الجلسات المتبقي يجب أن يكون صفر أو أكبر عند إدخال باقة."
+        if sessions_remaining > sessions_total:
+            return (
+                None,
+                "active_package_remaining_exceeds_total",
+                "عدد الجلسات المتبقي لا يمكن أن يكون أكبر من عدد الجلسات الكلي.",
+            )
+
+        standalone_session_price_minor = int(service.price_minor)
+        if bool(getattr(service, "requires_laser_device", False)):
+            configured_devices = device_prices_by_service_id.get(service.id, {})
+            if not configured_devices:
+                return None, "active_package_laser_device_unconfigured", "الخدمة ليزر ولكن لا توجد أجهزة مفعلة لها في Linka."
+            if not device_name:
+                return None, "active_package_laser_device_missing", "اختر اسم الجهاز للباقة الليزر."
+            match = configured_devices.get(device_name.casefold())
+            if match is None:
+                return None, "active_package_laser_device_invalid", "الجهاز المختار غير متاح لهذه الخدمة."
+            device_price, package_device_name = match
+            package_device_key = device_price.device_key
+            standalone_session_price_minor = int(device_price.price_minor or 0)
+        elif device_name and pulses_remaining is None:
+            return (
+                None,
+                "active_package_device_not_allowed",
+                "هذه الخدمة لا تستخدم جهاز ليزر. اترك اسم الجهاز فارغًا إلا إذا كان الصف يحتوي على نبضات متبقية.",
+            )
+
+        amount_raw = _clean(row.get("amount_paid"))
+        price_raw = _clean(row.get("package_price"))
+        if amount_raw is None and price_raw is None:
+            return (
+                None,
+                "active_holding_financials_missing",
+                "للباقة يجب إدخال المبلغ المدفوع أو سعر الباقة على الأقل. إذا تركت المبلغ المدفوع فارغًا سيعتبر النظام الباقة مدفوعة بالكامل بسعر الباقة.",
+            )
+
+        if price_raw is None:
+            package_price_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
+        else:
+            package_price_minor = _money_minor(row.get("package_price"), allow_negative=False)
+        if package_price_minor is None or package_price_minor < 0:
+            return None, "active_package_price_invalid", "سعر الباقة يجب أن يكون مبلغًا صحيحًا غير سالب."
+
+        if amount_raw is None:
+            amount_paid_minor = package_price_minor
+        else:
+            amount_paid_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
+        if amount_paid_minor is None or amount_paid_minor <= 0:
+            return None, "active_package_amount_paid_invalid", "المبلغ المدفوع يجب أن يكون أكبر من صفر، أو اتركه فارغًا مع إدخال سعر الباقة ليعتبرها النظام مدفوعة بالكامل."
+        if amount_paid_minor > package_price_minor:
+            return None, "active_package_price_below_paid", "سعر الباقة لا يمكن أن يكون أقل من المبلغ المدفوع."
+
+        purchased_date = _parse_active_package_purchase_date(row.get("purchased_at"))
+        if purchased_date is None:
+            return None, "active_package_purchase_date_invalid", "عند إدخال باقة يجب إدخال تاريخ شراء صحيح بصيغة DD/MM/YYYY أو YYYY-MM-DD."
+        purchased_at = datetime.combine(purchased_date, time.min, tzinfo=EGYPT_TZ).astimezone(UTC)
+
+    pulse_device_key: str | None = None
+    pulse_device_name: str | None = None
+    if pulses_remaining is not None:
+        if not device_name:
+            return None, "active_holding_pulse_device_missing", "اختر اسم الجهاز عند إدخال نبضات متبقية."
+        pulse_matches = devices_by_name.get(device_name.casefold(), [])
+        if not pulse_matches:
+            return None, "active_holding_pulse_device_unknown", f'الجهاز "{device_name}" غير موجود أو غير مفعل.'
+        if len(pulse_matches) > 1:
+            return None, "active_holding_pulse_device_ambiguous", f'اسم الجهاز "{device_name}" مكرر في الإعدادات.'
+        pulse_device_key = pulse_matches[0].device_key
+        pulse_device_name = pulse_matches[0].name
+    elif device_name and service is None:
+        return None, "active_holding_device_without_holding", "اسم الجهاز موجود بدون باقة ليزر أو نبضات متبقية."
+
+    package_source_record_id: str | None = None
+    if service is not None:
+        package_facts = "|".join(
+            [
+                identity,
+                str(service.id),
+                package_device_key or "",
+                purchased_at.date().isoformat() if purchased_at is not None else "unknown-date",
+                str(sessions_total) if sessions_total is not None else "unknown-total",
+                str(sessions_remaining),
+                str(package_price_minor),
+                str(amount_paid_minor),
+            ]
+        )
+        package_source_record_id = _source_id("package", None, f"active_package|{package_facts}")
+
+    pulse_source_record_id: str | None = None
+    if pulse_device_key is not None:
+        pulse_source_record_id = _source_id(
+            "pulse_pack",
+            None,
+            f"active_holding|{identity}|{pulse_device_key}",
+        )
+
+    kind = (
+        "both"
+        if package_source_record_id and pulse_source_record_id
+        else "package"
+        if package_source_record_id
+        else "pulses"
+        if pulse_source_record_id
+        else "patient_only"
+    )
+    holding_fallback = "|".join(
+        [identity, package_source_record_id or "", pulse_source_record_id or "", kind]
+    )
+    payload = {
+        "identity": identity,
+        "patient_id": None,
+        "patient_phone": phone_display,
+        "patient_phone_normalized": phone_normalized,
+        "full_name": full_name,
+        "patient_name": full_name,
+        "holding_kind": kind,
+        "service_id": str(service.id) if service is not None else None,
+        "service_name": service.name if service is not None else None,
+        "sessions_total": sessions_total,
+        "sessions_remaining": sessions_remaining,
+        "package_device_key": package_device_key,
+        "package_device_name": package_device_name,
+        "standalone_session_price_minor": standalone_session_price_minor,
+        "price_minor": package_price_minor,
+        "historical_payment_amount_minor": amount_paid_minor,
+        "purchased_at": purchased_at.isoformat() if purchased_at is not None else None,
+        "package_source_record_id": package_source_record_id,
+        "pulses_remaining": pulses_remaining,
+        "pulse_device_key": pulse_device_key,
+        "pulse_device_name": pulse_device_name,
+        "pulse_source_record_id": pulse_source_record_id,
+        "import_contract": ACTIVE_HOLDING_CONTRACT,
+        "source_record_id": _source_id("holding", None, holding_fallback),
+    }
+    return payload, None, None
+
 def _unified_component_hash(payload: dict[str, Any], component: str) -> str:
+    contract = payload.get("import_contract") or UNIFIED_HOLDING_CONTRACT
     if component == "package":
         stable = {
             "identity": payload["identity"],
             "service_id": payload.get("service_id"),
+            "sessions_total": payload.get("sessions_total"),
             "sessions_remaining": payload.get("sessions_remaining"),
             "package_device_key": payload.get("package_device_key"),
-            "import_contract": UNIFIED_HOLDING_CONTRACT,
+            "price_minor": payload.get("price_minor"),
+            "historical_payment_amount_minor": payload.get("historical_payment_amount_minor"),
+            "purchased_at": payload.get("purchased_at"),
+            "import_contract": contract,
         }
     elif component == "pulse_pack":
         stable = {
             "identity": payload["identity"],
             "pulses_remaining": payload.get("pulses_remaining"),
             "pulse_device_key": payload.get("pulse_device_key"),
-            "import_contract": UNIFIED_HOLDING_CONTRACT,
+            "import_contract": contract,
         }
     else:
         raise HistoricalImportError(f"Unsupported unified holding component: {component}")
     return _payload_hash(stable)
 
+
+
+def _legacy_active_package_payload_from_holding(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if payload.get("import_contract") != ACTIVE_HOLDING_CONTRACT:
+        return None
+    if not payload.get("service_id") or payload.get("sessions_total") is None or not payload.get("purchased_at"):
+        return None
+    return {
+        "identity": payload["identity"],
+        "patient_id": None,
+        "patient_phone": payload.get("patient_phone"),
+        "patient_phone_normalized": payload.get("patient_phone_normalized"),
+        "full_name": payload.get("full_name"),
+        "patient_name": payload.get("patient_name"),
+        "package_id": None,
+        "package_name": f"{payload.get('service_name')} Package",
+        "service_id": payload.get("service_id"),
+        "service_name": payload.get("service_name"),
+        "laser_device_key": payload.get("package_device_key"),
+        "laser_device_name": payload.get("package_device_name"),
+        "sessions_total": payload.get("sessions_total"),
+        "sessions_remaining": payload.get("sessions_remaining"),
+        "price_minor": payload.get("price_minor"),
+        "standalone_session_price_minor": payload.get("standalone_session_price_minor"),
+        "purchased_at": payload.get("purchased_at"),
+        "expires_at": None,
+        "status": "active",
+        "historical_payment_amount_minor": payload.get("historical_payment_amount_minor"),
+        "import_contract": ACTIVE_PACKAGE_CONTRACT,
+    }
+
+
+def _holding_package_component_hash(payload: dict[str, Any]) -> str:
+    legacy_payload = _legacy_active_package_payload_from_holding(payload)
+    if legacy_payload is not None:
+        return _active_package_fact_hash(legacy_payload)
+    return _unified_component_hash(payload, "package")
+
+
+def _holding_payment_hash(
+    payload: dict[str, Any],
+    *,
+    package_source_record_id: str,
+) -> str:
+    hash_payload = payload
+    if payload.get("import_contract") == ACTIVE_HOLDING_CONTRACT:
+        hash_payload = dict(payload)
+        hash_payload["import_contract"] = ACTIVE_PACKAGE_CONTRACT
+    return _payload_hash(
+        _active_package_payment_payload(
+            hash_payload,
+            package_source_record_id=package_source_record_id,
+        )
+    )
+
+
+def _holding_package_hash_matches(existing_hash: str, payload: dict[str, Any]) -> bool:
+    if existing_hash == _holding_package_component_hash(payload):
+        return True
+    return existing_hash == _unified_component_hash(payload, "package")
+
+
+def _holding_payment_hash_matches(
+    existing_hash: str,
+    payload: dict[str, Any],
+    *,
+    package_source_record_id: str,
+) -> bool:
+    current_hash = _payload_hash(
+        _active_package_payment_payload(
+            payload,
+            package_source_record_id=package_source_record_id,
+        )
+    )
+    if existing_hash == current_hash:
+        return True
+    legacy_payload = dict(payload)
+    legacy_payload["import_contract"] = ACTIVE_PACKAGE_CONTRACT
+    legacy_hash = _payload_hash(
+        _active_package_payment_payload(
+            legacy_payload,
+            package_source_record_id=package_source_record_id,
+        )
+    )
+    return existing_hash == legacy_hash
 
 def _normalize_unified_holding(
     row: dict[str, Any],
@@ -1103,6 +1418,13 @@ def _normalize_row(
             )
         return _normalize_package(row, services_by_id=services_by_id, services_by_name=services_by_name)
     if entity_type == "holding":
+        if sheet == "active_packages":
+            return _normalize_active_holding(
+                row,
+                services_by_id=services_by_id,
+                device_prices_by_service_id=device_prices_by_service_id,
+                devices_by_name=devices_by_name,
+            )
         return _normalize_unified_holding(
             row,
             services_by_id=services_by_id,
@@ -1190,7 +1512,10 @@ def preview_historical_import(
             )
             key = (entity_type, source_record_id)
             if key in seen:
-                if payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT:
+                if payload.get("import_contract") == ACTIVE_PACKAGE_CONTRACT or (
+                    payload.get("import_contract") == ACTIVE_HOLDING_CONTRACT
+                    and payload.get("holding_kind") in {"package", "both"}
+                ):
                     issue_code = "duplicate_historical_package_row"
                     issue_message = "Duplicate historical package row."
                 else:
@@ -1282,6 +1607,42 @@ def preview_historical_import(
         if len(group["rows"]) < 5:
             group["rows"].append(staged.row_number)
 
+    holding_components_seen: dict[tuple[str, str], UUID | None] = {}
+    for staged in rows_to_add:
+        if staged.entity_type != "holding" or staged.row_status != "ready":
+            continue
+        duplicate_component: str | None = None
+        component_keys: list[tuple[str, str]] = []
+        for component, key_name in (
+            ("package", "package_source_record_id"),
+            ("pulse_pack", "pulse_source_record_id"),
+        ):
+            source_id = staged.normalized_json.get(key_name)
+            if not source_id:
+                continue
+            key = (component, str(source_id))
+            component_keys.append(key)
+            if key in holding_components_seen:
+                duplicate_component = component
+                break
+        if duplicate_component is None:
+            for key in component_keys:
+                holding_components_seen[key] = staged.id
+            continue
+        staged.row_status = "rejected"
+        staged.issue_code = f"duplicate_{duplicate_component}_holding"
+        staged.issue_message = (
+            "نفس رصيد الباقة/النبضات مكرر لنفس العميل في أكثر من صف. "
+            "اكتب كل رصيد مرة واحدة فقط؛ وإذا للعميل أكثر من باقة استخدم صفوفًا منفصلة بدون تكرار النبضات."
+        )
+        ready_counts["holding"] -= 1
+        rejected_counts["holding"] += 1
+        issue_key = ("holding", staged.issue_code, staged.issue_message)
+        group = issue_counts.setdefault(issue_key, {"count": 0, "rows": []})
+        group["count"] += 1
+        if len(group["rows"]) < 5:
+            group["rows"].append(staged.row_number)
+
     active_ready_rows = [
         staged
         for staged in rows_to_add
@@ -1294,7 +1655,7 @@ def preview_historical_import(
         for staged in rows_to_add
         if staged.entity_type == "holding"
         and staged.row_status == "ready"
-        and staged.normalized_json.get("import_contract") == UNIFIED_HOLDING_CONTRACT
+        and staged.normalized_json.get("import_contract") in HOLDING_CONTRACTS
     ]
     projected_counts: dict[str, int] = {}
     total_amount_imported_minor = 0
@@ -1384,6 +1745,17 @@ def preview_historical_import(
                     )
                 ).all()
             )
+        new_holding_package_rows = [
+            staged
+            for staged in unified_ready_rows
+            if staged.normalized_json.get("package_source_record_id")
+            and str(staged.normalized_json["package_source_record_id"]) not in existing_unified_packages
+        ]
+        new_holding_payment_rows = [
+            staged
+            for staged in new_holding_package_rows
+            if int(staged.normalized_json.get("historical_payment_amount_minor") or 0) > 0
+        ]
         projected_counts.update({
             "patients_to_create": projected_counts.get("patients_to_create", 0)
             + len(unified_phones - existing_unified_phones),
@@ -1400,8 +1772,13 @@ def preview_historical_import(
                 staged.normalized_json.get("holding_kind") == "both"
                 for staged in unified_ready_rows
             ),
-            "historical_payments_to_create": projected_counts.get("historical_payments_to_create", 0),
+            "historical_payments_to_create": projected_counts.get("historical_payments_to_create", 0)
+            + len(new_holding_payment_rows),
         })
+        total_amount_imported_minor += sum(
+            int(staged.normalized_json.get("historical_payment_amount_minor") or 0)
+            for staged in new_holding_payment_rows
+        )
 
     db.add_all(rows_to_add)
     issue_groups = [
@@ -1919,10 +2296,17 @@ def apply_historical_import(
     }
     for row in rows:
         payload = row.normalized_json
-        if row.entity_type == "holding" and payload.get("import_contract") == UNIFIED_HOLDING_CONTRACT:
+        if row.entity_type == "holding" and payload.get("import_contract") in HOLDING_CONTRACTS:
             package_source_id = payload.get("package_source_record_id")
             if package_source_id:
-                incoming_hashes[("package", str(package_source_id))] = _unified_component_hash(payload, "package")
+                package_source_id = str(package_source_id)
+                incoming_hashes[("package", package_source_id)] = _holding_package_component_hash(payload)
+                if int(payload.get("historical_payment_amount_minor") or 0) > 0:
+                    payment_source_id = _active_package_payment_source_id(package_source_id)
+                    incoming_hashes[("payment", payment_source_id)] = _holding_payment_hash(
+                        payload,
+                        package_source_record_id=package_source_id,
+                    )
             pulse_source_id = payload.get("pulse_source_record_id")
             if pulse_source_id:
                 incoming_hashes[("pulse_pack", str(pulse_source_id))] = _unified_component_hash(payload, "pulse_pack")
@@ -1969,13 +2353,26 @@ def apply_historical_import(
             payload = row.normalized_json
             package_source_id = payload.get("package_source_record_id")
             if package_source_id:
-                link = existing_links.get(("package", str(package_source_id)))
-                expected = _unified_component_hash(payload, "package")
-                if link and link.payload_hash != expected:
+                package_source_id = str(package_source_id)
+                link = existing_links.get(("package", package_source_id))
+                expected = _holding_package_component_hash(payload)
+                if link and not _holding_package_hash_matches(link.payload_hash, payload):
                     raise HistoricalImportConflictError(
                         "This patient's imported package opening balance already exists with different data. "
                         "Choose Replace previous imports to reconcile it."
                     )
+                if int(payload.get("historical_payment_amount_minor") or 0) > 0:
+                    payment_source_id = _active_package_payment_source_id(package_source_id)
+                    payment_link = existing_links.get(("payment", payment_source_id))
+                    if payment_link and not _holding_payment_hash_matches(
+                        payment_link.payload_hash,
+                        payload,
+                        package_source_record_id=package_source_id,
+                    ):
+                        raise HistoricalImportConflictError(
+                            "This patient's imported package payment already exists with different data. "
+                            "Choose Replace previous imports to reconcile it."
+                        )
             pulse_source_id = payload.get("pulse_source_record_id")
             if pulse_source_id:
                 link = existing_links.get(("pulse_pack", str(pulse_source_id)))
@@ -2195,9 +2592,13 @@ def apply_historical_import(
         package_source_id = payload.get("package_source_record_id")
         if package_source_id:
             package_source_id = str(package_source_id)
-            component_hash = _unified_component_hash(payload, "package")
+            component_hash = _holding_package_component_hash(payload)
             link = existing_links.get(("package", package_source_id))
             if link is not None:
+                if not _holding_package_hash_matches(link.payload_hash, payload):
+                    raise HistoricalImportConflictError(
+                        "Historical package link exists with different imported facts."
+                    )
                 package = db.get(PatientPackage, link.canonical_id)
                 if package is None or package.patient_id != patient.id:
                     raise HistoricalImportConflictError(
@@ -2207,6 +2608,8 @@ def apply_historical_import(
             else:
                 service = services_by_id[UUID(str(payload["service_id"]))]
                 remaining = int(payload["sessions_remaining"])
+                total_known = payload.get("sessions_total") is not None
+                total = int(payload.get("sessions_total") or max(remaining, 1))
                 package = PatientPackage(
                     workspace_id=workspace.id,
                     patient_id=patient.id,
@@ -2217,15 +2620,15 @@ def apply_historical_import(
                     created_by_user_id=batch.created_by_user_id,
                     external_id=None,
                     name=f"{service.name} Package",
-                    sessions_purchased=remaining,
+                    sessions_purchased=total,
                     opening_sessions_remaining=remaining,
-                    sessions_total_known=False,
-                    sale_price_minor=0,
+                    sessions_total_known=total_known,
+                    sale_price_minor=int(payload.get("price_minor") or 0),
                     standalone_session_price_minor_at_purchase=payload.get("standalone_session_price_minor"),
                     laser_device_key=payload.get("package_device_key"),
                     laser_device_name=payload.get("package_device_name"),
                     currency="EGP",
-                    purchased_at=batch.created_at or datetime.now(UTC),
+                    purchased_at=_parse_datetime(payload.get("purchased_at")) or batch.created_at or datetime.now(UTC),
                     expires_at=None,
                     status="active",
                     source="integration",
@@ -2246,12 +2649,89 @@ def apply_historical_import(
                 existing_links[("package", package_source_id)] = link
                 imported["package"] += 1
 
+            payment_amount = int(payload.get("historical_payment_amount_minor") or 0)
+            if payment_amount > 0:
+                payment_source_id = _active_package_payment_source_id(package_source_id)
+                payment_payload = _active_package_payment_payload(
+                    payload,
+                    package_source_record_id=package_source_id,
+                )
+                payment_hash = _holding_payment_hash(
+                    payload,
+                    package_source_record_id=package_source_id,
+                )
+                payment_link = existing_links.get(("payment", payment_source_id))
+                if payment_link is not None:
+                    if not _holding_payment_hash_matches(
+                        payment_link.payload_hash,
+                        payload,
+                        package_source_record_id=package_source_id,
+                    ):
+                        raise HistoricalImportConflictError(
+                            "Historical package payment exists with different imported facts."
+                        )
+                    transaction = db.get(PaymentTransaction, payment_link.canonical_id)
+                    if (
+                        transaction is None
+                        or transaction.patient_package_id != package.id
+                        or transaction.patient_id != patient.id
+                        or transaction.transaction_type != "payment"
+                    ):
+                        raise HistoricalImportConflictError(
+                            "Historical package exists without its correctly linked payment."
+                        )
+                    if package.purchase_transaction_id is None:
+                        package.purchase_transaction_id = transaction.id
+                    elif package.purchase_transaction_id != transaction.id:
+                        raise HistoricalImportConflictError(
+                            "Historical package purchase link conflicts with its imported payment."
+                        )
+                    skipped["payment"] += 1
+                else:
+                    transaction = PaymentTransaction(
+                        workspace_id=workspace.id,
+                        appointment_id=None,
+                        origin_appointment_id=None,
+                        patient_id=patient.id,
+                        created_by_user_id=batch.created_by_user_id,
+                        reference_transaction_id=None,
+                        patient_package_id=package.id,
+                        transaction_type="payment",
+                        amount_minor=payment_amount,
+                        currency="EGP",
+                        payment_method="unknown",
+                        source="integration",
+                        external_reference=None,
+                        reason=None,
+                        idempotency_key=f"historical:{payment_source_id}"[:128],
+                        created_at=_parse_datetime(payload.get("purchased_at")) or package.purchased_at,
+                    )
+                    db.add(transaction)
+                    db.flush()
+                    package.purchase_transaction_id = transaction.id
+                    payment_link = ClinicHistoricalImportLink(
+                        workspace_id=workspace.id,
+                        batch_id=batch.id,
+                        entity_type="payment",
+                        canonical_id=transaction.id,
+                        source_record_id=payment_source_id,
+                        payload_hash=payment_hash,
+                    )
+                    db.add(payment_link)
+                    db.flush()
+                    existing_links[("payment", payment_source_id)] = payment_link
+                    imported["payment"] += 1
+
         pulse_source_id = payload.get("pulse_source_record_id")
         if pulse_source_id:
             pulse_source_id = str(pulse_source_id)
             component_hash = _unified_component_hash(payload, "pulse_pack")
             link = existing_links.get(("pulse_pack", pulse_source_id))
             if link is not None:
+                if link.payload_hash != component_hash:
+                    raise HistoricalImportConflictError(
+                        "Historical pulse link exists with different imported facts."
+                    )
                 pulse_pack = db.get(PatientPulsePack, link.canonical_id)
                 if pulse_pack is None or pulse_pack.patient_id != patient.id:
                     raise HistoricalImportConflictError(
@@ -2484,7 +2964,7 @@ def build_historical_import_template(
     service_names: Iterable[str] | None = None,
     device_names: Iterable[str] | None = None,
 ) -> bytes:
-    """Return the clinic-facing unified patient/package/pulse migration workbook."""
+    """Return the clinic-facing active_packages migration workbook."""
     valid_services = sorted(
         {str(name).strip() for name in (service_names or []) if str(name).strip()},
         key=str.casefold,
@@ -2493,8 +2973,16 @@ def build_historical_import_template(
         {str(name).strip() for name in (device_names or []) if str(name).strip()},
         key=str.casefold,
     )
-    example_service = valid_services[0] if valid_services else "اختر خدمة من القائمة"
-    example_device = valid_devices[0] if valid_devices else "اختر جهازًا من القائمة"
+    example_service = (
+        "ليزر إزالة الشعر - جسم كامل سيدات"
+        if "ليزر إزالة الشعر - جسم كامل سيدات" in valid_services
+        else (valid_services[0] if valid_services else "اختر خدمة من القائمة")
+    )
+    example_device = (
+        "Candela Gentle"
+        if "Candela Gentle" in valid_devices
+        else (valid_devices[0] if valid_devices else None)
+    )
 
     workbook = Workbook()
     instructions = workbook.active
@@ -2508,149 +2996,181 @@ def build_historical_import_template(
     thin_side = Side(style="thin")
     table_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
-    instructions.merge_cells("A1:F1")
-    instructions["A1"] = "دليل استيراد العملاء والباقات والـPulses"
+    instructions.merge_cells("A1:J1")
+    instructions["A1"] = "دليل استيراد الباقات النشطة"
     instructions["A1"].font = title_font
     instructions["A1"].alignment = Alignment(horizontal="center", vertical="center")
     instructions.row_dimensions[1].height = 26
 
-    instructions.merge_cells("A3:F3")
+    instructions.merge_cells("A3:J3")
     instructions["A3"] = (
-        "الاسم ورقم الموبايل إلزاميان. بيانات الباقة والـPulses اختيارية. "
-        "لو العميل لا يمتلك باقة أو Pulses اترك الأعمدة الأخرى فارغة."
+        "الحقول الإلزامية لكل صف هي اسم العميل ورقم الموبايل فقط. يمكن ترك باقي الأعمدة فارغة لإضافة العميل فقط. "
+        "إذا كانت هناك باقة وترك المبلغ المدفوع فارغًا، سيعتبر النظام الباقة مدفوعة بالكامل ويستخدم سعر الباقة كمبلغ مدفوع."
     )
     instructions["A3"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
-    instructions.row_dimensions[3].height = 34
+    instructions.row_dimensions[3].height = 42
 
-    headers = [
+    arabic_headers = [
         "اسم العميل",
         "رقم الموبايل",
-        "اسم الباقة / الخدمة",
-        "الجلسات المتبقية",
+        "اسم الخدمة",
+        "اسم الجهاز",
+        "عدد الجلسات الكلي",
+        "عدد الجلسات المتبقي",
+        "المبلغ المدفوع",
+        "تاريخ الشراء",
+        "سعر الباقة",
         "النبضات المتبقية",
-        "الجهاز",
-    ]
-    examples = [
-        ["أحمد علي", "01011111111", None, None, None, None],
-        ["مريم أحمد", "01122222222", example_service, 3, None, None],
-        ["سارة علي", "01233333333", None, None, 800, example_device],
-        ["نور محمد", "01544444444", example_service, 2, 500, example_device],
     ]
 
-    instructions.merge_cells("A5:F5")
-    instructions["A5"] = "أمثلة للحالات الأربع"
+    instructions.merge_cells("A5:J5")
+    instructions["A5"] = "مثال صحيح"
     instructions["A5"].font = section_font
     instructions["A5"].alignment = Alignment(horizontal="right")
-    for column, header in enumerate(headers, start=1):
-        cell = instructions.cell(row=6, column=column, value=header)
-        cell.font = header_font
-        cell.border = table_border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    for row_index, values in enumerate(examples, start=7):
-        for column, value in enumerate(values, start=1):
-            cell = instructions.cell(row=row_index, column=column, value=value)
-            cell.border = table_border
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        instructions.cell(row=row_index, column=2).number_format = "@"
 
-    instructions.merge_cells("A13:F13")
-    instructions["A13"] = (
-        "ملاحظة الجهاز: مطلوب مع أي رصيد Pulses، ومطلوب أيضًا إذا كانت الباقة خدمة ليزر. "
-        "لو الباقة والـPulses على جهازين مختلفين، استخدم صفين بنفس رقم الموبايل؛ Linka ستربطهما بنفس العميل."
-    )
-    instructions["A13"].alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
-    instructions.row_dimensions[13].height = 45
+    example_values = [
+        "سارة أحمد",
+        "01012345678",
+        example_service,
+        example_device,
+        8,
+        3,
+        None,
+        date(2026, 2, 15),
+        5000,
+        1000 if example_device else None,
+    ]
+    for column, header in enumerate(arabic_headers, start=1):
+        header_cell = instructions.cell(row=6, column=column, value=header)
+        header_cell.font = header_font
+        header_cell.border = table_border
+        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        value_cell = instructions.cell(row=7, column=column, value=example_values[column - 1])
+        value_cell.border = table_border
+        value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    instructions["B7"].number_format = "@"
+    instructions["H7"].number_format = "dd/mm/yyyy"
 
-    instructions["H5"] = "الخدمات المتاحة"
-    instructions["H5"].font = section_font
-    instructions["H6"] = "اسم الخدمة"
-    instructions["H6"].font = header_font
-    instructions["H6"].border = table_border
-    service_start_row = 7
-    service_end_row = 6
+    instructions["A10"] = "الخدمات"
+    instructions["A10"].font = section_font
+    instructions["D10"] = "الأجهزة"
+    instructions["D10"].font = section_font
+
+    instructions["A11"] = "اسم الخدمة"
+    instructions["A11"].font = header_font
+    instructions["A11"].border = table_border
+    instructions["A11"].alignment = Alignment(horizontal="center")
+
+    service_start_row: int | None = None
+    service_end_row: int | None = None
     if valid_services:
-        for idx, name in enumerate(valid_services, start=service_start_row):
-            instructions.cell(row=idx, column=8, value=name).border = table_border
+        service_start_row = 12
+        for index, name in enumerate(valid_services, start=service_start_row):
+            cell = instructions.cell(row=index, column=1, value=name)
+            cell.border = table_border
+            cell.alignment = Alignment(horizontal="right", vertical="center")
         service_end_row = service_start_row + len(valid_services) - 1
-        table = Table(displayName="ServicesTable", ref=f"H6:H{service_end_row}")
-        table.tableStyleInfo = TableStyleInfo(
+        services_table = Table(displayName="ServicesTable", ref=f"A11:A{service_end_row}")
+        services_table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
             showRowStripes=True, showColumnStripes=False,
         )
-        instructions.add_table(table)
+        instructions.add_table(services_table)
     else:
-        instructions["H7"] = "لا توجد خدمات نشطة حاليًا."
+        instructions["A12"] = "لا توجد خدمات نشطة حاليًا."
+        instructions["A12"].border = table_border
+        instructions["A12"].alignment = Alignment(horizontal="right")
 
-    instructions["J5"] = "الأجهزة المتاحة"
-    instructions["J5"].font = section_font
-    instructions["J6"] = "اسم الجهاز"
-    instructions["J6"].font = header_font
-    instructions["J6"].border = table_border
-    device_start_row = 7
-    device_end_row = 6
+    instructions["D11"] = "اسم الجهاز"
+    instructions["D11"].font = header_font
+    instructions["D11"].border = table_border
+    instructions["D11"].alignment = Alignment(horizontal="center")
+
+    device_start_row: int | None = None
+    device_end_row: int | None = None
     if valid_devices:
-        for idx, name in enumerate(valid_devices, start=device_start_row):
-            instructions.cell(row=idx, column=10, value=name).border = table_border
+        device_start_row = 12
+        for index, name in enumerate(valid_devices, start=device_start_row):
+            cell = instructions.cell(row=index, column=4, value=name)
+            cell.border = table_border
+            cell.alignment = Alignment(horizontal="right", vertical="center")
         device_end_row = device_start_row + len(valid_devices) - 1
-        table = Table(displayName="DevicesTable", ref=f"J6:J{device_end_row}")
-        table.tableStyleInfo = TableStyleInfo(
+        devices_table = Table(displayName="DevicesTable", ref=f"D11:D{device_end_row}")
+        devices_table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
             showRowStripes=True, showColumnStripes=False,
         )
-        instructions.add_table(table)
+        instructions.add_table(devices_table)
     else:
-        instructions["J7"] = "لا توجد أجهزة مفعلة حاليًا."
+        instructions["D12"] = "لا توجد أجهزة ليزر مفعلة حاليًا."
+        instructions["D12"].border = table_border
+        instructions["D12"].alignment = Alignment(horizontal="right")
 
-    for letter, width in {"A": 28, "B": 18, "C": 34, "D": 20, "E": 20, "F": 24, "H": 34, "J": 28}.items():
-        instructions.column_dimensions[letter].width = width
+    instructions.merge_cells("F14:J15")
+    instructions["F14"] = (
+        "اسم الجهاز مطلوب للباقة الليزر أو عند إدخال نبضات متبقية. "
+        "إذا كان للعميل أكثر من باقة استخدم صفًا لكل باقة. لا تكرر رصيد النبضات لنفس الجهاز في أكثر من صف."
+    )
+    instructions["F14"].alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
 
-    sheet = workbook.create_sheet("import_data")
+    readme_widths = {
+        "A": 34, "B": 18, "C": 34, "D": 20, "E": 20,
+        "F": 22, "G": 18, "H": 18, "I": 18, "J": 20,
+    }
+    for column_letter, width in readme_widths.items():
+        instructions.column_dimensions[column_letter].width = width
+
+    sheet = workbook.create_sheet("active_packages")
     sheet.sheet_view.rightToLeft = True
     sheet.sheet_view.showGridLines = True
-    sheet.append(headers)
-    sheet.append([None] * len(headers))
-    widths = [28, 18, 34, 20, 20, 24]
+    sheet.append(arabic_headers)
+    sheet.append([None] * len(arabic_headers))
+
+    widths = [34, 18, 34, 20, 20, 22, 18, 18, 18, 20]
     for index, width in enumerate(widths, start=1):
-        cell = sheet.cell(row=1, column=index)
-        cell.font = header_font
-        cell.border = table_border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        sheet.column_dimensions[cell.column_letter].width = width
-    sheet.row_dimensions[1].height = 28
-    import_table = Table(displayName="ImportDataTable", ref="A1:F2")
-    import_table.tableStyleInfo = TableStyleInfo(
+        header_cell = sheet.cell(row=1, column=index)
+        header_cell.font = header_font
+        header_cell.border = table_border
+        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sheet.column_dimensions[header_cell.column_letter].width = width
+    sheet.row_dimensions[1].height = 24
+    active_packages_table = Table(displayName="ActivePackagesTable", ref="A1:J2")
+    active_packages_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
         showRowStripes=True, showColumnStripes=False,
     )
-    sheet.add_table(import_table)
+    sheet.add_table(active_packages_table)
+
     for row_number in range(2, 5001):
         sheet.cell(row=row_number, column=2).number_format = "@"
+        sheet.cell(row=row_number, column=8).number_format = "dd/mm/yyyy"
+        sheet.cell(row=row_number, column=10).number_format = "0"
 
-    if valid_services:
+    if service_start_row is not None and service_end_row is not None:
         validation = DataValidation(
             type="list",
             formula1='INDIRECT("ServicesTable[اسم الخدمة]")',
             allow_blank=True,
         )
-        validation.error = "اختر خدمة من قائمة الخدمات الموجودة في ورقة التعليمات أو اترك الخانة فارغة."
+        validation.error = "اختر خدمة من قائمة الخدمات الموجودة في ورقة التعليمات، أو اتركها فارغة لو ستضيف العميل فقط/نبضات فقط."
         validation.errorTitle = "خدمة غير صحيحة"
-        validation.prompt = "اختياري: اختر الباقة/الخدمة إذا كان العميل لديه جلسات متبقية."
-        validation.promptTitle = "اسم الباقة / الخدمة"
+        validation.prompt = "اختر خدمة من القائمة عند إدخال باقة."
+        validation.promptTitle = "اسم الخدمة"
         sheet.add_data_validation(validation)
         validation.add("C2:C5000")
 
-    if valid_devices:
+    if device_start_row is not None and device_end_row is not None:
         device_validation = DataValidation(
             type="list",
             formula1='INDIRECT("DevicesTable[اسم الجهاز]")',
             allow_blank=True,
         )
-        device_validation.error = "اختر جهازًا من قائمة الأجهزة الموجودة في ورقة التعليمات أو اترك الخانة فارغة."
+        device_validation.error = "اختر جهازًا من قائمة الأجهزة، أو اترك الخانة فارغة إذا لا توجد باقة ليزر أو نبضات."
         device_validation.errorTitle = "جهاز غير صحيح"
-        device_validation.prompt = "مطلوب مع الـPulses ومع باقات الليزر فقط."
-        device_validation.promptTitle = "الجهاز"
+        device_validation.prompt = "الجهاز مطلوب للباقة الليزر أو عند إدخال نبضات متبقية."
+        device_validation.promptTitle = "اسم الجهاز"
         sheet.add_data_validation(device_validation)
-        device_validation.add("F2:F5000")
+        device_validation.add("D2:D5000")
 
     stream = io.BytesIO()
     workbook.save(stream)

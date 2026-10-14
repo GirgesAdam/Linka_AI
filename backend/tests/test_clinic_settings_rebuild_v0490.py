@@ -406,7 +406,7 @@ def test_package_negative_remaining_is_rejected() -> None:
     assert payload is None and code == "package_remaining_invalid"
 
 
-def test_official_template_is_minimal_unified_historical_contract() -> None:
+def test_official_template_preserves_active_packages_contract_with_pulses() -> None:
     wb = load_workbook(
         io.BytesIO(
             build_historical_import_template(
@@ -416,34 +416,40 @@ def test_official_template_is_minimal_unified_historical_contract() -> None:
         )
     )
     try:
-        assert wb.sheetnames == ["README", "import_data"]
+        assert wb.sheetnames == ["README", "active_packages"]
         headers = [
             cell.value
-            for cell in next(wb["import_data"].iter_rows(min_row=1, max_row=1))
+            for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))
         ]
         assert headers == [
             "اسم العميل",
             "رقم الموبايل",
-            "اسم الباقة / الخدمة",
-            "الجلسات المتبقية",
+            "اسم الخدمة",
+            "اسم الجهاز",
+            "عدد الجلسات الكلي",
+            "عدد الجلسات المتبقي",
+            "المبلغ المدفوع",
+            "تاريخ الشراء",
+            "سعر الباقة",
             "النبضات المتبقية",
-            "الجهاز",
         ]
         forbidden = {
             "patient_id", "package_id", "transaction_id", "payment_method",
             "service_id", "expires_at", "status", "currency",
         }
         assert forbidden.isdisjoint(headers)
-        assert wb["import_data"].data_validations.count == 2
-        readme_values = {
+        assert wb["active_packages"].data_validations.count == 2
+        readme_text = "\n".join(
             str(cell.value)
             for row in wb["README"].iter_rows()
             for cell in row
             if cell.value is not None
-        }
-        assert "Hydrafacial" in readme_values
-        assert "PRP Face" in readme_values
-        assert "Prime Lase" in readme_values
+        )
+        assert "Hydrafacial" in readme_text
+        assert "PRP Face" in readme_text
+        assert "Prime Lase" in readme_text
+        assert "اسم العميل ورقم الموبايل فقط" in readme_text
+        assert "ترك المبلغ المدفوع فارغًا" in readme_text
     finally:
         wb.close()
 

@@ -7,7 +7,7 @@ export async function GET() {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="Linka_Historical_Patients_Template.xlsx"',
+      "Content-Disposition": 'attachment; filename="Linka_Active_Packages_Template.xlsx"',
     },
   });
 }
