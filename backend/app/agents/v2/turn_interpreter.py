@@ -1406,6 +1406,29 @@ def _normalize_one_spoken_clock(
         return value, "none"
     return neutral, _derive_spoken_clock_ambiguity(neutral, literal_clock=None)
 
+
+def _normalize_spoken_period_hint(
+    value: str,
+    *,
+    ambiguity: TimeAmbiguity,
+    hint: str,
+    literal_clock: str | None,
+) -> str:
+    """Keep provider hints only where clinic hours cannot resolve the spoken clock alone."""
+    if literal_clock is not None or ambiguity != "twelve_hour":
+        return "none"
+    try:
+        parsed = time.fromisoformat(value)
+    except ValueError:
+        return "none"
+    if 1 <= parsed.hour <= 9:
+        return "none"
+    if parsed.hour in {10, 11}:
+        return hint if hint in {"am", "pm"} else "none"
+    if parsed.hour == 12:
+        return "midnight" if hint == "midnight" else "none"
+    return "none"
+
 def _normalize_time_semantics_v2(
     turn: TiaTurnUnderstanding,
     *,
@@ -1432,8 +1455,11 @@ def _normalize_time_semantics_v2(
                 update={
                     "start_time": value,
                     "start_time_ambiguity": ambiguity,
-                    "spoken_period_hint": (
-                        "none" if literal_clock is not None else constraint.spoken_period_hint
+                    "spoken_period_hint": _normalize_spoken_period_hint(
+                        value,
+                        ambiguity=ambiguity,
+                        hint=constraint.spoken_period_hint,
+                        literal_clock=literal_clock,
                     ),
                 }
             )
@@ -1464,8 +1490,11 @@ def _normalize_time_semantics_v2(
                 update={
                     "time": value,
                     "time_ambiguity": ambiguity,
-                    "spoken_period_hint": (
-                        "none" if literal_clock is not None else selection.spoken_period_hint
+                    "spoken_period_hint": _normalize_spoken_period_hint(
+                        value,
+                        ambiguity=ambiguity,
+                        hint=selection.spoken_period_hint,
+                        literal_clock=literal_clock,
                     ),
                 }
             )

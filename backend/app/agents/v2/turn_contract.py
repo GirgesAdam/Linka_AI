@@ -52,7 +52,7 @@ PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "fina
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
-SpokenPeriodHint = Literal["none", "am", "pm", "noon", "midnight"]
+SpokenPeriodHint = Literal["none", "am", "pm", "midnight"]
 ClockSource = Literal[
     "unspecified",
     "literal_24h",
@@ -144,8 +144,9 @@ class TimeConstraint(StrictContractModel):
         default="none",
         exclude=True,
         description=(
-            "Semantic hint only. Return none unless the latest customer turn explicitly distinguishes "
-            "an AM/PM-style period; Python owns final clock resolution from clinic hours."
+            "Clock disambiguation hint only. Use am/pm only for spoken 10/11-hour clocks when "
+            "the customer explicitly distinguishes the period; use midnight only for explicit "
+            "midnight at 12; use none otherwise. Python owns final resolution from clinic hours."
         ),
     )
 
@@ -178,8 +179,8 @@ class TimeConstraint(StrictContractModel):
         # time on a continuation, or otherwise choose the earliest available slot.
         if parsed_start is None and self.start_time_ambiguity != "none":
             raise ValueError("start_time_ambiguity requires start_time.")
-        if parsed_start is None and self.spoken_period_hint not in {"none", "am", "pm"}:
-            raise ValueError("noon/midnight hint requires start_time.")
+        if parsed_start is None and self.spoken_period_hint == "midnight":
+            raise ValueError("midnight hint requires start_time.")
         if parsed_end is None and self.end_time_ambiguity != "none":
             raise ValueError("end_time_ambiguity requires end_time.")
         return self
@@ -197,9 +198,9 @@ class Selection(StrictContractModel):
         default="none",
         exclude=True,
         description=(
-            "Semantic hint only. Return none unless the latest customer turn explicitly distinguishes "
-            "an AM/PM-style period. A period-only answer to a pending time clarification may set this "
-            "hint with time=null; Python owns final clock resolution from clinic hours."
+            "Clock disambiguation hint only. Use am/pm for a spoken 10/11-hour clock when the "
+            "customer explicitly distinguishes the period, including a period-only answer to a "
+            "pending time clarification; use none otherwise. Python owns final resolution."
         ),
     )
 

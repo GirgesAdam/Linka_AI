@@ -19,8 +19,8 @@ from app.models.booking_settings import BookingSettings
 from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.message import Message
 from app.schemas.agent import AgentChatRequest
+from app.services.agent_v2 import state_persistence
 from app.services.agent_v2.live_chat import run_agent_chat
-from app.services.agent_v2.state_persistence import load_active_task
 from scripts.run_grouped_multiservice_intent_live_review import build_fixture
 
 CAIRO = ZoneInfo("Africa/Cairo")
@@ -303,7 +303,7 @@ def _create_occupancy(
 def _active_task(ctx: Context) -> dict[str, Any] | None:
     if ctx.conversation_id is None:
         return None
-    persisted = load_active_task(
+    persisted = state_persistence.load_active_task(
         ctx.db,
         workspace_id=ctx.workspace.id,
         conversation_id=ctx.conversation_id,
@@ -311,7 +311,7 @@ def _active_task(ctx: Context) -> dict[str, Any] | None:
     )
     if persisted is None:
         return None
-    return persisted.active_task.model_dump(mode="json")
+    return state_persistence._task_namespace(persisted.active_task)["active_task"]
 
 
 def _appointments(ctx: Context) -> list[dict[str, Any]]:

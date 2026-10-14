@@ -30,6 +30,8 @@ SAFETY_COUNTERS = {
     "unnecessary_10_11_clarification": 0,
     "arbitrary_10_11_resolution": 0,
     "contextual_period_misresolution": 0,
+    "lost_period_hints": 0,
+    "repeated_period_clarifications": 0,
     "wrong_device": 0,
     "cross_device_visits": 0,
     "lost_services": 0,
@@ -80,7 +82,7 @@ class ScenarioSpec:
     customer: str
     start: str
     end: str
-    expected_hint: str
+    expected_hint: str | None
     expected_canonical: str | None
     expected_bare_status: str | None = None
     expected_candidates: tuple[str, ...] = ()
@@ -91,73 +93,108 @@ class ScenarioSpec:
 
 SCENARIOS = [
     ScenarioSpec(
-        name="RA-T1",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3؟",
-        start="10:00", end="22:00", expected_hint="none", expected_canonical="15:00",
+        name="RA1",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3\u061f",
+        start="10:00", end="22:00", expected_hint=None, expected_canonical="15:00",
         expected_bare_status="resolved", expected_candidates=("03:00", "15:00"),
         expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
-        name="RA-T2",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3 الصبح؟",
-        start="10:00", end="22:00", expected_hint="am", expected_canonical="15:00",
+        name="RA2",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3 \u0627\u0644\u0635\u0628\u062d\u061f",
+        start="10:00", end="22:00", expected_hint=None, expected_canonical="15:00",
         expected_bare_status="resolved", expected_candidates=("03:00", "15:00"),
         expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
-        name="RA-T3",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 4 وربع؟",
-        start="10:00", end="22:00", expected_hint="none", expected_canonical="16:15",
+        name="RA3",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        start="10:00", end="22:00", expected_hint=None, expected_canonical="15:00",
+        expected_bare_status="resolved", expected_candidates=("03:00", "15:00"),
+        expected_valid_candidates=("15:00",),
+    ),
+    ScenarioSpec(
+        name="RA4",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 4 \u0648\u0631\u0628\u0639\u061f",
+        start="10:00", end="22:00", expected_hint=None, expected_canonical="16:15",
         expected_bare_status="resolved", expected_candidates=("04:15", "16:15"),
         expected_valid_candidates=("16:15",),
     ),
     ScenarioSpec(
-        name="RA-T4",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10؟",
-        start="09:00", end="23:30", expected_hint="none", expected_canonical=None,
+        name="RA5",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10\u061f",
+        start="00:00", end="23:59", expected_hint="none", expected_canonical=None,
         expected_bare_status="clarify_period", expected_candidates=("10:00", "22:00"),
         expected_valid_candidates=("10:00", "22:00"), clarification_required=True,
     ),
     ScenarioSpec(
-        name="RA-T5",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10 بالليل؟",
-        start="09:00", end="23:30", expected_hint="pm", expected_canonical="22:00",
+        name="RA6",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        start="00:00", end="23:59", expected_hint="pm", expected_canonical="22:00",
         expected_bare_status="resolved", expected_candidates=("10:00", "22:00"),
         expected_valid_candidates=("10:00", "22:00"),
     ),
     ScenarioSpec(
-        name="RA-T6",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11؟",
-        start="09:00", end="23:30", expected_hint="none", expected_canonical=None,
+        name="RA7",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0627\u0644\u0635\u0628\u062d\u061f",
+        start="00:00", end="23:59", expected_hint="am", expected_canonical="10:00",
+        expected_bare_status="resolved", expected_candidates=("10:00", "22:00"),
+        expected_valid_candidates=("10:00", "22:00"),
+    ),
+    ScenarioSpec(
+        name="RA8",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635\u061f",
+        start="00:00", end="23:59", expected_hint="none", expected_canonical=None,
+        expected_bare_status="clarify_period", expected_candidates=("10:30", "22:30"),
+        expected_valid_candidates=("10:30", "22:30"), clarification_required=True,
+    ),
+    ScenarioSpec(
+        name="RA9",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        start="00:00", end="23:59", expected_hint="pm", expected_canonical="22:30",
+        expected_bare_status="resolved", expected_candidates=("10:30", "22:30"),
+        expected_valid_candidates=("10:30", "22:30"),
+    ),
+    ScenarioSpec(
+        name="RA10",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0627\u0644\u0635\u0628\u062d\u061f",
+        start="00:00", end="23:59", expected_hint="am", expected_canonical="10:30",
+        expected_bare_status="resolved", expected_candidates=("10:30", "22:30"),
+        expected_valid_candidates=("10:30", "22:30"),
+    ),
+    ScenarioSpec(
+        name="RA11",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11\u061f",
+        start="00:00", end="23:59", expected_hint="none", expected_canonical=None,
         expected_bare_status="clarify_period", expected_candidates=("11:00", "23:00"),
         expected_valid_candidates=("11:00", "23:00"), clarification_required=True,
     ),
     ScenarioSpec(
-        name="RA-T7",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل؟",
-        start="09:00", end="23:30", expected_hint="pm", expected_canonical="23:00",
+        name="RA12",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        start="00:00", end="23:59", expected_hint="pm", expected_canonical="23:00",
         expected_bare_status="resolved", expected_candidates=("11:00", "23:00"),
         expected_valid_candidates=("11:00", "23:00"),
     ),
     ScenarioSpec(
-        name="RA-T8",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل؟",
-        start="09:00", end="21:00", expected_hint="pm", expected_canonical="11:00",
+        name="RA13",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0627\u0644\u0635\u0628\u062d\u061f",
+        start="00:00", end="23:59", expected_hint="am", expected_canonical="11:00",
         expected_bare_status="resolved", expected_candidates=("11:00", "23:00"),
-        expected_valid_candidates=("11:00",),
+        expected_valid_candidates=("11:00", "23:00"),
     ),
     ScenarioSpec(
-        name="RA-T9",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 03:00؟",
+        name="RA14",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 03:00\u061f",
         start="10:00", end="22:00", expected_hint="none", expected_canonical="03:00",
         unavailable=True,
     ),
     ScenarioSpec(
-        name="RA-T10",
-        customer="ممكن أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10؟",
-        start="09:00", end="23:30", expected_hint="none", expected_canonical=None,
-        expected_bare_status="clarify_period", expected_candidates=("10:00", "22:00"),
-        expected_valid_candidates=("10:00", "22:00"), clarification_required=True,
+        name="RA15",
+        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 12 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        start="00:00", end="05:00", expected_hint="midnight", expected_canonical="00:00",
+        expected_bare_status="resolved", expected_candidates=("12:00", "00:00"),
+        expected_valid_candidates=("12:00", "00:00"),
     ),
 ]
 
@@ -418,11 +455,12 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
     reply = str(record.get("agent") or "").strip()
     _record_transactional_safety(record, expected_clock=spec.expected_canonical)
 
-    _require(
-        hint == spec.expected_hint,
-        counter="silent_am_pm_mutation",
-        message=f"{spec.name}: spoken_period_hint={hint}, expected {spec.expected_hint}",
-    )
+    if spec.expected_hint is not None:
+        _require(
+            hint == spec.expected_hint,
+            counter="silent_am_pm_mutation",
+            message=f"{spec.name}: spoken_period_hint={hint}, expected {spec.expected_hint}",
+        )
     if spec.expected_bare_status is not None:
         # Ambiguity is backend-derived authority, not an LLM/provider contract field.
         # Validate the deterministic resolver trace and canonical outcome instead.
@@ -480,11 +518,11 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
             counter="arbitrary_10_11_resolution",
             message=f"{spec.name}: unresolved 10/11 progressed to availability/proposal",
         )
-    elif spec.name in {"RT2", "RT4", "RT5"}:
+    else:
         _require(
             not period_question,
             counter="unnecessary_10_11_clarification",
-            message=f"{spec.name}: clinic hours uniquely resolved 10/11 but Agent asked AM/PM",
+            message=f"{spec.name}: resolved clock triggered an unnecessary AM/PM clarification",
         )
 
     if spec.unavailable:
@@ -696,39 +734,78 @@ def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     CLOCK_TRACE.clear()
     record = base._chat(ctx, spec.customer)
     _validate_record(record, spec, ctx)
-    if spec.name != "RA-T10":
-        return
 
-    side = base._chat(ctx, "\u0637\u0628 \u0627\u0644\u062c\u0644\u0633\u0629 \u0645\u062f\u062a\u0647\u0627 \u0642\u062f \u0625\u064a\u0647\u061f")
-    side_constraints = _task_constraint_facts(side)
-    side_time = side_constraints.get("time") if isinstance(side_constraints, dict) else None
+
+def _run_stateful_1030_pm_continuation(ctx: base.Context) -> None:
+    _set_operating_hours(ctx, start="00:00", end="23:59")
+    CLOCK_TRACE.clear()
+    first = base._chat(
+        ctx,
+        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
+    )
+    first_constraints = _task_constraint_facts(first)
+    first_time = first_constraints.get("time") if isinstance(first_constraints, dict) else None
     _require(
-        isinstance(side_time, dict)
-        and side_time.get("start_time") == "10:00"
-        and side_time.get("start_time_ambiguity") == "twelve_hour",
-        counter="contextual_period_misresolution",
-        message="RA-T10: side question did not preserve unresolved 10/22 clock",
+        isinstance(first_time, dict)
+        and first_time.get("start_time") == "10:30"
+        and first_time.get("start_time_ambiguity") == "twelve_hour"
+        and first_time.get("spoken_period_hint") == "pm",
+        counter="lost_period_hints",
+        message=f"RA-S1: unresolved explicit PM hint was not persisted: {first_time!r}",
     )
     _require(
-        str(side_constraints.get("time_clock_source") or "") == "bare_spoken_12h",
-        counter="contextual_period_misresolution",
-        message="RA-T10: side question changed spoken-clock authority",
-    )
-    _require(
-        not (side.get("appointments") or []),
+        not (first.get("availability_requests") or []) and not (first.get("appointments") or []),
         counter="wrong_time_writes",
-        message="RA-T10: side question wrote an appointment while time was unresolved",
+        message="RA-S1: missing-date turn progressed to time-dependent availability/write",
+    )
+    _require(
+        not _looks_like_period_question(str(first.get("agent") or "")),
+        counter="repeated_period_clarifications",
+        message="RA-S1: explicit 10:30 PM turn unnecessarily asked AM/PM before date",
     )
 
     CLOCK_TRACE.clear()
-    continued = base._chat(ctx, "\u0628\u0627\u0644\u0644\u064a\u0644")
-    _validate_ra_t10_continuation(
-        record,
-        continued,
-        ctx,
-        expected_clock="22:00",
-        expected_hint="pm",
+    continued = base._chat(ctx, "\u0627\u0644\u062e\u0645\u064a\u0633")
+    canonical = next(
+        (
+            value
+            for value in (
+                _availability_clock(continued),
+                base._task_time(continued),
+                _proposal_clock(continued),
+                base._appointment_clock(continued),
+            )
+            if value
+        ),
+        None,
     )
+    _record_transactional_safety(continued, expected_clock="22:30")
+    _require(
+        canonical == "22:30",
+        counter="contextual_period_misresolution",
+        message=f"RA-S1: persisted PM hint did not resolve to 22:30: {canonical}",
+    )
+    _require(
+        not _looks_like_period_question(str(continued.get("agent") or "")),
+        counter="repeated_period_clarifications",
+        message="RA-S1: period was asked again after explicit PM survived persistence",
+    )
+    continued_constraints = _task_constraint_facts(continued)
+    continued_time = (
+        continued_constraints.get("time") if isinstance(continued_constraints, dict) else None
+    )
+    if isinstance(continued_time, dict) and continued_time.get("start_time_ambiguity") == "none":
+        _require(
+            continued_time.get("spoken_period_hint") == "none",
+            counter="lost_period_hints",
+            message="RA-S1: resolved canonical clock retained provider period authority",
+        )
+    continued["stateful_1030_pm_evidence"] = {
+        "first_persisted_time": first_time,
+        "second_canonical_time": canonical,
+        "second_persisted_time": continued_time,
+        "repeated_period_question": _looks_like_period_question(str(continued.get("agent") or "")),
+    }
 
 
 def _persisted_appointments(workspace_id: UUID) -> int:
@@ -792,6 +869,40 @@ def main() -> int:
             ),
             flush=True,
         )
+
+    workspace_id = None
+    ctx = None
+    turns = []
+    error = None
+    try:
+        with rollback_session() as db:
+            ctx = base._setup(db, "RA-S1", hole=False)
+            workspace_id = ctx.workspace.id
+            _run_stateful_1030_pm_continuation(ctx)
+    except Exception as exc:  # noqa: BLE001
+        failures += 1
+        error = f"{type(exc).__name__}: {exc}"
+    if ctx is not None:
+        turns = list(ctx.turns)
+    persisted = _persisted_appointments(workspace_id) if workspace_id is not None else 0
+    if persisted:
+        SAFETY_COUNTERS["persisted_audit_writes"] += persisted
+        failures += 1
+        error = (error + "; " if error else "") + f"persisted_audit_writes={persisted}"
+    stateful_result = {
+        "scenario": "RA-S1",
+        "status": "PASS" if error is None else "FAIL",
+        "error": error,
+        "operating_hours": {"start": "00:00", "end": "23:59"},
+        "turns": turns,
+        "persisted_appointments_after_rollback": persisted,
+    }
+    results.append(stateful_result)
+    print(
+        "CLOCK_BOUNDARY_RESULT="
+        + json.dumps(stateful_result, ensure_ascii=False, separators=(",", ":"), default=str),
+        flush=True,
+    )
 
     payload = {
         "status": "PASS" if failures == 0 else "FAIL",

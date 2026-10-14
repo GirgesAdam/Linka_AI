@@ -9,6 +9,7 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     TimeConstraint,
 )
+from app.services.agent_v2 import state_persistence
 from app.services.agent_v2.active_task_progress import (
     plan_active_task_progress,
     prepare_active_task_clock_progress,
@@ -21,6 +22,10 @@ from app.services.agent_v2.state import (
     RescheduleTarget,
     RescheduleTaskState,
     WriteAuthorization,
+)
+from app.services.agent_v2.state_rules import (
+    apply_booking_branch_change,
+    apply_booking_date_change,
 )
 
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=UTC)
@@ -103,11 +108,13 @@ def _time(
     clock: str,
     *,
     ambiguity: str = "twelve_hour",
+    hint: str = "none",
 ) -> TimeConstraint:
     return TimeConstraint(
         mode="exact",
         start_time=clock,
         start_time_ambiguity=ambiguity,
+        spoken_period_hint=hint,
     )
 
 
@@ -118,6 +125,7 @@ def _booking(
     source: str = "bare_spoken_12h",
     date: str | None = DATE,
     branch_id: str | None = BRANCH,
+    hint: str = "none",
 ) -> BookingTaskState:
     return BookingTaskState(
         write_authorization=_authorization(),
@@ -125,7 +133,7 @@ def _booking(
             service_id=SERVICE,
             branch_id=branch_id,
             date=DateConstraint(mode="exact", start_date=date) if date else None,
-            time=_time(clock, ambiguity=ambiguity),
+            time=_time(clock, ambiguity=ambiguity, hint=hint),
             time_clock_source=source,
         ),
         requested_service_ids=[SERVICE],
@@ -452,3 +460,85 @@ def test_typed_period_hint_resolves_reschedule_same_boundary() -> None:
     assert updated.replacement.time.start_time == "22:00"
     assert updated.replacement.time.start_time_ambiguity == "none"
     assert updated.replacement.time_clock_source == "bare_spoken_12h"
+
+
+def test_p1_missing_date_persists_explicit_pm_hint_until_backend_can_resolve() -> None:
+    state = _booking("10:30", date=None, hint="pm")
+    restored = BookingTaskState.model_validate(state_persistence._task_namespace(state)["active_task"])
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.spoken_period_hint == "pm"
+    dated = apply_booking_date_change(
+        restored, date=DateConstraint(mode="exact", start_date=DATE)
+    )
+    prepared, gate = prepare_active_task_clock_progress(
+        dated, operation_index=0, context=_context(start="00:00", end="23:59")
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
+    assert prepared.constraints.time.spoken_period_hint == "none"
+    persisted_resolved = state_persistence._task_namespace(prepared)["active_task"]
+    assert "spoken_period_hint" not in persisted_resolved["constraints"]["time"]
+
+
+def test_p2_missing_branch_persists_pm_hint_until_selected_branch_resolves() -> None:
+    state = _booking("10:30", branch_id=None, hint="pm")
+    restored = BookingTaskState.model_validate(state_persistence._task_namespace(state)["active_task"])
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.spoken_period_hint == "pm"
+    selected = apply_booking_branch_change(restored, branch_id=BRANCH)
+    prepared, gate = prepare_active_task_clock_progress(
+        selected,
+        operation_index=0,
+        context=_context(start="00:00", end="23:59", second_branch=("09:00", "21:00")),
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.spoken_period_hint == "none"
+
+
+def test_p3_side_question_round_trip_preserves_unresolved_pm_hint() -> None:
+    state = _booking("10:30", branch_id=None, hint="pm")
+    after_first_persist = BookingTaskState.model_validate(state_persistence._task_namespace(state)["active_task"])
+    after_side_question_persist = BookingTaskState.model_validate(
+        state_persistence._task_namespace(after_first_persist)["active_task"]
+    )
+    assert after_side_question_persist.constraints.time is not None
+    assert after_side_question_persist.constraints.time.spoken_period_hint == "pm"
+    selected = apply_booking_branch_change(after_side_question_persist, branch_id=BRANCH)
+    prepared, gate = prepare_active_task_clock_progress(
+        selected, operation_index=0, context=_context(start="00:00", end="23:59")
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+
+
+def test_p4_bare_both_valid_clarification_pm_resolves_same_task() -> None:
+    state = _booking("10:30")
+    context = _context(start="00:00", end="23:59")
+    prepared, gate = prepare_active_task_clock_progress(
+        state, operation_index=0, context=context
+    )
+    assert gate is not None
+    assert gate.clarification_field == "time"
+    _assert_write_barrier(gate)
+    result = resolve_pending_bare_clock_period(prepared, "pm", context=context)
+    assert result is not None
+    updated, _ = result
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "22:30"
+    assert updated.constraints.time.spoken_period_hint == "none"
+
+
+def test_p5_bare_both_valid_clarification_am_resolves_same_task() -> None:
+    state = _booking("10:30")
+    context = _context(start="00:00", end="23:59")
+    result = resolve_pending_bare_clock_period(state, "am", context=context)
+    assert result is not None
+    updated, _ = result
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "10:30"
+    assert updated.constraints.time.spoken_period_hint == "none"

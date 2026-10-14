@@ -185,6 +185,13 @@ def test_structural_1615_remains_exact() -> None:
     assert _constraint(turn).start_time_ambiguity == "none"
 
 
+def test_structural_2230_remains_exact() -> None:
+    turn, _ = _pipeline("10:30", text="22:30", start="00:00", end="23:59", hint="am")
+    assert _clock(turn) == "22:30"
+    assert _constraint(turn).start_time_ambiguity == "none"
+    assert _constraint(turn).spoken_period_hint == "none"
+
+
 def test_bare_12_remains_noon() -> None:
     turn, _ = _pipeline("12:00", text="?????? 12", start="10:00", end="22:00")
     assert _clock(turn) == "12:00"
@@ -224,15 +231,15 @@ def test_period_only_selection_can_carry_typed_hint_for_pending_10_11() -> None:
     assert selection.spoken_period_hint == "pm"
 
 
-def test_spoken_period_hint_is_provider_visible_but_not_backend_serialized() -> None:
+def test_spoken_period_hint_is_provider_visible_but_general_serialization_stays_clean() -> None:
     schema = TimeConstraint.model_json_schema()
     assert "spoken_period_hint" in schema["properties"]
     constraint = TimeConstraint(
         mode="exact",
-        start_time="11:00",
+        start_time="10:30",
+        start_time_ambiguity="twelve_hour",
         spoken_period_hint="pm",
     )
-    assert constraint.spoken_period_hint == "pm"
     assert "spoken_period_hint" not in constraint.model_dump(mode="json")
 
     selection_schema = Selection.model_json_schema()
@@ -240,3 +247,76 @@ def test_spoken_period_hint_is_provider_visible_but_not_backend_serialized() -> 
     selection = Selection(kind="time", time=None, spoken_period_hint="pm")
     assert selection.spoken_period_hint == "pm"
     assert "spoken_period_hint" not in selection.model_dump(mode="json")
+
+
+def test_noon_is_not_a_provider_hint_value() -> None:
+    with pytest.raises(ValueError):
+        TimeConstraint(mode="exact", start_time="12:00", spoken_period_hint="noon")
+
+
+@pytest.mark.parametrize("hint", ["am", "pm"])
+def test_1_to_9_provider_hint_is_neutralized_before_resolution(hint: str) -> None:
+    normalized = _normalize_time_semantics_v2(
+        _turn("03:00", hint=hint), latest_customer_text="?????? 3 ?????"
+    )
+    assert _constraint(normalized).start_time == "03:00"
+    assert _constraint(normalized).start_time_ambiguity == "twelve_hour"
+    assert _constraint(normalized).spoken_period_hint == "none"
+
+
+def test_structural_literal_neutralizes_provider_hint() -> None:
+    normalized = _normalize_time_semantics_v2(
+        _turn("22:30", hint="am"), latest_customer_text="22:30"
+    )
+    assert _constraint(normalized).start_time == "22:30"
+    assert _constraint(normalized).start_time_ambiguity == "none"
+    assert _constraint(normalized).spoken_period_hint == "none"
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "hint", "expected", "clarifies"),
+    [
+        ("09:00", "21:00", "none", "10:30", False),
+        ("20:00", "23:30", "none", "22:30", False),
+        ("00:00", "23:59", "none", "10:30", True),
+        ("00:00", "23:59", "am", "10:30", False),
+        ("00:00", "23:59", "pm", "22:30", False),
+        ("09:00", "21:00", "pm", "10:30", False),
+        ("20:00", "23:30", "am", "22:30", False),
+    ],
+    ids=[
+        "T1030-1-only-am",
+        "T1030-2-only-pm",
+        "T1030-3-both-no-hint",
+        "T1030-4-both-am",
+        "T1030-5-both-pm",
+        "T1030-6-only-am-wrong-pm",
+        "T1030-7-only-pm-wrong-am",
+    ],
+)
+def test_1030_required_matrix(
+    start: str, end: str, hint: str, expected: str, clarifies: bool
+) -> None:
+    turn, context = _pipeline("10:30", text="?????? 10 ???", hint=hint, start=start, end=end)
+    if clarifies:
+        assert _constraint(turn).start_time == "10:30"
+        assert _constraint(turn).start_time_ambiguity == "twelve_hour"
+        step = plan_turn(
+            turn, PlannerContext(semantic_context=context, active_task=None, now=NOW)
+        ).steps[0]
+        assert step.disposition == "clarify"
+        assert step.clarification_field == "time"
+        assert step.write_intent is None
+        assert all(read.kind != "availability" for read in step.reads)
+    else:
+        assert _clock(turn) == expected
+        assert _constraint(turn).start_time_ambiguity == "none"
+        assert _constraint(turn).spoken_period_hint == "none"
+
+
+def test_1130_uses_same_generic_candidate_policy() -> None:
+    turn, _ = _pipeline(
+        "11:30", text="?????? 11 ??? ??????", hint="pm", start="00:00", end="23:59"
+    )
+    assert _clock(turn) == "23:30"
+    assert _constraint(turn).spoken_period_hint == "none"
