@@ -143,6 +143,9 @@ def _priced_env() -> V2FixtureEnvironment:
             ],
         }
     ]
+    for doctor in catalog.get("doctors", []):
+        if isinstance(doctor, dict):
+            doctor["branch_ids"] = ["single-location"]
     return V2FixtureEnvironment(
         catalog=catalog,
         clinic_info=deepcopy(base.clinic_info),
