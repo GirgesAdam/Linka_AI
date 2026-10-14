@@ -1,0 +1,137 @@
+name: Post-Merge Spoken-Time & Grouped Regression Review
+
+on:
+  push:
+    branches:
+      - audit/post-merge-spoken-time-grouped-20261014
+    paths:
+      - .github/workflows/post-merge-spoken-time-grouped-regression-review.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-agent:
+    name: PM1-PM16 PG1-PG4 PX1 exact merged-main
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONUNBUFFERED: "1"
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_postmerge_unused
+      SUPABASE_SECRET_KEY: sb_secret_postmerge_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      AGENT_V2_LIVE_ENABLED: "true"
+      POST_MERGE_TARGET_SHA: 20c61ce1cc699aa44f8c3c6b80b66abfb03e203e
+      POST_MERGE_REVIEW_REPORT_PATH: artifacts/post-merge-spoken-time-grouped-review.json
+    steps:
+      - name: Checkout reviewer definition
+        uses: actions/checkout@v4
+        with:
+          ref: audit/post-merge-spoken-time-grouped-20261014
+          path: reviewer
+          fetch-depth: 0
+
+      - name: Checkout exact merged production target
+        uses: actions/checkout@v4
+        with:
+          ref: 20c61ce1cc699aa44f8c3c6b80b66abfb03e203e
+          path: target
+          fetch-depth: 0
+
+      - name: Verify exact merged target and reviewer isolation
+        shell: bash
+        run: |
+          test "$(git -C target rev-parse HEAD)" = "$POST_MERGE_TARGET_SHA"
+          git -C reviewer diff --name-only "$POST_MERGE_TARGET_SHA"..HEAD | sort > /tmp/reviewer-files.txt
+          cat /tmp/reviewer-files.txt
+          test "$(wc -l < /tmp/reviewer-files.txt | tr -d ' ')" = "2"
+          grep -Fxq '.github/workflows/post-merge-spoken-time-grouped-regression-review.yml' /tmp/reviewer-files.txt
+          grep -Fxq 'backend/scripts/run_post_merge_spoken_time_grouped_review.py' /tmp/reviewer-files.txt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: target/backend/requirements.txt
+
+      - name: Install exact-target dependencies
+        working-directory: target/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify real-model secret
+        run: test -n "$OPENAI_API_KEY"
+
+      - name: Validate reviewer syntax
+        run: |
+          python -m py_compile reviewer/backend/scripts/run_post_merge_spoken_time_grouped_review.py
+
+      - name: Bootstrap Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+
+      - name: Apply exact-target clean migrations
+        working-directory: target/backend
+        run: |
+          python -m alembic heads
+          python -m alembic upgrade head
+
+      - name: Run fresh post-merge real-agent review once
+        working-directory: target/backend
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/target/backend" \
+            python "$GITHUB_WORKSPACE/reviewer/backend/scripts/run_post_merge_spoken_time_grouped_review.py"
+
+      - name: Upload post-merge review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-spoken-time-grouped-${{ env.POST_MERGE_TARGET_SHA }}
+          path: target/backend/artifacts/post-merge-spoken-time-grouped-review.json
+          if-no-files-found: warn
+          retention-days: 14
