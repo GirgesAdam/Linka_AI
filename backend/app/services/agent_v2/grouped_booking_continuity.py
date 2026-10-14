@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnOperation
+from app.agents.v2.turn_contract import (
+    EntityReference,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnOperation,
+)
 from app.services.agent_v2.active_task_progress import resolved_operation_parameters
 from app.services.agent_v2.compound_turn_policy import (
     compound_visit_group,
@@ -26,6 +31,34 @@ from app.services.agent_v2.state import (
 _BOOKING_OPERATION_TYPES = frozenset({"book", "continue_active"})
 
 
+def _grouped_state_time(
+    value: object,
+    *,
+    semantic: TimeConstraint | None,
+) -> object:
+    """Carry only unresolved 10/11 AM/PM meaning into durable grouped state."""
+    if not isinstance(value, dict) or semantic is None:
+        return value
+    try:
+        constraint = TimeConstraint.model_validate(value)
+    except ValueError:
+        return value
+    if (
+        constraint.start_time_ambiguity != "twelve_hour"
+        or semantic.start_time_ambiguity != "twelve_hour"
+        or constraint.start_time != semantic.start_time
+        or semantic.spoken_period_hint not in {"am", "pm"}
+    ):
+        return value
+    try:
+        hour = int(str(constraint.start_time).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return value
+    if hour not in {10, 11}:
+        return value
+    return {**value, "spoken_period_hint": semantic.spoken_period_hint}
+
+
 def _constraints_from_step(
     step: PlanStep,
     *,
@@ -39,7 +72,9 @@ def _constraints_from_step(
             "branch_id": str(facts["branch_id"]) if facts.get("branch_id") else None,
             "device_key": str(facts["device_key"]) if facts.get("device_key") else None,
             "date": facts.get("date"),
-            "time": facts.get("time"),
+            "time": _grouped_state_time(
+                facts.get("time"), semantic=operation.entities.time
+            ),
             "time_clock_source": operation.clock_source,
             "package_usage": facts.get("package_usage") or "unspecified",
         }

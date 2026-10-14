@@ -12,9 +12,11 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.services.agent_v2 import state_persistence
 from app.services.agent_v2.active_task_progress import (
     adapt_matching_active_task_step,
     persist_initial_task_intent,
+    prepare_active_task_clock_progress,
 )
 from app.services.agent_v2.compound_turn_policy import (
     compound_write_group,
@@ -40,6 +42,7 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import apply_step_state
+from app.services.agent_v2.state_rules import apply_booking_branch_change
 
 NOW = datetime(2026, 9, 27, 8, 0, tzinfo=UTC)
 DATE = DateConstraint(mode="exact", start_date="2026-09-28")
@@ -720,3 +723,102 @@ def test_group_survives_persist_side_read_reload_and_resume_without_llm() -> Non
         str(step.facts["service_id"])
         for step in guarded.steps
     } == {"svc-a", "svc-b"}
+
+
+def _grouped_clock_context():
+    return build_semantic_context(
+        {
+            "services": [
+                {"id": "svc-a", "name": "Hydrafacial", "requires_laser_device": False},
+                {
+                    "id": "svc-b",
+                    "name": "Underarm Laser",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {"device_key": "prime_lase", "device_name": "Prime Lase"}
+                    ],
+                },
+            ],
+            "doctors": [
+                {
+                    "id": "doc-1",
+                    "name": "Dr Maryam",
+                    "service_ids": ["svc-a", "svc-b"],
+                    "branch_ids": ["branch-1"],
+                }
+            ],
+            "branches": [
+                {
+                    "id": "branch-1",
+                    "name": "Clinic A",
+                    "working_hours": [
+                        {"weekday": weekday, "start": "00:00", "end": "23:59"}
+                        for weekday in range(7)
+                    ],
+                }
+            ],
+            "appointments": [],
+        }
+    )
+
+
+def test_grouped_1030_pm_survives_planner_state_persistence_and_resolution() -> None:
+    semantic_time = TimeConstraint(
+        mode="exact",
+        start_time="10:30",
+        start_time_ambiguity="twelve_hour",
+        spoken_period_hint="pm",
+    )
+    first = _operation("svc-a", time=semantic_time)
+    second = _operation("svc-b", time=semantic_time)
+    understanding = TiaTurnUnderstanding(operations=[first, second])
+    plan = TurnPlan(
+        steps=[
+            _step(0, "svc-a", semantic_time),
+            _step(1, "svc-b", semantic_time),
+        ]
+    )
+
+    task = grouped_booking_task_from_plan(
+        plan,
+        understanding=understanding,
+        existing=None,
+        now=NOW,
+        turn_id="turn-grouped-1030-pm",
+    )
+    assert task is not None
+    assert task.grouped is not None
+    assert [component.service_id for component in task.grouped.components] == ["svc-a", "svc-b"]
+    assert all(component.time is not None for component in task.grouped.components)
+    assert {component.time.spoken_period_hint for component in task.grouped.components if component.time} == {"pm"}
+
+    task = task.model_copy(
+        update={
+            "requested_service_ids": ["svc-a", "svc-b"],
+            "service_device_keys": {"svc-b": "prime_lase"},
+        }
+    )
+    payload = state_persistence._task_namespace(task)["active_task"]
+    reloaded = BookingTaskState.model_validate(payload)
+    assert reloaded.grouped is not None
+    assert reloaded.requested_service_ids == ["svc-a", "svc-b"]
+    assert reloaded.service_device_keys == {"svc-b": "prime_lase"}
+    assert {component.time.spoken_period_hint for component in reloaded.grouped.components if component.time} == {"pm"}
+
+    selected = apply_booking_branch_change(reloaded, branch_id="branch-1")
+    prepared, gate = prepare_active_task_clock_progress(
+        selected,
+        operation_index=0,
+        context=_grouped_clock_context(),
+    )
+    assert gate is None
+    assert isinstance(prepared, BookingTaskState)
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.spoken_period_hint == "none"
+    assert prepared.requested_service_ids == ["svc-a", "svc-b"]
+    assert prepared.service_device_keys == {"svc-b": "prime_lase"}
+    assert prepared.grouped is not None
+    assert [component.service_id for component in prepared.grouped.components] == ["svc-a", "svc-b"]
+    assert {component.time.start_time for component in prepared.grouped.components if component.time} == {"22:30"}
+    assert {component.time.spoken_period_hint for component in prepared.grouped.components if component.time} == {"none"}

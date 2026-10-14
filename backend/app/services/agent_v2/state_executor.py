@@ -71,6 +71,33 @@ def _time_constraint(value: object) -> TimeConstraint | None:
     return None
 
 
+def _state_time_constraint(
+    value: object,
+    *,
+    semantic: TimeConstraint | None,
+) -> TimeConstraint | None:
+    """Carry only unresolved 10/11 tie-break semantics into durable task state."""
+    constraint = _time_constraint(value if value is not None else semantic)
+    if constraint is None or semantic is None:
+        return constraint
+    if (
+        constraint.start_time_ambiguity != "twelve_hour"
+        or semantic.start_time_ambiguity != "twelve_hour"
+        or constraint.start_time != semantic.start_time
+        or semantic.spoken_period_hint not in {"am", "pm"}
+    ):
+        return constraint
+    try:
+        hour = int(str(constraint.start_time).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return constraint
+    if hour not in {10, 11}:
+        return constraint
+    return constraint.model_copy(
+        update={"spoken_period_hint": semantic.spoken_period_hint}
+    )
+
+
 def _clock_source(value: object, *, fallback: ClockSource = "unspecified") -> ClockSource:
     if value == "explicit_period":  # Legacy persisted input only.
         return "bare_spoken_12h"
@@ -130,7 +157,7 @@ def _booking_constraints(step: PlanStep, operation: TurnOperation) -> CustomerCo
         branch_id=str(facts["branch_id"]) if facts.get("branch_id") else None,
         device_key=str(facts["device_key"]) if facts.get("device_key") else None,
         date=_date_constraint(facts.get("date") or operation.entities.date),
-        time=_time_constraint(facts.get("time") or operation.entities.time),
+        time=_state_time_constraint(facts.get("time"), semantic=operation.entities.time),
         time_clock_source=_clock_source(
             facts.get("time_clock_source"),
             fallback=operation.clock_source,
@@ -214,7 +241,9 @@ def _apply_booking_updates(
     if "time" in facts:
         updated = apply_booking_time_change(
             updated,
-            time=_time_constraint(facts.get("time")),
+            time=_state_time_constraint(
+                facts.get("time"), semantic=operation.entities.time
+            ),
             clock_source=_clock_source(
                 facts.get("time_clock_source"),
                 fallback=operation.clock_source,
@@ -365,7 +394,7 @@ def _new_reschedule_state(
             else None
         ),
         date=_date_constraint(step.facts.get("date") or operation.entities.date),
-        time=_time_constraint(step.facts.get("time") or operation.entities.time),
+        time=_state_time_constraint(step.facts.get("time"), semantic=operation.entities.time),
         time_clock_source=_clock_source(
             step.facts.get("time_clock_source"),
             fallback=operation.clock_source,
@@ -420,7 +449,9 @@ def _apply_reschedule_updates(
     if "time" in facts:
         updated = apply_reschedule_time_change(
             updated,
-            time=_time_constraint(facts.get("time")),
+            time=_state_time_constraint(
+                facts.get("time"), semantic=operation.entities.time
+            ),
             clock_source=_clock_source(
                 facts.get("time_clock_source"),
                 fallback=operation.clock_source,

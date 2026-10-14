@@ -193,8 +193,7 @@ SCENARIOS = [
         name="RA15",
         customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 12 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
         start="00:00", end="05:00", expected_hint="midnight", expected_canonical="00:00",
-        expected_bare_status="resolved", expected_candidates=("12:00", "00:00"),
-        expected_valid_candidates=("12:00", "00:00"),
+        unavailable=True,
     ),
 ]
 

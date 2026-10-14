@@ -16,6 +16,7 @@ from app.services.agent_v2.state import (
     DerivedBookingState,
     OptionChoice,
     OptionSnapshot,
+    RescheduleTaskState,
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import (
@@ -245,6 +246,149 @@ def test_start_booking_persists_authorization_and_known_constraints() -> None:
     assert state.write_authorization.authorized is True
     assert state.write_authorization.source_turn_id == "turn-book"
     assert transition.changed is True
+
+
+def test_start_booking_preserves_unresolved_10_11_hint_after_planner_serialization() -> None:
+    semantic_time = TimeConstraint(
+        mode="exact",
+        start_time="10:30",
+        start_time_ambiguity="twelve_hour",
+        spoken_period_hint="pm",
+    )
+    operation = _operation(time=semantic_time)
+    serialized_time = semantic_time.model_dump(mode="json")
+    assert "spoken_period_hint" not in serialized_time
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="clarify",
+        state_action="start_booking",
+        response_goal="clarification",
+        clarification_field="date",
+        facts={
+            "service_id": "svc-underarm",
+            "time": serialized_time,
+            "time_clock_source": "bare_spoken_12h",
+        },
+    )
+
+    transition = apply_step_state(
+        None,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-unresolved-period",
+    )
+
+    state = transition.active_task
+    assert isinstance(state, BookingTaskState)
+    assert state.constraints.time is not None
+    assert state.constraints.time.start_time == "10:30"
+    assert state.constraints.time.start_time_ambiguity == "twelve_hour"
+    assert state.constraints.time.spoken_period_hint == "pm"
+
+
+def test_resolved_planner_time_does_not_retain_semantic_period_hint() -> None:
+    semantic_time = TimeConstraint(
+        mode="exact",
+        start_time="10:30",
+        start_time_ambiguity="twelve_hour",
+        spoken_period_hint="pm",
+    )
+    operation = _operation(time=semantic_time)
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="start_booking",
+        facts={
+            "service_id": "svc-underarm",
+            "time": {
+                "mode": "exact",
+                "start_time": "22:30",
+                "end_time": None,
+                "start_time_ambiguity": "none",
+                "end_time_ambiguity": "none",
+            },
+            "time_clock_source": "bare_spoken_12h",
+        },
+    )
+
+    transition = apply_step_state(
+        None,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-resolved-period",
+    )
+
+    state = transition.active_task
+    assert isinstance(state, BookingTaskState)
+    assert state.constraints.time is not None
+    assert state.constraints.time.start_time == "22:30"
+    assert state.constraints.time.start_time_ambiguity == "none"
+    assert state.constraints.time.spoken_period_hint == "none"
+
+def test_start_reschedule_preserves_unresolved_10_11_hint_after_planner_serialization() -> None:
+    semantic_time = TimeConstraint(
+        mode="exact",
+        start_time="10:30",
+        start_time_ambiguity="twelve_hour",
+        spoken_period_hint="pm",
+    )
+    operation = _operation(operation_type="reschedule", time=semantic_time)
+    serialized_time = semantic_time.model_dump(mode="json")
+    step = PlanStep(
+        operation_index=0,
+        operation_type="reschedule",
+        disposition="clarify",
+        state_action="start_reschedule",
+        response_goal="clarification",
+        clarification_field="date",
+        reads=[ReadRequest(kind="appointments")],
+        facts={
+            "time": serialized_time,
+            "time_clock_source": "bare_spoken_12h",
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="appointments",
+                ok=True,
+                payload={
+                    "appointments": [
+                        {
+                            "appointment_id": "apt-1",
+                            "service_id": "svc-underarm",
+                            "doctor_id": "doc-maryam",
+                            "laser_device_key": "candela_gentle",
+                            "start_local": "2026-09-14T19:00:00+03:00",
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+
+    transition = apply_step_state(
+        None,
+        step=step,
+        operation=operation,
+        reads=reads,
+        now=NOW,
+        turn_id="turn-reschedule-unresolved-period",
+    )
+
+    state = transition.active_task
+    assert isinstance(state, RescheduleTaskState)
+    assert state.target.appointment_id == "apt-1"
+    assert state.replacement.time is not None
+    assert state.replacement.time.start_time == "10:30"
+    assert state.replacement.time.start_time_ambiguity == "twelve_hour"
+    assert state.replacement.time.spoken_period_hint == "pm"
 
 
 def test_broad_booking_availability_becomes_current_option_snapshot() -> None:

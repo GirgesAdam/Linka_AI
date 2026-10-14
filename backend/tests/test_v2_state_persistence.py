@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.turn_contract import DateConstraint, TimeConstraint
 from app.models.conversation_flow_state import ConversationFlowState
 from app.services.agent_v2 import state_persistence
 from app.services.agent_v2.active_task_progress import prepare_active_task_clock_progress
@@ -652,3 +653,113 @@ def test_pre_deploy_booking_loads_post_deploy_and_progresses_without_losing_cont
     assert prepared.constraints.time.start_time == "15:00"
     assert prepared.write_authorization.authorized is False
     assert prepared.proposal is None
+
+
+def _all_day_clock_context():
+    return build_semantic_context(
+        {
+            "services": [{"id": "service-1", "name": "Consultation", "duration_minutes": 30}],
+            "branches": [
+                {
+                    "id": "branch-1",
+                    "name": "Clinic A",
+                    "working_hours": [
+                        {"weekday": weekday, "start": "00:00", "end": "23:59"}
+                        for weekday in range(7)
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def test_unresolved_1030_pm_survives_two_persistence_decode_cycles() -> None:
+    task = _booking_task().model_copy(
+        update={
+            "constraints": CustomerConstraints(
+                service_id="service-1",
+                branch_id="branch-1",
+                time=TimeConstraint(
+                    mode="exact",
+                    start_time="10:30",
+                    start_time_ambiguity="twelve_hour",
+                    spoken_period_hint="pm",
+                ),
+                time_clock_source="bare_spoken_12h",
+            )
+        }
+    )
+
+    first_payload = state_persistence._task_namespace(task)["active_task"]
+    assert first_payload["constraints"]["time"]["spoken_period_hint"] == "pm"
+    first = state_persistence._decode_flow_task(_flow_for_task(task))
+    assert first is not None
+    assert first.constraints.time is not None
+    assert first.constraints.time.spoken_period_hint == "pm"
+
+    second_payload = state_persistence._task_namespace(first)["active_task"]
+    assert second_payload["constraints"]["time"]["spoken_period_hint"] == "pm"
+    second = state_persistence._decode_flow_task(_flow_for_task(first))
+    assert second is not None
+    assert second.constraints.time is not None
+    assert second.constraints.time.start_time == "10:30"
+    assert second.constraints.time.start_time_ambiguity == "twelve_hour"
+    assert second.constraints.time.spoken_period_hint == "pm"
+
+
+def test_reschedule_1030_pm_round_trip_preserves_target_then_resolves() -> None:
+    task = _reschedule_task().model_copy(
+        update={
+            "replacement": CustomerConstraints(
+                service_id="service-1",
+                branch_id="branch-1",
+                date=DateConstraint(mode="exact", start_date="2026-10-15"),
+                time=TimeConstraint(
+                    mode="exact",
+                    start_time="10:30",
+                    start_time_ambiguity="twelve_hour",
+                    spoken_period_hint="pm",
+                ),
+                time_clock_source="bare_spoken_12h",
+            )
+        }
+    )
+    restored = state_persistence._decode_flow_task(_flow_for_task(task))
+    assert isinstance(restored, RescheduleTaskState)
+    assert restored.target.appointment_id == "appointment-1"
+    assert restored.replacement.time is not None
+    assert restored.replacement.time.spoken_period_hint == "pm"
+
+    prepared, gate = prepare_active_task_clock_progress(
+        restored,
+        operation_index=0,
+        context=_all_day_clock_context(),
+    )
+    assert gate is None
+    assert isinstance(prepared, RescheduleTaskState)
+    assert prepared.target.appointment_id == "appointment-1"
+    assert prepared.replacement.time is not None
+    assert prepared.replacement.time.start_time == "22:30"
+    assert prepared.replacement.time.start_time_ambiguity == "none"
+    assert prepared.replacement.time.spoken_period_hint == "none"
+
+
+def test_one_to_nine_provider_noise_is_never_injected_into_persisted_state() -> None:
+    task = _booking_task().model_copy(
+        update={
+            "constraints": CustomerConstraints(
+                service_id="service-1",
+                branch_id="branch-1",
+                date=DateConstraint(mode="exact", start_date="2026-10-15"),
+                time=TimeConstraint(
+                    mode="exact",
+                    start_time="03:00",
+                    start_time_ambiguity="twelve_hour",
+                    spoken_period_hint="am",
+                ),
+                time_clock_source="bare_spoken_12h",
+            )
+        }
+    )
+    payload = state_persistence._task_namespace(task)["active_task"]
+    assert "spoken_period_hint" not in payload["constraints"]["time"]
