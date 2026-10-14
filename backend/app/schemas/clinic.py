@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 ServiceCategory = Literal["laser", "dermatology", "slimming"]
 
 
-def _normalize_service_category(value: object, *, allow_none: bool = False) -> object:
+def normalize_service_category(value: object, *, allow_none: bool = False) -> object:
     if value is None:
         return None if allow_none else "dermatology"
     raw = str(value).strip().casefold()
@@ -138,6 +138,18 @@ class DoctorRead(ORMModel):
     updated_at: datetime
 
 
+class ServiceDevicePriceInput(BaseModel):
+    device_key: str = Field(min_length=1, max_length=40)
+    price_minor: int = Field(ge=0)
+    duration_minutes: int = Field(gt=0, le=1440)
+    currency: str = Field(default="EGP", min_length=3, max_length=3)
+
+    @field_validator("device_key")
+    @classmethod
+    def normalize_device_key(cls, value: str) -> str:
+        return value.strip()
+
+
 class ServiceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=160, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -151,18 +163,18 @@ class ServiceCreate(BaseModel):
     currency: str = Field(default="EGP", min_length=3, max_length=3)
     requires_medical_review: bool = False
     requires_laser_device: bool = False
+    device_prices: list[ServiceDevicePriceInput] = Field(default_factory=list)
 
     @field_validator("operational_category", mode="before")
     @classmethod
     def normalize_operational_category(cls, value: object) -> object:
-        return _normalize_service_category(value)
+        return normalize_service_category(value)
 
     @model_validator(mode="after")
-    def infer_legacy_operational_category(self):
-        if self.requires_laser_device:
-            self.operational_category = "laser"
-        elif "operational_category" not in self.model_fields_set and self.category:
-            self.operational_category = _normalize_service_category(self.category)
+    def derive_laser_requirement_from_category(self):
+        self.requires_laser_device = self.operational_category == "laser"
+        if not self.requires_laser_device:
+            self.device_prices = []
         return self
 
 
@@ -178,12 +190,21 @@ class ServiceUpdate(BaseModel):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     requires_medical_review: bool | None = None
     requires_laser_device: bool | None = None
+    device_prices: list[ServiceDevicePriceInput] | None = None
     is_active: bool | None = None
 
     @field_validator("operational_category", mode="before")
     @classmethod
     def normalize_operational_category(cls, value: object) -> object:
-        return _normalize_service_category(value, allow_none=True)
+        return normalize_service_category(value, allow_none=True)
+
+    @model_validator(mode="after")
+    def derive_laser_requirement_when_category_is_supplied(self):
+        if self.operational_category is not None:
+            self.requires_laser_device = self.operational_category == "laser"
+            if not self.requires_laser_device:
+                self.device_prices = [] if self.device_prices is not None else None
+        return self
 
 
 class ServiceRead(ORMModel):

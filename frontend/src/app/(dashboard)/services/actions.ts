@@ -20,8 +20,7 @@ function pulseMoneyMinor(value: FormDataEntryValue | null) {
   return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
 }
 
-function serviceCategory(formData: FormData, requiresLaserDevice: boolean) {
-  if (requiresLaserDevice) return "laser";
+function serviceCategory(formData: FormData) {
   const value = String(formData.get("operational_category") || "");
   if (!["laser", "dermatology", "slimming"].includes(value)) {
     throw new Error("اختار تصنيف الخدمة.");
@@ -62,127 +61,101 @@ function devicePricePayload(formData: FormData, deviceKey: string) {
   };
 }
 
-export async function createService(formData: FormData) {
-  const name = String(formData.get("name") || "").trim();
-  if (!name) return;
+export type ServiceMutationActionState = {
+  ok: boolean;
+  error: string | null;
+  revision: string | null;
+};
 
-  const requiresLaserDevice = formData.get("requires_laser_device") === "1";
-  const selectedDevices = selectedDeviceKeys(formData);
-  if (requiresLaserDevice && selectedDevices.length === 0) {
-    throw new Error("اختار جهاز واحد على الأقل للخدمة الليزر.");
-  }
-
-  const baseDurationMinutes = requiresLaserDevice
-    ? positiveInteger(
-        formData.get(`device_duration_${selectedDevices[0]}`),
-        60,
-      )
-    : positiveInteger(formData.get("duration_minutes"), 60);
-
-  const service = await tiaRequest<{ id: string }>("/clinic/services", {
-    method: "POST",
-    body: JSON.stringify({
-      name,
-      slug: `service-${randomUUID()}`,
-      operational_category: serviceCategory(formData, requiresLaserDevice),
-      description: null,
-      duration_minutes: baseDurationMinutes,
-      buffer_before_minutes: 0,
-      buffer_after_minutes: 0,
-      price_minor: requiresLaserDevice ? 0 : moneyMinor(formData.get("price")),
-      currency: "EGP",
-      requires_medical_review: false,
-      requires_laser_device: requiresLaserDevice,
-    }),
-  });
-
-  if (requiresLaserDevice) {
-    await Promise.all(
-      selectedDevices.map((deviceKey) =>
-        tiaRequest("/inventory/laser-prices", {
-          method: "PUT",
-          body: JSON.stringify({
-            service_id: service.id,
-            ...devicePricePayload(formData, deviceKey),
-          }),
-        }),
-      ),
-    );
-  }
-
-  revalidatePath("/services");
-  revalidatePath("/appointments");
+function mutationFailure(error: unknown): ServiceMutationActionState {
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : "تعذر حفظ الخدمة. حاول مرة أخرى.",
+    revision: randomUUID(),
+  };
 }
 
-export async function updateServicePricing(formData: FormData) {
-  const serviceId = String(formData.get("service_id") || "");
-  const name = String(formData.get("name") || "").trim();
-  const requiresLaserDevice = formData.get("requires_laser_device") === "1";
-  const category = serviceCategory(formData, requiresLaserDevice);
-  if (!serviceId || !name) return;
+export async function createService(
+  _previous: ServiceMutationActionState,
+  formData: FormData,
+): Promise<ServiceMutationActionState> {
+  try {
+    const name = String(formData.get("name") || "").trim();
+    if (!name) throw new Error("اكتب اسم الخدمة.");
 
-  const allDevices = deviceKeys(formData);
-  const selectedDevices = selectedDeviceKeys(formData);
-
-  if (requiresLaserDevice) {
-    if (selectedDevices.length === 0) {
+    const category = serviceCategory(formData);
+    const requiresLaserDevice = category === "laser";
+    const selectedDevices = requiresLaserDevice ? selectedDeviceKeys(formData) : [];
+    if (requiresLaserDevice && selectedDevices.length === 0) {
       throw new Error("اختار جهاز واحد على الأقل للخدمة الليزر.");
     }
-    const primaryDuration = positiveInteger(
-      formData.get(`device_duration_${selectedDevices[0]}`),
-      60,
-    );
 
-    await tiaRequest(`/clinic/services/${serviceId}`, {
-      method: "PATCH",
+    const baseDurationMinutes = requiresLaserDevice
+      ? positiveInteger(formData.get(`device_duration_${selectedDevices[0]}`), 60)
+      : positiveInteger(formData.get("duration_minutes"), 60);
+
+    await tiaRequest("/clinic/services", {
+      method: "POST",
       body: JSON.stringify({
         name,
+        slug: `service-${randomUUID()}`,
         operational_category: category,
-        price_minor: 0,
-        duration_minutes: primaryDuration,
-        requires_laser_device: true,
+        description: null,
+        duration_minutes: baseDurationMinutes,
+        buffer_before_minutes: 0,
+        buffer_after_minutes: 0,
+        price_minor: requiresLaserDevice ? 0 : moneyMinor(formData.get("price")),
+        currency: "EGP",
+        requires_medical_review: false,
+        device_prices: selectedDevices.map((deviceKey) => devicePricePayload(formData, deviceKey)),
       }),
     });
 
-    await Promise.all(
-      allDevices.map((deviceKey) =>
-        selectedDevices.includes(deviceKey)
-          ? tiaRequest("/inventory/laser-prices", {
-              method: "PUT",
-              body: JSON.stringify({
-                service_id: serviceId,
-                ...devicePricePayload(formData, deviceKey),
-              }),
-            })
-          : tiaRequest(
-              `/inventory/laser-prices/${serviceId}/${encodeURIComponent(deviceKey)}`,
-              { method: "DELETE" },
-            ),
-      ),
-    );
-  } else {
-    await tiaRequest(`/clinic/services/${serviceId}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        name,
-        operational_category: category,
-        price_minor: moneyMinor(formData.get("price")),
-        duration_minutes: positiveInteger(formData.get("duration_minutes"), 60),
-        requires_laser_device: false,
-      }),
-    });
-    await Promise.all(
-      allDevices.map((deviceKey) =>
-        tiaRequest(
-          `/inventory/laser-prices/${serviceId}/${encodeURIComponent(deviceKey)}`,
-          { method: "DELETE" },
-        ),
-      ),
-    );
+    revalidatePath("/services");
+    revalidatePath("/appointments");
+    return { ok: true, error: null, revision: randomUUID() };
+  } catch (error) {
+    return mutationFailure(error);
   }
+}
 
-  revalidatePath("/services");
-  revalidatePath("/appointments");
+export async function updateServicePricing(
+  _previous: ServiceMutationActionState,
+  formData: FormData,
+): Promise<ServiceMutationActionState> {
+  try {
+    const serviceId = String(formData.get("service_id") || "");
+    const name = String(formData.get("name") || "").trim();
+    if (!serviceId || !name) throw new Error("بيانات الخدمة غير مكتملة.");
+
+    const category = serviceCategory(formData);
+    const requiresLaserDevice = category === "laser";
+    const selectedDevices = requiresLaserDevice ? selectedDeviceKeys(formData) : [];
+    if (requiresLaserDevice && selectedDevices.length === 0) {
+      throw new Error("اختار جهاز واحد على الأقل للخدمة الليزر.");
+    }
+
+    const durationMinutes = requiresLaserDevice
+      ? positiveInteger(formData.get(`device_duration_${selectedDevices[0]}`), 60)
+      : positiveInteger(formData.get("duration_minutes"), 60);
+
+    await tiaRequest(`/clinic/services/${serviceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name,
+        operational_category: category,
+        price_minor: requiresLaserDevice ? 0 : moneyMinor(formData.get("price")),
+        duration_minutes: durationMinutes,
+        device_prices: selectedDevices.map((deviceKey) => devicePricePayload(formData, deviceKey)),
+      }),
+    });
+
+    revalidatePath("/services");
+    revalidatePath("/appointments");
+    return { ok: true, error: null, revision: randomUUID() };
+  } catch (error) {
+    return mutationFailure(error);
+  }
 }
 
 export async function updateLaserDevicePrice(formData: FormData) {

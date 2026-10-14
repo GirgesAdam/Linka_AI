@@ -22,6 +22,7 @@ from app.integrations.clinic.authority import (
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEntityLink
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -52,6 +53,7 @@ from app.schemas.clinic import (
     DoctorUpdate,
     DoctorWorkingHourRead,
     ServiceCreate,
+    ServiceDevicePriceInput,
     ServiceRead,
     ServiceUpdate,
     StaffCreate,
@@ -98,6 +100,12 @@ from app.services.clinic_integration_sync_runtime import (
     update_sync_schedule,
 )
 from app.services.doctor_categories import sync_service_doctor_assignments
+from app.services.inventory import (
+    InventoryNotFound,
+    InventoryOperationError,
+    deactivate_laser_device_price,
+    upsert_laser_device_price,
+)
 
 router = APIRouter()
 
@@ -411,6 +419,44 @@ def assign_doctor_to_branch(
     return assignment
 
 
+def _sync_service_device_prices(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    service: Service,
+    device_prices: list[ServiceDevicePriceInput] | None,
+) -> None:
+    desired = {item.device_key: item for item in (device_prices or [])}
+    if service.operational_category != "laser":
+        desired = {}
+    existing = list(
+        db.scalars(
+            select(ServiceDevicePrice).where(
+                ServiceDevicePrice.workspace_id == workspace_id,
+                ServiceDevicePrice.service_id == service.id,
+            )
+        ).all()
+    )
+    for row in existing:
+        if row.device_key not in desired and row.is_active:
+            deactivate_laser_device_price(
+                db,
+                workspace_id=workspace_id,
+                service_id=service.id,
+                device_key=row.device_key,
+            )
+    for item in desired.values():
+        upsert_laser_device_price(
+            db,
+            workspace_id=workspace_id,
+            service_id=service.id,
+            device_key=item.device_key,
+            price_minor=item.price_minor,
+            duration_minutes=item.duration_minutes,
+            currency=item.currency,
+        )
+
+
 @router.post("/services", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)
 def create_service(
     payload: ServiceCreate,
@@ -418,20 +464,29 @@ def create_service(
     actor_user_id: UUID = Depends(get_workspace_admin_user_id),
     db: Session = Depends(get_db),
 ) -> Service:
-    service = Service(workspace_id=workspace.id, **payload.model_dump())
-    if service.requires_laser_device and service.operational_category != "laser":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Services that require a laser device must use the laser category.",
-        )
+    service_values = payload.model_dump(exclude={"device_prices", "requires_laser_device"})
+    service_values["requires_laser_device"] = payload.operational_category == "laser"
+    service = Service(workspace_id=workspace.id, **service_values)
     db.add(service)
     try:
         db.flush()
+        _sync_service_device_prices(
+            db,
+            workspace_id=workspace.id,
+            service=service,
+            device_prices=payload.device_prices,
+        )
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Service slug already exists in this workspace.",
+        ) from exc
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
         ) from exc
     sync_service_doctor_assignments(db, workspace_id=workspace.id, service=service)
     record_activity_event(
@@ -469,18 +524,35 @@ def update_service(
     )
     if service is None:
         raise not_found("Service")
-    changes = payload.model_dump(exclude_unset=True)
+    device_prices = (
+        payload.device_prices
+        if "device_prices" in payload.model_fields_set
+        else None
+    )
+    changes = payload.model_dump(
+        exclude_unset=True,
+        exclude={"device_prices", "requires_laser_device"},
+    )
     if changes.get("category") is None:
         changes.pop("category", None)
     final_category = changes.get("operational_category", service.operational_category)
-    final_requires_laser = changes.get("requires_laser_device", service.requires_laser_device)
-    if final_requires_laser and final_category != "laser":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Services that require a laser device must use the laser category.",
-        )
+    changes["requires_laser_device"] = final_category == "laser"
     for key, value in changes.items():
         setattr(service, key, value)
+    try:
+        if device_prices is not None or final_category != "laser":
+            _sync_service_device_prices(
+                db,
+                workspace_id=workspace.id,
+                service=service,
+                device_prices=device_prices,
+            )
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     sync_service_doctor_assignments(db, workspace_id=workspace.id, service=service)
     record_activity_event(
         db, workspace_id=workspace.id, actor_type="staff", actor_user_id=actor_user_id,

@@ -3,7 +3,7 @@ from datetime import time
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.clinic import ServiceCreate, WorkingHourInterval
+from app.schemas.clinic import ServiceCreate, ServiceUpdate, WorkingHourInterval
 
 
 def test_service_rejects_float_style_negative_price() -> None:
@@ -28,7 +28,6 @@ def test_working_hours_reject_overlap() -> None:
         )
 
 
-
 def test_service_keeps_legacy_category_and_derives_operational_category() -> None:
     service = ServiceCreate(
         name="Hydrafacial",
@@ -39,17 +38,46 @@ def test_service_keeps_legacy_category_and_derives_operational_category() -> Non
     )
     assert service.category == "Facial"
     assert service.operational_category == "dermatology"
+    assert service.requires_laser_device is False
 
 
-def test_laser_device_service_is_always_operationally_laser() -> None:
-    service = ServiceCreate(
+def test_service_operational_category_is_laser_requirement_authority() -> None:
+    laser = ServiceCreate(
         name="Full Body",
         slug="full-body",
-        category="Laser Hair Removal",
-        operational_category="dermatology",
+        operational_category="laser",
         duration_minutes=60,
         price_minor=0,
+        requires_laser_device=False,
+    )
+    assert laser.operational_category == "laser"
+    assert laser.requires_laser_device is True
+
+    dermatology = ServiceCreate(
+        name="Facial",
+        slug="facial",
+        operational_category="dermatology",
+        duration_minutes=45,
+        price_minor=100_000,
         requires_laser_device=True,
     )
-    assert service.category == "Laser Hair Removal"
-    assert service.operational_category == "laser"
+    assert dermatology.operational_category == "dermatology"
+    assert dermatology.requires_laser_device is False
+
+
+def test_service_update_operational_category_wins_over_contradictory_flag() -> None:
+    to_laser = ServiceUpdate(
+        operational_category="laser",
+        requires_laser_device=False,
+    )
+    assert to_laser.requires_laser_device is True
+
+    from_laser = ServiceUpdate(
+        operational_category="dermatology",
+        requires_laser_device=True,
+    )
+    assert from_laser.requires_laser_device is False
+
+    unrelated_update = ServiceUpdate(name="Renamed")
+    assert unrelated_update.operational_category is None
+    assert unrelated_update.requires_laser_device is None
