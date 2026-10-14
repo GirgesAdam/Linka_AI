@@ -789,10 +789,10 @@ def _parse_active_package_purchase_date(
     if isinstance(value, date):
         return value
     if isinstance(value, bool):
-        return None
+        return effective_reference
     if isinstance(value, (int, float)):
         if isinstance(value, float) and not value.is_integer():
-            return None
+            return effective_reference
         month = int(value)
         if 1 <= month <= 12:
             return _most_recent_active_package_partial_date(
@@ -800,9 +800,9 @@ def _parse_active_package_purchase_date(
                 day=1,
                 reference_date=effective_reference,
             )
-        # Proper Excel date cells are returned by openpyxl as datetime/date. Other
-        # raw numerics stay invalid so an Excel serial is never silently misread.
-        return None
+        # Proper Excel date cells are returned by openpyxl as datetime/date. If a
+        # raw numeric is not a month, keep the row importable and use upload day.
+        return effective_reference
 
     text = (_clean(value) or "").strip()
     if not text:
@@ -828,7 +828,7 @@ def _parse_active_package_purchase_date(
             day=int(day_month_match.group(1)),
             month=int(day_month_match.group(2)),
             reference_date=effective_reference,
-        )
+        ) or effective_reference
 
     month_match = re.fullmatch(r"\d{1,2}", text)
     if month_match:
@@ -836,12 +836,15 @@ def _parse_active_package_purchase_date(
             day=1,
             month=int(text),
             reference_date=effective_reference,
-        )
+        ) or effective_reference
 
     try:
         return datetime.fromisoformat(text).date()
     except ValueError:
-        return None
+        # Purchase date is historical context, not an import gate. Preserve the
+        # row and use upload/preview day when the supplied value is unusable.
+        return effective_reference
+
 
 def _normalize_active_package(
     row: dict[str, Any],

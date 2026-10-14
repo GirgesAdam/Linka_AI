@@ -413,9 +413,14 @@ def test_active_package_purchase_date_accepts_excel_and_clear_egyptian_formats(
     assert parsed.isoformat() == expected
 
 
-@pytest.mark.parametrize("value", ["02/15/2026", "not-a-date", 46000, 2.5])
-def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(value) -> None:
-    assert history._parse_active_package_purchase_date(value) is None
+@pytest.mark.parametrize("value", ["02/15/2026", "not-a-date", 46000, 2.5, True, "31/2"])
+def test_active_package_purchase_date_falls_back_for_unusable_values(value) -> None:
+    parsed = history._parse_active_package_purchase_date(
+        value,
+        reference_date=datetime(2026, 10, 15).date(),
+    )
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-10-15"
 
 
 @pytest.mark.parametrize(
