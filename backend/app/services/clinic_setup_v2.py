@@ -6,11 +6,12 @@ from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
+from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -18,6 +19,7 @@ from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
 from app.models.workspace import Workspace
+from app.schemas.clinic import normalize_service_category
 from app.schemas.clinic_setup_v2 import (
     BookingPolicyUpdateV2,
     ClinicDoctorCreateV2,
@@ -162,6 +164,7 @@ def create_service_v2(
         name=payload.name.strip(),
         slug=_service_slug(workspace.id, payload.name),
         category=payload.category,
+        operational_category=normalize_service_category(payload.category),
         description=None,
         duration_minutes=payload.duration_minutes,
         buffer_before_minutes=0,
@@ -169,6 +172,7 @@ def create_service_v2(
         price_minor=_price_minor(payload.price),
         currency="EGP",
         requires_medical_review=False,
+        requires_laser_device=normalize_service_category(payload.category) == "laser",
         is_active=True,
     )
     db.add(service)
@@ -199,9 +203,21 @@ def update_service_v2(
         raise ClinicSetupV2Error("A service with this name already exists.")
     service.name = payload.name.strip()
     service.category = payload.category
+    service.operational_category = normalize_service_category(payload.category)
+    service.requires_laser_device = service.operational_category == "laser"
     service.duration_minutes = payload.duration_minutes
     service.price_minor = _price_minor(payload.price)
     service.currency = "EGP"
+    if service.operational_category != "laser":
+        db.execute(
+            update(ServiceDevicePrice)
+            .where(
+                ServiceDevicePrice.workspace_id == workspace.id,
+                ServiceDevicePrice.service_id == service.id,
+                ServiceDevicePrice.is_active.is_(True),
+            )
+            .values(is_active=False)
+        )
     db.flush()
     return service
 

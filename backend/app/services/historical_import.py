@@ -151,8 +151,31 @@ class HistoricalImportError(ValueError):
     pass
 
 
+class HistoricalImportValidationError(HistoricalImportError):
+    def __init__(self, errors: list[dict[str, Any]], message: str = "\u062a\u0639\u0630\u0631 \u0627\u0633\u062a\u064a\u0631\u0627\u062f \u0627\u0644\u0645\u0644\u0641 \u0628\u0633\u0628\u0628 \u0623\u062e\u0637\u0627\u0621 \u0641\u064a \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a.") -> None:
+        super().__init__(message)
+        self.errors = errors
+        self.message = message
+
+
 class HistoricalImportConflictError(HistoricalImportError):
     pass
+
+
+def _required_header_errors(sheet_key: str, headers: list[str]) -> list[dict[str, Any]]:
+    if sheet_key not in {"active_packages", "import_data"}:
+        return []
+    required = {"full_name": "\u0627\u0633\u0645 \u0627\u0644\u0639\u0645\u064a\u0644", "phone": "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644"}
+    present = set(headers)
+    return [
+        {
+            "row": None,
+            "field": field,
+            "message": f"\u0627\u0644\u0639\u0645\u0648\u062f \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \"{label}\" \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
+        }
+        for field, label in required.items()
+        if field not in present
+    ]
 
 
 def _clean(value: Any) -> str | None:
@@ -230,7 +253,11 @@ def _rows_from_xlsx(document: HistoricalImportDocument) -> Iterable[tuple[str, i
     try:
         workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     except Exception as exc:
-        raise HistoricalImportError(f"{document.name}: unreadable Excel workbook.") from exc
+        raise HistoricalImportValidationError([{
+            "row": None,
+            "field": "file",
+            "message": "\u0627\u0644\u0645\u0644\u0641 \u063a\u064a\u0631 \u0642\u0627\u0628\u0644 \u0644\u0644\u0642\u0631\u0627\u0621\u0629 \u0643\u0645\u0644\u0641 Excel.",
+        }]) from exc
     try:
         for sheet in workbook.worksheets:
             key = _header(sheet.title)
@@ -243,6 +270,9 @@ def _rows_from_xlsx(document: HistoricalImportDocument) -> Iterable[tuple[str, i
                 continue
             if not any(headers):
                 continue
+            header_errors = _required_header_errors(key, headers)
+            if header_errors:
+                raise HistoricalImportValidationError(header_errors)
             for row_number, values in enumerate(iterator, start=2):
                 if not any(_clean(value) is not None for value in values):
                     continue
@@ -271,6 +301,9 @@ def _rows_from_csv(document: HistoricalImportDocument) -> Iterable[tuple[str, in
         for name in reader.fieldnames
         if _header_for_sheet(key, name)
     }
+    header_errors = _required_header_errors(key, list(headers))
+    if header_errors:
+        raise HistoricalImportValidationError(header_errors)
     for row_number, raw_row in enumerate(reader, start=2):
         row = {key_name: raw_row.get(original) for key_name, original in headers.items()}
         if any(_clean(value) is not None for value in row.values()):
@@ -285,8 +318,12 @@ def _iter_rows(documents: list[HistoricalImportDocument]) -> Iterable[tuple[str,
             recognized = True
             yield document.name, sheet, row_number, row
     if not recognized:
-        raise HistoricalImportError(
-            "No recognized historical-data sheet was found. Use the Linka Active Packages Import template or a supported legacy historical sheet."
+        raise HistoricalImportValidationError(
+            [{
+                "row": None,
+                "field": "sheet",
+                "message": "\u0644\u0645 \u064a\u062a\u0645 \u0627\u0644\u0639\u062b\u0648\u0631 \u0639\u0644\u0649 \u0648\u0631\u0642\u0629 \u0628\u064a\u0627\u0646\u0627\u062a \u0645\u0639\u0631\u0648\u0641\u0629 \u0641\u064a \u0627\u0644\u0645\u0644\u0641.",
+            }]
         )
 
 
@@ -986,7 +1023,7 @@ def _normalize_active_holding(
             and _clean(service_row.name).casefold() == service_name.casefold()
         ]
         if not matches:
-            return None, "active_package_service_unknown", "اسم الخدمة غير موجود ضمن خدمات Linka النشطة."
+            return None, "active_package_service_unknown", f'الخدمة "{service_name}" غير موجودة في النظام.'
         if len(matches) > 1:
             return None, "active_package_service_ambiguous", "اسم الخدمة يطابق أكثر من خدمة. عدّل أسماء الخدمات قبل الاستيراد."
         service = matches[0]
@@ -3159,6 +3196,7 @@ def build_historical_import_template(
 __all__ = [
     "HistoricalImportConflictError",
     "HistoricalImportError",
+    "HistoricalImportValidationError",
     "apply_historical_import",
     "build_historical_import_template",
     "get_historical_import_batch",

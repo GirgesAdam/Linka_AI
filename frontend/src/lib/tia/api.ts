@@ -8,33 +8,65 @@ const RAW_API_URL = process.env.TIA_API_URL || "http://127.0.0.1:8000";
 const API_URL = (RAW_API_URL.startsWith("//") ? `https:${RAW_API_URL}` : RAW_API_URL).replace(/\/$/, "");
 const REQUEST_TIMEOUT_MS = 15_000;
 
+export type ImportValidationErrorItem = {
+  row: number | null;
+  field: string | null;
+  message: string;
+};
+
+export type ImportValidationErrorDetail = {
+  code: "import_validation_failed";
+  message: string;
+  error_count: number;
+  errors: ImportValidationErrorItem[];
+};
+
 export class TiaApiError extends Error {
   constructor(
     public status: number,
     message: string,
     public technicalMessage?: string,
+    public detail?: unknown,
   ) {
     super(message);
   }
 }
 
-async function accessToken() {
-  const supabase = await createClient();
-  const { data: claimsData } = await supabase.auth.getClaims();
-  if (!claimsData?.claims?.sub) redirect("/login");
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token;
-  if (!token) redirect("/login");
-  return token;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-async function parseTechnicalError(response: Response) {
+export function getImportValidationErrorDetail(error: unknown): ImportValidationErrorDetail | null {
+  if (!(error instanceof TiaApiError) || !isRecord(error.detail)) return null;
+  const detail = error.detail;
+  if (detail.code !== "import_validation_failed" || typeof detail.message !== "string") return null;
+  if (typeof detail.error_count !== "number" || !Array.isArray(detail.errors)) return null;
+  const errors = detail.errors.filter((item): item is ImportValidationErrorItem => {
+    if (!isRecord(item) || typeof item.message !== "string") return false;
+    return (item.row === null || typeof item.row === "number")
+      && (item.field === null || typeof item.field === "string");
+  });
+  return {
+    code: "import_validation_failed",
+    message: detail.message,
+    error_count: detail.error_count,
+    errors,
+  };
+}
+
+async function parseApiError(response: Response) {
   try {
     const body = await response.json();
-    if (typeof body?.detail === "string") return body.detail;
-    return JSON.stringify(body);
+    const detail = body?.detail;
+    const technicalMessage = typeof detail === "string"
+      ? detail
+      : JSON.stringify(detail ?? body);
+    return { detail, technicalMessage };
   } catch {
-    return `${response.status} ${response.statusText}`;
+    return {
+      detail: null,
+      technicalMessage: `${response.status} ${response.statusText}`,
+    };
   }
 }
 
@@ -83,16 +115,36 @@ export async function tiaRawRequest(path: string, init: RequestInit = {}, option
     );
   }
   if (!response.ok) {
-    const technicalMessage = await parseTechnicalError(response);
+    const { detail, technicalMessage } = await parseApiError(response);
     console.error("[Linka API] request failed", {
       path,
       method: init.method || "GET",
       status: response.status,
       detail: technicalMessage,
     });
-    throw new TiaApiError(response.status, userFacingApiError(response.status), technicalMessage);
+    const structuredMessage = isRecord(detail)
+      && detail.code === "import_validation_failed"
+      && typeof detail.message === "string"
+      ? detail.message
+      : null;
+    throw new TiaApiError(
+      response.status,
+      structuredMessage || userFacingApiError(response.status),
+      technicalMessage,
+      detail,
+    );
   }
   return response;
+}
+
+async function accessToken() {
+  const supabase = await createClient();
+  const { data: claimsData } = await supabase.auth.getClaims();
+  if (!claimsData?.claims?.sub) redirect("/login");
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) redirect("/login");
+  return token;
 }
 
 export async function tiaRequest<T>(path: string, init: RequestInit = {}, options?: { workspace?: boolean }) {

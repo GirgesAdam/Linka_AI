@@ -1676,3 +1676,112 @@ def test_unified_historical_import_four_shapes_create_canonical_records_without_
         assert sorted(pack.pulses_purchased for pack in pulse_packs) == [500, 800]
         assert all(pack.purchase_transaction_id is None for pack in pulse_packs)
         assert payments == []
+
+
+def test_active_packages_missing_required_header_is_structured_validation_error() -> None:
+    wb = Workbook()
+    sheet = wb.active
+    sheet.title = "active_packages"
+    sheet.append([
+        "اسم العميل",
+        "اسم الخدمة",
+        "عدد الجلسات الكلي",
+        "عدد الجلسات المتبقي",
+        "المبلغ المدفوع",
+        "تاريخ الشراء",
+        "سعر الباقة",
+        "النبضات المتبقية",
+    ])
+    sheet.append(["سارة أحمد", "Hydrafacial", 6, 3, 3000, "15/02/2026", 3000, None])
+    stream = io.BytesIO()
+    wb.save(stream)
+    wb.close()
+    document = HistoricalImportDocument(
+        name="missing-phone.xlsx",
+        format="xlsx",
+        content_base64=base64.b64encode(stream.getvalue()).decode("ascii"),
+    )
+
+    with pytest.raises(history.HistoricalImportValidationError) as exc_info:
+        list(history._rows_from_xlsx(document))
+
+    assert exc_info.value.errors == [
+        {
+            "row": None,
+            "field": "phone",
+            "message": 'العمود المطلوب "رقم الموبايل" غير موجود.',
+        }
+    ]
+
+
+def test_active_packages_multiple_invalid_rows_keep_excel_rows_and_no_canonical_writes() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        document = _arabic_active_package_document(
+            [
+                [None, "01011111111", None, None, None, None, None, None, None, None],
+                ["Bad Phone", "abc", None, None, None, None, None, None, None, None],
+                ["Unknown Service", "01122222222", "Not In Linka", None, 6, 3, 3000, "15/02/2026", 3000, None],
+                ["Bad Sessions", "01233333333", "Hydrafacial", None, 0, 0, None, "16/02/2026", 3000, None],
+            ]
+        )
+
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[document],
+            mode="append",
+        )
+
+        assert preview.can_import is False
+        assert preview.ready_counts.get("holding", 0) == 0
+        assert preview.rejected_counts["holding"] == 4
+        rows_by_code = {
+            issue.code: issue.example_rows
+            for issue in preview.issue_groups
+        }
+        assert rows_by_code["active_package_name_missing"] == [2]
+        assert rows_by_code["active_package_phone_invalid"] == [3]
+        assert rows_by_code["active_package_service_unknown"] == [4]
+        assert rows_by_code["active_package_total_invalid"] == [5]
+        assert db.scalar(
+            select(func.count())
+            .select_from(Patient)
+            .where(Patient.workspace_id == workspace.id)
+        ) == 0
+        assert db.scalar(
+            select(func.count())
+            .select_from(PatientPackage)
+            .where(PatientPackage.workspace_id == workspace.id)
+        ) == 0
+        assert db.scalar(
+            select(func.count())
+            .select_from(PaymentTransaction)
+            .where(PaymentTransaction.workspace_id == workspace.id)
+        ) == 0
+        assert db.scalar(
+            select(func.count())
+            .select_from(PatientPulsePack)
+            .where(PatientPulsePack.workspace_id == workspace.id)
+        ) == 0
+
+
+def test_history_route_structures_file_validation_without_exposing_internals() -> None:
+    from app.api.routes.clinic_setup_v2 import _setup_error
+
+    exc = history.HistoricalImportValidationError(
+        [
+            {"row": 8, "field": "phone", "message": "رقم الهاتف غير صالح."},
+            {"row": 12, "field": "service_name", "message": "الخدمة غير موجودة."},
+        ]
+    )
+    response = _setup_error(exc)
+
+    assert response.status_code == 422
+    assert response.detail == {
+        "code": "import_validation_failed",
+        "message": "تعذر استيراد الملف بسبب أخطاء في البيانات.",
+        "error_count": 2,
+        "errors": exc.errors,
+    }

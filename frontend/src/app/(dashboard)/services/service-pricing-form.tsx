@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useActionState, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Save } from "lucide-react";
 
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ClinicLaserDevice } from "@/lib/types";
 
-import { updateServicePricing } from "./actions";
+import { type ServiceMutationActionState, updateServicePricing } from "./actions";
 
 type DeviceConfig = {
   device_key: string;
@@ -32,6 +33,12 @@ function major(minor: number | null | undefined) {
   return minor == null ? "" : String(minor / 100);
 }
 
+const initialServiceMutationActionState: ServiceMutationActionState = {
+  ok: false,
+  error: null,
+  revision: null,
+};
+
 export function ServicePricingForm({
   service,
   devicePrices,
@@ -41,30 +48,38 @@ export function ServicePricingForm({
   devicePrices: DeviceConfig[];
   devices: ClinicLaserDevice[];
 }) {
-  const [requiresLaserDevice, setRequiresLaserDevice] = useState(service.requires_laser_device);
   const [category, setCategory] = useState(service.operational_category);
+  const router = useRouter();
+  const [state, formAction, pending] = useActionState(
+    async (previous: ServiceMutationActionState, formData: FormData) => {
+      const next = await updateServicePricing(previous, formData);
+      if (next.ok) router.refresh();
+      return next;
+    },
+    initialServiceMutationActionState,
+  );
+  const requiresLaserDevice = category === "laser";
   const activeDevices = devices.filter((device) => device.is_active);
   const config = (key: string) => devicePrices.find((item) => item.device_key === key);
 
   return (
-    <form action={updateServicePricing} className="grid gap-3 rounded-xl bg-slate-50 p-3">
+    <form action={formAction} className="grid gap-3 rounded-xl bg-slate-50 p-3">
       <input type="hidden" name="service_id" value={service.id} />
       {activeDevices.map((device) => (
         <input key={device.id} type="hidden" name="device_key" value={device.device_key} />
       ))}
-      <div className="grid gap-3 md:grid-cols-[minmax(180px,1.4fr)_minmax(130px,.7fr)_auto_auto] md:items-end">
+      <div className="grid gap-3 md:grid-cols-[minmax(180px,1.4fr)_minmax(130px,.7fr)_auto] md:items-end">
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">اسم الخدمة</span>
-          <Input name="name" required maxLength={200} defaultValue={service.name} />
+          <Input name="name" required maxLength={200} defaultValue={service.name} disabled={pending} />
         </label>
         <label>
           <span className="mb-1.5 block text-xs font-bold text-slate-600">التصنيف</span>
-          {requiresLaserDevice && <input type="hidden" name="operational_category" value="laser" />}
           <select
             name="operational_category"
-            value={requiresLaserDevice ? "laser" : category}
-            disabled={requiresLaserDevice}
+            value={category}
             onChange={(event) => setCategory(event.target.value as typeof category)}
+            disabled={pending}
             className="form-control h-10 min-h-10"
           >
             <option value="laser">ليزر</option>
@@ -72,28 +87,21 @@ export function ServicePricingForm({
             <option value="slimming">تخسيس</option>
           </select>
         </label>
-        <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700">
-          <input
-            type="checkbox"
-            name="requires_laser_device"
-            value="1"
-            checked={requiresLaserDevice}
-            onChange={(event) => {
-              setRequiresLaserDevice(event.target.checked);
-              if (event.target.checked) setCategory("laser");
-            }}
-          />
-          خدمة تحتاج اختيار جهاز ليزر
-        </label>
-        <Button type="submit" size="sm"><Save size={14} /> حفظ</Button>
+        <Button type="submit" size="sm" disabled={pending}>
+          <Save size={14} /> {pending ? "جاري الحفظ…" : "حفظ"}
+        </Button>
       </div>
+
+      {state.error && (
+        <div className="rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{state.error}</div>
+      )}
 
       {requiresLaserDevice ? (
         <div className="grid gap-3">
           {activeDevices.length ? (
             <>
               <p className="text-xs text-[var(--muted)]">
-                فعّل فقط الأجهزة التي تُستخدم في هذه الخدمة. تعطيل الجهاز هنا لا يحذفه من العيادة ولا من السجلات القديمة.
+                فعّل فقط الأجهزة التي تُستخدم في هذه الخدمة. تغيير التصنيف لغير ليزر يعطّل ربط الأجهزة دون حذف السجلات القديمة.
               </p>
               <div className="grid gap-3 lg:grid-cols-2">
                 {activeDevices.map((device) => {
@@ -106,6 +114,7 @@ export function ServicePricingForm({
                           name={`device_enabled_${device.device_key}`}
                           value="1"
                           defaultChecked={Boolean(row?.configured)}
+                          disabled={pending}
                         />
                         {device.name}
                       </label>
@@ -118,6 +127,7 @@ export function ServicePricingForm({
                           step="0.01"
                           defaultValue={major(row?.price_minor)}
                           placeholder="السعر"
+                          disabled={pending}
                         />
                       </label>
                       <label>
@@ -128,6 +138,7 @@ export function ServicePricingForm({
                           min="1"
                           max="1440"
                           defaultValue={row?.duration_minutes ?? service.duration_minutes}
+                          disabled={pending}
                         />
                       </label>
                     </div>
@@ -145,11 +156,11 @@ export function ServicePricingForm({
         <div className="grid gap-3 md:grid-cols-2">
           <label>
             <span className="mb-1.5 block text-xs font-bold text-slate-600">السعر الأساسي بالجنيه</span>
-            <Input name="price" type="number" min="0" step="0.01" required defaultValue={major(service.price_minor)} />
+            <Input name="price" type="number" min="0" step="0.01" required defaultValue={major(service.price_minor)} disabled={pending} />
           </label>
           <label>
             <span className="mb-1.5 block text-xs font-bold text-slate-600">المدة بالدقائق</span>
-            <Input name="duration_minutes" type="number" min="1" max="1440" required defaultValue={service.duration_minutes} />
+            <Input name="duration_minutes" type="number" min="1" max="1440" required defaultValue={service.duration_minutes} disabled={pending} />
           </label>
         </div>
       )}

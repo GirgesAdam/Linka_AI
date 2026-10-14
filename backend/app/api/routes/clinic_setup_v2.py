@@ -61,6 +61,7 @@ from app.services.clinic_setup_v2 import (
 from app.services.historical_import import (
     HistoricalImportConflictError,
     HistoricalImportError,
+    HistoricalImportValidationError,
     _batch_read,
     apply_historical_import,
     build_historical_import_template,
@@ -78,6 +79,16 @@ router = APIRouter()
 def _setup_error(exc: Exception) -> HTTPException:
     if isinstance(exc, HistoricalImportConflictError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, HistoricalImportValidationError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "import_validation_failed",
+                "message": exc.message,
+                "error_count": len(exc.errors),
+                "errors": exc.errors,
+            },
+        )
     if isinstance(exc, (ClinicSetupV2Error, HistoricalImportError)):
         return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Clinic setup operation failed.")

@@ -14,6 +14,7 @@ import {
 } from "./actions";
 
 const initialHistoricalImportActionState: HistoricalImportActionState = { preview: null, error: null };
+const MAX_VISIBLE_ISSUE_GROUPS = 4;
 
 const entityLabels: Record<string, string> = {
   patient: "العملاء",
@@ -34,10 +35,7 @@ function BatchStatus({ batch }: { batch: HistoricalBatch }) {
 export function HistoricalImportUploader({ initialBatch = null }: { initialBatch?: HistoricalBatch | null }) {
   const [batch, setBatch] = useState<HistoricalBatch | null>(initialBatch);
   const [state, formAction, pendingPreview] = useActionState(
-    async (
-      previous: HistoricalImportActionState,
-      formData: FormData,
-    ) => {
+    async (previous: HistoricalImportActionState, formData: FormData) => {
       const next = await previewHistoricalImportAction(previous, formData);
       if (next.preview?.batch) setBatch(next.preview.batch);
       return next;
@@ -66,6 +64,10 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
   const preview = state.preview;
   const readyTotal = preview ? Object.values(preview.ready_counts).reduce((sum, value) => sum + value, 0) : 0;
   const rejectedTotal = preview ? Object.values(preview.rejected_counts).reduce((sum, value) => sum + value, 0) : 0;
+  const visibleIssues = preview?.issue_groups.slice(0, MAX_VISIBLE_ISSUE_GROUPS) ?? [];
+  const hiddenIssueRows = preview
+    ? Math.max(rejectedTotal - visibleIssues.reduce((sum, issue) => sum + issue.occurrence_count, 0), 0)
+    : 0;
 
   return (
     <div className="space-y-5">
@@ -76,7 +78,7 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
           <label className="rounded-xl border p-3 text-sm"><input type="radio" name="mode" value="append" defaultChecked className="ml-2" /><b>إضافة للبيانات الحالية</b><div className="mt-1 text-xs text-[var(--muted)]">يحافظ على البيانات الموجودة ويضيف الحقائق الجديدة فقط.</div></label>
           <label className="rounded-xl border p-3 text-sm"><input type="radio" name="mode" value="replace_previous_imports" className="ml-2" /><b>استبدال الاستيرادات السابقة</b><div className="mt-1 text-xs text-[var(--muted)]">يستبدل البيانات التاريخية المستوردة سابقًا فقط.</div></label>
         </div>
-        {state.error && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{state.error}</div>}
+        {state.error && <div className="whitespace-pre-line rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{state.error}</div>}
         <Button disabled={pendingPreview}>{pendingPreview ? <><LoaderCircle size={16} className="animate-spin" /> جاري الفحص</> : "فحص الملفات"}</Button>
       </form>
 
@@ -111,7 +113,20 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
               {(preview.projected_counts.historical_payments_to_create ?? 0) > 0 && <div className="rounded-xl border border-slate-100 p-3"><div className="text-xs text-[var(--muted)]">مدفوعات الباقات التاريخية</div><b>{preview.projected_counts.historical_payments_to_create ?? 0}</b></div>}
             </div>
           )}
-          {preview.issue_groups.length > 0 && <div className="space-y-2"><div className="font-black">ملاحظات تحتاج مراجعة</div>{preview.issue_groups.map((issue) => <div key={`${issue.entity_type}-${issue.code}`} className="rounded-xl border border-amber-100 bg-amber-50/60 p-3 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><b>{issue.message}</b><Badge tone="yellow">{issue.occurrence_count} صف</Badge></div>{issue.example_rows.length > 0 && <div className="mt-1 text-xs text-[var(--muted)]">أمثلة: الصفوف {issue.example_rows.join("، ")}</div>}</div>)}</div>}
+          {rejectedTotal > 0 && (
+            <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-sm">
+              <div className="font-black">
+                {preview.can_import ? `تم العثور على ${rejectedTotal} مشاكل؛ سيتم استبعاد الصفوف غير الصالحة.` : `تعذر استيراد الملف بسبب ${rejectedTotal} مشاكل:`}
+              </div>
+              {visibleIssues.map((issue) => (
+                <div key={`${issue.entity_type}-${issue.code}`}>
+                  <b>{issue.example_rows[0] ? `الصف ${issue.example_rows[0]}: ` : ""}{issue.message}</b>
+                  {issue.occurrence_count > 1 && <span className="mr-2 text-xs text-[var(--muted)]">({issue.occurrence_count} صفوف)</span>}
+                </div>
+              ))}
+              {hiddenIssueRows > 0 && <div className="font-semibold text-[var(--muted)]">وهناك {hiddenIssueRows} مشاكل إضافية.</div>}
+            </div>
+          )}
           {batch && <BatchStatus batch={batch} />}
           {applyError && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{applyError}</div>}
           {preview.can_import && batch?.status === "preview_ready" && (
