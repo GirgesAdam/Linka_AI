@@ -102,6 +102,31 @@ def test_bare_clock_uses_am_when_pm_is_invalid_even_if_model_guesses_pm() -> Non
     assert constraint.start_time_ambiguity == "none"
 
 
+def test_spoken_quarter_clock_without_period_evidence_uses_clinic_hours() -> None:
+    resolved, _ = _normalize_and_resolve(
+        "16:15",
+        evidence=None,
+        text="الساعة 4 وربع",
+        start="10:00",
+        end="22:00",
+    )
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "16:15"
+    assert constraint.start_time_ambiguity == "none"
+    assert constraint.period_status == "none"
+
+
+def test_spoken_clock_amount_mislabeled_as_period_evidence_still_fails_closed() -> None:
+    turn = _normalize_time_semantics_v2(
+        _turn("16:15", evidence="4 وربع"),
+        latest_customer_text="الساعة 4 وربع",
+    )
+    constraint = turn.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.period_status == "conflict"
+
+
 def test_bare_ten_reopens_guessed_22_and_clarifies_when_both_valid() -> None:
     turn = _normalize_time_semantics_v2(
         _turn("22:00"),
