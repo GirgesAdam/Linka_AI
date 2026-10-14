@@ -146,9 +146,6 @@ SEMANTIC PRINCIPLES
   requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
   the requested components to one canonical service ref. Do not decide which service is primary/main;
   Python chooses that deterministically from catalog duration.
-- For an unfinished grouped booking correction, entities.service is the complete resulting service set,
-  never a delta. Follow grouped_booking_action: explicit removal/replacement uses remove_other_components;
-  pure addition uses preserve_group.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
   reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the
@@ -420,8 +417,6 @@ SEMANTIC PRINCIPLES
   situations use urgent_medical. Explicit requests for a person use human_support.
 - Resolve clear relative dates against the clinic-local clock. If a date remains semantically
   underspecified, leave it null rather than guessing.
-- Use period_status=none when the customer did not explicitly fix a period; keep a periodless 1-12 clock in 12-hour form.
-- Use period_status=explicit when the customer explicitly fixes the period and put the normalized semantic clock in start_time; use conflict only for irreconcilable explicit time evidence. Apply the same rule to time selections.
 - follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
   resolve a specific future follow-up time. Otherwise leave it null.
 - requested_service_details describes only service facts the customer explicitly asked for in that
@@ -1360,17 +1355,6 @@ def merge_verified_action_context(
     return turn.model_copy(update={"operations": operations})
 
 
-def _same_clock_or_twelve_hour_variant(value: str | None, explicit: str) -> bool:
-    raw = str(value or "").strip()[:5]
-    if not raw:
-        return False
-    try:
-        raw_hour, raw_minute = (int(part) for part in raw.split(":", 1))
-        exp_hour, exp_minute = (int(part) for part in explicit.split(":", 1))
-    except (TypeError, ValueError):
-        return False
-    return raw_minute == exp_minute and (raw_hour == exp_hour or abs(raw_hour - exp_hour) == 12)
-
 
 def _normalize_periodless_clock(value: str | None) -> str | None:
     """Remove an inferred AM/PM choice while preserving the model's minute meaning."""
@@ -1415,13 +1399,104 @@ def _derive_periodless_clock_ambiguity(
     return "twelve_hour" if 1 <= parsed.hour <= 12 else "none"
 
 
+def _count_time_targets(turn: TiaTurnUnderstanding) -> int:
+    count = 0
+    for operation in turn.operations:
+        constraint = operation.entities.time
+        if constraint is not None and constraint.start_time is not None:
+            count += 1
+        selection = operation.selection
+        if selection is not None and selection.kind == "time" and selection.time is not None:
+            count += 1
+    return count
+
+
+def _verified_period_evidence(
+    evidence_text: str | None,
+    *,
+    latest_customer_text: str,
+) -> bool | None:
+    """Verify model-reported semantic evidence without parsing customer language."""
+    if evidence_text is None:
+        return False
+    evidence = str(evidence_text).strip()
+    if not evidence:
+        return None
+    if evidence not in latest_customer_text:
+        return None
+    # Period evidence must be semantic wording, not the clock digits themselves.
+    if any(char.isdigit() for char in evidence) or ":" in evidence:
+        return None
+    return True
+
+
+def _normalize_one_clock(
+    value: str,
+    *,
+    existing_status: str,
+    existing_ambiguity: TimeAmbiguity,
+    evidence_text: str | None,
+    latest_customer_text: str,
+    literal_clock: str | None,
+) -> tuple[str, TimeAmbiguity, str]:
+    """Convert semantic clock output into backend-owned authority metadata."""
+    if not latest_customer_text.strip():
+        # Internal/unit-test construction has no latest-turn language evidence.
+        return value, existing_ambiguity, existing_status
+
+    # period_status is runtime-only now. Preserve explicit/conflict authority only
+    # for internal callers that set it deliberately; the provider cannot emit it.
+    if evidence_text is None and existing_status == "conflict":
+        return value, "none", "conflict"
+    if evidence_text is None and existing_status == "explicit":
+        if literal_clock is not None and _explicit_clock_conflicts_with_literal(
+            value, literal_clock
+        ):
+            return value, "none", "conflict"
+        return value, "none", "explicit"
+
+    evidence_state = _verified_period_evidence(
+        evidence_text,
+        latest_customer_text=latest_customer_text,
+    )
+    if evidence_state is None:
+        return value, "none", "conflict"
+
+    if evidence_state:
+        if literal_clock is not None and _explicit_clock_conflicts_with_literal(
+            value, literal_clock
+        ):
+            return value, "none", "conflict"
+        # The LLM owns language understanding only. Once its explicit-period evidence
+        # is proven to exist in the latest customer message, its normalized semantic
+        # clock can be treated as exact. Clinic hours never reinterpret it.
+        return value, "none", "explicit"
+
+    if literal_clock is not None:
+        # Defensive compatibility: a customer-typed colon HH:MM remains structural
+        # exact authority when no semantic period wording is present (#230).
+        return literal_clock, "none", "none"
+
+    # No explicit period evidence: strip any AM/PM choice invented by the semantic
+    # model and let deterministic clinic-hours policy own the 12-hour resolution.
+    neutral = _normalize_periodless_clock(value)
+    if neutral is None:
+        return value, "none", "conflict"
+    return (
+        neutral,
+        _derive_periodless_clock_ambiguity(neutral, literal_clock=None),
+        "none",
+    )
+
+
 def _normalize_time_semantics_v2(
     turn: TiaTurnUnderstanding,
     *,
     latest_customer_text: str,
 ) -> TiaTurnUnderstanding:
-    """Keep language meaning in the contract; Python owns clock authority/canonicalization."""
-    literal_clock = extract_single_explicit_hhmm(latest_customer_text)
+    """Keep language meaning in the LLM while Python owns clock authority."""
+    structural_literal = extract_single_explicit_hhmm(latest_customer_text)
+    literal_clock = structural_literal if _count_time_targets(turn) == 1 else None
     operations: list = []
     changed = False
 
@@ -1432,39 +1507,21 @@ def _normalize_time_semantics_v2(
         selection = operation.selection
 
         if constraint is not None and constraint.start_time is not None:
-            status = constraint.period_status
-            if status == "explicit":
-                if literal_clock is not None and _explicit_clock_conflicts_with_literal(
-                    constraint.start_time, literal_clock
-                ):
-                    status = "conflict"
-                constraint = constraint.model_copy(
-                    update={"start_time_ambiguity": "none", "period_status": status}
-                )
-            elif status == "none":
-                if literal_clock is not None and (
-                    _same_clock_or_twelve_hour_variant(constraint.start_time, literal_clock)
-                    or (
-                        len(turn.operations) == 1
-                        and operation.type in {"book", "reschedule", "availability"}
-                    )
-                ):
-                    constraint = constraint.model_copy(
-                        update={"start_time": literal_clock, "start_time_ambiguity": "none"}
-                    )
-                elif latest_customer_text.strip():
-                    neutral = _normalize_periodless_clock(constraint.start_time)
-                    if neutral is not None:
-                        constraint = constraint.model_copy(
-                            update={
-                                "start_time": neutral,
-                                "start_time_ambiguity": _derive_periodless_clock_ambiguity(
-                                    neutral, literal_clock=literal_clock
-                                ),
-                            }
-                        )
-            else:
-                constraint = constraint.model_copy(update={"start_time_ambiguity": "none"})
+            value, ambiguity, status = _normalize_one_clock(
+                constraint.start_time,
+                existing_status=constraint.period_status,
+                existing_ambiguity=constraint.start_time_ambiguity,
+                evidence_text=constraint.period_evidence_text,
+                latest_customer_text=latest_customer_text,
+                literal_clock=literal_clock,
+            )
+            constraint = constraint.model_copy(
+                update={
+                    "start_time": value,
+                    "start_time_ambiguity": ambiguity,
+                    "period_status": status,
+                }
+            )
             entities = entities.model_copy(update={"time": constraint})
         elif (
             constraint is None
@@ -1478,41 +1535,28 @@ def _normalize_time_semantics_v2(
                         mode="exact",
                         start_time=literal_clock,
                         start_time_ambiguity="none",
+                        period_evidence_text=None,
                         period_status="none",
                     )
                 }
             )
 
         if selection is not None and selection.kind == "time" and selection.time is not None:
-            status = selection.period_status
-            if status == "explicit":
-                if literal_clock is not None and _explicit_clock_conflicts_with_literal(
-                    selection.time, literal_clock
-                ):
-                    status = "conflict"
-                selection = selection.model_copy(
-                    update={"time_ambiguity": "none", "period_status": status}
-                )
-            elif status == "none":
-                if literal_clock is not None and _same_clock_or_twelve_hour_variant(
-                    selection.time, literal_clock
-                ):
-                    selection = selection.model_copy(
-                        update={"time": literal_clock, "time_ambiguity": "none"}
-                    )
-                elif latest_customer_text.strip():
-                    neutral = _normalize_periodless_clock(selection.time)
-                    if neutral is not None:
-                        selection = selection.model_copy(
-                            update={
-                                "time": neutral,
-                                "time_ambiguity": _derive_periodless_clock_ambiguity(
-                                    neutral, literal_clock=literal_clock
-                                ),
-                            }
-                        )
-            else:
-                selection = selection.model_copy(update={"time_ambiguity": "none"})
+            value, ambiguity, status = _normalize_one_clock(
+                selection.time,
+                existing_status=selection.period_status,
+                existing_ambiguity=selection.time_ambiguity,
+                evidence_text=selection.period_evidence_text,
+                latest_customer_text=latest_customer_text,
+                literal_clock=literal_clock,
+            )
+            selection = selection.model_copy(
+                update={
+                    "time": value,
+                    "time_ambiguity": ambiguity,
+                    "period_status": status,
+                }
+            )
 
         operation = operation.model_copy(update={"entities": entities, "selection": selection})
         if operation != original:
@@ -1529,7 +1573,7 @@ def interpret_customer_turn_v2(
     timezone_name: str,
     local_now: datetime,
 ) -> TiaTurnUnderstanding:
-    """One semantic LLM call; no regex/keyword fallback and no production side effects."""
+    """One semantic LLM call; Python verifies period evidence and owns clock authority."""
 
     messages = _build_interpreter_messages(
         history=history,

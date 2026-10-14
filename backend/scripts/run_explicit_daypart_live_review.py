@@ -61,9 +61,34 @@ def _dump(value: Any) -> Any:
     return str(value)
 
 
+def _dump_provider_value(value: Any) -> Any:
+    payload = _dump(value)
+    operations = getattr(value, "operations", None)
+    if not isinstance(payload, dict) or not isinstance(operations, list):
+        return payload
+    dumped_operations = payload.get("operations")
+    if not isinstance(dumped_operations, list):
+        return payload
+    for index, operation in enumerate(operations):
+        if index >= len(dumped_operations) or not isinstance(dumped_operations[index], dict):
+            continue
+        dumped_operation = dumped_operations[index]
+        dumped_entities = dumped_operation.get("entities")
+        constraint = getattr(getattr(operation, "entities", None), "time", None)
+        if constraint is not None and isinstance(dumped_entities, dict):
+            dumped_time = dumped_entities.get("time")
+            if isinstance(dumped_time, dict):
+                dumped_time["period_evidence_text"] = constraint.period_evidence_text
+        selection = getattr(operation, "selection", None)
+        dumped_selection = dumped_operation.get("selection")
+        if selection is not None and isinstance(dumped_selection, dict):
+            dumped_selection["period_evidence_text"] = selection.period_evidence_text
+    return payload
+
+
 def _capture_invoke(*args, **kwargs):
     value = _ORIGINAL_INVOKE(*args, **kwargs)
-    RAW.append(_dump(value))
+    RAW.append(_dump_provider_value(value))
     return value
 
 
@@ -512,15 +537,31 @@ def _appointment_clock(record: dict[str, Any]) -> str | None:
 
 
 def _raw_period(record: dict[str, Any]) -> str | None:
+    customer = str(record.get("customer") or "")
     for payload in record.get("raw_structured") or []:
         if not isinstance(payload, dict):
             continue
         operations = payload.get("operations")
-        if isinstance(operations, list) and operations and isinstance(operations[0], dict):
-            operation = operations[0]
-            entities = operation.get("entities") if isinstance(operation, dict) else None
-            time_value = entities.get("time") if isinstance(entities, dict) else None
-            return str(time_value.get("period_status") or "none") if isinstance(time_value, dict) else "none"
+        if not isinstance(operations, list) or not operations or not isinstance(operations[0], dict):
+            continue
+        operation = operations[0]
+        entities = operation.get("entities") if isinstance(operation, dict) else None
+        time_value = entities.get("time") if isinstance(entities, dict) else None
+        if not isinstance(time_value, dict):
+            continue
+        evidence = time_value.get("period_evidence_text")
+        if evidence in (None, ""):
+            legacy = str(time_value.get("period_status") or "none")
+            return legacy if legacy in {"explicit", "conflict"} else "none"
+        text = str(evidence).strip()
+        if (
+            not text
+            or text not in customer
+            or any(char.isdigit() for char in text)
+            or ":" in text
+        ):
+            return "conflict"
+        return "explicit"
     return None
 
 
@@ -543,7 +584,12 @@ def _raw_semantic_times(record: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "operation_type": operation.get("type"),
                     "time": time_value,
-                    "period_status": time_value.get("period_status"),
+                    "period_evidence_text": time_value.get("period_evidence_text"),
+                    "period_status": (
+                        "explicit"
+                        if time_value.get("period_evidence_text") not in (None, "")
+                        else str(time_value.get("period_status") or "none")
+                    ),
                 }
             )
     return values

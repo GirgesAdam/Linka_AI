@@ -401,8 +401,10 @@ def test_provider_schema_omits_backend_derived_time_ambiguity() -> None:
     assert "start_time_ambiguity" not in time_properties
     assert "end_time_ambiguity" not in time_properties
     assert "time_ambiguity" not in selection_properties
-    assert "period_status" in time_properties
-    assert "period_status" in selection_properties
+    assert "period_status" not in time_properties
+    assert "period_status" not in selection_properties
+    assert "period_evidence_text" in time_properties
+    assert "period_evidence_text" in selection_properties
     assert "explicit_period" not in time_properties
     assert "explicit_period" not in selection_properties
 

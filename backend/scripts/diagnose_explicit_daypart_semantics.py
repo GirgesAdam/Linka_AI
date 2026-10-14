@@ -81,6 +81,7 @@ def _time_view(turn: Any) -> dict[str, object] | None:
         "operation_type": operation.type,
         "active_task_relationship": operation.active_task_relationship,
         "active_task_explicit_fields": list(operation.active_task_explicit_fields),
+        "period_evidence_text": constraint.period_evidence_text,
         "period_status": constraint.period_status,
         "selection_period_status": (
             operation.selection.period_status

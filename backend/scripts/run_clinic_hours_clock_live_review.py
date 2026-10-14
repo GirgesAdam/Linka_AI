@@ -397,7 +397,7 @@ def _validate_write_safety(record: dict[str, Any], spec: ScenarioSpec, ctx: base
 def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Context) -> None:
     operation = _semantic_operation(record)
     time_value = _semantic_time(operation)
-    period = str(time_value.get("period_status") or "none")
+    period = str(base._raw_period(record) or "none")
     reply = str(record.get("agent") or "").strip()
 
     _require(
