@@ -383,7 +383,6 @@ def test_active_package_validation_rejects_unknown_service_sessions_and_finances
             {**base, "package_price": 5000},
             "active_package_price_below_paid",
         ),
-        ({**base, "purchased_at": "not-a-date"}, "active_package_purchase_date_invalid"),
         ({**base, "phone": "abc"}, "active_package_phone_invalid"),
     ]
     for row, expected_code in cases:
@@ -394,6 +393,15 @@ def test_active_package_validation_rejects_unknown_service_sessions_and_finances
         )
         assert payload is None
         assert code == expected_code
+
+    date_payload, date_code, _ = _normalize_active_package(
+        {**base, "purchased_at": "not-a-date"},
+        services_by_id={service.id: service},
+        services_by_name={service.name.casefold(): service},
+    )
+    assert date_payload is not None
+    assert date_code is None
+    assert date_payload["purchased_at"] is not None
 
 
 def test_package_negative_remaining_is_rejected() -> None:

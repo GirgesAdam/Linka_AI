@@ -1207,8 +1207,8 @@ def test_active_package_preview_rejects_invalid_and_duplicate_rows_without_write
             documents=[_active_package_document(rows)],
             mode="append",
         )
-        assert preview.ready_counts["holding"] == 1
-        assert preview.rejected_counts["holding"] == len(rows) - 1
+        assert preview.ready_counts["holding"] == 2
+        assert preview.rejected_counts["holding"] == len(rows) - 2
         codes = {issue.code for issue in preview.issue_groups}
         assert {
             "duplicate_historical_package_row",
@@ -1218,7 +1218,6 @@ def test_active_package_preview_rejects_invalid_and_duplicate_rows_without_write
             "active_package_remaining_exceeds_total",
             "active_package_amount_paid_invalid",
             "active_package_price_below_paid",
-            "active_package_purchase_date_invalid",
             "active_package_phone_invalid",
         }.issubset(codes)
         assert db.scalar(
