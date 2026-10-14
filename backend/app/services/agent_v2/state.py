@@ -57,6 +57,15 @@ class CustomerConstraints(StrictStateModel):
 
     @model_validator(mode="before")
     @classmethod
+    def normalize_legacy_clock_source(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if value.get("time_clock_source") == "explicit_period":
+            return {**value, "time_clock_source": "bare_spoken_12h"}
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
     def normalize_legacy_pulse_usage(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value

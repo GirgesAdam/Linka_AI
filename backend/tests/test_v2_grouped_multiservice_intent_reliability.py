@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
 from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
@@ -13,6 +14,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
 from app.services.agent_v2.planner import PlannerContext, PlanStep, plan_turn
 from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
 from app.services.agent_v2.state_executor import apply_step_state
@@ -658,7 +660,6 @@ def _ra6_book_turn(context, *, execution_intent: str) -> TiaTurnUnderstanding:
                     time=TimeConstraint(
                         mode="exact",
                         start_time="16:30",
-                        period_status="explicit",
                     ),
                 ),
             )
@@ -777,3 +778,189 @@ def test_true_service_info_comparison_does_not_become_booking_task() -> None:
     )
     assert plan.steps[0].state_action != "start_booking"
     assert plan.steps[0].write_intent is None
+
+
+
+def test_g13_singleton_ambiguous_preserve_group_unions_new_service() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        ref=refs[ARMS],
+                        candidate_mode="ambiguous",
+                    )
+                ),
+            )
+        ]
+    )
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B, ARMS]}
+    service = normalized.operations[0].entities.service
+    assert service is not None
+    assert service.ref == refs[ARMS]
+
+
+def test_g14_existing_singleton_preserve_group_does_not_duplicate_service() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(ref=refs[B], candidate_mode="ambiguous")
+                ),
+            )
+        ]
+    )
+    _normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B]}
+
+
+
+def test_integrated_grouped_spoken_clock_addition_preserves_canonical_time() -> None:
+    catalog = _catalog(common_devices=1)
+    catalog["branches"] = [
+        {
+            "id": "branch-1",
+            "name": "Main",
+            "working_hours": [
+                {"weekday": weekday, "start": "10:00", "end": "22:00"}
+                for weekday in range(7)
+            ],
+        }
+    ]
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    branch_ref = next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "branch" and target.canonical_id == "branch-1"
+    )
+    initial = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B]],
+                        candidate_mode="set",
+                    ),
+                    branch=EntityReference(ref=branch_ref),
+                    date=DateConstraint(mode="exact", start_date="2026-10-15"),
+                    time=TimeConstraint(
+                        mode="exact",
+                        start_time="03:00",
+                        spoken_period_hint="am",
+                    ),
+                ),
+            )
+        ]
+    )
+    time_safe = _normalize_time_semantics_v2(initial, latest_customer_text="spoken three")
+    resolved = resolve_turn_times_by_clinic_hours(time_safe, context)
+    initial_time = resolved.operations[0].entities.time
+    assert initial_time is not None
+    assert initial_time.start_time == "15:00"
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        resolved,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=None,
+    )
+    plan = tag_booking_service_sets(
+        plan_turn(
+            collapsed,
+            PlannerContext(semantic_context=context, active_task=None, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    started = apply_step_state(
+        None,
+        step=plan.steps[0],
+        operation=collapsed.operations[0],
+        reads=None,
+        now=NOW,
+        turn_id="integrated-start",
+        catalog=catalog,
+    ).active_task
+    assert isinstance(started, BookingTaskState)
+    assert started.requested_service_ids == [A, B]
+    assert started.constraints.time is not None
+    assert started.constraints.time.start_time == "15:00"
+
+    addition = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(ref=refs[ARMS], candidate_mode="ambiguous")
+                ),
+            )
+        ]
+    )
+    normalized, service_sets = collapse_booking_service_sets(
+        addition,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=started,
+    )
+    assert service_sets == {0: [A, B, ARMS]}
+    addition_plan = tag_booking_service_sets(
+        plan_turn(
+            normalized,
+            PlannerContext(semantic_context=context, active_task=started, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    updated = apply_step_state(
+        started,
+        step=addition_plan.steps[0],
+        operation=normalized.operations[0],
+        reads=None,
+        now=NOW,
+        turn_id="integrated-add",
+        catalog=catalog,
+    ).active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.requested_service_ids == [A, B, ARMS]
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "15:00"
+    assert updated.proposal is None

@@ -52,13 +52,11 @@ PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "fina
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
-PeriodStatus = Literal["none", "explicit", "conflict"]
-# Internal persisted bookkeeping only. The interpreter no longer asks the model to report it.
+SpokenPeriodHint = Literal["none", "am", "pm", "noon", "midnight"]
 ClockSource = Literal[
     "unspecified",
     "literal_24h",
     "bare_spoken_12h",
-    "explicit_period",
     "inherited",
 ]
 SelectionKind = Literal["index", "time", "ref", "relative"]
@@ -139,22 +137,16 @@ class TimeConstraint(StrictContractModel):
     mode: TimeMode
     start_time: str | None = None
     end_time: str | None = None
-    # Internal authority derived by Python from clock structure + period_status.
-    # Keep it out of the provider schema so the LLM does not report backend bookkeeping.
+    # Backend runtime metadata. Provider reports only the spoken clock and one small semantic hint.
     start_time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
     end_time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
-    period_evidence_text: str | None = Field(
-        default=None,
-        exclude=True,
+    spoken_period_hint: SpokenPeriodHint = Field(
+        default="none",
         description=(
-            "Exact substring from the latest customer message that explicitly carries the clock-period "
-            "meaning for start_time, such as the customer's own morning/afternoon/evening/noon/midnight "
-            "wording. Use null when no period meaning was explicitly stated. Copy only the period-bearing "
-            "text, never the clock digits or a generic clock introducer. Python verifies this evidence and "
-            "owns AM/PM defaulting and canonicalization."
+            "Semantic hint only. Return none unless the latest customer turn explicitly distinguishes "
+            "an AM/PM-style period; Python owns final clock resolution from clinic hours."
         ),
     )
-    period_status: SkipJsonSchema[PeriodStatus] = "none"
 
     @model_validator(mode="after")
     def validate_times(self) -> TimeConstraint:
@@ -172,8 +164,8 @@ class TimeConstraint(StrictContractModel):
         # time on a continuation, or otherwise choose the earliest available slot.
         if parsed_start is None and self.start_time_ambiguity != "none":
             raise ValueError("start_time_ambiguity requires start_time.")
-        if parsed_start is None and self.period_evidence_text is not None:
-            raise ValueError("period_evidence_text requires start_time.")
+        if parsed_start is None and self.spoken_period_hint not in {"none", "am", "pm"}:
+            raise ValueError("noon/midnight hint requires start_time.")
         if parsed_end is None and self.end_time_ambiguity != "none":
             raise ValueError("end_time_ambiguity requires end_time.")
         return self
@@ -185,19 +177,16 @@ class Selection(StrictContractModel):
     time: str | None = None
     ref: str | None = None
     relative: RelativeSelection | None = None
-    # Internal authority derived by Python after semantic interpretation.
+    # Backend runtime ambiguity plus one provider-facing semantic hint.
     time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
-    period_evidence_text: str | None = Field(
-        default=None,
-        exclude=True,
+    spoken_period_hint: SpokenPeriodHint = Field(
+        default="none",
         description=(
-            "Exact substring from the latest customer message that explicitly carries the clock-period "
-            "meaning for this time selection. Use null when no period meaning was explicitly stated. "
-            "Copy only the period-bearing text, never clock digits or a generic clock introducer. Python "
-            "verifies this evidence and owns AM/PM defaulting and canonicalization."
+            "Semantic hint only. Return none unless the latest customer turn explicitly distinguishes "
+            "an AM/PM-style period. A period-only answer to a pending time clarification may set this "
+            "hint with time=null; Python owns final clock resolution from clinic hours."
         ),
     )
-    period_status: SkipJsonSchema[PeriodStatus] = "none"
 
     @model_validator(mode="before")
     @classmethod
@@ -229,8 +218,7 @@ class Selection(StrictContractModel):
             "time": None,
             "relative": None,
             "time_ambiguity": "none",
-            "period_evidence_text": None,
-            "period_status": "none",
+            "spoken_period_hint": "none",
         }
 
     @model_validator(mode="after")
@@ -242,14 +230,15 @@ class Selection(StrictContractModel):
                 raise ValueError("index selection cannot also contain time/ref/relative.")
             if (
                 self.time_ambiguity != "none"
-                or self.period_evidence_text is not None
-                or self.period_status != "none"
+                or self.spoken_period_hint != "none"
             ):
                 raise ValueError("index selection cannot contain time semantics.")
         elif self.kind == "time":
             if self.time is None:
-                raise ValueError("time selection requires time.")
-            time.fromisoformat(self.time)
+                if self.spoken_period_hint not in {"am", "pm"}:
+                    raise ValueError("time selection requires time or an AM/PM spoken period hint.")
+            else:
+                time.fromisoformat(self.time)
             if self.index is not None or self.ref is not None or self.relative is not None:
                 raise ValueError("time selection cannot also contain index/ref/relative.")
         elif self.kind == "ref":
@@ -259,8 +248,7 @@ class Selection(StrictContractModel):
                 raise ValueError("ref selection cannot also contain index/time/relative.")
             if (
                 self.time_ambiguity != "none"
-                or self.period_evidence_text is not None
-                or self.period_status != "none"
+                or self.spoken_period_hint != "none"
             ):
                 raise ValueError("ref selection cannot contain time semantics.")
         elif self.kind == "relative":
@@ -270,8 +258,7 @@ class Selection(StrictContractModel):
                 raise ValueError("relative selection cannot also contain index/time/ref.")
             if (
                 self.time_ambiguity != "none"
-                or self.period_evidence_text is not None
-                or self.period_status != "none"
+                or self.spoken_period_hint != "none"
             ):
                 raise ValueError("relative selection cannot contain time semantics.")
         return self
@@ -560,8 +547,6 @@ class TurnOperation(StrictContractModel):
             return "unspecified"
         if constraint.start_time_ambiguity == "twelve_hour":
             return "bare_spoken_12h"
-        if constraint.period_status != "none":
-            return "explicit_period"
         return "unspecified"
 
 

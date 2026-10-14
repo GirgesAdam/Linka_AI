@@ -1949,33 +1949,6 @@ def orchestrate_v2_turn(
         semantic_context,
         automation_context=automation_context,
     )
-    contextual_period_understanding: TiaTurnUnderstanding | None = None
-    contextual_period_resolution = resolve_pending_bare_clock_period(
-        initial_task,
-        latest_customer_text,
-        context=semantic_context,
-    )
-    if contextual_period_resolution is not None:
-        initial_task, _resolved_period = contextual_period_resolution
-        semantic_context = with_safe_task_context(
-            semantic_context,
-            active_task=_task_dict(initial_task),
-            pending_choice=(
-                pending_choice.model_dump(mode="json") if pending_choice is not None else None
-            ),
-        )
-        contextual_period_understanding = TiaTurnUnderstanding(
-            operations=[
-                TurnOperation(
-                    type="continue_active",
-                    entities=TurnEntities(),
-                    execution_intent="execute",
-                    active_task_relationship="continue",
-                    continues_previous=True,
-                )
-            ]
-        )
-
     reference_interpretation: ReferenceInterpretation | None = None
     reference_plan_override: TurnPlan | None = None
     full_interpreter_called = True
@@ -1983,8 +1956,7 @@ def orchestrate_v2_turn(
         "availability_reference_options"
     )
     if (
-        contextual_period_understanding is None
-        and latest_customer_text
+        latest_customer_text
         and isinstance(raw_reference_options, list)
         and raw_reference_options
     ):
@@ -2024,10 +1996,7 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    if contextual_period_understanding is not None:
-        understanding = contextual_period_understanding
-        full_interpreter_called = False
-    elif (
+    if (
         decision is not None
         and decision.action == "new_search"
         and exact_reference_time is not None
@@ -2255,6 +2224,42 @@ def orchestrate_v2_turn(
             raise V2TurnInterpretationStructuredOutputError(
                 "V2 turn semantic interpretation exhausted structured attempts."
             ) from exc
+    typed_period_hints = {
+        hint
+        for operation in understanding.operations
+        for hint in (
+            (operation.entities.time.spoken_period_hint if operation.entities.time is not None else "none"),
+            (operation.selection.spoken_period_hint if operation.selection is not None else "none"),
+        )
+        if hint in {"am", "pm"}
+    }
+    if len(typed_period_hints) == 1:
+        typed_period_resolution = resolve_pending_bare_clock_period(
+            initial_task,
+            next(iter(typed_period_hints)),
+            context=semantic_context,
+        )
+        if typed_period_resolution is not None:
+            initial_task, _resolved_period = typed_period_resolution
+            semantic_context = with_safe_task_context(
+                semantic_context,
+                active_task=_task_dict(initial_task),
+                pending_choice=(
+                    pending_choice.model_dump(mode="json") if pending_choice is not None else None
+                ),
+            )
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="continue_active",
+                        entities=TurnEntities(),
+                        execution_intent="execute",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                    )
+                ]
+            )
+
     understanding = merge_same_visit_booking_operations(understanding)
     initial_booking_task = (
         initial_task if isinstance(initial_task, BookingTaskState) else None

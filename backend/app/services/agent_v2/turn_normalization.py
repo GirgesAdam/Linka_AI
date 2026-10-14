@@ -161,8 +161,9 @@ def collapse_booking_service_sets(
             explicit_grouped_service_mutation
             and operation.grouped_booking_action == "remove_other_components"
         )
-        explicit_singleton_narrowing = (
-            explicit_grouped_service_correction
+        explicit_singleton_mutation = (
+            explicit_grouped_service_mutation
+            and execution_intent == "execute"
             and entity is not None
             and isinstance(entity.ref, str)
             and bool(entity.ref)
@@ -175,7 +176,7 @@ def collapse_booking_service_sets(
                 or fresh_grouped_availability
             )
             or entity is None
-            or (entity.candidate_mode != "set" and not explicit_singleton_narrowing)
+            or (entity.candidate_mode != "set" and not explicit_singleton_mutation)
         ):
             normalized.append(operation)
             continue
