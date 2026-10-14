@@ -384,7 +384,7 @@ def test_ap12_period_answer_updates_same_task_then_continues_at_22() -> None:
                 mode="exact",
                 start_time="22:00",
                 start_time_ambiguity="none",
-                explicit_period="pm",
+                period_status="explicit",
             )
         ),
     )

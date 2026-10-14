@@ -170,7 +170,7 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 4:15 العصر بالضبط",
         start="10:00",
         end="22:00",
-        expected_period="pm",
+        expected_period="explicit",
         expected_canonical="16:15",
         unavailable=True,
     ),
@@ -179,7 +179,7 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل بالضبط",
         start="09:00",
         end="21:00",
-        expected_period="pm",
+        expected_period="explicit",
         expected_canonical="23:00",
         unavailable=True,
     ),
@@ -188,7 +188,7 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3 العصر بالضبط",
         start="10:00",
         end="22:00",
-        expected_period="pm",
+        expected_period="explicit",
         expected_canonical="15:00",
     ),
 ]
@@ -397,13 +397,13 @@ def _validate_write_safety(record: dict[str, Any], spec: ScenarioSpec, ctx: base
 def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Context) -> None:
     operation = _semantic_operation(record)
     time_value = _semantic_time(operation)
-    period = str(time_value.get("explicit_period") or "none")
+    period = str(time_value.get("period_status") or "none")
     reply = str(record.get("agent") or "").strip()
 
     _require(
         period == spec.expected_period,
         counter="silent_am_pm_mutation",
-        message=f"{spec.name}: explicit_period={period}, expected {spec.expected_period}",
+        message=f"{spec.name}: period_status={period}, expected {spec.expected_period}",
     )
     if spec.expected_bare_status is not None:
         # Ambiguity is backend-derived authority, not an LLM/provider contract field.

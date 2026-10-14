@@ -705,3 +705,71 @@ def test_d6_grouped_explicit_pm_executes_one_pending_appointment_with_shared_vis
     assert appointment.laser_device_key == "candela"
     assert result["main_service_id"] == COMBO
     assert result["additional_service_ids"] == [FULL_ARMS]
+
+def test_ra6_confirmation_creates_one_bikini_appointment_plus_underarm_on_same_device(monkeypatch) -> None:
+    proposal = _proposal(services=[UNDERARM, BIKINI]).model_copy(
+        update={
+            "device_key": "candela",
+            "additional_service_device_keys": {UNDERARM: "candela"},
+        }
+    )
+    assert proposal.main_service_id == BIKINI
+    assert proposal.additional_service_ids == [UNDERARM]
+    appointment = SimpleNamespace(
+        id=UUID("88888888-8888-8888-8888-888888888888"),
+        service_id=UUID(BIKINI),
+        status="pending",
+        duration_minutes=25,
+        laser_device_key="candela",
+    )
+    created: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_additional_services",
+        lambda *_args, **_kwargs: [
+            AdditionalServiceResolution(service_id=UUID(UNDERARM), device_key="candela")
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_booking_package",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            package_id=None, package_used=False, package_name=None
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: "candela",
+    )
+
+    def fake_create(*_args, **kwargs):
+        created.append(("appointment", kwargs.get("laser_device_key")))
+        return appointment
+
+    def fake_add(*_args, **kwargs):
+        created.append((f"additional:{kwargs['service_id']}", kwargs.get("laser_device_key")))
+        return SimpleNamespace(
+            id=UUID("99999999-9999-9999-9999-999999999999"),
+            service_id=kwargs["service_id"],
+        )
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.create_appointment_operation", fake_create
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.add_additional_service", fake_add
+    )
+
+    result = execute_booking_proposal(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        patient=SimpleNamespace(id=UUID(PATIENT_ID), status="active"),
+        proposal=proposal,
+        idempotency_key="ra6-confirmation",
+    )
+
+    assert created == [
+        ("appointment", "candela"),
+        (f"additional:{UNDERARM}", "candela"),
+    ]
+    assert result["main_service_id"] == BIKINI
+    assert result["additional_service_ids"] == [UNDERARM]

@@ -81,9 +81,9 @@ def _time_view(turn: Any) -> dict[str, object] | None:
         "operation_type": operation.type,
         "active_task_relationship": operation.active_task_relationship,
         "active_task_explicit_fields": list(operation.active_task_explicit_fields),
-        "explicit_period": constraint.explicit_period,
-        "selection_explicit_period": (
-            operation.selection.explicit_period
+        "period_status": constraint.period_status,
+        "selection_period_status": (
+            operation.selection.period_status
             if operation.selection is not None and operation.selection.kind == "time"
             else "none"
         ),

@@ -898,11 +898,11 @@ def _plan_operation(
     params, ambiguous = _base_parameters(operation, context)
 
     if (
-        (operation.entities.time is not None and operation.entities.time.explicit_period == "conflict")
+        (operation.entities.time is not None and operation.entities.time.period_status == "conflict")
         or (
             operation.selection is not None
             and operation.selection.kind == "time"
-            and operation.selection.explicit_period == "conflict"
+            and operation.selection.period_status == "conflict"
         )
     ):
         return _clarify(

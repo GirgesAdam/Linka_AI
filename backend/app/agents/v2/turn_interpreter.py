@@ -21,7 +21,6 @@ from app.agents.v2.turn_contract import (
     AppointmentSelector,
     DateConstraint,
     EntityReference,
-    ExplicitTimePeriod,
     Selection,
     TiaTurnUnderstanding,
     TimeAmbiguity,
@@ -421,12 +420,8 @@ SEMANTIC PRINCIPLES
   situations use urgent_medical. Explicit requests for a person use human_support.
 - Resolve clear relative dates against the clinic-local clock. If a date remains semantically
   underspecified, leave it null rather than guessing.
-- For a periodless spoken 1-12 clock, preserve the 12-hour-form value with explicit_period=none.
-  Do not choose AM/PM from clinic hours; Python derives ambiguity and canonical resolution.
-- When the customer explicitly states AM/PM, morning/afternoon/evening, noon, or midnight, preserve that
-  meaning in explicit_period (am/pm/noon/midnight). Python owns canonical 24-hour conversion. A literal
-  colon-formatted HH:MM with no explicit period stays exact with ambiguity=none. Use conflict only for
-  genuinely contradictory explicit period meaning. Apply the same semantic fields to a time selection.
+- Use period_status=none when the customer did not explicitly fix a period; keep a periodless 1-12 clock in 12-hour form.
+- Use period_status=explicit when the customer explicitly fixes the period and put the normalized semantic clock in start_time; use conflict only for irreconcilable explicit time evidence. Apply the same rule to time selections.
 - follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
   resolve a specific future follow-up time. Otherwise leave it null.
 - requested_service_details describes only service facts the customer explicitly asked for in that
@@ -1377,59 +1372,34 @@ def _same_clock_or_twelve_hour_variant(value: str | None, explicit: str) -> bool
     return raw_minute == exp_minute and (raw_hour == exp_hour or abs(raw_hour - exp_hour) == 12)
 
 
-def _period_matches_clock(value: str | None, period: ExplicitTimePeriod) -> bool:
-    raw = str(value or "").strip()[:5]
-    try:
-        hour, _minute = (int(part) for part in raw.split(":", 1))
-    except (TypeError, ValueError):
-        return False
-    if period == "am":
-        return 0 <= hour < 12
-    if period == "pm":
-        return 12 <= hour <= 23
-    if period == "noon":
-        return hour == 12
-    if period == "midnight":
-        return hour == 0
-    return period == "none"
-
-
-def _canonicalize_explicit_period_clock(
-    value: str | None,
-    period: ExplicitTimePeriod,
-) -> str | None:
-    """Canonicalize model-understood period meaning without consulting raw language."""
+def _normalize_periodless_clock(value: str | None) -> str | None:
+    """Remove an inferred AM/PM choice while preserving the model's minute meaning."""
     raw = str(value or "").strip()[:5]
     try:
         parsed = time.fromisoformat(raw)
     except ValueError:
         return None
-    if period == "none":
-        return raw
-    if period not in {"am", "pm", "noon", "midnight"}:
-        return None
-
     hour = parsed.hour
-    minute = parsed.minute
-    if period == "am":
-        if hour == 12:
-            hour = 0
-        elif hour >= 12:
-            return None
-    elif period == "pm":
-        if hour == 0:
-            hour = 12
-        elif 1 <= hour < 12:
-            hour += 12
-    elif period == "noon":
-        if hour not in {0, 12}:
-            return None
+    if hour == 0:
         hour = 12
-    elif period == "midnight":
-        if hour not in {0, 12}:
-            return None
-        hour = 0
-    return f"{hour:02d}:{minute:02d}"
+    elif hour > 12:
+        hour -= 12
+    return f"{hour:02d}:{parsed.minute:02d}"
+
+
+def _explicit_clock_conflicts_with_literal(value: str | None, literal_clock: str) -> bool:
+    """Validate semantic explicit-period time against structural HH:MM evidence only."""
+    raw = str(value or "").strip()[:5]
+    try:
+        semantic = time.fromisoformat(raw)
+        literal = time.fromisoformat(literal_clock)
+    except ValueError:
+        return True
+    if semantic.minute != literal.minute:
+        return True
+    if literal.hour == 0 or literal.hour > 12:
+        return semantic.hour != literal.hour
+    return not (semantic.hour == literal.hour or abs(semantic.hour - literal.hour) == 12)
 
 
 def _derive_periodless_clock_ambiguity(
@@ -1450,11 +1420,10 @@ def _normalize_time_semantics_v2(
     *,
     latest_customer_text: str,
 ) -> TiaTurnUnderstanding:
-    """Keep only language meaning in the contract; Python owns clock authority/canonicalization."""
+    """Keep language meaning in the contract; Python owns clock authority/canonicalization."""
     literal_clock = extract_single_explicit_hhmm(latest_customer_text)
     operations: list = []
     changed = False
-    semantic_periods = {"am", "pm", "noon", "midnight"}
 
     for operation in turn.operations:
         original = operation
@@ -1463,36 +1432,16 @@ def _normalize_time_semantics_v2(
         selection = operation.selection
 
         if constraint is not None and constraint.start_time is not None:
-            period = constraint.explicit_period
-            if period in semantic_periods:
-                source_clock = constraint.start_time
-                if literal_clock is not None:
-                    if not _same_clock_or_twelve_hour_variant(source_clock, literal_clock):
-                        period = "conflict"
-                    else:
-                        literal_hour = int(literal_clock.split(":", 1)[0])
-                        if (literal_hour == 0 or literal_hour > 12) and not _period_matches_clock(
-                            literal_clock, period
-                        ):
-                            period = "conflict"
-                        else:
-                            source_clock = literal_clock
-                canonical = (
-                    _canonicalize_explicit_period_clock(source_clock, period)
-                    if period != "conflict"
-                    else None
+            status = constraint.period_status
+            if status == "explicit":
+                if literal_clock is not None and _explicit_clock_conflicts_with_literal(
+                    constraint.start_time, literal_clock
+                ):
+                    status = "conflict"
+                constraint = constraint.model_copy(
+                    update={"start_time_ambiguity": "none", "period_status": status}
                 )
-                if canonical is None:
-                    period = "conflict"
-                else:
-                    constraint = constraint.model_copy(
-                        update={
-                            "start_time": canonical,
-                            "start_time_ambiguity": "none",
-                            "explicit_period": period,
-                        }
-                    )
-            elif period == "none":
+            elif status == "none":
                 if literal_clock is not None and (
                     _same_clock_or_twelve_hour_variant(constraint.start_time, literal_clock)
                     or (
@@ -1501,22 +1450,21 @@ def _normalize_time_semantics_v2(
                     )
                 ):
                     constraint = constraint.model_copy(
-                        update={
-                            "start_time": literal_clock,
-                            "start_time_ambiguity": "none",
-                        }
+                        update={"start_time": literal_clock, "start_time_ambiguity": "none"}
                     )
                 elif latest_customer_text.strip():
-                    constraint = constraint.model_copy(
-                        update={
-                            "start_time_ambiguity": _derive_periodless_clock_ambiguity(
-                                constraint.start_time,
-                                literal_clock=literal_clock
-                            )
-                        }
-                    )
-            if period != constraint.explicit_period:
-                constraint = constraint.model_copy(update={"explicit_period": period})
+                    neutral = _normalize_periodless_clock(constraint.start_time)
+                    if neutral is not None:
+                        constraint = constraint.model_copy(
+                            update={
+                                "start_time": neutral,
+                                "start_time_ambiguity": _derive_periodless_clock_ambiguity(
+                                    neutral, literal_clock=literal_clock
+                                ),
+                            }
+                        )
+            else:
+                constraint = constraint.model_copy(update={"start_time_ambiguity": "none"})
             entities = entities.model_copy(update={"time": constraint})
         elif (
             constraint is None
@@ -1530,42 +1478,22 @@ def _normalize_time_semantics_v2(
                         mode="exact",
                         start_time=literal_clock,
                         start_time_ambiguity="none",
-                        explicit_period="none",
+                        period_status="none",
                     )
                 }
             )
 
         if selection is not None and selection.kind == "time" and selection.time is not None:
-            period = selection.explicit_period
-            if period in semantic_periods:
-                source_clock = selection.time
-                if literal_clock is not None:
-                    if not _same_clock_or_twelve_hour_variant(source_clock, literal_clock):
-                        period = "conflict"
-                    else:
-                        literal_hour = int(literal_clock.split(":", 1)[0])
-                        if (literal_hour == 0 or literal_hour > 12) and not _period_matches_clock(
-                            literal_clock, period
-                        ):
-                            period = "conflict"
-                        else:
-                            source_clock = literal_clock
-                canonical = (
-                    _canonicalize_explicit_period_clock(source_clock, period)
-                    if period != "conflict"
-                    else None
+            status = selection.period_status
+            if status == "explicit":
+                if literal_clock is not None and _explicit_clock_conflicts_with_literal(
+                    selection.time, literal_clock
+                ):
+                    status = "conflict"
+                selection = selection.model_copy(
+                    update={"time_ambiguity": "none", "period_status": status}
                 )
-                if canonical is None:
-                    period = "conflict"
-                else:
-                    selection = selection.model_copy(
-                        update={
-                            "time": canonical,
-                            "time_ambiguity": "none",
-                            "explicit_period": period,
-                        }
-                    )
-            elif period == "none":
+            elif status == "none":
                 if literal_clock is not None and _same_clock_or_twelve_hour_variant(
                     selection.time, literal_clock
                 ):
@@ -1573,16 +1501,18 @@ def _normalize_time_semantics_v2(
                         update={"time": literal_clock, "time_ambiguity": "none"}
                     )
                 elif latest_customer_text.strip():
-                    selection = selection.model_copy(
-                        update={
-                            "time_ambiguity": _derive_periodless_clock_ambiguity(
-                                selection.time,
-                                literal_clock=literal_clock
-                            )
-                        }
-                    )
-            if period != selection.explicit_period:
-                selection = selection.model_copy(update={"explicit_period": period})
+                    neutral = _normalize_periodless_clock(selection.time)
+                    if neutral is not None:
+                        selection = selection.model_copy(
+                            update={
+                                "time": neutral,
+                                "time_ambiguity": _derive_periodless_clock_ambiguity(
+                                    neutral, literal_clock=literal_clock
+                                ),
+                            }
+                        )
+            else:
+                selection = selection.model_copy(update={"time_ambiguity": "none"})
 
         operation = operation.model_copy(update={"entities": entities, "selection": selection})
         if operation != original:
@@ -1590,6 +1520,7 @@ def _normalize_time_semantics_v2(
         operations.append(operation)
 
     return turn.model_copy(update={"operations": operations}) if changed else turn
+
 
 def interpret_customer_turn_v2(
     *,

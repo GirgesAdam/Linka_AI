@@ -43,7 +43,7 @@ AFTER_FIVE = {
     "end_time": None,
     "start_time_ambiguity": "none",
     "end_time_ambiguity": "none",
-    "explicit_period": "none",
+    "period_status": "none",
 }
 BEFORE_FIVE = {
     "mode": "before",
@@ -51,7 +51,7 @@ BEFORE_FIVE = {
     "end_time": None,
     "start_time_ambiguity": "none",
     "end_time_ambiguity": "none",
-    "explicit_period": "none",
+    "period_status": "none",
 }
 
 

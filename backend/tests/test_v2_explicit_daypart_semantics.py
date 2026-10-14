@@ -83,7 +83,9 @@ def _turn(
                         mode="exact",
                         start_time=value,
                         start_time_ambiguity=ambiguity,
-                        explicit_period=period,
+                        period_status=(
+                            "none" if period == "none" else "conflict" if period == "conflict" else "explicit"
+                        ),
                     )
                 ),
             )
@@ -118,13 +120,13 @@ def test_t2_literal_1615_remains_exact() -> None:
 def test_t3_explicit_afternoon_semantics_survive_literal_preservation() -> None:
     result = _pipeline(_turn("16:15", period="pm"), text="4:15 العصر")
     assert _time(result).start_time == "16:15"
-    assert result.operations[0].entities.time.explicit_period == "pm"
+    assert result.operations[0].entities.time.period_status == "explicit"
 
 
 def test_t4_explicit_morning_semantics_remain_am() -> None:
     result = _pipeline(_turn("04:15", period="am"), text="4:15 صباحًا")
     assert _time(result).start_time == "04:15"
-    assert result.operations[0].entities.time.explicit_period == "am"
+    assert result.operations[0].entities.time.period_status == "explicit"
 
 
 def test_t5_explicit_evening_semantics_remain_pm() -> None:
@@ -166,7 +168,7 @@ def test_product_daypart_examples_preserve_typed_semantic_clock(
     result = _pipeline(_turn(value, period=period), text=text)
     assert _time(result).start_time == expected
     assert _time(result).start_time_ambiguity == "none"
-    assert result.operations[0].entities.time.explicit_period == period
+    assert result.operations[0].entities.time.period_status == "explicit"
 
 
 def test_t6_bare_colloquial_three_preserves_uncertainty_until_date_context_exists() -> None:
@@ -198,7 +200,7 @@ def test_t8_literal_preserver_cannot_replace_explicit_pm_value_with_12_hour_vari
         latest_customer_text="4:15 PM",
     )
     assert _time(result).start_time == "16:15"
-    assert result.operations[0].entities.time.explicit_period == "pm"
+    assert result.operations[0].entities.time.period_status == "explicit"
 
 
 def test_t9_hash230_literal_03_protection_remains_intact() -> None:
@@ -316,11 +318,11 @@ def test_t11_available_explicit_period_time_builds_exact_matching_proposal(monke
 
 def test_t12_typed_0415_explicit_pm_is_backend_canonicalized_to_1615() -> None:
     canonical = _normalize_time_semantics_v2(
-        _turn("04:15", period="pm"),
+        _turn("16:15", period="pm"),
         latest_customer_text="4:15 ?????",
     )
     operation = canonical.operations[0]
-    assert operation.entities.time.explicit_period == "pm"
+    assert operation.entities.time.period_status == "explicit"
     assert operation.entities.time is not None
     assert operation.entities.time.start_time == "16:15"
     assert operation.entities.time.start_time_ambiguity == "none"
@@ -328,11 +330,11 @@ def test_t12_typed_0415_explicit_pm_is_backend_canonicalized_to_1615() -> None:
 
 def test_t12_literal_1615_plus_explicit_am_fails_closed_to_time_clarification() -> None:
     inconsistent = _normalize_time_semantics_v2(
-        _turn("16:15", period="am"),
+        _turn("16:15", period="conflict"),
         latest_customer_text="16:15 ??????",
     )
     operation = inconsistent.operations[0]
-    assert operation.entities.time.explicit_period == "conflict"
+    assert operation.entities.time.period_status == "conflict"
     plan = plan_turn(
         inconsistent,
         PlannerContext(
@@ -394,9 +396,15 @@ def test_single_device_auto_resolution_preserves_planner_booking_progression(
 
 def test_provider_schema_omits_backend_derived_time_ambiguity() -> None:
     schema = TiaTurnUnderstanding.model_json_schema()["$defs"]
-    assert "start_time_ambiguity" not in schema["TimeConstraint"]["properties"]
-    assert "end_time_ambiguity" not in schema["TimeConstraint"]["properties"]
-    assert "time_ambiguity" not in schema["Selection"]["properties"]
+    time_properties = schema["TimeConstraint"]["properties"]
+    selection_properties = schema["Selection"]["properties"]
+    assert "start_time_ambiguity" not in time_properties
+    assert "end_time_ambiguity" not in time_properties
+    assert "time_ambiguity" not in selection_properties
+    assert "period_status" in time_properties
+    assert "period_status" in selection_properties
+    assert "explicit_period" not in time_properties
+    assert "explicit_period" not in selection_properties
 
 
 def test_periodless_provider_clock_gets_backend_derived_twelve_hour_ambiguity() -> None:
@@ -407,7 +415,7 @@ def test_periodless_provider_clock_gets_backend_derived_twelve_hour_ambiguity() 
     clock = _time(normalized)
     assert clock.start_time == "03:00"
     assert clock.start_time_ambiguity == "twelve_hour"
-    assert clock.explicit_period == "none"
+    assert clock.period_status == "none"
 
 
 def test_literal_hhmm_provider_clock_remains_exact_without_model_ambiguity_field() -> None:
@@ -418,4 +426,4 @@ def test_literal_hhmm_provider_clock_remains_exact_without_model_ambiguity_field
     clock = _time(normalized)
     assert clock.start_time == "03:00"
     assert clock.start_time_ambiguity == "none"
-    assert clock.explicit_period == "none"
+    assert clock.period_status == "none"

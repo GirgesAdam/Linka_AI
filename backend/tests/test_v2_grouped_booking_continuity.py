@@ -271,7 +271,7 @@ def test_grouped_plan_captures_durable_component_state() -> None:
 
 
 def test_d6_grouped_explicit_pm_preserves_one_grouped_task_and_all_components() -> None:
-    explicit_pm = TimeConstraint(mode="exact", start_time="16:15", explicit_period="pm")
+    explicit_pm = TimeConstraint(mode="exact", start_time="16:15", period_status="explicit")
     plan = TurnPlan(steps=[
         _step(0, "svc-a", explicit_pm),
         _step(1, "svc-b", explicit_pm),

@@ -534,7 +534,7 @@ def _resolve_selection(
             mode="exact",
             start_time=selection.time,
             start_time_ambiguity=selection.time_ambiguity,
-            explicit_period=selection.explicit_period,
+            period_status=selection.period_status,
         ),
         date_constraint=date_constraint,
         context=context,
