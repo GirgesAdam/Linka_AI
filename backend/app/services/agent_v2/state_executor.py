@@ -72,7 +72,9 @@ def _time_constraint(value: object) -> TimeConstraint | None:
 
 
 def _clock_source(value: object, *, fallback: ClockSource = "unspecified") -> ClockSource:
-    if value in {"literal_24h", "bare_spoken_12h", "explicit_period", "inherited", "unspecified"}:
+    if value == "explicit_period":  # legacy persisted/runtime input only
+        return "bare_spoken_12h"
+    if value in {"literal_24h", "bare_spoken_12h", "inherited", "unspecified"}:
         return value  # type: ignore[return-value]
     return fallback
 

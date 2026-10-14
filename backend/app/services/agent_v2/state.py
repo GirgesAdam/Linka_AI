@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -57,12 +57,38 @@ class CustomerConstraints(StrictStateModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_legacy_pulse_usage(cls, value: object) -> object:
+    def normalize_legacy_state(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
-        if value.get("pulse_usage") in {"use_existing", "avoid_existing"}:
-            return {**value, "pulse_usage": "unspecified"}
-        return value
+        cleaned = dict(value)
+        if cleaned.get("pulse_usage") in {"use_existing", "avoid_existing"}:
+            cleaned["pulse_usage"] = "unspecified"
+        if cleaned.get("time_clock_source") == "explicit_period":
+            # Legacy compatibility only: reopen the old model-owned period clock as a
+            # backend-owned spoken clock instead of preserving obsolete authority.
+            cleaned["time_clock_source"] = "bare_spoken_12h"
+            raw_time = cleaned.get("time")
+            if isinstance(raw_time, dict) and raw_time.get("start_time") not in (None, ""):
+                legacy_time = dict(raw_time)
+                try:
+                    parsed = time.fromisoformat(str(legacy_time["start_time"])[:5])
+                except ValueError:
+                    pass
+                else:
+                    hour = parsed.hour
+                    if hour in {0, 12}:
+                        # Old explicit-period 12 cannot be safely reconstructed without
+                        # reviving legacy semantic authority. Preserve the value but fail
+                        # closed at the clock-source boundary instead of assuming noon.
+                        cleaned["time_clock_source"] = "unspecified"
+                    else:
+                        if hour > 12:
+                            hour -= 12
+                        legacy_time["start_time"] = f"{hour:02d}:{parsed.minute:02d}"
+                    legacy_time["start_time_ambiguity"] = "twelve_hour"
+                    legacy_time["spoken_period_hint"] = "none"
+                    cleaned["time"] = legacy_time
+        return cleaned
 
 
 class DerivedBookingState(StrictStateModel):

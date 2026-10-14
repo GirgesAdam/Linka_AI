@@ -168,6 +168,15 @@ def collapse_booking_service_sets(
             and bool(entity.ref)
             and not entity.candidate_refs
         )
+        explicit_singleton_preserve = (
+            explicit_grouped_service_mutation
+            and execution_intent == "execute"
+            and operation.grouped_booking_action == "preserve_group"
+            and entity is not None
+            and isinstance(entity.ref, str)
+            and bool(entity.ref)
+            and not entity.candidate_refs
+        )
         if (
             not (
                 canonical_booking_set
@@ -175,7 +184,11 @@ def collapse_booking_service_sets(
                 or fresh_grouped_availability
             )
             or entity is None
-            or (entity.candidate_mode != "set" and not explicit_singleton_narrowing)
+            or (
+                entity.candidate_mode != "set"
+                and not explicit_singleton_narrowing
+                and not explicit_singleton_preserve
+            )
         ):
             normalized.append(operation)
             continue
