@@ -60,9 +60,12 @@ class CustomerConstraints(StrictStateModel):
     def normalize_legacy_pulse_usage(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
-        if value.get("pulse_usage") in {"use_existing", "avoid_existing"}:
-            return {**value, "pulse_usage": "unspecified"}
-        return value
+        normalized = dict(value)
+        if normalized.get("pulse_usage") in {"use_existing", "avoid_existing"}:
+            normalized["pulse_usage"] = "unspecified"
+        if normalized.get("time_clock_source") == "explicit_period":
+            normalized["time_clock_source"] = "inherited"
+        return normalized
 
 
 class DerivedBookingState(StrictStateModel):

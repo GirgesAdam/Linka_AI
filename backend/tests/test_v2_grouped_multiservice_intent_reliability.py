@@ -658,7 +658,7 @@ def _ra6_book_turn(context, *, execution_intent: str) -> TiaTurnUnderstanding:
                     time=TimeConstraint(
                         mode="exact",
                         start_time="16:30",
-                        period_status="explicit",
+                        spoken_period_hint="pm",
                     ),
                 ),
             )
@@ -777,3 +777,71 @@ def test_true_service_info_comparison_does_not_become_booking_task() -> None:
     )
     assert plan.steps[0].state_action != "start_booking"
     assert plan.steps[0].write_intent is None
+
+
+def test_g12_singleton_preserve_group_unions_grounded_service_without_set_mode() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        ref=refs[ARMS],
+                        candidate_refs=[],
+                        candidate_mode="ambiguous",
+                    )
+                ),
+            )
+        ]
+    )
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B, ARMS]}
+    assert normalized.operations[0].entities.service is not None
+    assert normalized.operations[0].entities.service.candidate_mode == "ambiguous"
+
+
+def test_g13_existing_singleton_preserve_group_does_not_duplicate_component() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(ref=refs[B], candidate_mode="ambiguous")
+                ),
+            )
+        ]
+    )
+    _normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B]}

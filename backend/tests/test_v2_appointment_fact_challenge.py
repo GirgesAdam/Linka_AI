@@ -42,7 +42,7 @@ def _catalog(*, start_local: str = "2026-10-02T14:00:00+03:00") -> dict[str, obj
         "doctors": [
             {
                 "id": DOCTOR_ID,
-                "name": "دكتورة مريم",
+                "name": "Ø¯ÙƒØªÙˆØ±Ø© Ù…Ø±ÙŠÙ…",
                 "service_ids": [SERVICE_ID],
             }
         ],
@@ -52,7 +52,7 @@ def _catalog(*, start_local: str = "2026-10-02T14:00:00+03:00") -> dict[str, obj
                 "service_id": SERVICE_ID,
                 "service_name": "Hydrafacial",
                 "doctor_id": DOCTOR_ID,
-                "doctor_name": "دكتورة مريم",
+                "doctor_name": "Ø¯ÙƒØªÙˆØ±Ø© Ù…Ø±ÙŠÙ…",
                 "status": "confirmed",
                 "start_local": start_local,
             }
@@ -93,7 +93,7 @@ def _appointment_outcome(
                         "status": "confirmed",
                         "start_local": start_local,
                         "end_local": "2026-10-02T15:00:00+03:00",
-                        "doctor_name": "دكتورة مريم",
+                        "doctor_name": "Ø¯ÙƒØªÙˆØ±Ø© Ù…Ø±ÙŠÙ…",
                         "services": [{"service_name": "Hydrafacial"}],
                     }
                 ],
@@ -192,7 +192,7 @@ def test_verified_appointment_identity_gets_ephemeral_ref_without_catalog_appoin
             "doctors": [
                 {
                     "id": DOCTOR_ID,
-                    "name": "دكتورة مريم",
+                    "name": "Ø¯ÙƒØªÙˆØ±Ø© Ù…Ø±ÙŠÙ…",
                     "service_ids": [SERVICE_ID],
                 }
             ],
@@ -297,7 +297,7 @@ def test_new_filtered_query_remains_exact_time_filter() -> None:
             "end_time": None,
             "start_time_ambiguity": "none",
             "end_time_ambiguity": "none",
-            "period_status": "none",
+            "spoken_period_hint": "none",
         }
     }
     assert step.write_intent is None
@@ -344,7 +344,7 @@ def test_false_time_challenge_deterministically_corrects_verified_truth() -> Non
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
-        history=[HumanMessage(content="مش كان الساعة 18:00؟")],
+        history=[HumanMessage(content="Ù…Ø´ ÙƒØ§Ù† Ø§Ù„Ø³Ø§Ø¹Ø© 18:00ØŸ")],
         outcomes=[
             _appointment_outcome(
                 start_local="2026-10-02T14:00:00+03:00",
@@ -354,9 +354,9 @@ def test_false_time_challenge_deterministically_corrects_verified_truth() -> Non
     )
 
     assert model == "deterministic:appointment-info-contract"
-    assert "مش الساعة 6:00 مساءً" in reply
-    assert "الساعة 2:00 مساءً" in reply
-    assert "مفيش مواعيد" not in reply
+    assert "Ù…Ø´ Ø§Ù„Ø³Ø§Ø¹Ø© 6:00 Ù…Ø³Ø§Ø¡Ù‹" in reply
+    assert "Ø§Ù„Ø³Ø§Ø¹Ø© 2:00 Ù…Ø³Ø§Ø¡Ù‹" in reply
+    assert "Ù…ÙÙŠØ´ Ù…ÙˆØ§Ø¹ÙŠØ¯" not in reply
 
 
 def test_correct_time_challenge_deterministically_confirms_verified_truth() -> None:
@@ -364,7 +364,7 @@ def test_correct_time_challenge_deterministically_confirms_verified_truth() -> N
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
-        history=[HumanMessage(content="مش كان الساعة 18:00؟")],
+        history=[HumanMessage(content="Ù…Ø´ ÙƒØ§Ù† Ø§Ù„Ø³Ø§Ø¹Ø© 18:00ØŸ")],
         outcomes=[
             _appointment_outcome(
                 start_local="2026-10-02T18:00:00+03:00",
@@ -374,8 +374,8 @@ def test_correct_time_challenge_deterministically_confirms_verified_truth() -> N
     )
 
     assert model == "deterministic:appointment-info-contract"
-    assert reply.startswith("أيوه، ده الوقت المؤكد للموعد:")
-    assert "الساعة 6:00 مساءً" in reply
+    assert reply.startswith("Ø£ÙŠÙˆÙ‡ØŒ Ø¯Ù‡ Ø§Ù„ÙˆÙ‚Øª Ø§Ù„Ù…Ø¤ÙƒØ¯ Ù„Ù„Ù…ÙˆØ¹Ø¯:")
+    assert "Ø§Ù„Ø³Ø§Ø¹Ø© 6:00 Ù…Ø³Ø§Ø¡Ù‹" in reply
 
 
 def test_missing_reread_target_never_claims_global_no_appointments() -> None:
@@ -400,10 +400,10 @@ def test_missing_reread_target_never_claims_global_no_appointments() -> None:
         clinic_name="Linka Clinic",
         timezone_name="Africa/Cairo",
         local_now=NOW,
-        history=[HumanMessage(content="مش كان الساعة 18:00؟")],
+        history=[HumanMessage(content="Ù…Ø´ ÙƒØ§Ù† Ø§Ù„Ø³Ø§Ø¹Ø© 18:00ØŸ")],
         outcomes=[outcome],
     )
 
     assert model == "deterministic:appointment-info-contract"
-    assert "الموعد اللي راجعناه" in reply
-    assert "مفيش مواعيد جاية" not in reply
+    assert "Ø§Ù„Ù…ÙˆØ¹Ø¯ Ø§Ù„Ù„ÙŠ Ø±Ø§Ø¬Ø¹Ù†Ø§Ù‡" in reply
+    assert "Ù…ÙÙŠØ´ Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø¬Ø§ÙŠØ©" not in reply
