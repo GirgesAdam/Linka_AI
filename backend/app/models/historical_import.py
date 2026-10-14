@@ -61,7 +61,7 @@ class ClinicHistoricalImportRow(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "clinic_historical_import_rows"
     __table_args__ = (
         CheckConstraint(
-            "entity_type IN ('patient', 'appointment', 'payment', 'payment_allocation', 'package')",
+            "entity_type IN ('patient', 'appointment', 'payment', 'payment_allocation', 'package', 'holding')",
             name="clinic_historical_import_row_entity_type_valid",
         ),
         CheckConstraint(
@@ -102,7 +102,7 @@ class ClinicHistoricalImportLink(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "clinic_historical_import_links"
     __table_args__ = (
         CheckConstraint(
-            "entity_type IN ('patient', 'appointment', 'payment', 'package')",
+            "entity_type IN ('patient', 'appointment', 'payment', 'package', 'pulse_pack')",
             name="clinic_historical_import_link_entity_type_valid",
         ),
         ForeignKeyConstraint(

@@ -192,7 +192,7 @@ export function ClinicSettingsPanel({
           <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <b className="text-sm">قالب الاستيراد</b>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">القالب الجديد مخصص للباقات النشطة فقط: README + active_packages، بدون IDs أو شيت مدفوعات منفصل.</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">القالب يحتوي على README + active_packages بنفس شكل الباقات السابق، مع عمود النبضات المتبقية. الاسم ورقم الموبايل فقط إلزاميان على كل صف.</p>
             </div>
             <a href="/api/clinic-history-template" className={buttonVariants({ variant: "outline" })}><Download size={16} /> تحميل القالب</a>
           </div>

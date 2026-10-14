@@ -30,6 +30,10 @@ class Service(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "operational_category IN ('laser', 'dermatology', 'slimming')",
             name="service_operational_category_valid",
         ),
+        CheckConstraint(
+            "requires_laser_device = (operational_category = 'laser')",
+            name="service_laser_requirement_matches_category",
+        ),
         CheckConstraint("buffer_before_minutes >= 0", name="service_buffer_before_non_negative"),
         CheckConstraint("buffer_after_minutes >= 0", name="service_buffer_after_non_negative"),
     )

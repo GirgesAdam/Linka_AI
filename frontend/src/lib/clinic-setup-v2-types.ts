@@ -67,7 +67,7 @@ export type HistoricalPreview = {
   issue_groups: Array<{
     code: string;
     message: string;
-    entity_type: "patient" | "appointment" | "payment" | "payment_allocation" | "package";
+    entity_type: "patient" | "appointment" | "payment" | "payment_allocation" | "package" | "holding";
     occurrence_count: number;
     example_rows: number[];
   }>;
@@ -76,6 +76,9 @@ export type HistoricalPreview = {
     patients_to_create?: number;
     existing_patients_reused?: number;
     packages_to_create?: number;
+    pulse_balances_to_create?: number;
+    patient_only_records?: number;
+    patients_with_both?: number;
     historical_payments_to_create?: number;
   };
   total_amount_imported_minor: number;

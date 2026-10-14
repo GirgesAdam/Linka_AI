@@ -1,7 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { tiaRequest } from "@/lib/tia/api";
+import {
+  getImportValidationErrorDetail,
+  tiaRequest,
+  type ImportValidationErrorDetail,
+} from "@/lib/tia/api";
 import type { HistoricalBatch, HistoricalPreview } from "@/lib/clinic-setup-v2-types";
 
 export type HistoricalImportActionState = {
@@ -9,15 +13,27 @@ export type HistoricalImportActionState = {
   error: string | null;
 };
 
-
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 60 * 1024 * 1024;
+const MAX_VISIBLE_VALIDATION_ERRORS = 4;
 
 function extension(name: string): "csv" | "xlsx" | null {
   const value = name.toLowerCase();
   if (value.endsWith(".csv")) return "csv";
   if (value.endsWith(".xlsx")) return "xlsx";
   return null;
+}
+
+function formatImportValidationError(detail: ImportValidationErrorDetail) {
+  const title = detail.error_count === 1
+    ? "تعذر استيراد الملف:"
+    : `تعذر استيراد الملف بسبب ${detail.error_count} مشاكل:`;
+  const visible = detail.errors.slice(0, MAX_VISIBLE_VALIDATION_ERRORS).map((item) =>
+    item.row ? `- الصف ${item.row}: ${item.message}` : `- ${item.message}`,
+  );
+  const hiddenCount = Math.max(detail.error_count - visible.length, 0);
+  if (hiddenCount > 0) visible.push(`- وهناك ${hiddenCount} مشاكل إضافية.`);
+  return [title, ...visible].join("\n");
 }
 
 export async function previewHistoricalImportAction(
@@ -53,7 +69,12 @@ export async function previewHistoricalImportAction(
     revalidatePath("/setup/integration");
     return { preview, error: null };
   } catch (error) {
-    return { preview: null, error: error instanceof Error ? error.message : "تعذر فحص الملفات." };
+    const validation = getImportValidationErrorDetail(error);
+    if (validation) return { preview: null, error: formatImportValidationError(validation) };
+    return {
+      preview: null,
+      error: error instanceof Error ? error.message : "حدث خطأ أثناء معالجة الملف. حاول مرة أخرى.",
+    };
   }
 }
 
