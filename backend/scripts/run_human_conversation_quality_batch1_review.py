@@ -129,11 +129,33 @@ def _run(
 
 
 def _priced_env() -> V2FixtureEnvironment:
-    return V2FixtureEnvironment()
+    base = V2FixtureEnvironment()
+    catalog = deepcopy(base.catalog)
+    catalog["primary_branch_id"] = "single-location"
+    catalog["branches"] = [
+        {
+            "id": "single-location",
+            "name": "Main Branch",
+            "timezone": TZ,
+            "working_hours": [
+                {"weekday": weekday, "start": "10:00", "end": "22:00"}
+                for weekday in range(7)
+            ],
+        }
+    ]
+    return V2FixtureEnvironment(
+        catalog=catalog,
+        clinic_info=deepcopy(base.clinic_info),
+        profile=deepcopy(base.profile),
+        history=deepcopy(base.history),
+        slots=deepcopy(base.slots),
+        package_offers=deepcopy(base.package_offers),
+        refund_quotes=deepcopy(base.refund_quotes),
+    )
 
 
 def _marker_env() -> V2FixtureEnvironment:
-    base = V2FixtureEnvironment()
+    base = _priced_env()
     slots = deepcopy(base.slots)
     for slot in slots:
         if (

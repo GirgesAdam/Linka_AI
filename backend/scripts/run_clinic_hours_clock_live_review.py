@@ -751,6 +751,7 @@ def main() -> int:
     results: list[dict[str, Any]] = []
     failures = 0
     scenarios = _selected_scenarios()
+    base.install_runtime_instrumentation()
     for spec in scenarios:
         workspace_id: UUID | None = None
         ctx: base.Context | None = None
@@ -808,6 +809,7 @@ def main() -> int:
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
         flush=True,
     )
+    base.uninstall_runtime_instrumentation()
     return 0 if failures == 0 and all(value == 0 for value in SAFETY_COUNTERS.values()) else 1
 
 

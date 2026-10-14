@@ -56,8 +56,6 @@ def _capture_invoke(*args, **kwargs):
     return value
 
 
-turn_interpreter.invoke_typed_structured_output = _capture_invoke
-
 RUNTIME_TRACE: dict[str, Any] = {}
 _ORIGINAL_AUTO_DEVICE = orchestrator_runtime._auto_resolve_single_booking_device
 _ORIGINAL_PLAN_PROGRESS = orchestrator_runtime.plan_active_task_progress
@@ -150,11 +148,24 @@ def _capture_prepare_proposal(step, *args, **kwargs):
     return advanced, proposal
 
 
-orchestrator_runtime._auto_resolve_single_booking_device = _capture_auto_device
-orchestrator_runtime.plan_active_task_progress = _capture_plan_progress
-orchestrator_runtime.apply_step_state = _capture_apply_state
-orchestrator_runtime.execute_step_reads = _capture_execute_reads
-orchestrator_runtime._prepare_booking_proposal = _capture_prepare_proposal
+def install_runtime_instrumentation() -> None:
+    """Install live-review tracing only for the explicit reviewer execution window."""
+    turn_interpreter.invoke_typed_structured_output = _capture_invoke
+    orchestrator_runtime._auto_resolve_single_booking_device = _capture_auto_device
+    orchestrator_runtime.plan_active_task_progress = _capture_plan_progress
+    orchestrator_runtime.apply_step_state = _capture_apply_state
+    orchestrator_runtime.execute_step_reads = _capture_execute_reads
+    orchestrator_runtime._prepare_booking_proposal = _capture_prepare_proposal
+
+
+def uninstall_runtime_instrumentation() -> None:
+    """Restore production functions so importing reviewer helpers cannot contaminate tests."""
+    turn_interpreter.invoke_typed_structured_output = _ORIGINAL_INVOKE
+    orchestrator_runtime._auto_resolve_single_booking_device = _ORIGINAL_AUTO_DEVICE
+    orchestrator_runtime.plan_active_task_progress = _ORIGINAL_PLAN_PROGRESS
+    orchestrator_runtime.apply_step_state = _ORIGINAL_APPLY_STATE
+    orchestrator_runtime.execute_step_reads = _ORIGINAL_EXECUTE_READS
+    orchestrator_runtime._prepare_booking_proposal = _ORIGINAL_PREPARE_PROPOSAL
 
 
 @dataclass
