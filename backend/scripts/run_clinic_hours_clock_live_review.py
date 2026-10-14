@@ -79,7 +79,6 @@ class ScenarioSpec:
     customer: str
     start: str
     end: str
-    expected_source: str
     expected_period: str
     expected_canonical: str | None
     expected_bare_status: str | None = None
@@ -95,7 +94,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3",
         start="10:00",
         end="22:00",
-        expected_source="bare_spoken_12h",
         expected_period="none",
         expected_canonical="15:00",
         expected_bare_status="resolved",
@@ -107,7 +105,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10",
         start="09:00",
         end="21:00",
-        expected_source="bare_spoken_12h",
         expected_period="none",
         expected_canonical="10:00",
         expected_bare_status="resolved",
@@ -119,7 +116,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10",
         start="09:00",
         end="23:30",
-        expected_source="bare_spoken_12h",
         expected_period="none",
         expected_canonical=None,
         expected_bare_status="clarify_period",
@@ -132,7 +128,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11",
         start="09:00",
         end="22:00",
-        expected_source="bare_spoken_12h",
         expected_period="none",
         expected_canonical="11:00",
         expected_bare_status="resolved",
@@ -144,7 +139,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11",
         start="14:00",
         end="23:30",
-        expected_source="bare_spoken_12h",
         expected_period="none",
         expected_canonical="23:00",
         expected_bare_status="resolved",
@@ -156,7 +150,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 12",
         start="10:00",
         end="22:00",
-        expected_source="bare_spoken_12h",
         expected_period="none",
         expected_canonical="12:00",
         expected_bare_status="resolved",
@@ -168,7 +161,6 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 03:00 بالضبط",
         start="10:00",
         end="22:00",
-        expected_source="literal_24h",
         expected_period="none",
         expected_canonical="03:00",
         unavailable=True,
@@ -178,8 +170,7 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 4:15 العصر بالضبط",
         start="10:00",
         end="22:00",
-        expected_source="explicit_period",
-        expected_period="explicit_pm",
+        expected_period="pm",
         expected_canonical="16:15",
         unavailable=True,
     ),
@@ -188,10 +179,17 @@ SCENARIOS = [
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل بالضبط",
         start="09:00",
         end="21:00",
-        expected_source="explicit_period",
-        expected_period="explicit_pm",
+        expected_period="pm",
         expected_canonical="23:00",
         unavailable=True,
+    ),
+    ScenarioSpec(
+        name="RT10",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3 العصر بالضبط",
+        start="10:00",
+        end="22:00",
+        expected_period="pm",
+        expected_canonical="15:00",
     ),
 ]
 
@@ -304,7 +302,7 @@ def _canonical_clock(record: dict[str, Any], spec: ScenarioSpec) -> str | None:
     operation = _semantic_operation(record)
     time_value = _semantic_time(operation)
     raw = time_value.get("start_time")
-    if operation.get("clock_source") == "literal_24h" and raw:
+    if raw and time_value.get("start_time_ambiguity") != "twelve_hour":
         return str(raw)
     return None
 
@@ -399,23 +397,18 @@ def _validate_write_safety(record: dict[str, Any], spec: ScenarioSpec, ctx: base
 def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Context) -> None:
     operation = _semantic_operation(record)
     time_value = _semantic_time(operation)
-    source = str(operation.get("clock_source") or "unspecified")
-    period = str(operation.get("time_period_provenance") or "none")
+    period = str(time_value.get("explicit_period") or "none")
+    ambiguity = str(time_value.get("start_time_ambiguity") or "none")
     reply = str(record.get("agent") or "").strip()
 
     _require(
-        source == spec.expected_source,
-        counter="silent_am_pm_mutation",
-        message=f"{spec.name}: typed clock_source={source}, expected {spec.expected_source}",
-    )
-    _require(
         period == spec.expected_period,
         counter="silent_am_pm_mutation",
-        message=f"{spec.name}: period={period}, expected {spec.expected_period}",
+        message=f"{spec.name}: explicit_period={period}, expected {spec.expected_period}",
     )
-    if spec.expected_source == "bare_spoken_12h":
+    if spec.expected_bare_status is not None:
         _require(
-            time_value.get("start_time_ambiguity") == "twelve_hour",
+            ambiguity == "twelve_hour",
             counter="silent_am_pm_mutation",
             message=f"{spec.name}: bare clock was not emitted as twelve_hour semantic clock",
         )
@@ -514,8 +507,8 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
     record["evidence"] = {
         "CUSTOMER": record.get("customer"),
         "AGENT": record.get("agent"),
-        "Typed clock source": source,
-        "Typed period provenance": period,
+        "Time ambiguity": ambiguity,
+        "Explicit period semantics": period,
         "Typed semantic time": time_value,
         "Effective clinic/branch operating hours": {
             "requested_date": "2026-10-15",

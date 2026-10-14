@@ -51,14 +51,8 @@ PulseDetail = Literal["balance", "owned_packs", "offers", "overage_price", "fina
 DateMode = Literal["exact", "range", "from_date", "next_available"]
 TimeMode = Literal["exact", "after", "before", "range", "nearest"]
 TimeAmbiguity = Literal["none", "twelve_hour"]
-TimePeriodProvenance = Literal[
-    "none",
-    "explicit_am",
-    "explicit_pm",
-    "explicit_noon",
-    "explicit_midnight",
-    "conflict",
-]
+ExplicitTimePeriod = Literal["none", "am", "pm", "noon", "midnight", "conflict"]
+# Internal persisted bookkeeping only. The interpreter no longer asks the model to report it.
 ClockSource = Literal[
     "unspecified",
     "literal_24h",
@@ -144,8 +138,22 @@ class TimeConstraint(StrictContractModel):
     mode: TimeMode
     start_time: str | None = None
     end_time: str | None = None
-    start_time_ambiguity: TimeAmbiguity = "none"
+    start_time_ambiguity: TimeAmbiguity = Field(
+        default="none",
+        description=(
+            "Use twelve_hour only when the customer's start clock is a periodless 1-12 clock. "
+            "Do not resolve AM/PM from clinic hours; Python owns that decision."
+        ),
+    )
     end_time_ambiguity: TimeAmbiguity = "none"
+    explicit_period: ExplicitTimePeriod = Field(
+        default="none",
+        description=(
+            "Customer-explicit period meaning for start_time: am, pm, noon, midnight, or conflict. "
+            "Use none when no period was explicitly expressed. Do not infer a period from clinic hours "
+            "or inherited server state; Python owns canonical 24-hour conversion."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_times(self) -> TimeConstraint:
@@ -175,6 +183,13 @@ class Selection(StrictContractModel):
     ref: str | None = None
     relative: RelativeSelection | None = None
     time_ambiguity: TimeAmbiguity = "none"
+    explicit_period: ExplicitTimePeriod = Field(
+        default="none",
+        description=(
+            "Customer-explicit period meaning for a time selection: am, pm, noon, midnight, or conflict; "
+            "otherwise none. Python resolves the selected canonical clock."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -206,6 +221,7 @@ class Selection(StrictContractModel):
             "time": None,
             "relative": None,
             "time_ambiguity": "none",
+            "explicit_period": "none",
         }
 
     @model_validator(mode="after")
@@ -215,8 +231,8 @@ class Selection(StrictContractModel):
                 raise ValueError("index selection requires a positive index.")
             if self.time is not None or self.ref is not None or self.relative is not None:
                 raise ValueError("index selection cannot also contain time/ref/relative.")
-            if self.time_ambiguity != "none":
-                raise ValueError("index selection cannot contain time ambiguity.")
+            if self.time_ambiguity != "none" or self.explicit_period != "none":
+                raise ValueError("index selection cannot contain time semantics.")
         elif self.kind == "time":
             if self.time is None:
                 raise ValueError("time selection requires time.")
@@ -228,15 +244,15 @@ class Selection(StrictContractModel):
                 raise ValueError("ref selection requires ref.")
             if self.index is not None or self.time is not None or self.relative is not None:
                 raise ValueError("ref selection cannot also contain index/time/relative.")
-            if self.time_ambiguity != "none":
-                raise ValueError("ref selection cannot contain time ambiguity.")
+            if self.time_ambiguity != "none" or self.explicit_period != "none":
+                raise ValueError("ref selection cannot contain time semantics.")
         elif self.kind == "relative":
             if self.relative is None:
                 raise ValueError("relative selection requires a relative direction.")
             if self.index is not None or self.time is not None or self.ref is not None:
                 raise ValueError("relative selection cannot also contain index/time/ref.")
-            if self.time_ambiguity != "none":
-                raise ValueError("relative selection cannot contain time ambiguity.")
+            if self.time_ambiguity != "none" or self.explicit_period != "none":
+                raise ValueError("relative selection cannot contain time semantics.")
         return self
 
 
@@ -380,41 +396,6 @@ class TurnOperation(StrictContractModel):
             "never authorizes a financial read or write. Service/package offer prices remain none."
         ),
     )
-    clock_source: ClockSource = Field(
-        default="unspecified",
-        description=(
-            "Typed source for entities.time.start_time. Use literal_24h only when the customer supplied "
-            "an exact 24-hour clock such as 03:00 or 16:15; bare_spoken_12h for a periodless spoken "
-            "1-12 clock such as '3' or '10'; explicit_period when the customer explicitly supplied "
-            "AM/PM/morning/afternoon/evening/noon/midnight semantics; inherited only when the clock "
-            "comes from authoritative task/verified state rather than this message. Use unspecified "
-            "only when there is no typed source evidence. Python owns canonicalization."
-        ),
-    )
-    selection_clock_source: ClockSource = Field(
-        default="unspecified",
-        description=(
-            "Same clock-source contract as clock_source, but only for selection.kind=time."
-        ),
-    )
-    time_period_provenance: TimePeriodProvenance = Field(
-        default="none",
-        description=(
-            "Typed period provenance for entities.time.start_time in the latest customer message. Use "
-            "explicit_am for an explicit AM/morning period, explicit_pm for an explicit PM/afternoon/"
-            "evening period, explicit_noon for explicit noon semantics, and explicit_midnight for "
-            "explicit midnight semantics. Use conflict only when typed customer evidence is genuinely "
-            "contradictory and cannot be safely canonicalized. Use none for literal 24-hour clocks, "
-            "bare periodless clocks, inherited task time, and clinic-hour inference. Python validates "
-            "this evidence and owns the canonical 24-hour value."
-        ),
-    )
-    selection_time_period_provenance: TimePeriodProvenance = Field(
-        default="none",
-        description=(
-            "Same provenance contract as time_period_provenance, but only for selection.kind=time."
-        ),
-    )
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.
     execution_intent: ExecutionIntent = "execute"
@@ -497,17 +478,9 @@ class TurnOperation(StrictContractModel):
     grouped_booking_action: GroupedBookingAction = Field(
         default="preserve_group",
         description=(
-            "For an active unfinished same-visit multi-service booking, preserve_group means the current "
-            "service set remains part of the visit while the operation adds/edits constraints. Use "
-            "remove_other_components whenever the customer explicitly narrows the service set, including "
-            "removing one or more services while keeping the others. Singleton narrowing is included: if "
-            "the active set is A+B and the customer explicitly keeps only A, the complete retained set is "
-            "A and this field must be remove_other_components. Replacement follows the same rule: A+B -> B+C "
-            "is remove_other_components with B+C as the COMPLETE post-correction set. Any explicit removal of "
-            "an existing component wins over preserve_group even when a new component is added in the same "
-            "correction. In that case entities.service must represent the COMPLETE retained canonical set after "
-            "the correction, never the removed service as a delta and never the stale pre-correction set. Never "
-            "infer narrowing merely because the customer mentions or edits one component."
+            "For an active grouped booking, use remove_other_components when any existing service is "
+            "explicitly removed or replaced; entities.service must then contain the complete resulting "
+            "service set. Pure additions and constraint-only edits use preserve_group."
         ),
     )
     cleared_verified_read_fields: list[VerifiedReadClearField] = Field(
@@ -557,6 +530,29 @@ class TurnOperation(StrictContractModel):
             "evaluates this condition against the verified previous result."
         ),
     )
+
+    @property
+    def clock_source(self) -> ClockSource:
+        """Backend-derived source needed only for persisted bare-clock safety."""
+        constraint = self.entities.time
+        if constraint is None:
+            return "unspecified"
+        if constraint.start_time_ambiguity == "twelve_hour":
+            return "bare_spoken_12h"
+        if constraint.explicit_period != "none":
+            return "explicit_period"
+        return "unspecified"
+
+    @property
+    def selection_clock_source(self) -> ClockSource:
+        selection = self.selection
+        if selection is None or selection.kind != "time":
+            return "unspecified"
+        if selection.time_ambiguity == "twelve_hour":
+            return "bare_spoken_12h"
+        if selection.explicit_period != "none":
+            return "explicit_period"
+        return "unspecified"
 
     @model_validator(mode="before")
     @classmethod

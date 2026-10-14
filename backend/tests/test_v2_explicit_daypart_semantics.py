@@ -15,10 +15,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import (
-    _preserve_explicit_clock_constraints_v2,
-    _validate_explicit_period_provenance_v2,
-)
+from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
 from app.agents.v2.turn_normalization import normalize_semantic_invariants
 from app.services.agent_v2.orchestrator import (
     _auto_resolve_single_booking_device,
@@ -75,20 +72,18 @@ def _turn(
     *,
     ambiguity: str = "none",
     period: str = "none",
-    clock_source: str = "unspecified",
     operation_type: str = "book",
 ) -> TiaTurnUnderstanding:
     return TiaTurnUnderstanding(
         operations=[
             TurnOperation(
                 type=operation_type,
-                clock_source=clock_source,
-                time_period_provenance=period,
                 entities=TurnEntities(
                     time=TimeConstraint(
                         mode="exact",
                         start_time=value,
                         start_time_ambiguity=ambiguity,
+                        explicit_period=period,
                     )
                 ),
             )
@@ -97,12 +92,8 @@ def _turn(
 
 
 def _pipeline(turn: TiaTurnUnderstanding, *, text: str) -> TiaTurnUnderstanding:
-    period_safe = _validate_explicit_period_provenance_v2(turn)
-    literal_safe = _preserve_explicit_clock_constraints_v2(
-        period_safe,
-        latest_customer_text=text,
-    )
-    normalized = normalize_semantic_invariants(literal_safe)
+    time_safe = _normalize_time_semantics_v2(turn, latest_customer_text=text)
+    normalized = normalize_semantic_invariants(time_safe)
     return resolve_turn_times_by_clinic_hours(normalized, build_semantic_context(_catalog()))
 
 
@@ -125,27 +116,27 @@ def test_t2_literal_1615_remains_exact() -> None:
 
 
 def test_t3_explicit_afternoon_semantics_survive_literal_preservation() -> None:
-    result = _pipeline(_turn("16:15", period="explicit_pm"), text="4:15 العصر")
+    result = _pipeline(_turn("16:15", period="pm"), text="4:15 العصر")
     assert _time(result).start_time == "16:15"
-    assert result.operations[0].time_period_provenance == "explicit_pm"
+    assert result.operations[0].entities.time.explicit_period == "pm"
 
 
 def test_t4_explicit_morning_semantics_remain_am() -> None:
-    result = _pipeline(_turn("04:15", period="explicit_am"), text="4:15 صباحًا")
+    result = _pipeline(_turn("04:15", period="am"), text="4:15 صباحًا")
     assert _time(result).start_time == "04:15"
-    assert result.operations[0].time_period_provenance == "explicit_am"
+    assert result.operations[0].entities.time.explicit_period == "am"
 
 
 def test_t5_explicit_evening_semantics_remain_pm() -> None:
-    result = _pipeline(_turn("16:15", period="explicit_pm"), text="4:15 مساءً")
+    result = _pipeline(_turn("16:15", period="pm"), text="4:15 مساءً")
     assert _time(result).start_time == "16:15"
 
 
 @pytest.mark.parametrize(
     ("text", "value", "period", "expected"),
     [
-        ("4:15 PM", "16:15", "explicit_pm", "16:15"),
-        ("4:15 AM", "04:15", "explicit_am", "04:15"),
+        ("4:15 PM", "16:15", "pm", "16:15"),
+        ("4:15 AM", "04:15", "am", "04:15"),
     ],
 )
 def test_english_explicit_period_uses_same_typed_contract(
@@ -161,12 +152,12 @@ def test_english_explicit_period_uses_same_typed_contract(
 @pytest.mark.parametrize(
     ("text", "value", "period", "expected"),
     [
-        ("10 ?????", "10:00", "explicit_am", "10:00"),
-        ("10 ??????", "22:00", "explicit_pm", "22:00"),
-        ("11 ?????", "11:00", "explicit_am", "11:00"),
-        ("11 ??????", "23:00", "explicit_pm", "23:00"),
-        ("12 ?????", "12:00", "explicit_pm", "12:00"),
-        ("4:15 ?????", "16:15", "explicit_pm", "16:15"),
+        ("10 ?????", "10:00", "am", "10:00"),
+        ("10 ??????", "22:00", "pm", "22:00"),
+        ("11 ?????", "11:00", "am", "11:00"),
+        ("11 ??????", "23:00", "pm", "23:00"),
+        ("12 ?????", "12:00", "pm", "12:00"),
+        ("4:15 ?????", "16:15", "pm", "16:15"),
     ],
 )
 def test_product_daypart_examples_preserve_typed_semantic_clock(
@@ -175,17 +166,17 @@ def test_product_daypart_examples_preserve_typed_semantic_clock(
     result = _pipeline(_turn(value, period=period), text=text)
     assert _time(result).start_time == expected
     assert _time(result).start_time_ambiguity == "none"
-    assert result.operations[0].time_period_provenance == period
+    assert result.operations[0].entities.time.explicit_period == period
 
 
-def test_t6_bare_colloquial_three_keeps_existing_clinic_hours_resolution() -> None:
-    result = _pipeline(_turn("03:00", ambiguity="twelve_hour"), text="الساعة 3")
-    assert _time(result).start_time == "15:00"
-    assert _time(result).start_time_ambiguity == "none"
+def test_t6_bare_colloquial_three_preserves_uncertainty_until_date_context_exists() -> None:
+    result = _pipeline(_turn("03:00", ambiguity="twelve_hour"), text="?????? 3")
+    assert _time(result).start_time == "03:00"
+    assert _time(result).start_time_ambiguity == "twelve_hour"
 
 
 def test_t7_explicit_period_value_survives_into_booking_task_state() -> None:
-    result = _pipeline(_turn("16:15", period="explicit_pm"), text="4:15 العصر")
+    result = _pipeline(_turn("16:15", period="pm"), text="4:15 العصر")
     task = BookingTaskState(
         write_authorization=WriteAuthorization(operation="booking"),
         constraints=CustomerConstraints(
@@ -202,19 +193,16 @@ def test_t7_explicit_period_value_survives_into_booking_task_state() -> None:
 
 
 def test_t8_literal_preserver_cannot_replace_explicit_pm_value_with_12_hour_variant() -> None:
-    period_safe = _validate_explicit_period_provenance_v2(
-        _turn("16:15", period="explicit_pm")
-    )
-    result = _preserve_explicit_clock_constraints_v2(
-        period_safe,
+    result = _normalize_time_semantics_v2(
+        _turn("16:15", period="pm"),
         latest_customer_text="4:15 PM",
     )
     assert _time(result).start_time == "16:15"
-    assert result.operations[0].time_period_provenance == "explicit_pm"
+    assert result.operations[0].entities.time.explicit_period == "pm"
 
 
 def test_t9_hash230_literal_03_protection_remains_intact() -> None:
-    result = _preserve_explicit_clock_constraints_v2(
+    result = _normalize_time_semantics_v2(
         _turn("15:00", ambiguity="twelve_hour"),
         latest_customer_text="03:00",
     )
@@ -327,22 +315,24 @@ def test_t11_available_explicit_period_time_builds_exact_matching_proposal(monke
 
 
 def test_t12_typed_0415_explicit_pm_is_backend_canonicalized_to_1615() -> None:
-    canonical = _validate_explicit_period_provenance_v2(
-        _turn("04:15", period="explicit_pm", clock_source="explicit_period")
+    canonical = _normalize_time_semantics_v2(
+        _turn("04:15", period="pm"),
+        latest_customer_text="4:15 ?????",
     )
     operation = canonical.operations[0]
-    assert operation.time_period_provenance == "explicit_pm"
+    assert operation.entities.time.explicit_period == "pm"
     assert operation.entities.time is not None
     assert operation.entities.time.start_time == "16:15"
     assert operation.entities.time.start_time_ambiguity == "none"
 
 
 def test_t12_literal_1615_plus_explicit_am_fails_closed_to_time_clarification() -> None:
-    inconsistent = _validate_explicit_period_provenance_v2(
-        _turn("16:15", period="explicit_am", clock_source="literal_24h")
+    inconsistent = _normalize_time_semantics_v2(
+        _turn("16:15", period="am"),
+        latest_customer_text="16:15 ??????",
     )
     operation = inconsistent.operations[0]
-    assert operation.time_period_provenance == "conflict"
+    assert operation.entities.time.explicit_period == "conflict"
     plan = plan_turn(
         inconsistent,
         PlannerContext(

@@ -361,6 +361,13 @@ def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, 
 
 
 def run_scenario(name: str, messages: list[str], validator) -> None:
+    selected = {
+        item.strip()
+        for item in os.environ.get("RA_G_SCENARIOS", "").split(",")
+        if item.strip()
+    }
+    if selected and name not in selected:
+        return
     with rollback_session() as db:
         workspace, patient, doctor, underarm, bikini, arms = build_fixture(db)
         ids = {

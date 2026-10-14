@@ -21,6 +21,7 @@ from app.agents.v2.turn_contract import (
     AppointmentSelector,
     DateConstraint,
     EntityReference,
+    ExplicitTimePeriod,
     Selection,
     TiaTurnUnderstanding,
     TimeConstraint,
@@ -145,18 +146,9 @@ SEMANTIC PRINCIPLES
   requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
   the requested components to one canonical service ref. Do not decide which service is primary/main;
   Python chooses that deterministically from catalog duration.
-- When the customer corrects the services for an unfinished same-visit booking, emit the CURRENT complete
-  canonical service set after the correction, not a delta and not the stale prior set. Keep it one book
-  continuation operation with candidate_mode=set. If the current set is A+B+C and the customer explicitly
-  removes B while keeping the visit, the emitted set is A+C: exclude B, set grouped_booking_action to
-  remove_other_components, and do NOT emit B merely to identify what was removed. Singleton narrowing follows
-  the exact same semantic rule: if the active set is A+B and the customer explicitly keeps only A, emit exactly
-  A as the complete set and set grouped_booking_action=remove_other_components; never preserve B merely because
-  it existed in the active task. Replacement is removal plus addition: if the active set is A+B and the customer
-  replaces A with C while keeping B, emit exactly B+C and set grouped_booking_action=remove_other_components.
-  Any explicit removal of an existing component takes precedence over preserve_group even when new services are
-  added in the same correction. Pure addition remains preserve_group: A+B plus D becomes A+B+D. This is semantic
-  set mutation, not wording or phrase matching.
+- For an unfinished grouped booking correction, entities.service is the complete resulting service set,
+  never a delta. Follow grouped_booking_action: explicit removal/replacement uses remove_other_components;
+  pure addition uses preserve_group.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
   reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the
@@ -428,27 +420,12 @@ SEMANTIC PRINCIPLES
   situations use urgent_medical. Explicit requests for a person use human_support.
 - Resolve clear relative dates against the clinic-local clock. If a date remains semantically
   underspecified, leave it null rather than guessing.
-- For clock times, separate customer meaning from backend canonicalization. Set clock_source on every
-  customer-supplied scheduling clock: literal_24h for an exact 24-hour clock such as 03:00 or 16:15;
-  bare_spoken_12h for a periodless spoken 1-12 clock; explicit_period when the customer states
-  AM/PM/morning/afternoon/evening/noon/midnight semantics; inherited only for authoritative task or
-  verified-state time copied into this operation. Never infer clock_source from clinic hours.
-- A bare_spoken_12h clock keeps a 12-hour-form value plus time_ambiguity=twelve_hour. Do not decide AM/PM
-  in the model. Deterministic Python applies the product rule using canonical branch/date operating
-  hours: bare 1-9 prefers PM when admissible, bare 10/11 clarifies only when both candidates are
-  admissible, and bare 12 means noon. If branch/date context is still missing, preserve the unresolved
-  clock instead of asking AM/PM early.
-- For explicit_period clocks, preserve the semantic clock and set time_ambiguity=none. The model may emit
-  a 12-hour-form value such as 04:15 with explicit_pm; deterministic Python owns conversion to 16:15.
-  Do not silently reconcile genuinely contradictory typed evidence such as literal_24h 16:15 + explicit_am.
-- time_period_provenance is message-local evidence, not a restatement of the normalized hour. Set
-  explicit_am for explicit AM/morning semantics, explicit_pm for explicit PM/afternoon/evening semantics,
-  explicit_noon for explicit noon, and explicit_midnight for explicit midnight. Use conflict only for
-  irreconcilable explicit evidence. Use none for literal_24h, bare_spoken_12h, inherited time, and any
-  period inferred from clinic hours. Apply selection_clock_source and selection_time_period_provenance
-  the same way to selection.kind=time.
-- Apply the ambiguity rule independently to start_time_ambiguity/end_time_ambiguity and to a time
-  selection's time_ambiguity. Fields unrelated to a time value use none.
+- For a periodless spoken 1-12 clock, preserve the 12-hour-form value and set
+  start_time_ambiguity=twelve_hour with explicit_period=none. Do not choose AM/PM from clinic hours.
+- When the customer explicitly states AM/PM, morning/afternoon/evening, noon, or midnight, preserve that
+  meaning in explicit_period (am/pm/noon/midnight). Python owns canonical 24-hour conversion. A literal
+  colon-formatted HH:MM with no explicit period stays exact with ambiguity=none. Use conflict only for
+  genuinely contradictory explicit period meaning. Apply the same semantic fields to a time selection.
 - follow_up_at_local is an ISO local datetime only when the customer supplied enough meaning to
   resolve a specific future follow-up time. Otherwise leave it null.
 - requested_service_details describes only service facts the customer explicitly asked for in that
@@ -1399,184 +1376,125 @@ def _same_clock_or_twelve_hour_variant(value: str | None, explicit: str) -> bool
     return raw_minute == exp_minute and (raw_hour == exp_hour or abs(raw_hour - exp_hour) == 12)
 
 
-def _explicit_period_matches_clock(value: str | None, provenance: str) -> bool:
+def _period_matches_clock(value: str | None, period: ExplicitTimePeriod) -> bool:
     raw = str(value or "").strip()[:5]
     try:
         hour, _minute = (int(part) for part in raw.split(":", 1))
     except (TypeError, ValueError):
         return False
-    if provenance == "explicit_am":
+    if period == "am":
         return 0 <= hour < 12
-    if provenance == "explicit_pm":
+    if period == "pm":
         return 12 <= hour <= 23
-    if provenance == "explicit_noon":
+    if period == "noon":
         return hour == 12
-    if provenance == "explicit_midnight":
+    if period == "midnight":
         return hour == 0
-    return provenance == "none"
+    return period == "none"
 
 
 def _canonicalize_explicit_period_clock(
     value: str | None,
-    provenance: str,
-    *,
-    clock_source: str,
+    period: ExplicitTimePeriod,
 ) -> str | None:
-    """Canonicalize trusted typed period semantics without consulting raw customer text."""
+    """Canonicalize model-understood period meaning without consulting raw language."""
     raw = str(value or "").strip()[:5]
     try:
         parsed = time.fromisoformat(raw)
     except ValueError:
         return None
-
-    if provenance not in {
-        "explicit_am",
-        "explicit_pm",
-        "explicit_noon",
-        "explicit_midnight",
-    }:
-        return raw if provenance == "none" else None
-
-    # A literal 24-hour clock is already exact authority. Period evidence may only
-    # confirm it; contradictory evidence must fail closed rather than flip it.
-    if clock_source == "literal_24h":
-        return raw if _explicit_period_matches_clock(raw, provenance) else None
-    if clock_source not in {"explicit_period", "unspecified"}:
+    if period == "none":
+        return raw
+    if period not in {"am", "pm", "noon", "midnight"}:
         return None
 
     hour = parsed.hour
     minute = parsed.minute
-    if provenance == "explicit_am":
+    if period == "am":
         if hour == 12:
             hour = 0
         elif hour >= 12:
             return None
-    elif provenance == "explicit_pm":
+    elif period == "pm":
         if hour == 0:
             hour = 12
         elif 1 <= hour < 12:
             hour += 12
-    elif provenance == "explicit_noon":
+    elif period == "noon":
         if hour not in {0, 12}:
             return None
         hour = 12
-    elif provenance == "explicit_midnight":
+    elif period == "midnight":
         if hour not in {0, 12}:
             return None
         hour = 0
     return f"{hour:02d}:{minute:02d}"
 
 
-def _validate_explicit_period_provenance_v2(
-    turn: TiaTurnUnderstanding,
-) -> TiaTurnUnderstanding:
-    """Canonicalize typed explicit periods and fail closed on genuine contradictions."""
-    operations = []
-    changed = False
-    explicit_periods = {
-        "explicit_am",
-        "explicit_pm",
-        "explicit_noon",
-        "explicit_midnight",
-    }
-    for operation in turn.operations:
-        original = operation
-        time_period = operation.time_period_provenance
-        selection_period = operation.selection_time_period_provenance
-        entities = operation.entities
-        time_constraint = entities.time
-        selection = operation.selection
-
-        if time_period in explicit_periods:
-            canonical = (
-                _canonicalize_explicit_period_clock(
-                    time_constraint.start_time if time_constraint is not None else None,
-                    time_period,
-                    clock_source=operation.clock_source,
-                )
-                if time_constraint is not None
-                else None
-            )
-            if canonical is None:
-                time_period = "conflict"
-            elif time_constraint is not None:
-                time_constraint = time_constraint.model_copy(
-                    update={"start_time": canonical, "start_time_ambiguity": "none"}
-                )
-                entities = entities.model_copy(update={"time": time_constraint})
-
-        if selection_period in explicit_periods:
-            canonical = (
-                _canonicalize_explicit_period_clock(
-                    selection.time if selection is not None and selection.kind == "time" else None,
-                    selection_period,
-                    clock_source=operation.selection_clock_source,
-                )
-                if selection is not None
-                else None
-            )
-            if canonical is None:
-                selection_period = "conflict"
-            elif selection is not None and selection.kind == "time":
-                selection = selection.model_copy(
-                    update={"time": canonical, "time_ambiguity": "none"}
-                )
-
-        operation = operation.model_copy(
-            update={
-                "entities": entities,
-                "selection": selection,
-                "time_period_provenance": time_period,
-                "selection_time_period_provenance": selection_period,
-            }
-        )
-        if operation != original:
-            changed = True
-        operations.append(operation)
-    return turn.model_copy(update={"operations": operations}) if changed else turn
-
-
-def _preserve_explicit_clock_constraints_v2(
+def _normalize_time_semantics_v2(
     turn: TiaTurnUnderstanding,
     *,
     latest_customer_text: str,
 ) -> TiaTurnUnderstanding:
-    """Preserve literal HH:MM authority without erasing typed explicit-period semantics."""
-    explicit = extract_single_explicit_hhmm(latest_customer_text)
-    if explicit is None:
-        return turn
-
-    operations = []
+    """Keep only language meaning in the contract; Python owns clock authority/canonicalization."""
+    literal_clock = extract_single_explicit_hhmm(latest_customer_text)
+    operations: list = []
     changed = False
+    semantic_periods = {"am", "pm", "noon", "midnight"}
+
     for operation in turn.operations:
+        original = operation
         entities = operation.entities
-        time_constraint = entities.time
-        if time_constraint is not None and time_constraint.start_time is not None:
-            same_clock = _same_clock_or_twelve_hour_variant(
-                time_constraint.start_time, explicit
-            )
-            period = operation.time_period_provenance
-            if period in {"explicit_am", "explicit_pm"}:
-                if not same_clock:
-                    operation = operation.model_copy(
-                        update={"time_period_provenance": "conflict"}
+        constraint = entities.time
+        selection = operation.selection
+
+        if constraint is not None and constraint.start_time is not None:
+            period = constraint.explicit_period
+            if period in semantic_periods:
+                source_clock = constraint.start_time
+                if literal_clock is not None:
+                    if not _same_clock_or_twelve_hour_variant(source_clock, literal_clock):
+                        period = "conflict"
+                    else:
+                        literal_hour = int(literal_clock.split(":", 1)[0])
+                        if (literal_hour == 0 or literal_hour > 12) and not _period_matches_clock(
+                            literal_clock, period
+                        ):
+                            period = "conflict"
+                        else:
+                            source_clock = literal_clock
+                canonical = (
+                    _canonicalize_explicit_period_clock(source_clock, period)
+                    if period != "conflict"
+                    else None
+                )
+                if canonical is None:
+                    period = "conflict"
+                else:
+                    constraint = constraint.model_copy(
+                        update={
+                            "start_time": canonical,
+                            "start_time_ambiguity": "none",
+                            "explicit_period": period,
+                        }
                     )
-                    changed = True
-            elif period == "none":
-                if same_clock or (
+            elif period == "none" and literal_clock is not None:
+                if _same_clock_or_twelve_hour_variant(constraint.start_time, literal_clock) or (
                     len(turn.operations) == 1
                     and operation.type in {"book", "reschedule", "availability"}
                 ):
-                    time_constraint = time_constraint.model_copy(
+                    constraint = constraint.model_copy(
                         update={
-                            "start_time": explicit,
+                            "start_time": literal_clock,
                             "start_time_ambiguity": "none",
                         }
                     )
-                    entities = entities.model_copy(update={"time": time_constraint})
-                    changed = True
+            if period != constraint.explicit_period:
+                constraint = constraint.model_copy(update={"explicit_period": period})
+            entities = entities.model_copy(update={"time": constraint})
         elif (
-            operation.time_period_provenance == "none"
+            constraint is None
+            and literal_clock is not None
             and len(turn.operations) == 1
             and operation.type in {"book", "reschedule", "availability"}
         ):
@@ -1584,36 +1502,58 @@ def _preserve_explicit_clock_constraints_v2(
                 update={
                     "time": TimeConstraint(
                         mode="exact",
-                        start_time=explicit,
+                        start_time=literal_clock,
                         start_time_ambiguity="none",
+                        explicit_period="none",
                     )
                 }
             )
-            changed = True
 
-        selection = operation.selection
         if selection is not None and selection.kind == "time" and selection.time is not None:
-            same_clock = _same_clock_or_twelve_hour_variant(selection.time, explicit)
-            period = operation.selection_time_period_provenance
-            if period in {"explicit_am", "explicit_pm"}:
-                if not same_clock:
-                    operation = operation.model_copy(
-                        update={"selection_time_period_provenance": "conflict"}
-                    )
-                    changed = True
-            elif period == "none" and same_clock:
-                selection = selection.model_copy(
-                    update={"time": explicit, "time_ambiguity": "none"}
+            period = selection.explicit_period
+            if period in semantic_periods:
+                source_clock = selection.time
+                if literal_clock is not None:
+                    if not _same_clock_or_twelve_hour_variant(source_clock, literal_clock):
+                        period = "conflict"
+                    else:
+                        literal_hour = int(literal_clock.split(":", 1)[0])
+                        if (literal_hour == 0 or literal_hour > 12) and not _period_matches_clock(
+                            literal_clock, period
+                        ):
+                            period = "conflict"
+                        else:
+                            source_clock = literal_clock
+                canonical = (
+                    _canonicalize_explicit_period_clock(source_clock, period)
+                    if period != "conflict"
+                    else None
                 )
-                changed = True
+                if canonical is None:
+                    period = "conflict"
+                else:
+                    selection = selection.model_copy(
+                        update={
+                            "time": canonical,
+                            "time_ambiguity": "none",
+                            "explicit_period": period,
+                        }
+                    )
+            elif period == "none" and literal_clock is not None and _same_clock_or_twelve_hour_variant(
+                selection.time, literal_clock
+            ):
+                selection = selection.model_copy(
+                    update={"time": literal_clock, "time_ambiguity": "none"}
+                )
+            if period != selection.explicit_period:
+                selection = selection.model_copy(update={"explicit_period": period})
 
-        operations.append(
-            operation.model_copy(update={"entities": entities, "selection": selection})
-            if entities != operation.entities or selection != operation.selection
-            else operation
-        )
+        operation = operation.model_copy(update={"entities": entities, "selection": selection})
+        if operation != original:
+            changed = True
+        operations.append(operation)
+
     return turn.model_copy(update={"operations": operations}) if changed else turn
-
 
 def interpret_customer_turn_v2(
     *,
@@ -1723,11 +1663,11 @@ def interpret_customer_turn_v2(
         )
     latest_index = _latest_customer_index(history)
     latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
-    period_safe = _validate_explicit_period_provenance_v2(invocation.value)
-    explicit_safe = _preserve_explicit_clock_constraints_v2(
-        period_safe, latest_customer_text=latest_customer_text
+    time_safe = _normalize_time_semantics_v2(
+        invocation.value,
+        latest_customer_text=latest_customer_text,
     )
-    presented = merge_presented_availability_context(explicit_safe, semantic_context)
+    presented = merge_presented_availability_context(time_safe, semantic_context)
     bounded = enforce_unscoped_task_boundary(presented, semantic_context)
     isolated = isolate_fresh_task_context(bounded)
     continued = merge_verified_read_context(isolated, semantic_context)

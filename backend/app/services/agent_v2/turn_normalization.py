@@ -225,7 +225,11 @@ def collapse_booking_service_sets(
         if main_ref is None:
             normalized.append(operation)
             continue
-        service_sets[index] = canonical_ids
+        # Equivalent provider shapes must not change single-service business semantics.
+        # A one-item candidate_mode=set becomes the same grounded singleton ref unless
+        # it is authoritatively narrowing an existing grouped booking.
+        if len(canonical_ids) > 1 or explicit_grouped_service_correction:
+            service_sets[index] = canonical_ids
         normalized.append(
             operation.model_copy(
                 update={
@@ -244,9 +248,8 @@ def collapse_booking_service_sets(
             )
         )
 
-    if not service_sets:
-        return turn, {}
-    return turn.model_copy(update={"operations": normalized}), service_sets
+    normalized_turn = turn.model_copy(update={"operations": normalized})
+    return normalized_turn, service_sets
 
 
 def tag_booking_service_sets(

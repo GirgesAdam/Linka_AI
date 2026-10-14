@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   real-agent:
-    name: RT1-RT9 clinic-hours clock boundary
+    name: RT1-RT10 clinic-hours clock boundary
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
@@ -127,6 +127,26 @@ jobs:
         run: |
           python -m alembic heads
           python -m alembic upgrade head
+      - name: Run focused bare-3 booking
+        env:
+          CLOCK_RT_SCENARIOS: RT1
+          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-bare3.json
+        run: python scripts/run_clinic_hours_clock_live_review.py
+      - name: Run focused explicit 3 afternoon booking
+        env:
+          CLOCK_RT_SCENARIOS: RT10
+          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-explicit3pm.json
+        run: python scripts/run_clinic_hours_clock_live_review.py
+      - name: Run focused literal 03:00 booking
+        env:
+          CLOCK_RT_SCENARIOS: RT7
+          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-literal0300.json
+        run: python scripts/run_clinic_hours_clock_live_review.py
+      - name: Run focused bare 10/11 boundary
+        env:
+          CLOCK_RT_SCENARIOS: RT2,RT3,RT4,RT5
+          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-10-11.json
+        run: python scripts/run_clinic_hours_clock_live_review.py
       - name: Run focused RT3 night continuation
         env:
           CLOCK_RT_SCENARIOS: RT3
@@ -139,7 +159,7 @@ jobs:
           CLOCK_RT3_CONTINUATION: morning
           CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-rt3-morning-focused.json
         run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run RT1-RT9 through real Agent path
+      - name: Run RT1-RT10 through real Agent path
         run: python scripts/run_clinic_hours_clock_live_review.py
       - name: Upload clock-boundary reports
         if: always()
@@ -147,6 +167,10 @@ jobs:
         with:
           name: clinic-hours-clock-real-agent-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
+            backend/artifacts/clinic-hours-clock-focused-bare3.json
+            backend/artifacts/clinic-hours-clock-focused-explicit3pm.json
+            backend/artifacts/clinic-hours-clock-focused-literal0300.json
+            backend/artifacts/clinic-hours-clock-focused-10-11.json
             backend/artifacts/clinic-hours-clock-rt3-night-focused.json
             backend/artifacts/clinic-hours-clock-rt3-morning-focused.json
             backend/artifacts/clinic-hours-clock-live-review.json

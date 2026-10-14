@@ -143,11 +143,12 @@ def test_real_interpreter_combo_only_set_with_ref_is_preserved_as_service_set() 
         catalog=_catalog(),
     )
 
-    assert service_sets == {0: [COMBO]}
+    assert service_sets == {}
     service = collapsed.operations[0].entities.service
     assert service is not None
-    assert service.ref == "S3"
+    assert semantic.resolve(service.ref, expected_kind="service") == COMBO
     assert service.candidate_refs == []
+    assert service.candidate_mode == "ambiguous"
 
 
 def test_combo_only_set_stays_one_canonical_service() -> None:
@@ -172,9 +173,12 @@ def test_combo_only_set_stays_one_canonical_service() -> None:
         semantic_context=context,
         catalog=_catalog(),
     )
-    assert sets == {0: [COMBO]}
-    assert collapsed.operations[0].entities.service is not None
-    assert collapsed.operations[0].entities.service.ref == "S3"
+    assert sets == {}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert context.resolve(service.ref, expected_kind="service") == COMBO
+    assert service.candidate_refs == []
+    assert service.candidate_mode == "ambiguous"
 
 
 def test_combo_plus_full_arms_selects_combo_as_main_without_duplication() -> None:
@@ -281,6 +285,39 @@ def test_remove_other_components_preserves_request_order_of_retained_services() 
     service = collapsed.operations[0].entities.service
     assert service is not None
     assert context.resolve(service.ref, expected_kind="service") == COMBO
+
+
+def test_single_grounded_service_set_is_equivalent_to_single_ref_without_group_proposal() -> None:
+    context = build_semantic_context(_catalog())
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=["S4"],
+                        candidate_mode="set",
+                    )
+                ),
+                execution_intent="execute",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=_catalog(),
+        active_task=None,
+    )
+
+    assert service_sets == {}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert context.resolve(service.ref, expected_kind="service") == FULL_ARMS
+    assert service.candidate_refs == []
+    assert service.candidate_mode == "ambiguous"
 
 
 def test_explicit_combo_replacement_does_not_retain_covered_atomic_services() -> None:

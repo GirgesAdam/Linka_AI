@@ -6,7 +6,6 @@ from typing import Literal
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import (
-    ClockSource,
     DateConstraint,
     Selection,
     TiaTurnUnderstanding,
@@ -434,14 +433,15 @@ def resolve_time_constraint_by_clinic_hours(
     *,
     date_constraint: DateConstraint | None,
     context: SemanticContext,
-    clock_source: ClockSource = "unspecified",
     branch_id: str | None = None,
 ) -> TimeConstraint | None:
-    """Canonicalize typed bare clocks without ever mutating explicit customer clocks."""
+    """Canonicalize unresolved bare clocks; exact semantic clocks are already authoritative."""
     if constraint is None:
         return None
 
-    if clock_source == "bare_spoken_12h" and constraint.mode == "exact":
+    if constraint.mode == "exact":
+        if constraint.start_time_ambiguity != "twelve_hour":
+            return constraint
         resolution = resolve_bare_clock_constraint(
             constraint,
             date_constraint=date_constraint,
@@ -453,9 +453,6 @@ def resolve_time_constraint_by_clinic_hours(
         # Preserve unresolved semantic clock state. Planner decides whether missing
         # branch/date context should be gathered, whether 10/11 needs clarification,
         # or whether both candidates are outside operating hours.
-        return constraint
-
-    if clock_source in {"literal_24h", "explicit_period", "inherited"}:
         return constraint
 
     rows = _operating_hours(context)
@@ -504,8 +501,13 @@ def classify_operation_bare_clock(
     date_constraint: DateConstraint | None = None,
     branch_id: str | None = None,
 ) -> BareClockResolution:
-    if operation.clock_source != "bare_spoken_12h":
-        return BareClockResolution(status="not_applicable", constraint=operation.entities.time)
+    constraint = operation.entities.time
+    if (
+        constraint is None
+        or constraint.mode != "exact"
+        or constraint.start_time_ambiguity != "twelve_hour"
+    ):
+        return BareClockResolution(status="not_applicable", constraint=constraint)
     effective_date = date_constraint or operation.entities.date or _active_task_date(context)
     effective_branch = branch_id or _operation_branch_id(operation, context)
     return resolve_bare_clock_constraint(
@@ -521,45 +523,31 @@ def _resolve_selection(
     *,
     date_constraint: DateConstraint | None,
     context: SemanticContext,
-    clock_source: ClockSource,
     branch_id: str | None,
 ) -> Selection | None:
     if selection is None or selection.kind != "time" or selection.time is None:
         return selection
-    if clock_source in {"literal_24h", "explicit_period", "inherited"}:
-        return selection
-    if clock_source == "bare_spoken_12h":
-        resolution = resolve_bare_clock_constraint(
-            TimeConstraint(
-                mode="exact",
-                start_time=selection.time,
-                start_time_ambiguity=selection.time_ambiguity,
-            ),
-            date_constraint=date_constraint,
-            context=context,
-            branch_id=branch_id,
-        )
-        if resolution.status != "resolved" or resolution.constraint is None:
-            return selection
-        return selection.model_copy(
-            update={
-                "time": resolution.constraint.start_time,
-                "time_ambiguity": resolution.constraint.start_time_ambiguity,
-            }
-        )
     if selection.time_ambiguity != "twelve_hour":
         return selection
-
-    resolved, ambiguity = _resolve_boundary(
-        selection.time,
-        selection.time_ambiguity,
-        rows=_operating_hours(context),
-        weekdays=_relevant_weekdays(date_constraint),
-        boundary="exact",
+    resolution = resolve_bare_clock_constraint(
+        TimeConstraint(
+            mode="exact",
+            start_time=selection.time,
+            start_time_ambiguity=selection.time_ambiguity,
+            explicit_period=selection.explicit_period,
+        ),
+        date_constraint=date_constraint,
+        context=context,
+        branch_id=branch_id,
     )
-    if resolved is None:
-        return None
-    return selection.model_copy(update={"time": resolved, "time_ambiguity": ambiguity})
+    if resolution.status != "resolved" or resolution.constraint is None:
+        return selection
+    return selection.model_copy(
+        update={
+            "time": resolution.constraint.start_time,
+            "time_ambiguity": resolution.constraint.start_time_ambiguity,
+        }
+    )
 
 
 def resolve_turn_times_by_clinic_hours(
@@ -576,7 +564,6 @@ def resolve_turn_times_by_clinic_hours(
             operation.entities.time,
             date_constraint=date_constraint,
             context=context,
-            clock_source=operation.clock_source,
             branch_id=branch_id,
         )
         entities = operation.entities.model_copy(update={"time": resolved_time})
@@ -584,7 +571,6 @@ def resolve_turn_times_by_clinic_hours(
             operation.selection,
             date_constraint=date_constraint,
             context=context,
-            clock_source=operation.selection_clock_source,
             branch_id=branch_id,
         )
         operations.append(

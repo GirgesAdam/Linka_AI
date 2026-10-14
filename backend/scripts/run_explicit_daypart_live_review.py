@@ -517,7 +517,10 @@ def _raw_period(record: dict[str, Any]) -> str | None:
             continue
         operations = payload.get("operations")
         if isinstance(operations, list) and operations and isinstance(operations[0], dict):
-            return str(operations[0].get("time_period_provenance") or "none")
+            operation = operations[0]
+            entities = operation.get("entities") if isinstance(operation, dict) else None
+            time_value = entities.get("time") if isinstance(entities, dict) else None
+            return str(time_value.get("explicit_period") or "none") if isinstance(time_value, dict) else "none"
     return None
 
 
@@ -540,10 +543,7 @@ def _raw_semantic_times(record: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "operation_type": operation.get("type"),
                     "time": time_value,
-                    "time_period_provenance": operation.get("time_period_provenance"),
-                    "selection_time_period_provenance": operation.get(
-                        "selection_time_period_provenance"
-                    ),
+                    "explicit_period": time_value.get("explicit_period"),
                 }
             )
     return values
@@ -564,7 +564,7 @@ def _quality_assessment(
     )
     leak = any(
         token in reply
-        for token in ("||TIA_", "time_period_provenance", "device_key", "service_id")
+        for token in ("||TIA_", "explicit_period", "device_key", "service_id")
     )
     fragments = [
         item.strip()
@@ -597,8 +597,8 @@ def _annotate(
         "CUSTOMER": record.get("customer"),
         "AGENT": record.get("agent"),
         "Raw structured semantic time": _raw_semantic_times(record),
-        "time_period_provenance": [
-            item.get("time_period_provenance") for item in _raw_semantic_times(record)
+        "explicit_period": [
+            item.get("explicit_period") for item in _raw_semantic_times(record)
         ],
         "Canonical normalized time": _task_time(record),
         "Active task BEFORE": record.get("active_task_before"),
@@ -679,9 +679,9 @@ def _ra1(ctx: Context) -> None:
         message="RA1 canonical time != 16:15",
     )
     _require(
-        _raw_period(record) == "explicit_pm",
+        _raw_period(record) == "pm",
         counter="silent_am_pm_mutation",
-        message="RA1 missing explicit_pm provenance",
+        message="RA1 missing explicit PM semantics",
     )
     _require(
         not record["appointments"],
@@ -730,9 +730,9 @@ def _ra2(ctx: Context) -> None:
         message="RA2 explicit morning was mutated",
     )
     _require(
-        _raw_period(record) == "explicit_am",
+        _raw_period(record) == "am",
         counter="silent_am_pm_mutation",
-        message="RA2 missing explicit_am provenance",
+        message="RA2 missing explicit AM semantics",
     )
     _require(
         not record["appointments"],
@@ -904,13 +904,13 @@ def _ra6(ctx: Context) -> None:
         message="RA6 grouped explicit PM time != 16:30",
     )
     raw_periods = {
-        str(item.get("time_period_provenance") or "none")
+        str(item.get("explicit_period") or "none")
         for item in _raw_semantic_times(first)
     }
     _require(
-        "explicit_pm" in raw_periods,
+        "pm" in raw_periods,
         counter="silent_am_pm_mutation",
-        message="RA6 grouped turn lost explicit_pm provenance",
+        message="RA6 grouped turn lost explicit PM semantics",
     )
     _require(
         set(_task_service_ids(first)) == expected_services,
