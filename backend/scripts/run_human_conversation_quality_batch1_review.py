@@ -193,7 +193,9 @@ def ra_h1_marker_leak() -> None:
         env=_marker_env(),
     )
     _assert_no_marker(transcript)
-    assert "Candela" in str(transcript[-1]["agent"])
+    task = transcript[-1]["canonical"]["active_task"]
+    assert task is not None
+    assert task["constraints"]["device_key"] == "candela_gentle"
 
 
 def ra_h2_multiservice_total() -> None:

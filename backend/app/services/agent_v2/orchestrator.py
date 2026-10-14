@@ -2224,15 +2224,16 @@ def orchestrate_v2_turn(
             raise V2TurnInterpretationStructuredOutputError(
                 "V2 turn semantic interpretation exhausted structured attempts."
             ) from exc
-    typed_period_hints = {
-        hint
-        for operation in understanding.operations
+    typed_period_hints: set[str] = set()
+    for operation in understanding.operations:
+        time_entity = getattr(operation.entities, "time", None)
+        selection = getattr(operation, "selection", None)
         for hint in (
-            (operation.entities.time.spoken_period_hint if operation.entities.time is not None else "none"),
-            (operation.selection.spoken_period_hint if operation.selection is not None else "none"),
-        )
-        if hint in {"am", "pm"}
-    }
+            getattr(time_entity, "spoken_period_hint", "none"),
+            getattr(selection, "spoken_period_hint", "none"),
+        ):
+            if hint in {"am", "pm"}:
+                typed_period_hints.add(hint)
     if len(typed_period_hints) == 1:
         typed_period_resolution = resolve_pending_bare_clock_period(
             initial_task,

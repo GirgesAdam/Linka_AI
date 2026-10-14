@@ -222,3 +222,21 @@ def test_time_selection_uses_same_10_11_policy() -> None:
 def test_period_only_selection_can_carry_typed_hint_for_pending_10_11() -> None:
     selection = Selection(kind="time", time=None, spoken_period_hint="pm")
     assert selection.spoken_period_hint == "pm"
+
+
+def test_spoken_period_hint_is_provider_visible_but_not_backend_serialized() -> None:
+    schema = TimeConstraint.model_json_schema()
+    assert "spoken_period_hint" in schema["properties"]
+    constraint = TimeConstraint(
+        mode="exact",
+        start_time="11:00",
+        spoken_period_hint="pm",
+    )
+    assert constraint.spoken_period_hint == "pm"
+    assert "spoken_period_hint" not in constraint.model_dump(mode="json")
+
+    selection_schema = Selection.model_json_schema()
+    assert "spoken_period_hint" in selection_schema["properties"]
+    selection = Selection(kind="time", time=None, spoken_period_hint="pm")
+    assert selection.spoken_period_hint == "pm"
+    assert "spoken_period_hint" not in selection.model_dump(mode="json")

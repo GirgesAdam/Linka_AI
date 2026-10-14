@@ -142,6 +142,7 @@ class TimeConstraint(StrictContractModel):
     end_time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
     spoken_period_hint: SpokenPeriodHint = Field(
         default="none",
+        exclude=True,
         description=(
             "Semantic hint only. Return none unless the latest customer turn explicitly distinguishes "
             "an AM/PM-style period; Python owns final clock resolution from clinic hours."
@@ -181,6 +182,7 @@ class Selection(StrictContractModel):
     time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
     spoken_period_hint: SpokenPeriodHint = Field(
         default="none",
+        exclude=True,
         description=(
             "Semantic hint only. Return none unless the latest customer turn explicitly distinguishes "
             "an AM/PM-style period. A period-only answer to a pending time clarification may set this "
