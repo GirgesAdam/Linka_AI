@@ -1574,7 +1574,6 @@ def test_active_packages_four_shapes_create_usable_packages_pulses_and_financial
             db,
             workspace_id=workspace.id,
             patient_id=pulse_patient.id,
-            active_only=True,
         )
         assert len(pulse_read) == 1
         assert pulse_read[0].pulses_remaining == 800
