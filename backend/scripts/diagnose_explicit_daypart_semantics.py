@@ -81,8 +81,13 @@ def _time_view(turn: Any) -> dict[str, object] | None:
         "operation_type": operation.type,
         "active_task_relationship": operation.active_task_relationship,
         "active_task_explicit_fields": list(operation.active_task_explicit_fields),
-        "time_period_provenance": operation.time_period_provenance,
-        "selection_time_period_provenance": operation.selection_time_period_provenance,
+        "period_evidence_text": constraint.period_evidence_text,
+        "period_status": constraint.period_status,
+        "selection_period_status": (
+            operation.selection.period_status
+            if operation.selection is not None and operation.selection.kind == "time"
+            else "none"
+        ),
         "mode": constraint.mode,
         "start_time": constraint.start_time,
         "start_time_ambiguity": constraint.start_time_ambiguity,
@@ -93,20 +98,14 @@ def _time_view(turn: Any) -> dict[str, object] | None:
 
 def _run_case(text: str) -> dict[str, object]:
     stages: dict[str, object] = {}
-    original_validate_period = turn_interpreter._validate_explicit_period_provenance_v2
-    original_preserve = turn_interpreter._preserve_explicit_clock_constraints_v2
+    original_time_normalize = turn_interpreter._normalize_time_semantics_v2
     original_normalize = turn_interpreter.normalize_semantic_invariants
     original_resolve = turn_interpreter.resolve_turn_times_by_clinic_hours
 
-    def capture_validate_period(turn):
+    def capture_time_normalize(turn, *, latest_customer_text: str):
         stages["raw_interpreter"] = _time_view(turn)
-        result = original_validate_period(turn)
-        stages["after_period_provenance_validation"] = _time_view(result)
-        return result
-
-    def capture_preserve(turn, *, latest_customer_text: str):
-        result = original_preserve(turn, latest_customer_text=latest_customer_text)
-        stages["after_explicit_clock_preservation"] = _time_view(result)
+        result = original_time_normalize(turn, latest_customer_text=latest_customer_text)
+        stages["after_time_semantic_normalization"] = _time_view(result)
         return result
 
     def capture_normalize(turn):
@@ -119,8 +118,7 @@ def _run_case(text: str) -> dict[str, object]:
         stages["after_resolve_turn_times_by_clinic_hours"] = _time_view(result)
         return result
 
-    turn_interpreter._validate_explicit_period_provenance_v2 = capture_validate_period
-    turn_interpreter._preserve_explicit_clock_constraints_v2 = capture_preserve
+    turn_interpreter._normalize_time_semantics_v2 = capture_time_normalize
     turn_interpreter.normalize_semantic_invariants = capture_normalize
     turn_interpreter.resolve_turn_times_by_clinic_hours = capture_resolve
     try:
@@ -132,8 +130,7 @@ def _run_case(text: str) -> dict[str, object]:
         )
         stages["final_interpreter_result"] = _time_view(final)
     finally:
-        turn_interpreter._validate_explicit_period_provenance_v2 = original_validate_period
-        turn_interpreter._preserve_explicit_clock_constraints_v2 = original_preserve
+        turn_interpreter._normalize_time_semantics_v2 = original_time_normalize
         turn_interpreter.normalize_semantic_invariants = original_normalize
         turn_interpreter.resolve_turn_times_by_clinic_hours = original_resolve
 

@@ -140,22 +140,26 @@ def collapse_booking_service_sets(
         entity = operation.entities.service
         operation_type = getattr(operation, "type", None)
         execution_intent = getattr(operation, "execution_intent", "execute")
-        executable_booking_set = (
-            operation_type in {"book", "continue_active"}
-            and execution_intent == "execute"
-        )
-        explicit_grouped_service_correction = (
-            operation_type in {"book", "continue_active"}
-            and active_task is not None
-            and len(active_task.requested_service_ids) > 1
-            and operation.active_task_relationship != "replace"
-            and not operation.fresh_task
-            and operation.grouped_booking_action == "remove_other_components"
+        canonical_booking_set = (
+            operation_type == "book"
+            or (operation_type == "continue_active" and execution_intent == "execute")
         )
         fresh_grouped_availability = (
             operation_type == "availability"
             and execution_intent == "informational"
             and active_task is None
+        )
+        explicit_grouped_service_mutation = (
+            operation_type in {"book", "continue_active"}
+            and active_task is not None
+            and len(active_task.requested_service_ids) > 1
+            and operation.active_task_relationship != "replace"
+            and not operation.fresh_task
+            and operation.grouped_booking_action in {"preserve_group", "remove_other_components"}
+        )
+        explicit_grouped_service_correction = (
+            explicit_grouped_service_mutation
+            and operation.grouped_booking_action == "remove_other_components"
         )
         explicit_singleton_narrowing = (
             explicit_grouped_service_correction
@@ -166,8 +170,8 @@ def collapse_booking_service_sets(
         )
         if (
             not (
-                executable_booking_set
-                or explicit_grouped_service_correction
+                canonical_booking_set
+                or explicit_grouped_service_mutation
                 or fresh_grouped_availability
             )
             or entity is None
@@ -225,7 +229,11 @@ def collapse_booking_service_sets(
         if main_ref is None:
             normalized.append(operation)
             continue
-        service_sets[index] = canonical_ids
+        # Equivalent provider shapes must not change single-service business semantics.
+        # A one-item candidate_mode=set becomes the same grounded singleton ref unless
+        # it is authoritatively narrowing an existing grouped booking.
+        if len(canonical_ids) > 1 or explicit_grouped_service_correction:
+            service_sets[index] = canonical_ids
         normalized.append(
             operation.model_copy(
                 update={
@@ -244,9 +252,10 @@ def collapse_booking_service_sets(
             )
         )
 
-    if not service_sets:
-        return turn, {}
-    return turn.model_copy(update={"operations": normalized}), service_sets
+    if all(current is original for current, original in zip(normalized, turn.operations, strict=True)):
+        return turn, service_sets
+    normalized_turn = turn.model_copy(update={"operations": normalized})
+    return normalized_turn, service_sets
 
 
 def tag_booking_service_sets(
@@ -280,16 +289,15 @@ def tag_booking_service_sets(
             )
         state_action = step.state_action
         if (
-            step.operation_type == "availability"
+            step.operation_type in {"availability", "book"}
             and len(requested) > 1
             and state_action == "none"
+            and step.write_intent is None
         ):
-            # A fresh informational availability request for an intentional service set
-            # is still a durable same-visit booking task. The read stays read-only; the
-            # resulting task is deliberately not write-authorized until a later explicit
-            # booking/confirmation turn.
+            # A typed same-visit set remains durable even when this turn is read-only.
+            # Authorization stays separate and may only be granted by execution semantics.
             state_action = "start_booking"
-            facts["grouped_availability_task"] = True
+            facts["grouped_read_only_task"] = True
         steps.append(
             step.model_copy(
                 update={

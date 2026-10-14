@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 import app.agents.v2.turn_interpreter as turn_interpreter
+import app.services.agent_v2.orchestrator as orchestrator_module
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.booking_settings import BookingSettings
@@ -38,6 +39,12 @@ ORIGINAL = (
 )
 TOTAL = "السعر الإجمالي كام؟"
 MODE = os.environ.get("RA_G_MODE", "standalone").strip().lower()
+C7_INITIAL = "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0648\u0625\u0628\u0637 \u0645\u0639 \u0628\u0639\u0636 \u0639\u0644\u0649 Candela Gentle \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a 17 \u0623\u0643\u062a\u0648\u0628\u0631"
+C7_REPLACEMENT = "\u0628\u062f\u0644 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u062e\u0644\u064a\u0647\u0627 Full Arms \u0648\u062e\u0644\u064a \u0644\u064a\u0632\u0631 \u0627\u0644\u0625\u0628\u0637 \u0632\u064a \u0645\u0627 \u0647\u0648"
+C7_REPLACEMENT_VARIANT_1 = "\u0634\u064a\u0644 \u0627\u0644\u0628\u0643\u064a\u0646\u064a \u0648\u062d\u0637 \u0645\u0643\u0627\u0646\u0647 Full Arms \u0648\u0633\u064a\u0628 \u0627\u0644\u0625\u0628\u0637"
+C7_REPLACEMENT_VARIANT_2 = "\u062e\u0644\u064a \u0627\u0644\u0625\u0628\u0637 \u0648Full Arms \u0628\u0633"
+C7_ADDITION = "\u0636\u064a\u0641 Full Arms \u0643\u0645\u0627\u0646"
+C7_REMOVAL = "\u0634\u064a\u0644 \u0627\u0644\u0628\u0643\u064a\u0646\u064a \u0648\u062e\u0644\u064a \u0627\u0644\u0625\u0628\u0637 \u0628\u0633"
 
 
 @contextmanager
@@ -287,6 +294,41 @@ def capture_invoke(*args, **kwargs):
 turn_interpreter.invoke_typed_structured_output = capture_invoke
 
 
+STAGES: list[dict[str, object]] = []
+_original_collapse = orchestrator_module.collapse_booking_service_sets
+_original_expand = orchestrator_module.expand_multi_service_operations
+
+
+def capture_collapse(*args, **kwargs):
+    before = args[0] if args else kwargs.get("turn")
+    value = _original_collapse(*args, **kwargs)
+    understanding, service_sets = value
+    STAGES.append({
+        "stage": "collapse_booking_service_sets",
+        "input_understanding": dump(before),
+        "output_understanding": dump(understanding),
+        "canonical_service_sets": service_sets,
+    })
+    return value
+
+
+def capture_expand(*args, **kwargs):
+    before = args[0] if args else kwargs.get("turn")
+    value = _original_expand(*args, **kwargs)
+    understanding, visit_groups = value
+    STAGES.append({
+        "stage": "expand_multi_service_operations",
+        "input_understanding": dump(before),
+        "output_understanding": dump(understanding),
+        "visit_groups": visit_groups,
+    })
+    return value
+
+
+orchestrator_module.collapse_booking_service_sets = capture_collapse
+orchestrator_module.expand_multi_service_operations = capture_expand
+
+
 def appointment_count(db: Session, workspace_id: UUID) -> int:
     return int(
         db.scalar(
@@ -296,12 +338,14 @@ def appointment_count(db: Session, workspace_id: UUID) -> int:
     )
 
 
-def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, object]]) -> dict[str, object]:
+def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, object]], stages: list[dict[str, object]], active_task_before) -> dict[str, object]:
     task = turn.active_task
     return {
         "customer": customer,
         "raw_model_structured": raw,
+        "normalization_stages": stages,
         "understanding": dump(turn.understanding),
+        "active_task_before": dump(active_task_before),
         "plan": dump(turn.plan),
         "traces": [dump(trace) for trace in turn.traces],
         "outcomes": [dump(outcome) for outcome in turn.outcomes],
@@ -317,6 +361,13 @@ def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, 
 
 
 def run_scenario(name: str, messages: list[str], validator) -> None:
+    selected = {
+        item.strip()
+        for item in os.environ.get("RA_G_SCENARIOS", "").split(",")
+        if item.strip()
+    }
+    if selected and name not in selected:
+        return
     with rollback_session() as db:
         workspace, patient, doctor, underarm, bikini, arms = build_fixture(db)
         ids = {
@@ -343,9 +394,11 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
         history = []
         before = appointment_count(db, workspace.id)
         records: list[dict[str, object]] = []
+        previous_task = None
         for index, customer in enumerate(messages, start=1):
             history.append(HumanMessage(content=customer))
             RAW.clear()
+            STAGES.clear()
             result = orchestrate_v2_turn(
                 db=db,
                 workspace=workspace,
@@ -359,7 +412,8 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
                 turn_id=f"{name.lower()}-{index}",
                 write_executor=None,
             )
-            records.append(turn_record(result, customer=customer, raw=list(RAW)))
+            records.append(turn_record(result, customer=customer, raw=list(RAW), stages=list(STAGES), active_task_before=previous_task))
+            previous_task = result.active_task
             if result.reply:
                 history.append(AIMessage(content=result.reply))
         after = appointment_count(db, workspace.id)
@@ -378,6 +432,59 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
 
 def _task_ids(record: dict[str, object]) -> list[str]:
     return list(record.get("requested_service_ids") or [])
+
+
+def _raw_grouped_action(record: dict[str, object]) -> str | None:
+    for capture in reversed(list(record.get("raw_model_structured") or [])):
+        if not isinstance(capture, dict) or capture.get("status") != "ok":
+            continue
+        structured = capture.get("structured")
+        if not isinstance(structured, dict):
+            continue
+        operations = structured.get("operations")
+        if not isinstance(operations, list) or not operations or not isinstance(operations[0], dict):
+            continue
+        return str(operations[0].get("grouped_booking_action") or "") or None
+    return None
+
+
+def _collapsed_service_set(record: dict[str, object]) -> set[str]:
+    for stage in record.get("normalization_stages") or []:
+        if not isinstance(stage, dict) or stage.get("stage") != "collapse_booking_service_sets":
+            continue
+        service_sets = stage.get("canonical_service_sets")
+        if not isinstance(service_sets, dict):
+            continue
+        for values in service_sets.values():
+            if isinstance(values, list):
+                return {str(item) for item in values}
+    return set()
+
+
+def _validate_service_correction(records, ids, *, expected: set[str], action: str) -> None:
+    assert len(records) == 2
+    before, corrected = records
+    assert set(_task_ids(before)) == {ids["underarm"], ids["bikini"]}
+    assert _raw_grouped_action(corrected) == action
+    assert _collapsed_service_set(corrected) == expected
+    assert set(_task_ids(corrected)) == expected
+    assert corrected["pending_write"] is None
+
+
+def validate_c7_replacement(records, ids):
+    expected = {ids["underarm"], ids["arms"]}
+    _validate_service_correction(records, ids, expected=expected, action="remove_other_components")
+    assert ids["bikini"] not in _task_ids(records[-1])
+
+
+def validate_c7_addition(records, ids):
+    expected = {ids["underarm"], ids["bikini"], ids["arms"]}
+    _validate_service_correction(records, ids, expected=expected, action="preserve_group")
+
+
+def validate_c7_removal(records, ids):
+    expected = {ids["underarm"]}
+    _validate_service_correction(records, ids, expected=expected, action="remove_other_components")
 
 
 def validate_g1(records, ids):
@@ -445,6 +552,12 @@ def main() -> int:
     if MODE not in {"standalone", "batch1-overlay"}:
         raise RuntimeError(f"Unsupported RA_G_MODE={MODE}")
 
+    if MODE == "standalone":
+        run_scenario("RA-C7-REPLACEMENT", [C7_INITIAL, C7_REPLACEMENT], validate_c7_replacement)
+        run_scenario("RA-C7-REPLACEMENT-V1", [C7_INITIAL, C7_REPLACEMENT_VARIANT_1], validate_c7_replacement)
+        run_scenario("RA-C7-REPLACEMENT-V2", [C7_INITIAL, C7_REPLACEMENT_VARIANT_2], validate_c7_replacement)
+        run_scenario("RA-C7-ADDITION", [C7_INITIAL, C7_ADDITION], validate_c7_addition)
+        run_scenario("RA-C7-REMOVAL", [C7_INITIAL, C7_REMOVAL], validate_c7_removal)
     run_scenario("RA-G1", [ORIGINAL], validate_g1)
     if MODE == "batch1-overlay":
         run_scenario("RA-G2", [ORIGINAL, TOTAL], validate_g2)

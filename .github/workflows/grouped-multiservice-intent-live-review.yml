@@ -89,7 +89,15 @@ jobs:
           SQL
       - name: Apply clean migrations
         run: python -m alembic upgrade head
-      - name: Run RA-G1 and RA-G5 on standalone #241 tree
+      - name: Run focused C7 replacement
+        env:
+          RA_G_SCENARIOS: RA-C7-REPLACEMENT
+        run: python scripts/run_grouped_multiservice_intent_live_review.py
+      - name: Run focused C7 pure addition
+        env:
+          RA_G_SCENARIOS: RA-C7-ADDITION
+        run: python scripts/run_grouped_multiservice_intent_live_review.py
+      - name: Run full grouped multi-service review
         run: python scripts/run_grouped_multiservice_intent_live_review.py
 
   batch1-compatibility:

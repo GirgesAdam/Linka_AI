@@ -2274,6 +2274,8 @@ def orchestrate_v2_turn(
         understanding,
         active_task=initial_booking_task,
         context=semantic_context,
+        catalog=canonical_catalog,
+        booking_service_sets=booking_service_sets,
     )
     understanding, restored_visit_groups = restore_grouped_booking_understanding(
         understanding,

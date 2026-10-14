@@ -61,9 +61,34 @@ def _dump(value: Any) -> Any:
     return str(value)
 
 
+def _dump_provider_value(value: Any) -> Any:
+    payload = _dump(value)
+    operations = getattr(value, "operations", None)
+    if not isinstance(payload, dict) or not isinstance(operations, list):
+        return payload
+    dumped_operations = payload.get("operations")
+    if not isinstance(dumped_operations, list):
+        return payload
+    for index, operation in enumerate(operations):
+        if index >= len(dumped_operations) or not isinstance(dumped_operations[index], dict):
+            continue
+        dumped_operation = dumped_operations[index]
+        dumped_entities = dumped_operation.get("entities")
+        constraint = getattr(getattr(operation, "entities", None), "time", None)
+        if constraint is not None and isinstance(dumped_entities, dict):
+            dumped_time = dumped_entities.get("time")
+            if isinstance(dumped_time, dict):
+                dumped_time["period_evidence_text"] = constraint.period_evidence_text
+        selection = getattr(operation, "selection", None)
+        dumped_selection = dumped_operation.get("selection")
+        if selection is not None and isinstance(dumped_selection, dict):
+            dumped_selection["period_evidence_text"] = selection.period_evidence_text
+    return payload
+
+
 def _capture_invoke(*args, **kwargs):
     value = _ORIGINAL_INVOKE(*args, **kwargs)
-    RAW.append(_dump(value))
+    RAW.append(_dump_provider_value(value))
     return value
 
 
@@ -512,12 +537,31 @@ def _appointment_clock(record: dict[str, Any]) -> str | None:
 
 
 def _raw_period(record: dict[str, Any]) -> str | None:
+    customer = str(record.get("customer") or "")
     for payload in record.get("raw_structured") or []:
         if not isinstance(payload, dict):
             continue
         operations = payload.get("operations")
-        if isinstance(operations, list) and operations and isinstance(operations[0], dict):
-            return str(operations[0].get("time_period_provenance") or "none")
+        if not isinstance(operations, list) or not operations or not isinstance(operations[0], dict):
+            continue
+        operation = operations[0]
+        entities = operation.get("entities") if isinstance(operation, dict) else None
+        time_value = entities.get("time") if isinstance(entities, dict) else None
+        if not isinstance(time_value, dict):
+            continue
+        evidence = time_value.get("period_evidence_text")
+        if evidence in (None, ""):
+            legacy = str(time_value.get("period_status") or "none")
+            return legacy if legacy in {"explicit", "conflict"} else "none"
+        text = str(evidence).strip()
+        if (
+            not text
+            or text not in customer
+            or any(char.isdigit() for char in text)
+            or ":" in text
+        ):
+            return "conflict"
+        return "explicit"
     return None
 
 
@@ -540,9 +584,11 @@ def _raw_semantic_times(record: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "operation_type": operation.get("type"),
                     "time": time_value,
-                    "time_period_provenance": operation.get("time_period_provenance"),
-                    "selection_time_period_provenance": operation.get(
-                        "selection_time_period_provenance"
+                    "period_evidence_text": time_value.get("period_evidence_text"),
+                    "period_status": (
+                        "explicit"
+                        if time_value.get("period_evidence_text") not in (None, "")
+                        else str(time_value.get("period_status") or "none")
                     ),
                 }
             )
@@ -564,7 +610,7 @@ def _quality_assessment(
     )
     leak = any(
         token in reply
-        for token in ("||TIA_", "time_period_provenance", "device_key", "service_id")
+        for token in ("||TIA_", "period_status", "device_key", "service_id")
     )
     fragments = [
         item.strip()
@@ -597,8 +643,8 @@ def _annotate(
         "CUSTOMER": record.get("customer"),
         "AGENT": record.get("agent"),
         "Raw structured semantic time": _raw_semantic_times(record),
-        "time_period_provenance": [
-            item.get("time_period_provenance") for item in _raw_semantic_times(record)
+        "period_status": [
+            item.get("period_status") for item in _raw_semantic_times(record)
         ],
         "Canonical normalized time": _task_time(record),
         "Active task BEFORE": record.get("active_task_before"),
@@ -679,9 +725,9 @@ def _ra1(ctx: Context) -> None:
         message="RA1 canonical time != 16:15",
     )
     _require(
-        _raw_period(record) == "explicit_pm",
+        _raw_period(record) == "explicit",
         counter="silent_am_pm_mutation",
-        message="RA1 missing explicit_pm provenance",
+        message="RA1 missing explicit PM semantics",
     )
     _require(
         not record["appointments"],
@@ -730,9 +776,9 @@ def _ra2(ctx: Context) -> None:
         message="RA2 explicit morning was mutated",
     )
     _require(
-        _raw_period(record) == "explicit_am",
+        _raw_period(record) == "explicit",
         counter="silent_am_pm_mutation",
-        message="RA2 missing explicit_am provenance",
+        message="RA2 missing explicit AM semantics",
     )
     _require(
         not record["appointments"],
@@ -904,13 +950,13 @@ def _ra6(ctx: Context) -> None:
         message="RA6 grouped explicit PM time != 16:30",
     )
     raw_periods = {
-        str(item.get("time_period_provenance") or "none")
+        str(item.get("period_status") or "none")
         for item in _raw_semantic_times(first)
     }
     _require(
-        "explicit_pm" in raw_periods,
+        "explicit" in raw_periods,
         counter="silent_am_pm_mutation",
-        message="RA6 grouped turn lost explicit_pm provenance",
+        message="RA6 grouped turn lost explicit PM semantics",
     )
     _require(
         set(_task_service_ids(first)) == expected_services,

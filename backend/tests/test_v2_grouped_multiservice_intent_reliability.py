@@ -9,6 +9,7 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
+    TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
@@ -381,6 +382,61 @@ def test_g9_informational_continue_active_narrows_grouped_set() -> None:
     assert transition.active_task.constraints.service_id == A
 
 
+def test_g9_informational_continue_active_preserves_pure_addition() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B),
+        requested_service_ids=[A, B],
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="informational",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[ARMS]],
+                        candidate_mode="set",
+                    )
+                ),
+            )
+        ]
+    )
+
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    plan = tag_booking_service_sets(
+        plan_turn(
+            normalized,
+            PlannerContext(semantic_context=context, active_task=state, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    assert service_sets == {0: [A, B, ARMS]}
+
+    transition = apply_step_state(
+        state,
+        step=plan.steps[0],
+        operation=normalized.operations[0],
+        reads=None,
+        now=NOW,
+        turn_id="g9-informational-add",
+        catalog=catalog,
+    )
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.requested_service_ids == [A, B, ARMS]
+    assert transition.active_task.constraints.service_id == ARMS
+
+
 def test_g10_replace_one_service_keeps_retained_and_replacement_only() -> None:
     catalog = _catalog()
     context = build_semantic_context(catalog)
@@ -573,3 +629,151 @@ def test_stateful_harness_applies_same_explicit_group_narrowing_as_runtime(monke
     assert result.active_task.constraints.service_id == A
     assert result.active_task.write_authorization.authorized is False
     assert all(trace.simulated_write is None for trace in result.traces)
+
+def _ra6_book_turn(context, *, execution_intent: str) -> TiaTurnUnderstanding:
+    refs = _refs(context)
+    doctor_ref = next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "doctor" and target.canonical_id == "doc-common"
+    )
+    device_ref = next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "device" and target.canonical_id == "v1"
+    )
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent=execution_intent,
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B]],
+                        candidate_mode="set",
+                    ),
+                    doctor=EntityReference(ref=doctor_ref),
+                    device=EntityReference(ref=device_ref),
+                    date=DateConstraint(mode="exact", start_date="2026-10-15"),
+                    time=TimeConstraint(
+                        mode="exact",
+                        start_time="16:30",
+                        period_status="explicit",
+                    ),
+                ),
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("execution_intent", "expected_authorized"),
+    [("execute", True), ("informational", False)],
+)
+def test_ra6_book_set_meaning_is_independent_from_write_authorization(
+    execution_intent: str,
+    expected_authorized: bool,
+) -> None:
+    catalog = _catalog(common_devices=1)
+    context = build_semantic_context(catalog)
+    turn = _ra6_book_turn(context, execution_intent=execution_intent)
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=None,
+    )
+    expanded, groups = expand_multi_service_operations(
+        collapsed,
+        semantic_context=context,
+        booking_service_sets=service_sets,
+    )
+    plan = tag_booking_service_sets(
+        plan_turn(
+            expanded,
+            PlannerContext(semantic_context=context, active_task=None, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+
+    assert service_sets == {0: [A, B]}
+    assert groups == {}
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.facts["requested_service_ids"] == [A, B]
+    assert step.facts["multi_service_single_appointment"] is True
+    assert step.facts["booking_proposal_required"] is True
+    assert step.state_action == "start_booking"
+    availability_reads = [read for read in step.reads if read.kind == "availability"]
+    assert len(availability_reads) == 1
+    assert availability_reads[0].parameters["service_id"] == B
+    assert availability_reads[0].parameters["device_key"] == "v1"
+    assert availability_reads[0].parameters["time"]["start_time"] == "16:30"
+    if execution_intent == "informational":
+        assert step.write_intent is None
+
+    transition = apply_step_state(
+        None,
+        step=step,
+        operation=expanded.operations[0],
+        reads=None,
+        now=NOW,
+        turn_id=f"ra6-{execution_intent}",
+        catalog=catalog,
+    )
+    state = transition.active_task
+    assert isinstance(state, BookingTaskState)
+    assert state.requested_service_ids == [A, B]
+    assert state.constraints.service_id == B
+    assert state.constraints.doctor_id == "doc-common"
+    assert state.constraints.device_key == "v1"
+    assert state.constraints.time is not None
+    assert state.constraints.time.start_time == "16:30"
+    assert state.write_authorization.authorized is expected_authorized
+
+
+def test_ra6_informational_book_preserves_task_but_has_zero_write_authority() -> None:
+    catalog = _catalog(common_devices=1)
+    context = build_semantic_context(catalog)
+    turn = _ra6_book_turn(context, execution_intent="informational")
+    state = _start_state(turn, catalog)
+
+    assert state.requested_service_ids == [A, B]
+    assert state.constraints.service_id == B
+    assert state.constraints.device_key == "v1"
+    assert state.write_authorization.authorized is False
+    assert state.proposal is None
+
+
+def test_true_service_info_comparison_does_not_become_booking_task() -> None:
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="service_info",
+                execution_intent="informational",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B]],
+                        candidate_mode="set",
+                    )
+                ),
+            )
+        ]
+    )
+    collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=None,
+    )
+    assert service_sets == {}
+    plan = plan_turn(
+        collapsed,
+        PlannerContext(semantic_context=context, active_task=None, now=NOW),
+    )
+    assert plan.steps[0].state_action != "start_booking"
+    assert plan.steps[0].write_intent is None

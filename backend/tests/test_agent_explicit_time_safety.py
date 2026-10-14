@@ -22,7 +22,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import _preserve_explicit_clock_constraints_v2
+from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
 from app.services.agent_v2.planner import (
     _EXPLICIT_TIME_AUTHORITY_PARAM,
     PlannerContext,
@@ -307,7 +307,7 @@ def _v2_turn(*, value: str, ambiguity: str = "twelve_hour", operation_type: str 
 
 
 def test_v2_explicit_03_disables_twelve_hour_resolution_before_clinic_hours() -> None:
-    corrected = _preserve_explicit_clock_constraints_v2(
+    corrected = _normalize_time_semantics_v2(
         _v2_turn(value="03:00", ambiguity="twelve_hour"),
         latest_customer_text="????? PRP ?????? ???? ?????? 03:00 ?? ???",
     )
@@ -318,7 +318,7 @@ def test_v2_explicit_03_disables_twelve_hour_resolution_before_clinic_hours() ->
 
 
 def test_v2_explicit_arabic_indic_time_is_canonical_and_unambiguous() -> None:
-    corrected = _preserve_explicit_clock_constraints_v2(
+    corrected = _normalize_time_semantics_v2(
         _v2_turn(value="15:30", ambiguity="twelve_hour"),
         latest_customer_text="\u0627\u0644\u0633\u0627\u0639\u0629 \u0660\u0663:\u0660\u0660",
     )
@@ -330,7 +330,7 @@ def test_v2_explicit_arabic_indic_time_is_canonical_and_unambiguous() -> None:
 
 def test_v2_colloquial_three_keeps_existing_ambiguity_contract() -> None:
     original = _v2_turn(value="03:00", ambiguity="twelve_hour")
-    corrected = _preserve_explicit_clock_constraints_v2(
+    corrected = _normalize_time_semantics_v2(
         original, latest_customer_text="?????? 3"
     )
     assert corrected == original
@@ -419,7 +419,7 @@ def test_v2_single_explicit_time_does_not_leak_into_unrelated_compound_operation
     )
     second = TurnOperation(type="book", entities=TurnEntities())
     turn = TiaTurnUnderstanding(operations=[first, second])
-    corrected = _preserve_explicit_clock_constraints_v2(
+    corrected = _normalize_time_semantics_v2(
         turn, latest_customer_text="?????? ?????? 03:00 ???????? ??? ?????"
     )
     assert corrected.operations[0].entities.time is not None
@@ -429,7 +429,7 @@ def test_v2_single_explicit_time_does_not_leak_into_unrelated_compound_operation
 
 @pytest.mark.parametrize("operation_type", ["availability", "reschedule"])
 def test_v2_explicit_03_is_preserved_for_read_and_reschedule_semantics(operation_type: str) -> None:
-    corrected = _preserve_explicit_clock_constraints_v2(
+    corrected = _normalize_time_semantics_v2(
         _v2_turn(value="15:00", ambiguity="twelve_hour", operation_type=operation_type),
         latest_customer_text="????? ???? ?????? 03:00",
     )

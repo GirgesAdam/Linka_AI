@@ -43,10 +43,9 @@ def failing_validator(ctx):
                 {
                     "operations": [
                         {
-                            "time_period_provenance": "explicit_pm",
                             "entities": {
                                 "date": {"value": "2026-10-15"},
-                                "time": {"start_time": "16:15"},
+                                "time": {"start_time": "16:15", "period_status": "explicit"},
                             },
                         }
                     ]
@@ -156,9 +155,8 @@ def record(include_server_alternatives):
                 "operations": [
                     {
                         "entities": {
-                            "time": {"start_time": "16:15"},
+                            "time": {"start_time": "16:15", "period_status": "explicit"},
                         },
-                        "time_period_provenance": "explicit_pm",
                     }
                 ]
             }

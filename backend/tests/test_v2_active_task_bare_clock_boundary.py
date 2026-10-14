@@ -379,13 +379,12 @@ def test_ap12_period_answer_updates_same_task_then_continues_at_22() -> None:
         type="book",
         active_task_relationship="continue",
         active_task_explicit_fields=["time"],
-        clock_source="explicit_period",
-        time_period_provenance="explicit_pm",
         entities=TurnEntities(
             time=TimeConstraint(
                 mode="exact",
                 start_time="22:00",
                 start_time_ambiguity="none",
+                period_status="explicit",
             )
         ),
     )

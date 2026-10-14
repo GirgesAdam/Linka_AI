@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from app.agents.v2.semantic_context import build_semantic_context
-from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
+from app.agents.v2.time_resolution import (
+    classify_operation_bare_clock,
+    resolve_turn_times_by_clinic_hours,
+)
 from app.agents.v2.turn_contract import (
     DateConstraint,
     Selection,
@@ -65,7 +68,7 @@ def test_bare_eight_resolves_to_evening_when_only_pm_is_inside_clinic_hours() ->
     assert constraint.start_time_ambiguity == "none"
 
 
-def test_bare_eight_fails_closed_when_both_am_and_pm_are_inside_hours() -> None:
+def test_bare_eight_prefers_pm_when_both_am_and_pm_are_inside_hours() -> None:
     context = build_semantic_context(_catalog(start="08:00", end="22:00"))
     turn = _turn(
         TimeConstraint(
@@ -77,10 +80,13 @@ def test_bare_eight_fails_closed_when_both_am_and_pm_are_inside_hours() -> None:
 
     resolved = resolve_turn_times_by_clinic_hours(turn, context)
 
-    assert resolved.operations[0].entities.time is None
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "20:00"
+    assert constraint.start_time_ambiguity == "none"
 
 
-def test_bare_eight_fails_closed_when_neither_candidate_is_inside_hours() -> None:
+def test_bare_eight_neither_candidate_stays_unresolved_for_planner_unavailable_gate() -> None:
     context = build_semantic_context(_catalog(start="09:00", end="17:00"))
     turn = _turn(
         TimeConstraint(
@@ -92,7 +98,13 @@ def test_bare_eight_fails_closed_when_neither_candidate_is_inside_hours() -> Non
 
     resolved = resolve_turn_times_by_clinic_hours(turn, context)
 
-    assert resolved.operations[0].entities.time is None
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "08:00"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    classified = classify_operation_bare_clock(resolved.operations[0], context)
+    assert classified.status == "outside_operating_hours"
+    assert classified.valid_operating_hour_candidates == ()
 
 
 def test_explicit_morning_is_never_flipped_to_evening() -> None:

@@ -145,7 +145,10 @@ def _new_booking_state(
     turn_id: str,
     now: datetime,
 ) -> BookingTaskState:
-    authorized = operation.type == "book" or bool(
+    authorized = bool(
+        operation.type == "book"
+        and operation.execution_intent == "execute"
+    ) or bool(
         step.write_intent is not None
         and step.write_intent.kind == "booking"
         and step.write_intent.authorized

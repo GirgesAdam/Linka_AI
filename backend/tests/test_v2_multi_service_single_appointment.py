@@ -143,11 +143,12 @@ def test_real_interpreter_combo_only_set_with_ref_is_preserved_as_service_set() 
         catalog=_catalog(),
     )
 
-    assert service_sets == {0: [COMBO]}
+    assert service_sets == {}
     service = collapsed.operations[0].entities.service
     assert service is not None
-    assert service.ref == "S3"
+    assert semantic.resolve(service.ref, expected_kind="service") == COMBO
     assert service.candidate_refs == []
+    assert service.candidate_mode == "ambiguous"
 
 
 def test_combo_only_set_stays_one_canonical_service() -> None:
@@ -172,9 +173,12 @@ def test_combo_only_set_stays_one_canonical_service() -> None:
         semantic_context=context,
         catalog=_catalog(),
     )
-    assert sets == {0: [COMBO]}
-    assert collapsed.operations[0].entities.service is not None
-    assert collapsed.operations[0].entities.service.ref == "S3"
+    assert sets == {}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert context.resolve(service.ref, expected_kind="service") == COMBO
+    assert service.candidate_refs == []
+    assert service.candidate_mode == "ambiguous"
 
 
 def test_combo_plus_full_arms_selects_combo_as_main_without_duplication() -> None:
@@ -281,6 +285,39 @@ def test_remove_other_components_preserves_request_order_of_retained_services() 
     service = collapsed.operations[0].entities.service
     assert service is not None
     assert context.resolve(service.ref, expected_kind="service") == COMBO
+
+
+def test_single_grounded_service_set_is_equivalent_to_single_ref_without_group_proposal() -> None:
+    context = build_semantic_context(_catalog())
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=["S4"],
+                        candidate_mode="set",
+                    )
+                ),
+                execution_intent="execute",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=_catalog(),
+        active_task=None,
+    )
+
+    assert service_sets == {}
+    service = collapsed.operations[0].entities.service
+    assert service is not None
+    assert context.resolve(service.ref, expected_kind="service") == FULL_ARMS
+    assert service.candidate_refs == []
+    assert service.candidate_mode == "ambiguous"
 
 
 def test_explicit_combo_replacement_does_not_retain_covered_atomic_services() -> None:
@@ -529,6 +566,72 @@ def test_proposal_executor_creates_one_appointment_then_additional_rows(monkeypa
     assert result["reserved_duration_minutes"] == 45
 
 
+
+def test_replacement_final_set_executes_one_appointment_without_removed_service(monkeypatch) -> None:
+    proposal = _proposal(services=[UNDERARM, FULL_ARMS])
+    assert proposal.main_service_id == FULL_ARMS
+    assert BIKINI not in proposal.service_ids
+    appointment = SimpleNamespace(
+        id=UUID("88888888-8888-8888-8888-888888888888"),
+        service_id=UUID(FULL_ARMS),
+        status="pending",
+        duration_minutes=30,
+    )
+    created: list[str] = []
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_additional_services",
+        lambda *_args, **_kwargs: [
+            AdditionalServiceResolution(service_id=UUID(UNDERARM), device_key=None)
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_booking_package",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            package_id=None,
+            package_used=False,
+            package_name=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_create(*_args, **_kwargs):
+        created.append(f"appointment:{FULL_ARMS}")
+        return appointment
+
+    def fake_add(*_args, **kwargs):
+        created.append(f"additional:{kwargs['service_id']}")
+        return SimpleNamespace(
+            id=UUID("99999999-9999-9999-9999-999999999999"),
+            service_id=kwargs["service_id"],
+        )
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.create_appointment_operation",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.add_additional_service",
+        fake_add,
+    )
+    result = execute_booking_proposal(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        patient=SimpleNamespace(id=UUID(PATIENT_ID), status="active"),
+        proposal=proposal,
+        idempotency_key="replacement-final-set",
+    )
+
+    assert proposal.service_ids == [UNDERARM, FULL_ARMS]
+    assert created == [f"appointment:{FULL_ARMS}", f"additional:{UNDERARM}"]
+    assert not any(BIKINI in item for item in created)
+    assert result["main_service_id"] == FULL_ARMS
+    assert result["additional_service_ids"] == [UNDERARM]
+
+
 def test_d6_grouped_explicit_pm_executes_one_pending_appointment_with_shared_visit_device(monkeypatch) -> None:
     explicit_pm_start = datetime(2026, 10, 15, 13, 15, tzinfo=UTC)
     proposal = _proposal().model_copy(
@@ -602,3 +705,71 @@ def test_d6_grouped_explicit_pm_executes_one_pending_appointment_with_shared_vis
     assert appointment.laser_device_key == "candela"
     assert result["main_service_id"] == COMBO
     assert result["additional_service_ids"] == [FULL_ARMS]
+
+def test_ra6_confirmation_creates_one_bikini_appointment_plus_underarm_on_same_device(monkeypatch) -> None:
+    proposal = _proposal(services=[UNDERARM, BIKINI]).model_copy(
+        update={
+            "device_key": "candela",
+            "additional_service_device_keys": {UNDERARM: "candela"},
+        }
+    )
+    assert proposal.main_service_id == BIKINI
+    assert proposal.additional_service_ids == [UNDERARM]
+    appointment = SimpleNamespace(
+        id=UUID("88888888-8888-8888-8888-888888888888"),
+        service_id=UUID(BIKINI),
+        status="pending",
+        duration_minutes=25,
+        laser_device_key="candela",
+    )
+    created: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_additional_services",
+        lambda *_args, **_kwargs: [
+            AdditionalServiceResolution(service_id=UUID(UNDERARM), device_key="candela")
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_booking_package",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            package_id=None, package_used=False, package_name=None
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: "candela",
+    )
+
+    def fake_create(*_args, **kwargs):
+        created.append(("appointment", kwargs.get("laser_device_key")))
+        return appointment
+
+    def fake_add(*_args, **kwargs):
+        created.append((f"additional:{kwargs['service_id']}", kwargs.get("laser_device_key")))
+        return SimpleNamespace(
+            id=UUID("99999999-9999-9999-9999-999999999999"),
+            service_id=kwargs["service_id"],
+        )
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.create_appointment_operation", fake_create
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.add_additional_service", fake_add
+    )
+
+    result = execute_booking_proposal(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        patient=SimpleNamespace(id=UUID(PATIENT_ID), status="active"),
+        proposal=proposal,
+        idempotency_key="ra6-confirmation",
+    )
+
+    assert created == [
+        ("appointment", "candela"),
+        (f"additional:{UNDERARM}", "candela"),
+    ]
+    assert result["main_service_id"] == BIKINI
+    assert result["additional_service_ids"] == [UNDERARM]
