@@ -3061,57 +3061,36 @@ def build_historical_import_template(
     instructions["A11"].border = table_border
     instructions["A11"].alignment = Alignment(horizontal="center")
 
-    service_start_row: int | None = None
-    service_end_row: int | None = None
-    if valid_services:
-        service_start_row = 12
-        for index, name in enumerate(valid_services, start=service_start_row):
-            cell = instructions.cell(row=index, column=1, value=name)
-            cell.border = table_border
-            cell.alignment = Alignment(horizontal="right", vertical="center")
-        service_end_row = service_start_row + len(valid_services) - 1
-        services_table = Table(displayName="ServicesTable", ref=f"A11:A{service_end_row}")
-        services_table.tableStyleInfo = TableStyleInfo(
-            name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
-            showRowStripes=True, showColumnStripes=False,
-        )
-        instructions.add_table(services_table)
-    else:
-        instructions["A12"] = "لا توجد خدمات نشطة حاليًا."
-        instructions["A12"].border = table_border
-        instructions["A12"].alignment = Alignment(horizontal="right")
+    service_start_row = 12
+    for index, name in enumerate(valid_services, start=service_start_row):
+        cell = instructions.cell(row=index, column=1, value=name)
+        cell.border = table_border
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+    service_end_row = service_start_row + max(len(valid_services), 1) - 1
+    services_table = Table(displayName="ServicesTable", ref=f"A11:A{service_end_row}")
+    services_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
+        showRowStripes=True, showColumnStripes=False,
+    )
+    instructions.add_table(services_table)
 
     instructions["D11"] = "اسم الجهاز"
     instructions["D11"].font = header_font
     instructions["D11"].border = table_border
     instructions["D11"].alignment = Alignment(horizontal="center")
 
-    device_start_row: int | None = None
-    device_end_row: int | None = None
-    if valid_devices:
-        device_start_row = 12
-        for index, name in enumerate(valid_devices, start=device_start_row):
-            cell = instructions.cell(row=index, column=4, value=name)
-            cell.border = table_border
-            cell.alignment = Alignment(horizontal="right", vertical="center")
-        device_end_row = device_start_row + len(valid_devices) - 1
-        devices_table = Table(displayName="DevicesTable", ref=f"D11:D{device_end_row}")
-        devices_table.tableStyleInfo = TableStyleInfo(
-            name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
-            showRowStripes=True, showColumnStripes=False,
-        )
-        instructions.add_table(devices_table)
-    else:
-        instructions["D12"] = "لا توجد أجهزة ليزر مفعلة حاليًا."
-        instructions["D12"].border = table_border
-        instructions["D12"].alignment = Alignment(horizontal="right")
-
-    instructions.merge_cells("F14:J15")
-    instructions["F14"] = (
-        "اسم الجهاز مطلوب للباقة الليزر أو عند إدخال نبضات متبقية. "
-        "إذا كان للعميل أكثر من باقة استخدم صفًا لكل باقة. لا تكرر رصيد النبضات لنفس الجهاز في أكثر من صف."
+    device_start_row = 12
+    for index, name in enumerate(valid_devices, start=device_start_row):
+        cell = instructions.cell(row=index, column=4, value=name)
+        cell.border = table_border
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+    device_end_row = device_start_row + max(len(valid_devices), 1) - 1
+    devices_table = Table(displayName="DevicesTable", ref=f"D11:D{device_end_row}")
+    devices_table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
+        showRowStripes=True, showColumnStripes=False,
     )
-    instructions["F14"].alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
+    instructions.add_table(devices_table)
 
     readme_widths = {
         "A": 34, "B": 18, "C": 34, "D": 20, "E": 20,

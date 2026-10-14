@@ -471,6 +471,30 @@ def test_active_packages_template_preserves_old_shape_and_adds_pulses() -> None:
         workbook.close()
 
 
+def test_active_packages_template_keeps_empty_lookup_tables_without_helper_text() -> None:
+    payload = history.build_historical_import_template()
+    workbook = load_workbook(io.BytesIO(payload))
+    try:
+        readme = workbook["README"]
+        sheet = workbook["active_packages"]
+        assert "ServicesTable" in readme.tables
+        assert readme.tables["ServicesTable"].ref == "A11:A12"
+        assert "DevicesTable" in readme.tables
+        assert readme.tables["DevicesTable"].ref == "D11:D12"
+        assert readme["A12"].value is None
+        assert readme["D12"].value is None
+        assert readme["F14"].value is None
+        validations = {
+            str(validation.sqref): validation
+            for validation in sheet.data_validations.dataValidation
+        }
+        assert set(validations) == {"C2:C5000", "D2:D5000"}
+        assert "ServicesTable" in validations["C2:C5000"].formula1
+        assert "DevicesTable" in validations["D2:D5000"].formula1
+    finally:
+        workbook.close()
+
+
 def test_active_holding_normalizes_patient_package_pulses_and_both() -> None:
     service = Service(
         workspace_id=uuid4(),
