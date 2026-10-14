@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -58,11 +58,37 @@ class CustomerConstraints(StrictStateModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_legacy_clock_source(cls, value: object) -> object:
+        """Migrate removed explicit-period authority into the backend-owned bare-clock policy."""
         if not isinstance(value, dict):
             return value
-        if value.get("time_clock_source") == "explicit_period":
-            return {**value, "time_clock_source": "bare_spoken_12h"}
-        return value
+        if value.get("time_clock_source") != "explicit_period":
+            return value
+
+        normalized = {**value, "time_clock_source": "bare_spoken_12h"}
+        legacy_time = normalized.get("time")
+        if not isinstance(legacy_time, dict) or legacy_time.get("mode") != "exact":
+            return normalized
+
+        raw_start = legacy_time.get("start_time")
+        if not isinstance(raw_start, str):
+            return normalized
+        try:
+            parsed = time.fromisoformat(raw_start.strip())
+        except ValueError:
+            return normalized
+
+        hour = parsed.hour
+        if hour == 0:
+            hour = 12
+        elif hour > 12:
+            hour -= 12
+        migrated_time = {
+            **legacy_time,
+            "start_time": f"{hour:02d}:{parsed.minute:02d}",
+            "start_time_ambiguity": "twelve_hour",
+        }
+        normalized["time"] = migrated_time
+        return normalized
 
     @model_validator(mode="before")
     @classmethod

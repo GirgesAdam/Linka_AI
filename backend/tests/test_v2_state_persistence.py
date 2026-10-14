@@ -5,8 +5,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.agents.v2.semantic_context import build_semantic_context
 from app.models.conversation_flow_state import ConversationFlowState
 from app.services.agent_v2 import state_persistence
+from app.services.agent_v2.active_task_progress import prepare_active_task_clock_progress
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
@@ -255,3 +257,398 @@ def test_persisted_task_type_change_still_fails_closed() -> None:
             run_id=uuid4(),
             expected=expected,
         )
+
+
+def _legacy_pre_258_booking_payload(
+    *,
+    clock_source: str = "explicit_period",
+    clock: str = "15:00",
+    period_status: str = "explicit",
+) -> dict[str, object]:
+    """Literal schema-v1 payload emitted by pre-#258 model_dump(mode="json")."""
+    return {
+        "task_type": "booking",
+        "status": "collecting",
+        "write_authorization": {
+            "operation": "booking",
+            "authorized": False,
+            "source_turn_id": None,
+            "granted_at": None,
+        },
+        "constraints": {
+            "service_id": "service-1",
+            "doctor_id": "doctor-1",
+            "branch_id": "branch-1",
+            "device_key": "device-1",
+            "date": {
+                "mode": "exact",
+                "start_date": "2026-10-15",
+                "end_date": None,
+            },
+            "time": {
+                "mode": "exact",
+                "start_time": clock,
+                "end_time": None,
+                "start_time_ambiguity": "none",
+                "end_time_ambiguity": "none",
+                "period_status": period_status,
+            },
+            "time_clock_source": clock_source,
+            "package_usage": "unspecified",
+            "pulse_usage": "unspecified",
+        },
+        "requested_service_ids": ["service-1"],
+        "service_device_keys": {},
+        "proposal": None,
+        "grouped": None,
+        "derived": {
+            "availability_snapshot_id": None,
+            "selected_slot_ref": None,
+            "selected_package_id": None,
+            "package_validated": False,
+            "doctor_compatible": None,
+            "device_compatible": None,
+            "commercial_basis_presented_key": None,
+            "commercial_basis_presented_device_key": None,
+        },
+        "option_snapshot": None,
+        "version": 1,
+    }
+
+
+def _flow_for_raw_legacy_task(
+    payload: dict[str, object], *, flow_type: str = "booking"
+) -> ConversationFlowState:
+    now = datetime(2026, 10, 15, 0, 0, tzinfo=UTC)
+    return ConversationFlowState(
+        workspace_id=uuid4(),
+        conversation_id=uuid4(),
+        patient_id=uuid4(),
+        flow_type=flow_type,
+        status="collecting_requirements",
+        is_active=True,
+        capabilities=[],
+        entity_state={
+            "agent_core_v2": {
+                "schema_version": 1,
+                "active_task": payload,
+            }
+        },
+        missing_information=[],
+        pending_action={},
+        option_snapshot={},
+        last_decision={},
+        version=3,
+        expires_at=now + timedelta(hours=1),
+        last_turn_at=now,
+    )
+
+
+def test_pre_258_raw_booking_payload_with_period_status_decodes() -> None:
+    flow = _flow_for_raw_legacy_task(_legacy_pre_258_booking_payload())
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.task_type == "booking"
+
+
+
+def _legacy_pre_258_reschedule_payload() -> dict[str, object]:
+    """Literal schema-v1 reschedule payload with legacy replacement.time.period_status."""
+    return {
+        "task_type": "reschedule",
+        "status": "collecting",
+        "write_authorization": {
+            "operation": "reschedule",
+            "authorized": False,
+            "source_turn_id": None,
+            "granted_at": None,
+        },
+        "target": {
+            "appointment_id": "appointment-1",
+            "service_id": "service-1",
+            "doctor_id": "doctor-1",
+            "device_key": "device-1",
+            "start_local": "2026-10-14T15:00:00+03:00",
+            "payment_context": {},
+        },
+        "replacement": {
+            "service_id": "service-1",
+            "doctor_id": "doctor-1",
+            "branch_id": "branch-1",
+            "device_key": "device-1",
+            "date": {
+                "mode": "exact",
+                "start_date": "2026-10-15",
+                "end_date": None,
+            },
+            "time": {
+                "mode": "exact",
+                "start_time": "15:00",
+                "end_time": None,
+                "start_time_ambiguity": "none",
+                "end_time_ambiguity": "none",
+                "period_status": "explicit",
+            },
+            "time_clock_source": "explicit_period",
+            "package_usage": "unspecified",
+            "pulse_usage": "unspecified",
+        },
+        "derived": {
+            "availability_snapshot_id": None,
+            "selected_slot_ref": None,
+            "package_validated": False,
+            "doctor_compatible": None,
+            "device_compatible": None,
+        },
+        "option_snapshot": None,
+        "version": 1,
+    }
+
+
+def _legacy_pre_258_grouped_payload() -> dict[str, object]:
+    """Literal schema-v1 grouped payload; every persisted component carries period_status."""
+    payload = _legacy_pre_258_booking_payload(
+        clock_source="bare_spoken_12h",
+        clock="15:00",
+        period_status="none",
+    )
+    payload["requested_service_ids"] = ["service-1", "service-2"]
+    payload["grouped"] = {
+        "components": [
+            {
+                "service_id": "service-1",
+                "doctor_id": "doctor-1",
+                "branch_id": "branch-1",
+                "device_key": "device-1",
+                "date": {
+                    "mode": "exact",
+                    "start_date": "2026-10-15",
+                    "end_date": None,
+                },
+                "time": {
+                    "mode": "exact",
+                    "start_time": "15:00",
+                    "end_time": None,
+                    "start_time_ambiguity": "none",
+                    "end_time_ambiguity": "none",
+                    "period_status": "none",
+                },
+                "time_clock_source": "bare_spoken_12h",
+                "package_usage": "unspecified",
+                "pulse_usage": "unspecified",
+            },
+            {
+                "service_id": "service-2",
+                "doctor_id": "doctor-1",
+                "branch_id": "branch-1",
+                "device_key": "device-1",
+                "date": {
+                    "mode": "exact",
+                    "start_date": "2026-10-15",
+                    "end_date": None,
+                },
+                "time": {
+                    "mode": "exact",
+                    "start_time": "15:00",
+                    "end_time": None,
+                    "start_time_ambiguity": "none",
+                    "end_time_ambiguity": "none",
+                    "period_status": "none",
+                },
+                "time_clock_source": "bare_spoken_12h",
+                "package_usage": "unspecified",
+                "pulse_usage": "unspecified",
+            },
+        ]
+    }
+    return payload
+
+
+def _migration_clock_context():
+    return build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "service-1",
+                    "name": "Consultation",
+                    "duration_minutes": 30,
+                    "requires_laser_device": False,
+                }
+            ],
+            "branches": [
+                {
+                    "id": "branch-1",
+                    "name": "Clinic A",
+                    "working_hours": [
+                        {"weekday": weekday, "start": "10:00", "end": "22:00"}
+                        for weekday in range(7)
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def test_l1_old_bare_booking_decodes_without_reopening_resolved_clock() -> None:
+    flow = _flow_for_raw_legacy_task(
+        _legacy_pre_258_booking_payload(
+            clock_source="bare_spoken_12h",
+            clock="15:00",
+            period_status="none",
+        )
+    )
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.constraints.time_clock_source == "bare_spoken_12h"
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.start_time == "15:00"
+    assert restored.constraints.time.start_time_ambiguity == "none"
+    assert "period_status" not in restored.constraints.time.model_dump(mode="json")
+
+
+def test_l2_old_explicit_period_booking_reenters_backend_owned_clock_policy() -> None:
+    flow = _flow_for_raw_legacy_task(_legacy_pre_258_booking_payload())
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.constraints.time_clock_source == "bare_spoken_12h"
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.start_time == "03:00"
+    assert restored.constraints.time.start_time_ambiguity == "twelve_hour"
+
+    prepared, gate = prepare_active_task_clock_progress(
+        restored,
+        operation_index=0,
+        context=_migration_clock_context(),
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "15:00"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
+    assert prepared.constraints.time_clock_source == "bare_spoken_12h"
+
+
+def test_l3_old_literal_24h_booking_remains_exact() -> None:
+    flow = _flow_for_raw_legacy_task(
+        _legacy_pre_258_booking_payload(
+            clock_source="literal_24h",
+            clock="03:00",
+            period_status="none",
+        )
+    )
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.constraints.time_clock_source == "literal_24h"
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.start_time == "03:00"
+    assert restored.constraints.time.start_time_ambiguity == "none"
+
+    prepared, gate = prepare_active_task_clock_progress(
+        restored,
+        operation_index=0,
+        context=_migration_clock_context(),
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "03:00"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
+
+
+def test_l4_old_reschedule_replacement_time_decodes_and_preserves_target() -> None:
+    flow = _flow_for_raw_legacy_task(
+        _legacy_pre_258_reschedule_payload(),
+        flow_type="appointment_reschedule",
+    )
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.task_type == "reschedule"
+    assert restored.target.appointment_id == "appointment-1"
+    assert restored.replacement.service_id == "service-1"
+    assert restored.replacement.time_clock_source == "bare_spoken_12h"
+    assert restored.replacement.time is not None
+    assert restored.replacement.time.start_time == "03:00"
+    assert restored.replacement.time.start_time_ambiguity == "twelve_hour"
+    assert "period_status" not in restored.replacement.time.model_dump(mode="json")
+
+
+def test_l5_old_grouped_component_times_decode_and_preserve_requested_set() -> None:
+    flow = _flow_for_raw_legacy_task(_legacy_pre_258_grouped_payload())
+
+    restored = state_persistence._decode_flow_task(flow)
+
+    assert restored is not None
+    assert restored.requested_service_ids == ["service-1", "service-2"]
+    assert restored.grouped is not None
+    assert [component.service_id for component in restored.grouped.components] == [
+        "service-1",
+        "service-2",
+    ]
+    for component in restored.grouped.components:
+        assert component.time is not None
+        assert "period_status" not in component.time.model_dump(mode="json")
+
+
+def test_l6_legacy_decode_resave_emits_only_current_schema() -> None:
+    flow = _flow_for_raw_legacy_task(_legacy_pre_258_booking_payload())
+
+    restored = state_persistence._decode_flow_task(flow)
+    assert restored is not None
+    namespace = state_persistence._task_namespace(restored)
+    persisted = namespace["active_task"]
+
+    assert namespace["schema_version"] == 1
+    assert isinstance(persisted, dict)
+    constraints = persisted["constraints"]
+    assert isinstance(constraints, dict)
+    migrated_time = constraints["time"]
+    assert isinstance(migrated_time, dict)
+    assert "period_status" not in migrated_time
+    assert constraints["time_clock_source"] == "bare_spoken_12h"
+    assert constraints["time_clock_source"] != "explicit_period"
+    assert migrated_time["start_time"] == "03:00"
+    assert migrated_time["start_time_ambiguity"] == "twelve_hour"
+
+
+def test_pre_deploy_booking_loads_post_deploy_and_progresses_without_losing_context() -> None:
+    flow = _flow_for_raw_legacy_task(_legacy_pre_258_booking_payload())
+
+    restored = state_persistence._decode_flow_task(flow)
+    assert restored is not None
+    before = (
+        restored.constraints.service_id,
+        restored.constraints.doctor_id,
+        restored.constraints.branch_id,
+        restored.constraints.device_key,
+        restored.constraints.date,
+        tuple(restored.requested_service_ids),
+    )
+
+    prepared, gate = prepare_active_task_clock_progress(
+        restored,
+        operation_index=0,
+        context=_migration_clock_context(),
+    )
+
+    assert gate is None
+    assert prepared.task_type == "booking"
+    assert (
+        prepared.constraints.service_id,
+        prepared.constraints.doctor_id,
+        prepared.constraints.branch_id,
+        prepared.constraints.device_key,
+        prepared.constraints.date,
+        tuple(prepared.requested_service_ids),
+    ) == before
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "15:00"
+    assert prepared.write_authorization.authorized is False
+    assert prepared.proposal is None

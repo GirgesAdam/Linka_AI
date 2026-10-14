@@ -149,6 +149,19 @@ class TimeConstraint(StrictContractModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_period_status(cls, value: object) -> object:
+        """Accept only the removed schema-v1 runtime marker and never re-emit it."""
+        if not isinstance(value, dict):
+            return value
+        legacy_status = value.get("period_status")
+        if legacy_status not in {"none", "explicit", "conflict"}:
+            return value
+        normalized = dict(value)
+        normalized.pop("period_status", None)
+        return normalized
+
     @model_validator(mode="after")
     def validate_times(self) -> TimeConstraint:
         parsed_start = time.fromisoformat(self.start_time) if self.start_time else None
