@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 HistoricalImportMode = Literal["append", "replace_previous_imports"]
-HistoricalEntityType = Literal["patient", "appointment", "payment", "payment_allocation", "package"]
+HistoricalEntityType = Literal["patient", "appointment", "payment", "payment_allocation", "package", "holding"]
 
 
 class HistoricalImportDocument(BaseModel):

@@ -266,6 +266,34 @@ def _arabic_active_package_document(
     )
 
 
+def _unified_document(rows: list[list[object]]) -> HistoricalImportDocument:
+    wb = Workbook()
+    readme = wb.active
+    readme.title = "README"
+    readme.append(["test"])
+    sheet = wb.create_sheet("import_data")
+    sheet.append(
+        [
+            "اسم العميل",
+            "رقم الموبايل",
+            "اسم الباقة / الخدمة",
+            "الجلسات المتبقية",
+            "النبضات المتبقية",
+            "الجهاز",
+        ]
+    )
+    for row in rows:
+        sheet.append(row)
+    stream = io.BytesIO()
+    wb.save(stream)
+    wb.close()
+    return HistoricalImportDocument(
+        name="unified_history.xlsx",
+        format="xlsx",
+        content_base64=base64.b64encode(stream.getvalue()).decode("ascii"),
+    )
+
+
 def _legacy_document() -> HistoricalImportDocument:
     wb = Workbook()
     patients = wb.active
@@ -389,7 +417,7 @@ def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(va
     assert history._parse_active_package_purchase_date(value) is None
 
 
-def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() -> None:
+def test_unified_historical_template_is_plain_arabic_and_supports_four_shapes() -> None:
     laser_service = "ليزر إزالة الشعر - جسم كامل سيدات"
     payload = history.build_historical_import_template(
         service_names=["Hydrafacial", laser_service],
@@ -397,85 +425,121 @@ def test_active_package_template_is_plain_arabic_and_supports_dynamic_devices() 
     )
     workbook = load_workbook(io.BytesIO(payload))
     try:
-        assert workbook.sheetnames == ["README", "active_packages"]
+        assert workbook.sheetnames == ["README", "import_data"]
         readme = workbook["README"]
-        sheet = workbook["active_packages"]
-
+        sheet = workbook["import_data"]
         expected_headers = [
             "اسم العميل",
             "رقم الموبايل",
-            "اسم الخدمة",
-            "اسم الجهاز",
-            "عدد الجلسات الكلي",
-            "عدد الجلسات المتبقي",
-            "المبلغ المدفوع",
-            "تاريخ الشراء",
-            "سعر الباقة",
+            "اسم الباقة / الخدمة",
+            "الجلسات المتبقية",
+            "النبضات المتبقية",
+            "الجهاز",
         ]
-
         assert readme.sheet_view.rightToLeft is True
-        assert readme["A1"].value == "دليل استيراد الباقات النشطة"
-        assert readme["A3"].value == (
-            "سعر الباقة اختياري. إذا تركته فارغًا، سيتعامل النظام مع المبلغ المدفوع "
-            "على أنه سعر الباقة بالكامل."
-        )
-        assert readme["A5"].value == "مثال صحيح"
-        assert [readme.cell(6, column).value for column in range(1, 10)] == expected_headers
-        assert readme["A7"].value == "سارة أحمد"
-        assert readme["B7"].value == "01012345678"
+        assert readme["A1"].value == "دليل استيراد العملاء والباقات والـPulses"
+        assert "الاسم ورقم الموبايل إلزاميان" in str(readme["A3"].value)
+        assert readme["A5"].value == "أمثلة للحالات الأربع"
+        assert [readme.cell(6, column).value for column in range(1, 7)] == expected_headers
         assert readme["B7"].number_format == "@"
-        assert readme["C7"].value == laser_service
-        assert readme["D7"].value == "Candela Gentle"
-        assert readme["E7"].value == 8
-        assert readme["F7"].value == 3
-        assert readme["G7"].value == 5000
-        assert readme["H7"].value.date().isoformat() == "2026-02-15"
-        assert readme["H7"].number_format == "dd/mm/yyyy"
-        assert readme["I7"].value is None
-
+        assert readme["C7"].value is None and readme["E7"].value is None
+        assert readme["C8"].value in {"Hydrafacial", laser_service}
+        assert readme["E9"].value == 800
+        assert readme["E10"].value == 500
         readme_text = "\n".join(
             str(cell.value)
             for row in readme.iter_rows()
             for cell in row
             if cell.value is not None
         )
-        assert "طريقة الاستخدام" not in readme_text
-        assert readme["A10"].value == "الخدمات"
-        assert readme["D10"].value == "الأجهزة"
-        assert readme["A11"].value == "اسم الخدمة"
-        assert readme["D11"].value == "اسم الجهاز"
-
+        assert "لو الباقة والـPulses على جهازين مختلفين" in readme_text
         assert "ServicesTable" in readme.tables
         assert "DevicesTable" in readme.tables
-        assert readme.tables["ServicesTable"].tableStyleInfo.name == "TableStyleMedium2"
-        assert readme.tables["DevicesTable"].tableStyleInfo.name == "TableStyleMedium2"
-        device_values = {
-            readme.cell(row=row_number, column=4).value
-            for row_number in range(12, 15)
-        }
-        assert device_values == {"Prime Lase", "Candela Gentle", "DEKA Again"}
-        assert "لو الخدمة لا تستخدم جهاز ليزر" in readme_text
-
-        assert [sheet.cell(1, column).value for column in range(1, 10)] == expected_headers
-        assert [sheet.cell(2, column).value for column in range(1, 10)] == [None] * 9
-        assert "ActivePackagesTable" in sheet.tables
-        assert sheet.tables["ActivePackagesTable"].ref == "A1:I2"
-        assert sheet.tables["ActivePackagesTable"].tableStyleInfo.name == "TableStyleMedium2"
-        assert sheet["A1"].fill.fill_type is None
-        assert readme["A1"].fill.fill_type is None
+        assert [sheet.cell(1, column).value for column in range(1, 7)] == expected_headers
+        assert [sheet.cell(2, column).value for column in range(1, 7)] == [None] * 6
+        assert "ImportDataTable" in sheet.tables
+        assert sheet.tables["ImportDataTable"].ref == "A1:F2"
         assert sheet["B2"].number_format == "@"
-        assert sheet["H2"].number_format == "dd/mm/yyyy"
-
         validations = {
             str(validation.sqref): validation
             for validation in sheet.data_validations.dataValidation
         }
-        assert set(validations) == {"C2:C5000", "D2:D5000"}
+        assert set(validations) == {"C2:C5000", "F2:F5000"}
         assert "ServicesTable" in validations["C2:C5000"].formula1
-        assert "DevicesTable" in validations["D2:D5000"].formula1
-        assert validations["D2:D5000"].allow_blank is True
+        assert "DevicesTable" in validations["F2:F5000"].formula1
+        assert validations["C2:C5000"].allow_blank is True
+        assert validations["F2:F5000"].allow_blank is True
     finally:
         workbook.close()
+
+
+def test_unified_holding_normalizes_patient_package_pulses_and_both() -> None:
+    service = Service(
+        workspace_id=uuid4(),
+        name="Hydrafacial",
+        slug=f"hydrafacial-{uuid4().hex[:8]}",
+        category="Skin",
+        operational_category="dermatology",
+        description=None,
+        duration_minutes=60,
+        buffer_before_minutes=0,
+        buffer_after_minutes=0,
+        price_minor=180_000,
+        currency="EGP",
+        requires_medical_review=False,
+        requires_laser_device=False,
+        is_active=True,
+    )
+    service.id = uuid4()
+    device = ClinicLaserDevice(
+        workspace_id=service.workspace_id,
+        device_key="candela_gentle",
+        name="Candela Gentle",
+        is_active=True,
+    )
+    device.id = uuid4()
+    services = {service.id: service}
+    devices = {"candela gentle": [device]}
+
+    cases = [
+        ({"full_name": "Ahmed", "phone": "01011111111"}, "patient_only"),
+        ({"full_name": "Mariam", "phone": "01122222222", "service_name": "Hydrafacial", "sessions_remaining": 3}, "package"),
+        ({"full_name": "Sara", "phone": "01233333333", "pulses_remaining": 800, "device_name": "Candela Gentle"}, "pulses"),
+        ({"full_name": "Nour", "phone": "01544444444", "service_name": "Hydrafacial", "sessions_remaining": 2, "pulses_remaining": 500, "device_name": "Candela Gentle"}, "both"),
+    ]
+    for row, expected_kind in cases:
+        payload, code, message = history._normalize_unified_holding(
+            row,
+            services_by_id=services,
+            device_prices_by_service_id={},
+            devices_by_name=devices,
+        )
+        assert code is None, message
+        assert payload is not None
+        assert payload["holding_kind"] == expected_kind
+
+
+def test_unified_holding_rejects_incomplete_or_negative_balances() -> None:
+    service = Service(
+        workspace_id=uuid4(), name="Hydrafacial", slug=f"hydra-{uuid4().hex[:8]}",
+        category="Skin", operational_category="dermatology", description=None, duration_minutes=60,
+        buffer_before_minutes=0, buffer_after_minutes=0, price_minor=100_000, currency="EGP",
+        requires_medical_review=False, requires_laser_device=False, is_active=True,
+    )
+    service.id = uuid4()
+    services = {service.id: service}
+    invalid_rows = [
+        {"full_name": "A", "phone": "01011111111", "service_name": "Hydrafacial"},
+        {"full_name": "B", "phone": "01122222222", "service_name": "Hydrafacial", "sessions_remaining": -1},
+        {"full_name": "C", "phone": "01233333333", "pulses_remaining": -1, "device_name": "Candela Gentle"},
+        {"full_name": "D", "phone": "01544444444", "pulses_remaining": 500},
+    ]
+    for row in invalid_rows:
+        payload, code, _message = history._normalize_unified_holding(
+            row, services_by_id=services, device_prices_by_service_id={}, devices_by_name={}
+        )
+        assert payload is None
+        assert code is not None
 
 
 def test_active_package_arabic_headers_preview_and_apply() -> None:
@@ -1351,3 +1415,78 @@ def test_device_rename_updates_current_config_but_preserves_historical_snapshots
         assert old_appointment.laser_device_name == "DEKA Again"
         assert old_package.laser_device_name == "DEKA Again"
         assert old_pulse_pack.device_name == "DEKA Again"
+
+
+def test_unified_historical_import_four_shapes_create_canonical_records_without_fake_revenue() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(
+            db, services=("Hydrafacial", "Laser Full Body")
+        )
+        laser_service = services["Laser Full Body"]
+        _configure_laser_service(db, workspace=workspace, service=laser_service)
+        document = _unified_document(
+            [
+                ["Ahmed Patient", "01011111111", None, None, None, None],
+                ["Mariam Package", "01122222222", "Hydrafacial", 3, None, None],
+                ["Sara Pulses", "01233333333", None, None, 800, "Candela Gentle"],
+                ["Nour Both", "01544444444", "Laser Full Body", 2, 500, "Candela Gentle"],
+            ]
+        )
+        preview, summary = _preview_and_apply(
+            db, workspace=workspace, user=user, document=document
+        )
+        assert preview.ready_counts == {"holding": 4}
+        assert preview.rejected_counts == {}
+        assert preview.projected_counts["patient_only_records"] == 1
+        assert preview.projected_counts["packages_to_create"] == 2
+        assert preview.projected_counts["pulse_balances_to_create"] == 2
+        assert preview.projected_counts["patients_with_both"] == 1
+        assert preview.projected_counts["historical_payments_to_create"] == 0
+        assert preview.total_amount_imported_minor == 0
+        assert summary["imported_counts"]["package"] == 2
+        assert summary["imported_counts"]["pulse_pack"] == 2
+
+        normalized_phones = {
+            "+201011111111", "+201122222222", "+201233333333", "+201544444444"
+        }
+        patients = list(
+            db.scalars(
+                select(Patient).where(
+                    Patient.workspace_id == workspace.id,
+                    Patient.phone_normalized.in_(normalized_phones),
+                )
+            ).all()
+        )
+        assert len(patients) == 4
+        patient_ids = {patient.id for patient in patients}
+        packages = list(
+            db.scalars(
+                select(PatientPackage).where(
+                    PatientPackage.workspace_id == workspace.id,
+                    PatientPackage.patient_id.in_(patient_ids),
+                )
+            ).all()
+        )
+        pulse_packs = list(
+            db.scalars(
+                select(PatientPulsePack).where(
+                    PatientPulsePack.workspace_id == workspace.id,
+                    PatientPulsePack.patient_id.in_(patient_ids),
+                )
+            ).all()
+        )
+        payments = list(
+            db.scalars(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.workspace_id == workspace.id,
+                    PaymentTransaction.patient_id.in_(patient_ids),
+                )
+            ).all()
+        )
+        assert len(packages) == 2
+        assert all(package.purchase_transaction_id is None for package in packages)
+        assert sorted(package.opening_sessions_remaining for package in packages) == [2, 3]
+        assert len(pulse_packs) == 2
+        assert sorted(pack.pulses_purchased for pack in pulse_packs) == [500, 800]
+        assert all(pack.purchase_transaction_id is None for pack in pulse_packs)
+        assert payments == []

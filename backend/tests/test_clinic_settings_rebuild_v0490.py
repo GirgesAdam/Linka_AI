@@ -406,7 +406,7 @@ def test_package_negative_remaining_is_rejected() -> None:
     assert payload is None and code == "package_remaining_invalid"
 
 
-def test_official_template_is_minimal_active_package_contract() -> None:
+def test_official_template_is_minimal_unified_historical_contract() -> None:
     wb = load_workbook(
         io.BytesIO(
             build_historical_import_template(
@@ -416,36 +416,25 @@ def test_official_template_is_minimal_active_package_contract() -> None:
         )
     )
     try:
-        assert wb.sheetnames == ["README", "active_packages"]
+        assert wb.sheetnames == ["README", "import_data"]
         headers = [
             cell.value
-            for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))
+            for cell in next(wb["import_data"].iter_rows(min_row=1, max_row=1))
         ]
         assert headers == [
             "اسم العميل",
             "رقم الموبايل",
-            "اسم الخدمة",
-            "اسم الجهاز",
-            "عدد الجلسات الكلي",
-            "عدد الجلسات المتبقي",
-            "المبلغ المدفوع",
-            "تاريخ الشراء",
-            "سعر الباقة",
+            "اسم الباقة / الخدمة",
+            "الجلسات المتبقية",
+            "النبضات المتبقية",
+            "الجهاز",
         ]
         forbidden = {
-            "patient_id",
-            "package_id",
-            "transaction_id",
-            "payment_method",
-            "package_name",
-            "service_id",
-            "expires_at",
-            "status",
-            "currency",
-            "standalone_session_price",
+            "patient_id", "package_id", "transaction_id", "payment_method",
+            "service_id", "expires_at", "status", "currency",
         }
         assert forbidden.isdisjoint(headers)
-        assert wb["active_packages"].data_validations.count == 2
+        assert wb["import_data"].data_validations.count == 2
         readme_values = {
             str(cell.value)
             for row in wb["README"].iter_rows()
@@ -454,6 +443,7 @@ def test_official_template_is_minimal_active_package_contract() -> None:
         }
         assert "Hydrafacial" in readme_values
         assert "PRP Face" in readme_values
+        assert "Prime Lase" in readme_values
     finally:
         wb.close()
 
