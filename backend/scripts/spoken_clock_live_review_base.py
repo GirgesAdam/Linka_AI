@@ -47,7 +47,33 @@ def _dump(value: Any) -> Any:
 
 
 def _dump_provider_value(value: Any) -> Any:
-    return _dump(value)
+    """Serialize provider output while retaining audit-only excluded semantic hints."""
+    dumped = _dump(value)
+    operations = getattr(value, "operations", None)
+    if not isinstance(dumped, dict) or not isinstance(operations, list):
+        return dumped
+    dumped_operations = dumped.get("operations")
+    if not isinstance(dumped_operations, list):
+        return dumped
+    for operation, dumped_operation in zip(operations, dumped_operations, strict=False):
+        if not isinstance(dumped_operation, dict):
+            continue
+        entities = getattr(operation, "entities", None)
+        time_entity = getattr(entities, "time", None)
+        dumped_entities = dumped_operation.get("entities")
+        if time_entity is not None and isinstance(dumped_entities, dict):
+            dumped_time = dumped_entities.get("time")
+            if isinstance(dumped_time, dict):
+                dumped_time["spoken_period_hint"] = getattr(
+                    time_entity, "spoken_period_hint", "none"
+                )
+        selection = getattr(operation, "selection", None)
+        dumped_selection = dumped_operation.get("selection")
+        if selection is not None and isinstance(dumped_selection, dict):
+            dumped_selection["spoken_period_hint"] = getattr(
+                selection, "spoken_period_hint", "none"
+            )
+    return dumped
 
 
 def _capture_invoke(*args, **kwargs):
