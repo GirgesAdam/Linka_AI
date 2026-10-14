@@ -398,7 +398,6 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
     operation = _semantic_operation(record)
     time_value = _semantic_time(operation)
     period = str(time_value.get("explicit_period") or "none")
-    ambiguity = str(time_value.get("start_time_ambiguity") or "none")
     reply = str(record.get("agent") or "").strip()
 
     _require(
@@ -407,11 +406,8 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
         message=f"{spec.name}: explicit_period={period}, expected {spec.expected_period}",
     )
     if spec.expected_bare_status is not None:
-        _require(
-            ambiguity == "twelve_hour",
-            counter="silent_am_pm_mutation",
-            message=f"{spec.name}: bare clock was not emitted as twelve_hour semantic clock",
-        )
+        # Ambiguity is backend-derived authority, not an LLM/provider contract field.
+        # Validate the deterministic resolver trace and canonical outcome instead.
         trace = _original_bare_trace()
         _require(
             trace is not None,
@@ -507,7 +503,7 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
     record["evidence"] = {
         "CUSTOMER": record.get("customer"),
         "AGENT": record.get("agent"),
-        "Time ambiguity": ambiguity,
+        "Backend bare-clock trace": _original_bare_trace(),
         "Explicit period semantics": period,
         "Typed semantic time": time_value,
         "Effective clinic/branch operating hours": {
