@@ -70,7 +70,7 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
   return (
     <div className="space-y-5">
       <form action={formAction} className="space-y-4 rounded-2xl border border-[var(--border)] bg-white p-5">
-        <div className="flex items-start gap-3"><span className="grid size-10 place-items-center rounded-xl bg-teal-50 text-teal-700"><FileSpreadsheet size={19} /></span><div><b>ارفع بيانات العملاء القديمة</b><p className="mt-1 text-xs leading-5 text-[var(--muted)]">استخدم قالب Linka الموحد: اسم العميل ورقم الموبايل إلزاميان، ويمكنك إضافة الباقة أو رصيد الـPulses أو الاثنين معًا. القوالب التاريخية القديمة ما زالت مدعومة.</p></div></div>
+        <div className="flex items-start gap-3"><span className="grid size-10 place-items-center rounded-xl bg-teal-50 text-teal-700"><FileSpreadsheet size={19} /></span><div><b>ارفع بيانات العملاء القديمة</b><p className="mt-1 text-xs leading-5 text-[var(--muted)]">استخدم قالب Linka الموحد: اسم العميل ورقم الموبايل إلزاميان، ويمكنك إضافة الباقة أو رصيد الـPulses أو الاثنين معًا. ملفات Linka التاريخية القديمة متعددة الشيتات ما زالت مدعومة.</p></div></div>
         <input type="file" name="files" accept=".xlsx,.csv" multiple required className="form-control" />
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="rounded-xl border p-3 text-sm"><input type="radio" name="mode" value="append" defaultChecked className="ml-2" /><b>إضافة للبيانات الحالية</b><div className="mt-1 text-xs text-[var(--muted)]">يحافظ على البيانات الموجودة ويضيف الحقائق الجديدة فقط.</div></label>

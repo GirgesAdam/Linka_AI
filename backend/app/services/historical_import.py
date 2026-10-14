@@ -1939,7 +1939,9 @@ def apply_historical_import(
             )
     if batch.mode == "append":
         for row in rows:
-            if row.entity_type in {"payment_allocation", "patient", "holding"}:
+            if row.entity_type == "holding":
+                continue
+            if row.entity_type in {"payment_allocation", "patient"}:
                 # Patients are identity anchors rather than immutable historical facts.
                 # A later export may repeat the same patient with partial presentation
                 # fields (or a changed CRM source). Reuse the canonical patient instead
