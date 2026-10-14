@@ -390,3 +390,32 @@ def test_single_device_auto_resolution_preserves_planner_booking_progression(
     assert resolved.facts["device_key"] == "candela_gentle"
     assert resolved.facts["device_auto_resolved"] is True
     assert resolved.facts["booking_next_field"] == next_field
+
+
+def test_provider_schema_omits_backend_derived_time_ambiguity() -> None:
+    schema = TiaTurnUnderstanding.model_json_schema()["$defs"]
+    assert "start_time_ambiguity" not in schema["TimeConstraint"]["properties"]
+    assert "end_time_ambiguity" not in schema["TimeConstraint"]["properties"]
+    assert "time_ambiguity" not in schema["Selection"]["properties"]
+
+
+def test_periodless_provider_clock_gets_backend_derived_twelve_hour_ambiguity() -> None:
+    turn = _turn("03:00", ambiguity="none", period="none")
+    normalized = _normalize_time_semantics_v2(
+        turn, latest_customer_text="????? ???? ?????? 3"
+    )
+    clock = _time(normalized)
+    assert clock.start_time == "03:00"
+    assert clock.start_time_ambiguity == "twelve_hour"
+    assert clock.explicit_period == "none"
+
+
+def test_literal_hhmm_provider_clock_remains_exact_without_model_ambiguity_field() -> None:
+    turn = _turn("03:00", ambiguity="none", period="none")
+    normalized = _normalize_time_semantics_v2(
+        turn, latest_customer_text="????? ???? ?????? 03:00"
+    )
+    clock = _time(normalized)
+    assert clock.start_time == "03:00"
+    assert clock.start_time_ambiguity == "none"
+    assert clock.explicit_period == "none"

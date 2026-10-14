@@ -4,6 +4,7 @@ from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 OperationType = Literal[
     "service_info",
@@ -138,14 +139,10 @@ class TimeConstraint(StrictContractModel):
     mode: TimeMode
     start_time: str | None = None
     end_time: str | None = None
-    start_time_ambiguity: TimeAmbiguity = Field(
-        default="none",
-        description=(
-            "Use twelve_hour only when the customer's start clock is a periodless 1-12 clock. "
-            "Do not resolve AM/PM from clinic hours; Python owns that decision."
-        ),
-    )
-    end_time_ambiguity: TimeAmbiguity = "none"
+    # Internal authority derived by Python from clock structure + explicit_period.
+    # Keep it out of the provider schema so the LLM does not report backend bookkeeping.
+    start_time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
+    end_time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
     explicit_period: ExplicitTimePeriod = Field(
         default="none",
         description=(
@@ -182,7 +179,8 @@ class Selection(StrictContractModel):
     time: str | None = None
     ref: str | None = None
     relative: RelativeSelection | None = None
-    time_ambiguity: TimeAmbiguity = "none"
+    # Internal authority derived by Python after semantic interpretation.
+    time_ambiguity: SkipJsonSchema[TimeAmbiguity] = "none"
     explicit_period: ExplicitTimePeriod = Field(
         default="none",
         description=(

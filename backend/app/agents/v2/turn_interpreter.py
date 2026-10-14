@@ -24,6 +24,7 @@ from app.agents.v2.turn_contract import (
     ExplicitTimePeriod,
     Selection,
     TiaTurnUnderstanding,
+    TimeAmbiguity,
     TimeConstraint,
 )
 from app.agents.v2.turn_normalization import (
@@ -420,8 +421,8 @@ SEMANTIC PRINCIPLES
   situations use urgent_medical. Explicit requests for a person use human_support.
 - Resolve clear relative dates against the clinic-local clock. If a date remains semantically
   underspecified, leave it null rather than guessing.
-- For a periodless spoken 1-12 clock, preserve the 12-hour-form value and set
-  start_time_ambiguity=twelve_hour with explicit_period=none. Do not choose AM/PM from clinic hours.
+- For a periodless spoken 1-12 clock, preserve the 12-hour-form value with explicit_period=none.
+  Do not choose AM/PM from clinic hours; Python derives ambiguity and canonical resolution.
 - When the customer explicitly states AM/PM, morning/afternoon/evening, noon, or midnight, preserve that
   meaning in explicit_period (am/pm/noon/midnight). Python owns canonical 24-hour conversion. A literal
   colon-formatted HH:MM with no explicit period stays exact with ambiguity=none. Use conflict only for
@@ -1431,6 +1432,19 @@ def _canonicalize_explicit_period_clock(
     return f"{hour:02d}:{minute:02d}"
 
 
+def _derive_periodless_clock_ambiguity(
+    value: str | None, *, literal_clock: str | None
+) -> TimeAmbiguity:
+    """Derive bare 12-hour ambiguity at the latest-turn boundary, never from keywords."""
+    if value is None or literal_clock is not None:
+        return "none"
+    try:
+        parsed = time.fromisoformat(str(value).strip()[:5])
+    except ValueError:
+        return "none"
+    return "twelve_hour" if 1 <= parsed.hour <= 12 else "none"
+
+
 def _normalize_time_semantics_v2(
     turn: TiaTurnUnderstanding,
     *,
@@ -1478,15 +1492,27 @@ def _normalize_time_semantics_v2(
                             "explicit_period": period,
                         }
                     )
-            elif period == "none" and literal_clock is not None:
-                if _same_clock_or_twelve_hour_variant(constraint.start_time, literal_clock) or (
-                    len(turn.operations) == 1
-                    and operation.type in {"book", "reschedule", "availability"}
+            elif period == "none":
+                if literal_clock is not None and (
+                    _same_clock_or_twelve_hour_variant(constraint.start_time, literal_clock)
+                    or (
+                        len(turn.operations) == 1
+                        and operation.type in {"book", "reschedule", "availability"}
+                    )
                 ):
                     constraint = constraint.model_copy(
                         update={
                             "start_time": literal_clock,
                             "start_time_ambiguity": "none",
+                        }
+                    )
+                elif latest_customer_text.strip():
+                    constraint = constraint.model_copy(
+                        update={
+                            "start_time_ambiguity": _derive_periodless_clock_ambiguity(
+                                constraint.start_time,
+                                literal_clock=literal_clock
+                            )
                         }
                     )
             if period != constraint.explicit_period:
@@ -1539,12 +1565,22 @@ def _normalize_time_semantics_v2(
                             "explicit_period": period,
                         }
                     )
-            elif period == "none" and literal_clock is not None and _same_clock_or_twelve_hour_variant(
-                selection.time, literal_clock
-            ):
-                selection = selection.model_copy(
-                    update={"time": literal_clock, "time_ambiguity": "none"}
-                )
+            elif period == "none":
+                if literal_clock is not None and _same_clock_or_twelve_hour_variant(
+                    selection.time, literal_clock
+                ):
+                    selection = selection.model_copy(
+                        update={"time": literal_clock, "time_ambiguity": "none"}
+                    )
+                elif latest_customer_text.strip():
+                    selection = selection.model_copy(
+                        update={
+                            "time_ambiguity": _derive_periodless_clock_ambiguity(
+                                selection.time,
+                                literal_clock=literal_clock
+                            )
+                        }
+                    )
             if period != selection.explicit_period:
                 selection = selection.model_copy(update={"explicit_period": period})
 
