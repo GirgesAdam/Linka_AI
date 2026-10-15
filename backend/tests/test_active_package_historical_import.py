@@ -413,9 +413,43 @@ def test_active_package_purchase_date_accepts_excel_and_clear_egyptian_formats(
     assert parsed.isoformat() == expected
 
 
-@pytest.mark.parametrize("value", ["02/15/2026", "not-a-date", 46000])
-def test_active_package_purchase_date_rejects_ambiguous_or_raw_numeric_values(value) -> None:
-    assert history._parse_active_package_purchase_date(value) is None
+@pytest.mark.parametrize("value", ["02/15/2026", "not-a-date", 46000, 2.5, True, "31/2"])
+def test_active_package_purchase_date_falls_back_for_unusable_values(value) -> None:
+    parsed = history._parse_active_package_purchase_date(
+        value,
+        reference_date=datetime(2026, 10, 15).date(),
+    )
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-10-15"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "2026-10-15"),
+        ("", "2026-10-15"),
+        ("2/3", "2026-03-02"),
+        ("20/10", "2025-10-20"),
+        ("15/10", "2026-10-15"),
+        ("16/10", "2025-10-16"),
+        ("29/2", "2024-02-29"),
+        ("2", "2026-02-01"),
+        (2, "2026-02-01"),
+        ("12", "2025-12-01"),
+        (chr(0x0662), "2026-02-01"),
+        (f"{chr(0x0662)}/{chr(0x0663)}", "2026-03-02"),
+    ],
+)
+def test_active_package_purchase_date_accepts_blank_day_month_and_month_only(
+    value,
+    expected: str,
+) -> None:
+    parsed = history._parse_active_package_purchase_date(
+        value,
+        reference_date=datetime(2026, 10, 15).date(),
+    )
+    assert parsed is not None
+    assert parsed.isoformat() == expected
 
 
 def test_active_packages_template_preserves_old_shape_and_adds_pulses() -> None:
@@ -1173,8 +1207,8 @@ def test_active_package_preview_rejects_invalid_and_duplicate_rows_without_write
             documents=[_active_package_document(rows)],
             mode="append",
         )
-        assert preview.ready_counts["holding"] == 1
-        assert preview.rejected_counts["holding"] == len(rows) - 1
+        assert preview.ready_counts["holding"] == 2
+        assert preview.rejected_counts["holding"] == len(rows) - 2
         codes = {issue.code for issue in preview.issue_groups}
         assert {
             "duplicate_historical_package_row",
@@ -1184,7 +1218,6 @@ def test_active_package_preview_rejects_invalid_and_duplicate_rows_without_write
             "active_package_remaining_exceeds_total",
             "active_package_amount_paid_invalid",
             "active_package_price_below_paid",
-            "active_package_purchase_date_invalid",
             "active_package_phone_invalid",
         }.issubset(codes)
         assert db.scalar(
