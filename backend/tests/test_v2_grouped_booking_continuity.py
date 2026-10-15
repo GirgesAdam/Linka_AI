@@ -822,3 +822,108 @@ def test_grouped_1030_pm_survives_planner_state_persistence_and_resolution() -> 
     assert [component.service_id for component in prepared.grouped.components] == ["svc-a", "svc-b"]
     assert {component.time.start_time for component in prepared.grouped.components if component.time} == {"22:30"}
     assert {component.time.spoken_period_hint for component in prepared.grouped.components if component.time} == {"none"}
+
+
+def _grouped_pm_state(clock: str = "10:30") -> BookingTaskState:
+    base = _grouped_state()
+    assert base.grouped is not None
+    spoken = TimeConstraint(
+        mode="exact",
+        start_time=clock,
+        start_time_ambiguity="twelve_hour",
+        spoken_period_hint="pm",
+    )
+    components = [
+        component.model_copy(
+            update={
+                "branch_id": "branch-1",
+                "date": None,
+                "time": spoken,
+                "time_clock_source": "bare_spoken_12h",
+            }
+        )
+        for component in base.grouped.components
+    ]
+    return base.model_copy(
+        update={
+            "constraints": components[0],
+            "grouped": GroupedBookingState(components=components),
+            "requested_service_ids": ["svc-a", "svc-b"],
+            "service_device_keys": {"svc-b": "prime_lase"},
+        }
+    )
+
+
+def test_grouped_date_only_continuation_preserves_shared_pm_authority_then_resolves() -> None:
+    state = _grouped_pm_state()
+    date = DateConstraint(mode="exact", start_date="2026-10-15")
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(date=date),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        continues_previous=True,
+        grouped_booking_action="preserve_group",
+    )
+    restored, groups = restore_grouped_booking_understanding(
+        TiaTurnUnderstanding(operations=[operation]),
+        active_task=state,
+        context=_grouped_clock_context(),
+    )
+    assert len(restored.operations) == 2
+    assert groups
+    assert all(op.entities.time is not None for op in restored.operations)
+    assert {
+        op.entities.time.start_time for op in restored.operations if op.entities.time
+    } == {"10:30"}
+    assert {
+        op.entities.time.spoken_period_hint for op in restored.operations if op.entities.time
+    } == {"pm"}
+
+    planned = plan_turn(
+        restored,
+        PlannerContext(
+            semantic_context=_grouped_clock_context(), active_task=state, now=NOW
+        ),
+    )
+    # Backend clock resolution happens before compound sequencing.  Both grouped
+    # service plans must derive the same canonical requested clock first.
+    assert {
+        step.facts["time"]["start_time"]
+        for step in planned.steps
+        if isinstance(step.facts.get("time"), dict)
+    } == {"22:30"}
+    assert all(
+        step.facts["time"]["start_time_ambiguity"] == "none"
+        for step in planned.steps
+        if isinstance(step.facts.get("time"), dict)
+    )
+
+def test_grouped_explicit_same_clock_correction_removes_old_pm_for_whole_visit() -> None:
+    state = _grouped_pm_state()
+    bare = TimeConstraint(
+        mode="exact", start_time="10:30", start_time_ambiguity="twelve_hour"
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(time=bare),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+        continues_previous=True,
+        grouped_booking_action="preserve_group",
+    )
+    restored, groups = restore_grouped_booking_understanding(
+        TiaTurnUnderstanding(operations=[operation]),
+        active_task=state,
+        context=_grouped_clock_context(),
+    )
+    assert len(restored.operations) == 2
+    assert groups
+    assert {
+        op.entities.time.spoken_period_hint for op in restored.operations if op.entities.time
+    } == {"none"}
+    assert {
+        op.entities.time.start_time for op in restored.operations if op.entities.time
+    } == {"10:30"}

@@ -32,6 +32,7 @@ SAFETY_COUNTERS = {
     "contextual_period_misresolution": 0,
     "lost_period_hints": 0,
     "repeated_period_clarifications": 0,
+    "stale_period_hint_retention": 0,
     "wrong_device": 0,
     "cross_device_visits": 0,
     "lost_services": 0,
@@ -735,32 +736,37 @@ def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     _validate_record(record, spec, ctx)
 
 
-def _run_stateful_1030_pm_continuation(ctx: base.Context) -> None:
+def _run_stateful_period_continuation(
+    ctx: base.Context,
+    *,
+    scenario: str,
+    first_customer: str,
+    persisted_clock: str,
+    expected_hint: str,
+    expected_canonical: str,
+) -> None:
     _set_operating_hours(ctx, start="00:00", end="23:59")
     CLOCK_TRACE.clear()
-    first = base._chat(
-        ctx,
-        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
-    )
+    first = base._chat(ctx, first_customer)
     first_constraints = _task_constraint_facts(first)
     first_time = first_constraints.get("time") if isinstance(first_constraints, dict) else None
     _require(
         isinstance(first_time, dict)
-        and first_time.get("start_time") == "10:30"
+        and first_time.get("start_time") == persisted_clock
         and first_time.get("start_time_ambiguity") == "twelve_hour"
-        and first_time.get("spoken_period_hint") == "pm",
+        and first_time.get("spoken_period_hint") == expected_hint,
         counter="lost_period_hints",
-        message=f"RA-S1: unresolved explicit PM hint was not persisted: {first_time!r}",
+        message=f"{scenario}: unresolved explicit period hint was not persisted: {first_time!r}",
     )
     _require(
         not (first.get("availability_requests") or []) and not (first.get("appointments") or []),
         counter="wrong_time_writes",
-        message="RA-S1: missing-date turn progressed to time-dependent availability/write",
+        message=f"{scenario}: missing-date turn progressed to time-dependent availability/write",
     )
     _require(
         not _looks_like_period_question(str(first.get("agent") or "")),
         counter="repeated_period_clarifications",
-        message="RA-S1: explicit 10:30 PM turn unnecessarily asked AM/PM before date",
+        message=f"{scenario}: explicit period turn unnecessarily asked AM/PM before date",
     )
 
     CLOCK_TRACE.clear()
@@ -778,16 +784,19 @@ def _run_stateful_1030_pm_continuation(ctx: base.Context) -> None:
         ),
         None,
     )
-    _record_transactional_safety(continued, expected_clock="22:30")
+    _record_transactional_safety(continued, expected_clock=expected_canonical)
     _require(
-        canonical == "22:30",
+        canonical == expected_canonical,
         counter="contextual_period_misresolution",
-        message=f"RA-S1: persisted PM hint did not resolve to 22:30: {canonical}",
+        message=(
+            f"{scenario}: persisted {expected_hint} hint did not resolve to "
+            f"{expected_canonical}: {canonical}"
+        ),
     )
     _require(
         not _looks_like_period_question(str(continued.get("agent") or "")),
         counter="repeated_period_clarifications",
-        message="RA-S1: period was asked again after explicit PM survived persistence",
+        message=f"{scenario}: period was asked again after explicit hint survived persistence",
     )
     continued_constraints = _task_constraint_facts(continued)
     continued_time = (
@@ -797,15 +806,65 @@ def _run_stateful_1030_pm_continuation(ctx: base.Context) -> None:
         _require(
             continued_time.get("spoken_period_hint") == "none",
             counter="lost_period_hints",
-            message="RA-S1: resolved canonical clock retained provider period authority",
+            message=f"{scenario}: resolved canonical clock retained provider period authority",
         )
-    continued["stateful_1030_pm_evidence"] = {
+    continued["stateful_period_continuation_evidence"] = {
         "first_persisted_time": first_time,
         "second_canonical_time": canonical,
         "second_persisted_time": continued_time,
         "repeated_period_question": _looks_like_period_question(str(continued.get("agent") or "")),
     }
 
+
+def _run_stateful_explicit_same_clock_correction(ctx: base.Context) -> None:
+    scenario = "RA-S4"
+    _set_operating_hours(ctx, start="00:00", end="23:59")
+    first = base._chat(
+        ctx,
+        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
+    )
+    first_time = _task_constraint_facts(first).get("time")
+    _require(
+        isinstance(first_time, dict) and first_time.get("spoken_period_hint") == "pm",
+        counter="lost_period_hints",
+        message=f"{scenario}: setup did not establish durable PM authority: {first_time!r}",
+    )
+
+    corrected = base._chat(
+        ctx,
+        "\u0644\u0627\u060c \u062e\u0644\u064a\u0647\u0627 10 \u0648\u0646\u0635 \u0628\u0633",
+    )
+    corrected_time = _task_constraint_facts(corrected).get("time")
+    _require(
+        isinstance(corrected_time, dict)
+        and corrected_time.get("start_time") == "10:30"
+        and corrected_time.get("start_time_ambiguity") == "twelve_hour"
+        and corrected_time.get("spoken_period_hint") == "none",
+        counter="stale_period_hint_retention",
+        message=f"{scenario}: explicit same-clock correction retained stale PM: {corrected_time!r}",
+    )
+    _require(
+        not (corrected.get("appointments") or []),
+        counter="wrong_time_writes",
+        message=f"{scenario}: correction wrote before missing context was resolved",
+    )
+
+    final = base._chat(ctx, "\u0627\u0644\u062e\u0645\u064a\u0633")
+    _require(
+        _looks_like_period_question(str(final.get("agent") or "")),
+        counter="arbitrary_10_11_resolution",
+        message=f"{scenario}: bare corrected 10:30 did not require AM/PM in both-valid context",
+    )
+    _require(
+        not (final.get("appointments") or []),
+        counter="wrong_time_writes",
+        message=f"{scenario}: unresolved bare correction produced a write",
+    )
+    final["stateful_same_clock_correction_evidence"] = {
+        "first_persisted_time": first_time,
+        "corrected_persisted_time": corrected_time,
+        "final_period_question": _looks_like_period_question(str(final.get("agent") or "")),
+    }
 
 def _persisted_appointments(workspace_id: UUID) -> int:
     return base._persisted_appointments(workspace_id)
@@ -869,39 +928,81 @@ def main() -> int:
             flush=True,
         )
 
-    workspace_id = None
-    ctx = None
-    turns = []
-    error = None
-    try:
-        with rollback_session() as db:
-            ctx = base._setup(db, "RA-S1", hole=False)
-            workspace_id = ctx.workspace.id
-            _run_stateful_1030_pm_continuation(ctx)
-    except Exception as exc:  # noqa: BLE001
-        failures += 1
-        error = f"{type(exc).__name__}: {exc}"
-    if ctx is not None:
-        turns = list(ctx.turns)
-    persisted = _persisted_appointments(workspace_id) if workspace_id is not None else 0
-    if persisted:
-        SAFETY_COUNTERS["persisted_audit_writes"] += persisted
-        failures += 1
-        error = (error + "; " if error else "") + f"persisted_audit_writes={persisted}"
-    stateful_result = {
-        "scenario": "RA-S1",
-        "status": "PASS" if error is None else "FAIL",
-        "error": error,
-        "operating_hours": {"start": "00:00", "end": "23:59"},
-        "turns": turns,
-        "persisted_appointments_after_rollback": persisted,
-    }
-    results.append(stateful_result)
-    print(
-        "CLOCK_BOUNDARY_RESULT="
-        + json.dumps(stateful_result, ensure_ascii=False, separators=(",", ":"), default=str),
-        flush=True,
-    )
+    stateful_specs = [
+        (
+            "RA-S1",
+            lambda ctx: _run_stateful_period_continuation(
+                ctx,
+                scenario="RA-S1",
+                first_customer="\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
+                persisted_clock="10:30",
+                expected_hint="pm",
+                expected_canonical="22:30",
+            ),
+        ),
+        (
+            "RA-S2",
+            lambda ctx: _run_stateful_period_continuation(
+                ctx,
+                scenario="RA-S2",
+                first_customer="\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0627\u0644\u0635\u0628\u062d",
+                persisted_clock="10:30",
+                expected_hint="am",
+                expected_canonical="10:30",
+            ),
+        ),
+        (
+            "RA-S3",
+            lambda ctx: _run_stateful_period_continuation(
+                ctx,
+                scenario="RA-S3",
+                first_customer="\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
+                persisted_clock="11:30",
+                expected_hint="pm",
+                expected_canonical="23:30",
+            ),
+        ),
+        ("RA-S4", _run_stateful_explicit_same_clock_correction),
+    ]
+    for scenario, runner in stateful_specs:
+        workspace_id = None
+        ctx = None
+        turns = []
+        error = None
+        try:
+            with rollback_session() as db:
+                ctx = base._setup(db, scenario, hole=False)
+                workspace_id = ctx.workspace.id
+                runner(ctx)
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            error = f"{type(exc).__name__}: {exc}"
+        if ctx is not None:
+            turns = list(ctx.turns)
+        persisted = _persisted_appointments(workspace_id) if workspace_id is not None else 0
+        if persisted:
+            SAFETY_COUNTERS["persisted_audit_writes"] += persisted
+            failures += 1
+            error = (error + "; " if error else "") + f"persisted_audit_writes={persisted}"
+        stateful_result = {
+            "scenario": scenario,
+            "status": "PASS" if error is None else "FAIL",
+            "error": error,
+            "operating_hours": {"start": "00:00", "end": "23:59"},
+            "turns": turns,
+            "persisted_appointments_after_rollback": persisted,
+        }
+        results.append(stateful_result)
+        print(
+            "CLOCK_BOUNDARY_RESULT="
+            + json.dumps(
+                stateful_result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ),
+            flush=True,
+        )
 
     payload = {
         "status": "PASS" if failures == 0 else "FAIL",

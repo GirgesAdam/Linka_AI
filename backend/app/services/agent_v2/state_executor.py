@@ -106,6 +106,67 @@ def _clock_source(value: object, *, fallback: ClockSource = "unspecified") -> Cl
     return fallback
 
 
+def _time_business_signature(value: TimeConstraint | None) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    return (
+        value.mode,
+        value.start_time,
+        value.end_time,
+        value.start_time_ambiguity,
+        value.end_time_ambiguity,
+    )
+
+
+def _time_fact_has_backend_authority(facts: dict[str, Any]) -> bool:
+    return bool(
+        facts.get("verified_availability_reference") is True
+        or facts.get("bare_clock_resolution_status") == "resolved"
+        or facts.get("_backend_time_state_action") == "clear_past"
+    )
+
+
+def _authoritative_time_update(
+    existing: TimeConstraint | None,
+    *,
+    existing_clock_source: ClockSource,
+    facts: dict[str, Any],
+    operation: TurnOperation,
+) -> tuple[bool, TimeConstraint | None, ClockSource]:
+    """Classify time mutation authority instead of trusting fact presence.
+
+    Progression facts may echo durable constraints after normal serialization,
+    which intentionally excludes ``spoken_period_hint``.  Such echoes must not
+    overwrite richer durable state.  Explicit semantic time, verified backend
+    selections/resolution, and deterministic past-time clears remain authoritative.
+    """
+    if "time" not in facts and operation.entities.time is None:
+        return False, existing, existing_clock_source
+
+    incoming = _state_time_constraint(
+        facts.get("time") if "time" in facts else operation.entities.time,
+        semantic=operation.entities.time,
+    )
+    incoming_source = _clock_source(
+        facts.get("time_clock_source"),
+        fallback=operation.clock_source,
+    )
+
+    explicit_semantic = operation.entities.time is not None
+    backend_authoritative = _time_fact_has_backend_authority(facts)
+    if explicit_semantic or backend_authoritative:
+        return True, incoming, incoming_source
+
+    # Defensive equivalence guard: an inherited echo can be byte-different only
+    # because excluded semantic metadata was stripped.  Keep the durable object.
+    if _time_business_signature(incoming) == _time_business_signature(existing):
+        return False, existing, existing_clock_source
+
+    # Unknown, unproven time changes fail closed.  A materially different fact is
+    # not mutation authority merely because a planner/backend step carried `time`.
+    return False, existing, existing_clock_source
+
+
 def _authorization(
     *,
     operation: str,
@@ -238,22 +299,17 @@ def _apply_booking_updates(
         updated = apply_booking_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_booking_date_change(updated, date=operation.entities.date)
-    if "time" in facts:
+    apply_time, next_time, next_clock_source = _authoritative_time_update(
+        updated.constraints.time,
+        existing_clock_source=updated.constraints.time_clock_source,
+        facts=facts,
+        operation=operation,
+    )
+    if apply_time:
         updated = apply_booking_time_change(
             updated,
-            time=_state_time_constraint(
-                facts.get("time"), semantic=operation.entities.time
-            ),
-            clock_source=_clock_source(
-                facts.get("time_clock_source"),
-                fallback=operation.clock_source,
-            ),
-        )
-    elif operation.entities.time is not None:
-        updated = apply_booking_time_change(
-            updated,
-            time=operation.entities.time,
-            clock_source=operation.clock_source,
+            time=next_time,
+            clock_source=next_clock_source,
         )
     if operation.package_usage != "unspecified":
         updated = apply_booking_package_usage_change(
@@ -446,22 +502,17 @@ def _apply_reschedule_updates(
         updated = apply_reschedule_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_reschedule_date_change(updated, date=operation.entities.date)
-    if "time" in facts:
+    apply_time, next_time, next_clock_source = _authoritative_time_update(
+        updated.replacement.time,
+        existing_clock_source=updated.replacement.time_clock_source,
+        facts=facts,
+        operation=operation,
+    )
+    if apply_time:
         updated = apply_reschedule_time_change(
             updated,
-            time=_state_time_constraint(
-                facts.get("time"), semantic=operation.entities.time
-            ),
-            clock_source=_clock_source(
-                facts.get("time_clock_source"),
-                fallback=operation.clock_source,
-            ),
-        )
-    elif operation.entities.time is not None:
-        updated = apply_reschedule_time_change(
-            updated,
-            time=operation.entities.time,
-            clock_source=operation.clock_source,
+            time=next_time,
+            clock_source=next_clock_source,
         )
     return updated
 

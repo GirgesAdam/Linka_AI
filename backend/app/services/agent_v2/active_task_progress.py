@@ -295,7 +295,11 @@ def _past_temporal_resume_updates(
             and end_date < today
         )
         if fully_past:
-            return {"date": None, "time": None}
+            return {
+                "date": None,
+                "time": None,
+                "_backend_time_state_action": "clear_past",
+            }
 
         if (
             date_constraint.mode == "exact"
@@ -328,6 +332,7 @@ def _past_temporal_resume_updates(
             )
             if time_fully_past:
                 updates["time"] = None
+                updates["_backend_time_state_action"] = "clear_past"
     return updates
 
 

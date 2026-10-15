@@ -255,14 +255,22 @@ def _merge_component(
     apply_to_all: bool,
 ) -> CustomerConstraints:
     updates: dict[str, object] = {}
-    for key in ("doctor_id", "branch_id", "date", "time"):
+    for key in ("doctor_id", "branch_id", "date"):
         if key in params:
             updates[key] = params[key]
+    if "time" in params:
+        updates["time"] = _grouped_state_time(
+            params["time"], semantic=operation.entities.time
+        )
     if not apply_to_all and "device_key" in params:
         updates["device_key"] = params["device_key"]
     if operation.package_usage != "unspecified":
         updates["package_usage"] = operation.package_usage
     payload = component.model_dump(mode="json")
+    if "time" not in updates and component.time is not None:
+        # Normal serialization excludes spoken_period_hint.  An omitted-time
+        # continuation must retain the durable TimeConstraint object unchanged.
+        payload["time"] = component.time
     payload.update(updates)
     return CustomerConstraints.model_validate(payload)
 
