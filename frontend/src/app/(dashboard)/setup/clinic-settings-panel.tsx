@@ -1,4 +1,4 @@
-import { Cpu, Download, History } from "lucide-react";
+import { ChevronDown, Cpu, Download, History } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -126,10 +126,16 @@ export function ClinicSettingsPanel({
       </Card>
 
       <Card>
-        <CardHeader>
+        <details data-collapsible-section="clinic-hours" className="group">
+          <summary className="cursor-pointer list-none rounded-2xl outline-none transition hover:bg-slate-50/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-ring)] [&::-webkit-details-marker]:hidden">
+            <CardHeader className="flex-row items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1.5">
           <CardTitle>مواعيد عمل العيادة</CardTitle>
           <CardDescription>فعّل الأيام التي تعمل فيها العيادة وحدد بداية ونهاية العمل لكل يوم.</CardDescription>
-        </CardHeader>
+              </div>
+              <ChevronDown aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+            </CardHeader>
+          </summary>
         <CardContent>
           <form action={saveClinicHoursFormAction} className="space-y-3">
             {DAYS.map(({ weekday, label }) => {
@@ -148,13 +154,20 @@ export function ClinicSettingsPanel({
             <Button type="submit">حفظ مواعيد العمل</Button>
           </form>
         </CardContent>
+        </details>
       </Card>
 
       <Card id="tia-knowledge">
-        <CardHeader>
+        <details data-collapsible-section="linka-knowledge" className="group">
+          <summary className="cursor-pointer list-none rounded-2xl outline-none transition hover:bg-slate-50/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-ring)] [&::-webkit-details-marker]:hidden">
+            <CardHeader className="flex-row items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1.5">
           <CardTitle>معلومات Linka</CardTitle>
           <CardDescription>اكتب هنا فقط المعلومات التفسيرية التي تريد Linka أن تعرفها وتشرحها للعملاء: نبذة العيادة، شرح الخدمات، الفرق بين الأجهزة، التعليمات والسياسات والأسئلة الشائعة.</CardDescription>
-        </CardHeader>
+              </div>
+              <ChevronDown aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+            </CardHeader>
+          </summary>
         <CardContent>
           <form action={saveKnowledgeTextFormAction} className="space-y-4">
             <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4">
@@ -181,13 +194,20 @@ export function ClinicSettingsPanel({
             <Button type="submit">حفظ معلومات Linka</Button>
           </form>
         </CardContent>
+        </details>
       </Card>
 
       <Card id="historical-data">
-        <CardHeader>
+        <details data-collapsible-section="historical-data" className="group">
+          <summary className="cursor-pointer list-none rounded-2xl outline-none transition hover:bg-slate-50/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent-ring)] [&::-webkit-details-marker]:hidden">
+            <CardHeader className="flex-row items-start justify-between gap-4">
+              <div className="min-w-0 space-y-1.5">
           <CardTitle>البيانات القديمة</CardTitle>
           <CardDescription>لو عندك عملاء قدامى بباقات نشطة، انقل حالتهم الحالية إلى Linka من Sheet واحدة. ملفات الاستيراد التاريخية القديمة تظل مدعومة.</CardDescription>
-        </CardHeader>
+              </div>
+              <ChevronDown aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+            </CardHeader>
+          </summary>
         <CardContent className="space-y-5">
           <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -218,6 +238,7 @@ export function ClinicSettingsPanel({
             )}
           </div>
         </CardContent>
+        </details>
       </Card>
     </div>
   );

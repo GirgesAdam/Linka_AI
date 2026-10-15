@@ -85,3 +85,18 @@ def test_clinic_settings_ui_has_no_booking_policy_or_shortcuts() -> None:
     assert 'redirect("/setup#tia-knowledge")' in knowledge_page
     assert 'redirect("/setup#historical-data")' in history_page
     assert "HistoricalImportUploader" in panel
+
+
+def test_large_clinic_settings_sections_are_collapsible_by_header() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent.parent
+    panel = (root / "frontend/src/app/(dashboard)/setup/clinic-settings-panel.tsx").read_text(encoding="utf-8")
+
+    for key in ("clinic-hours", "linka-knowledge", "historical-data"):
+        marker = f'data-collapsible-section="{key}"'
+        assert marker in panel
+        details_tag = panel[panel.index(marker) - 20 : panel.index(marker) + len(marker) + 80]
+        assert " open" not in details_tag
+    assert panel.count("<summary className=") >= 3
+    assert "group-open:rotate-180" in panel
