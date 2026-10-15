@@ -6,6 +6,8 @@ import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { Appointment, Patient } from "@/lib/types";
 
 export type ManualAppointmentState = { ok: boolean; message: string };
+
+const RECEPTION_EGYPTIAN_MOBILE_PATTERN = /^01[0125]\d{8}$/;
 export type AvailabilityBlockActionState = { ok: boolean; message: string };
 
 export async function createAvailabilityBlock(previous: AvailabilityBlockActionState, formData: FormData): Promise<AvailabilityBlockActionState> {
@@ -260,6 +262,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
       const lastName = String(formData.get("last_name") || "").trim();
       const phone = String(formData.get("phone") || "").trim();
       if (!firstName || !phone) return { ok: false, message: "اكتب اسم العميل ورقم الهاتف." };
+      if (!RECEPTION_EGYPTIAN_MOBILE_PATTERN.test(phone)) return { ok: false, message: "رقم الهاتف لازم يكون 11 رقم ويبدأ بـ 010 أو 011 أو 012 أو 015." };
       const patient = await tiaRequest<Patient>("/crm/patients", {
         method: "POST",
         body: JSON.stringify({ first_name: firstName, last_name: lastName || null, phone, source: "phone", status: "active", preferred_language: "ar" }),

@@ -105,7 +105,7 @@ export function QuickAppointmentDialog({
             {visibleColumns.map((visibleColumn) => <input key={visibleColumn} type="hidden" name="column" value={visibleColumn} />)}
             <label className="min-w-0 flex-1">
               <span className="mb-1.5 block text-xs font-bold text-slate-600">رقم هاتف العميل</span>
-              <Input name="quick_phone" defaultValue={phone} required maxLength={40} dir="ltr" placeholder="01xxxxxxxxx" autoFocus={!phone} />
+              <Input name="quick_phone" defaultValue={phone} required inputMode="numeric" minLength={11} maxLength={11} pattern="01[0125][0-9]{8}" title={"رقم الهاتف لازم يكون 11 رقم ويبدأ بـ 010 أو 011 أو 012 أو 015."} dir="ltr" placeholder="01xxxxxxxxx" autoFocus={!phone} />
             </label>
             <Button type="submit" variant="outline" className="mt-6"><Search size={16} /> بحث</Button>
           </form>

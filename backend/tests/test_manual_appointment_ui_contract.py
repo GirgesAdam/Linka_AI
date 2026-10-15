@@ -77,3 +77,31 @@ def test_package_cancellation_does_not_ask_staff_for_a_reason() -> None:
     assert "سبب الإلغاء" not in form
     assert 'name="reason"' not in form
     assert 'const reason = "تم إلغاء الباكيدج من ملف العميل";' in actions
+
+
+
+def test_appointment_cancellation_does_not_ask_staff_for_a_reason() -> None:
+    root = _root()
+    page = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/page.tsx").read_text(encoding="utf-8")
+    actions = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/actions.ts").read_text(encoding="utf-8")
+
+    cancel_form = page.split('action={cancelAppointment}', 1)[1].split('</form>', 1)[0]
+    cancel_action = actions.split('export async function cancelAppointment', 1)[1].split('\n}\n', 1)[0]
+    assert 'name="reason"' not in cancel_form
+    assert 'formData.get("reason")' not in cancel_action
+    assert 'override_policy: overridePolicy' in actions
+
+
+def test_reception_phone_inputs_require_egyptian_mobile_format() -> None:
+    root = _root()
+    page = (root / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+    dialog = (root / "frontend/src/app/(dashboard)/appointments/quick-appointment-dialog.tsx").read_text(encoding="utf-8")
+    actions = (root / "frontend/src/app/(dashboard)/appointments/actions.ts").read_text(encoding="utf-8")
+
+    for source in (page, dialog):
+        assert 'pattern="01[0125][0-9]{8}"' in source
+        assert 'minLength={11}' in source
+        assert 'maxLength={11}' in source
+        assert 'inputMode="numeric"' in source
+    assert 'RECEPTION_EGYPTIAN_MOBILE_PATTERN = /^01[0125]\\d{8}$/' in actions
+    assert 'RECEPTION_EGYPTIAN_MOBILE_PATTERN.test(phone)' in actions

@@ -440,7 +440,6 @@ export default async function AppointmentOperationsPage({
                       <form action={cancelAppointment} className="space-y-3">
                         <input type="hidden" name="appointment_id" value={appointment.id} />
                         <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                        <label className="block text-sm font-bold">سبب الإلغاء<input name="reason" required maxLength={2000} placeholder="مثال: طلب العميل إلغاء الموعد" className="form-control mt-2 h-10 min-h-10" /></label>
                         {detail.cancellation_override_required && <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"><input type="checkbox" name="override_policy" value="1" required className="mt-1" />تأكيد الإلغاء رغم تجاوز مهلة الإلغاء المسموح بها</label>}
                         <Button variant="danger"><CircleX size={15} /> تأكيد الإلغاء</Button>
                       </form>
