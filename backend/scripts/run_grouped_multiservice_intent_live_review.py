@@ -56,6 +56,17 @@ RA_G6_INITIAL = (
 )
 RA_G6_PRICE = "\u0627\u0644\u0633\u0639\u0631 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a \u0643\u0627\u0645\u061f"
 RA_G6_TIME = "\u0627\u0644\u0633\u0627\u0639\u0629 8 \u0645\u0633\u0627\u0621 \u0645\u0646\u0627\u0633\u0628\u0629"
+RA_G7_INITIAL = (
+    "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0648\u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0648\u0643\u0634\u0641 \u062c\u0644\u062f\u064a\u0629 \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a 17 \u0623\u0643\u062a\u0648\u0628\u0631\u060c "
+    "\u062e\u0644\u064a\u0647\u0645 \u0648\u0631\u0627 \u0628\u0639\u0636 \u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f \u0648\u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
+)
+RA_G7_BOOK = (
+    "\u0627\u0644\u0633\u0628\u062a \u0627\u0644\u0633\u0627\u0639\u0629 6 \u0645\u0633\u0627\u0621 \u0645\u0646\u0627\u0633\u0628\u060c \u0627\u062d\u062c\u0632\u064a \u0627\u0644\u062e\u062f\u0645\u0627\u062a \u0627\u0644\u062b\u0644\u0627\u062b\u0629 \u0648\u0631\u0627 \u0628\u0639\u0636 "
+    "\u0648\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
+)
+RA_G7_CONFIRM_DETAILS = (
+    "\u062a\u0645\u0627\u0645\u060c \u0643\u0645\u0644\u064a \u0646\u0641\u0633 \u0627\u0644\u062d\u062c\u0632 \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a \u0627\u0644\u0633\u0627\u0639\u0629 6 \u0645\u0633\u0627\u0621 \u0648\u0648\u0631\u064a\u0646\u064a \u0643\u0644 \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 \u0642\u0628\u0644 \u0627\u0644\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0646\u0647\u0627\u0626\u064a"
+)
 
 
 @contextmanager
@@ -140,6 +151,12 @@ def build_fixture(db: Session):
         last_name="أحمد",
         is_active=True,
     )
+    dermatology_staff = Staff(
+        workspace_id=workspace.id,
+        first_name="Dermatology",
+        last_name="Doctor",
+        is_active=True,
+    )
     underarm = Service(
         workspace_id=workspace.id,
         name="ليزر إبط",
@@ -173,6 +190,17 @@ def build_fixture(db: Session):
         requires_laser_device=True,
         is_active=True,
     )
+    dermatology = Service(
+        workspace_id=workspace.id,
+        name="\u0643\u0634\u0641 \u062c\u0644\u062f\u064a\u0629",
+        slug=f"dermatology-consultation-{suffix}",
+        operational_category="dermatology",
+        duration_minutes=30,
+        price_minor=100_000,
+        currency="EGP",
+        requires_laser_device=False,
+        is_active=True,
+    )
     patient = Patient(
         workspace_id=workspace.id,
         first_name="سارة",
@@ -181,7 +209,7 @@ def build_fixture(db: Session):
         source="other",
         status="active",
     )
-    db.add_all([branch, staff, underarm, bikini, arms, patient])
+    db.add_all([branch, staff, dermatology_staff, underarm, bikini, arms, dermatology, patient])
     db.flush()
     workspace.primary_branch_id = branch.id
     doctor = Doctor(
@@ -191,17 +219,25 @@ def build_fixture(db: Session):
         booking_enabled=True,
         is_active=True,
     )
-    db.add(doctor)
-    db.flush()
-    db.add(
-        DoctorBranch(
-            workspace_id=workspace.id,
-            doctor_id=doctor.id,
-            branch_id=branch.id,
-            is_primary=True,
-            is_active=True,
-        )
+    dermatology_doctor = Doctor(
+        workspace_id=workspace.id,
+        staff_id=dermatology_staff.id,
+        specialization="Dermatology",
+        booking_enabled=True,
+        is_active=True,
     )
+    db.add_all([doctor, dermatology_doctor])
+    db.flush()
+    for assigned_doctor in (doctor, dermatology_doctor):
+        db.add(
+            DoctorBranch(
+                workspace_id=workspace.id,
+                doctor_id=assigned_doctor.id,
+                branch_id=branch.id,
+                is_primary=True,
+                is_active=True,
+            )
+        )
     for service in (underarm, bikini, arms):
         db.add(
             DoctorService(
@@ -211,6 +247,14 @@ def build_fixture(db: Session):
                 is_active=True,
             )
         )
+    db.add(
+        DoctorService(
+            workspace_id=workspace.id,
+            doctor_id=dermatology_doctor.id,
+            service_id=dermatology.id,
+            is_active=True,
+        )
+    )
     for weekday in range(7):
         db.add(
             BranchWorkingHour(
@@ -225,6 +269,17 @@ def build_fixture(db: Session):
             DoctorWorkingHour(
                 workspace_id=workspace.id,
                 doctor_id=doctor.id,
+                branch_id=branch.id,
+                weekday=weekday,
+                start_time=time(10),
+                end_time=time(22),
+            )
+        )
+    for weekday in range(7):
+        db.add(
+            DoctorWorkingHour(
+                workspace_id=workspace.id,
+                doctor_id=dermatology_doctor.id,
                 branch_id=branch.id,
                 weekday=weekday,
                 start_time=time(10),
@@ -268,7 +323,7 @@ def build_fixture(db: Session):
             duration_minutes=duration,
         )
     db.flush()
-    return workspace, patient, doctor, underarm, bikini, arms
+    return workspace, patient, doctor, dermatology_doctor, underarm, bikini, arms, dermatology
 
 
 def dump(value):
@@ -389,12 +444,17 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
     if selected and name not in selected:
         return
     with rollback_session() as db:
-        workspace, patient, doctor, underarm, bikini, arms = build_fixture(db)
+        (
+            workspace, patient, doctor, dermatology_doctor,
+            underarm, bikini, arms, dermatology,
+        ) = build_fixture(db)
         ids = {
             "underarm": str(underarm.id),
             "bikini": str(bikini.id),
             "arms": str(arms.id),
+            "dermatology": str(dermatology.id),
             "doctor": str(doctor.id),
+            "dermatology_doctor": str(dermatology_doctor.id),
         }
         conversation_id = uuid4()
         db.add(
@@ -647,6 +707,44 @@ def validate_g6_visit_time_selection(records, ids):
     assert len(doctor_ids) == 1
 
 
+
+def validate_g7_category_split(records, ids):
+    expected = {ids["underarm"], ids["bikini"], ids["dermatology"]}
+    assert len(records) == 3
+    final = records[-1]
+    assert set(_task_ids(final)) == expected
+    assert final["pending_write"] is None
+    proposal = final.get("proposal")
+    assert isinstance(proposal, dict), "RA-G7 must remain proposal-only before confirmation"
+    assert set(proposal.get("service_ids") or []) == expected
+    visits = proposal.get("visits")
+    assert isinstance(visits, list) and len(visits) == 2
+    assert all(isinstance(visit, dict) for visit in visits)
+    laser_visit = next(
+        visit for visit in visits
+        if set(visit.get("service_ids") or []) == {ids["underarm"], ids["bikini"]}
+    )
+    dermatology_visit = next(
+        visit for visit in visits
+        if visit.get("service_ids") == [ids["dermatology"]]
+    )
+    assert laser_visit.get("doctor_id") == ids["doctor"]
+    assert dermatology_visit.get("doctor_id") == ids["dermatology_doctor"]
+    assert laser_visit.get("device_key") == "candela_gentle"
+    assert dermatology_visit.get("device_key") is None
+    laser_start = datetime.fromisoformat(str(laser_visit["start_at"]))
+    laser_end = datetime.fromisoformat(str(laser_visit["end_at"]))
+    dermatology_start = datetime.fromisoformat(str(dermatology_visit["start_at"]))
+    dermatology_end = datetime.fromisoformat(str(dermatology_visit["end_at"]))
+    assert int((laser_end - laser_start).total_seconds() // 60) == 30
+    assert int((dermatology_end - dermatology_start).total_seconds() // 60) == 30
+    ordered = sorted(
+        [(laser_start, laser_end), (dermatology_start, dermatology_end)],
+        key=lambda item: item[0],
+    )
+    assert ordered[0][0].astimezone(CAIRO).strftime("%H:%M") == "18:00"
+    assert ordered[1][0] >= ordered[0][1]
+
 def main() -> int:
     if MODE not in {"standalone", "batch1-overlay"}:
         raise RuntimeError(f"Unsupported RA_G_MODE={MODE}")
@@ -685,6 +783,12 @@ def main() -> int:
         [RA_G6_INITIAL, RA_G6_PRICE, RA_G6_TIME],
         validate_g6_visit_time_selection,
     )
+    if MODE == "standalone":
+        run_scenario(
+            "RA-G7-CATEGORY-SPLIT",
+            [RA_G7_INITIAL, RA_G7_BOOK, RA_G7_CONFIRM_DETAILS],
+            validate_g7_category_split,
+        )
     print(f"RA_G_SUMMARY={{\"mode\":\"{MODE}\",\"status\":\"PASS\"}}", flush=True)
     return 0
 
