@@ -399,6 +399,13 @@ def _validate_write_safety(record: dict[str, Any], spec: ScenarioSpec, ctx: base
     )
 
 
+def _serialized_period_hint(time_payload: object) -> str:
+    """Normalize runtime state serialization where the default `none` hint is omitted."""
+    if not isinstance(time_payload, dict):
+        return "none"
+    return str(time_payload.get("spoken_period_hint") or "none")
+
+
 def _raw_spoken_period_hint(record: dict[str, Any]) -> str:
     for payload in record.get("raw_structured") or []:
         if not isinstance(payload, dict):
@@ -804,7 +811,7 @@ def _run_stateful_period_continuation(
     )
     if isinstance(continued_time, dict) and continued_time.get("start_time_ambiguity") == "none":
         _require(
-            continued_time.get("spoken_period_hint") == "none",
+            _serialized_period_hint(continued_time) == "none",
             counter="lost_period_hints",
             message=f"{scenario}: resolved canonical clock retained provider period authority",
         )
@@ -816,30 +823,19 @@ def _run_stateful_period_continuation(
     }
 
 
-def _run_stateful_explicit_same_clock_correction(ctx: base.Context) -> None:
-    scenario = "RA-S4"
-    _set_operating_hours(ctx, start="00:00", end="23:59")
-    first = base._chat(
-        ctx,
-        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
-    )
-    first_time = _task_constraint_facts(first).get("time")
-    _require(
-        isinstance(first_time, dict) and first_time.get("spoken_period_hint") == "pm",
-        counter="lost_period_hints",
-        message=f"{scenario}: setup did not establish durable PM authority: {first_time!r}",
-    )
-
-    corrected = base._chat(
-        ctx,
-        "\u0644\u0627\u060c \u062e\u0644\u064a\u0647\u0627 10 \u0648\u0646\u0635 \u0628\u0633",
-    )
-    corrected_time = _task_constraint_facts(corrected).get("time")
+def _validate_stateful_same_clock_correction(
+    *,
+    corrected_time: object,
+    corrected: dict[str, Any],
+    final: dict[str, Any],
+    scenario: str = "RA-S4",
+) -> None:
+    """Assert the explicit-bare correction without assuming default fields serialize."""
     _require(
         isinstance(corrected_time, dict)
         and corrected_time.get("start_time") == "10:30"
         and corrected_time.get("start_time_ambiguity") == "twelve_hour"
-        and corrected_time.get("spoken_period_hint") == "none",
+        and _serialized_period_hint(corrected_time) == "none",
         counter="stale_period_hint_retention",
         message=f"{scenario}: explicit same-clock correction retained stale PM: {corrected_time!r}",
     )
@@ -848,8 +844,11 @@ def _run_stateful_explicit_same_clock_correction(ctx: base.Context) -> None:
         counter="wrong_time_writes",
         message=f"{scenario}: correction wrote before missing context was resolved",
     )
-
-    final = base._chat(ctx, "\u0627\u0644\u062e\u0645\u064a\u0633")
+    _require(
+        not (corrected.get("availability_requests") or []),
+        counter="arbitrary_10_11_resolution",
+        message=f"{scenario}: bare correction started availability before date/period resolution",
+    )
     _require(
         _looks_like_period_question(str(final.get("agent") or "")),
         counter="arbitrary_10_11_resolution",
@@ -859,6 +858,40 @@ def _run_stateful_explicit_same_clock_correction(ctx: base.Context) -> None:
         not (final.get("appointments") or []),
         counter="wrong_time_writes",
         message=f"{scenario}: unresolved bare correction produced a write",
+    )
+    _require(
+        not (final.get("availability_requests") or []),
+        counter="arbitrary_10_11_resolution",
+        message=f"{scenario}: unresolved bare correction progressed to availability",
+    )
+
+
+def _run_stateful_explicit_same_clock_correction(ctx: base.Context) -> None:
+    scenario = "RA-S4"
+    _set_operating_hours(ctx, start="00:00", end="23:59")
+    first = base._chat(
+        ctx,
+        "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
+    )
+    first_time = _task_constraint_facts(first).get("time")
+    _require(
+        isinstance(first_time, dict) and _serialized_period_hint(first_time) == "pm",
+        counter="lost_period_hints",
+        message=f"{scenario}: setup did not establish durable PM authority: {first_time!r}",
+    )
+
+    corrected = base._chat(
+        ctx,
+        "\u0644\u0627\u060c \u062e\u0644\u064a\u0647\u0627 10 \u0648\u0646\u0635 \u0628\u0633",
+    )
+    corrected_time = _task_constraint_facts(corrected).get("time")
+
+    final = base._chat(ctx, "\u0627\u0644\u062e\u0645\u064a\u0633")
+    _validate_stateful_same_clock_correction(
+        corrected_time=corrected_time,
+        corrected=corrected,
+        final=final,
+        scenario=scenario,
     )
     final["stateful_same_clock_correction_evidence"] = {
         "first_persisted_time": first_time,
