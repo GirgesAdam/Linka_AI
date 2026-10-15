@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,13 +16,23 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
+from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
+from app.services.agent_v2.grouped_booking_continuity import restore_grouped_booking_understanding
+from app.services.agent_v2.multi_service_booking import (
+    category_group_duration_minutes,
+    common_doctor_ids,
+    common_laser_device_keys,
+)
 from app.services.agent_v2.planner import PlannerContext, PlanStep, plan_turn
+from app.services.agent_v2.read_executor import ReadExecutionContext, _read_service_catalog_set
 from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
 from app.services.agent_v2.state_executor import apply_step_state
 from app.services.agent_v2.state_rules import apply_booking_requested_services_change
 from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     expand_multi_service_operations,
+    merge_same_visit_booking_operations,
+    recollapse_restored_booking_visit_groups,
     tag_booking_service_sets,
 )
 
@@ -964,3 +975,210 @@ def test_integrated_grouped_spoken_clock_addition_preserves_canonical_time() -> 
     assert updated.constraints.time is not None
     assert updated.constraints.time.start_time == "15:00"
     assert updated.proposal is None
+
+
+def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing() -> None:
+    catalog = _catalog(common_devices=1)
+    context = build_semantic_context(catalog)
+    state = _start_state(_grouped_availability(context, [A, B]), catalog)
+    continuation = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-17"),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+            )
+        ]
+    )
+
+    normalized = merge_same_visit_booking_operations(continuation)
+    normalized, service_sets = collapse_booking_service_sets(
+        normalized,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    normalized, semantic_groups = expand_multi_service_operations(
+        normalized,
+        semantic_context=context,
+        booking_service_sets=service_sets,
+    )
+    normalized, restored_groups = restore_grouped_booking_understanding(
+        normalized,
+        active_task=state,
+        context=context,
+    )
+    normalized, restored_service_sets, restored_groups = (
+        recollapse_restored_booking_visit_groups(
+            normalized,
+            semantic_context=context,
+            catalog=catalog,
+            restored_visit_groups=restored_groups,
+        )
+    )
+    service_sets = {**service_sets, **restored_service_sets}
+    semantic_groups = {**semantic_groups, **restored_groups}
+    plan = tag_booking_service_sets(
+        plan_turn(
+            normalized,
+            PlannerContext(semantic_context=context, active_task=state, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    plan = normalize_compound_turn_plan(
+        plan,
+        catalog=catalog,
+        operation_visit_groups=semantic_groups,
+    )
+
+    assert len(normalized.operations) == 1
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.facts["requested_service_ids"] == [A, B]
+    assert step.facts["service_id"] == B
+    assert step.facts["time"]["start_time"] == "18:00"
+    assert step.facts.get("compound_visit_sequence_index") is None
+    duration = category_group_duration_minutes(catalog, [A, B], device_key="v1")
+    assert duration == 30
+    start = datetime(2026, 10, 17, 18, 0)
+    assert start + timedelta(minutes=duration) == datetime(2026, 10, 17, 18, 30)
+    assert common_doctor_ids(catalog, [A, B]) == ["doc-common"]
+    assert common_laser_device_keys(catalog, [A, B]) == ["v1"]
+
+
+def test_ra_h2_grouped_availability_task_prices_both_services_without_clarification() -> None:
+    catalog = _catalog(common_devices=1)
+    underarm = next(row for row in catalog["services"] if row["id"] == A)
+    bikini = next(row for row in catalog["services"] if row["id"] == B)
+    underarm["currency"] = "EGP"
+    bikini["currency"] = "EGP"
+    bikini["laser_devices"][0]["price_minor"] = 70_000
+    context = build_semantic_context(catalog)
+    state = _start_state(_grouped_availability(context, [A, B]), catalog)
+    assert state.requested_service_ids == [A, B]
+
+    pricing = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                execution_intent="informational",
+                entities=TurnEntities(),
+                requested_service_details=["price"],
+            )
+        ]
+    )
+    plan = plan_turn(
+        pricing,
+        PlannerContext(semantic_context=context, active_task=state, now=NOW),
+    )
+
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.disposition == "read"
+    assert step.response_goal == "answer_price"
+    assert step.clarification_field is None
+    assert step.facts["requested_service_ids"] == [A, B]
+    assert len(step.reads) == 1
+    request = step.reads[0]
+    assert request.kind == "service_catalog_set"
+    assert request.parameters["service_ids"] == [A, B]
+
+    result = _read_service_catalog_set(
+        request,
+        ReadExecutionContext(
+            db=SimpleNamespace(),
+            workspace=SimpleNamespace(),
+            patient=SimpleNamespace(),
+            now=NOW,
+            catalog=catalog,
+            adapter=None,
+        ),
+    )
+    assert result.payload["variants"][0]["total_price_minor"] == 120_000
+    assert result.payload["variants"][0]["currency"] == "EGP"
+    assert state.requested_service_ids == [A, B]
+
+
+def test_restored_mixed_category_continuation_sequences_category_visits_not_services() -> None:
+    catalog = _catalog(common_devices=1)
+    catalog["services"].append(
+        {
+            "id": "svc-dermatology",
+            "name": "Dermatology Consultation",
+            "duration_minutes": 30,
+            "operational_category": "dermatology",
+            "requires_laser_device": False,
+            "price_minor": 100_000,
+            "currency": "EGP",
+        }
+    )
+    catalog["doctors"].append(
+        {
+            "id": "doc-dermatology",
+            "name": "Dermatology Doctor",
+            "service_ids": ["svc-dermatology"],
+        }
+    )
+    context = build_semantic_context(catalog)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id=B, device_key="v1"),
+        requested_service_ids=[A, B, "svc-dermatology"],
+        service_device_keys={A: "v1", B: "v1"},
+    )
+    continuation = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-17"),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+            )
+        ]
+    )
+
+    restored, restored_groups = restore_grouped_booking_understanding(
+        continuation,
+        active_task=state,
+        context=context,
+    )
+    assert len(restored.operations) == 3
+    restored, service_sets, restored_groups = recollapse_restored_booking_visit_groups(
+        restored,
+        semantic_context=context,
+        catalog=catalog,
+        restored_visit_groups=restored_groups,
+    )
+
+    assert len(restored.operations) == 2
+    assert service_sets == {0: [A, B]}
+    assert set(restored_groups) == {0, 1}
+    assert len(set(restored_groups.values())) == 1
+
+    plan = tag_booking_service_sets(
+        plan_turn(
+            restored,
+            PlannerContext(semantic_context=context, active_task=state, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    plan = normalize_compound_turn_plan(
+        plan,
+        catalog=catalog,
+        operation_visit_groups=restored_groups,
+    )
+
+    assert len(plan.steps) == 2
+    assert plan.steps[0].facts["requested_service_ids"] == [A, B]
+    assert plan.steps[0].facts["time"]["start_time"] == "18:00"
+    assert plan.steps[1].facts["service_id"] == "svc-dermatology"
+    assert plan.steps[1].facts["time"]["start_time"] == "18:30"

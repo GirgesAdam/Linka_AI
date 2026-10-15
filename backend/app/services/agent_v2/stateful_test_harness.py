@@ -61,6 +61,7 @@ from app.services.agent_v2.turn_normalization import (
     expand_multi_service_operations,
     guard_multiple_booking_writes,
     merge_same_visit_booking_operations,
+    recollapse_restored_booking_visit_groups,
     tag_booking_service_sets,
 )
 
@@ -378,6 +379,16 @@ def run_v2_stateful_fixture_turn(
         active_task=initial_booking_task,
         context=semantic_context,
     )
+    if restored_visit_groups:
+        understanding, restored_service_sets, restored_visit_groups = (
+            recollapse_restored_booking_visit_groups(
+                understanding,
+                semantic_context=semantic_context,
+                catalog=fixture.catalog,
+                restored_visit_groups=restored_visit_groups,
+            )
+        )
+        booking_service_sets = {**booking_service_sets, **restored_service_sets}
     semantic_visit_groups = {
         **semantic_visit_groups,
         **restored_visit_groups,

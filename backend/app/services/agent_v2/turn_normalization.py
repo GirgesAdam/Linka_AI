@@ -5,6 +5,7 @@ from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.multi_service_booking import (
     partition_service_ids_by_operational_category,
     select_main_service_id,
+    service_operational_category,
 )
 from app.services.agent_v2.planner import TurnPlan
 from app.services.agent_v2.state import BookingTaskState
@@ -276,6 +277,113 @@ def collapse_booking_service_sets(
         return turn, service_sets
     normalized_turn = turn.model_copy(update={"operations": normalized})
     return normalized_turn, service_sets
+
+
+
+def recollapse_restored_booking_visit_groups(
+    turn: TiaTurnUnderstanding,
+    *,
+    semantic_context: SemanticContext,
+    catalog: dict[str, object],
+    restored_visit_groups: dict[int, str],
+) -> tuple[TiaTurnUnderstanding, dict[int, list[str]], dict[int, str]]:
+    """Restore category-level visit boundaries before compound sequencing.
+
+    Grouped-continuation recovery rebuilds durable service components so corrections
+    can be applied to every member. Those component operations are not visit
+    boundaries. Partition the recovered peers by backend operational_category, merge
+    only peers in the same category, then run the normal canonical service-set collapse.
+    """
+    if not restored_visit_groups:
+        return turn, {}, {}
+    group_keys = set(restored_visit_groups.values())
+    if len(group_keys) != 1:
+        return turn, {}, restored_visit_groups
+    restored_indexes = sorted(restored_visit_groups)
+    if not restored_indexes or any(index >= len(turn.operations) for index in restored_indexes):
+        return turn, {}, restored_visit_groups
+
+    restored_rows: list[tuple[int, TurnOperation, str, str | None]] = []
+    for index in restored_indexes:
+        operation = turn.operations[index]
+        entity = operation.entities.service
+        if operation.type != "book" or entity is None or entity.ref is None:
+            return turn, {}, restored_visit_groups
+        service_id = semantic_context.resolve(entity.ref, expected_kind="service")
+        if service_id is None:
+            return turn, {}, restored_visit_groups
+        restored_rows.append(
+            (index, operation, service_id, service_operational_category(catalog, service_id))
+        )
+
+    category_rows: list[list[tuple[int, TurnOperation, str, str | None]]] = []
+    category_positions: dict[str, int] = {}
+    for row in restored_rows:
+        category = row[3]
+        if category is None:
+            category_rows.append([row])
+            continue
+        position = category_positions.get(category)
+        if position is None:
+            category_positions[category] = len(category_rows)
+            category_rows.append([row])
+        else:
+            category_rows[position].append(row)
+
+    replacement_by_index: dict[int, TurnOperation] = {}
+    removed: set[int] = set()
+    for rows in category_rows:
+        first_index, first, _service_id, _category = rows[0]
+        if len(rows) == 1:
+            replacement_by_index[first_index] = first
+            continue
+        refs = [
+            operation.entities.service.ref
+            for _index, operation, _canonical, _category in rows
+            if operation.entities.service is not None and operation.entities.service.ref
+        ]
+        assert first.entities.service is not None
+        replacement_by_index[first_index] = first.model_copy(
+            update={
+                "entities": first.entities.model_copy(
+                    update={
+                        "service": first.entities.service.model_copy(
+                            update={
+                                "ref": None,
+                                "candidate_refs": refs,
+                                "candidate_mode": "set",
+                            }
+                        )
+                    }
+                )
+            }
+        )
+        removed.update(index for index, *_rest in rows[1:])
+
+    operations = [
+        replacement_by_index.get(index, operation)
+        for index, operation in enumerate(turn.operations)
+        if index not in removed
+    ]
+    category_turn = turn.model_copy(update={"operations": operations})
+    collapsed, service_sets = collapse_booking_service_sets(
+        category_turn,
+        semantic_context=semantic_context,
+        catalog=catalog,
+        active_task=None,
+    )
+    expanded, _ = expand_multi_service_operations(
+        collapsed,
+        semantic_context=semantic_context,
+        booking_service_sets=service_sets,
+    )
+    group_key = next(iter(group_keys))
+    category_visit_groups = {
+        index: group_key
+        for index, operation in enumerate(expanded.operations)
+        if operation.type == "book" and operation.grouped_booking_action == "preserve_group"
+    }
+    return expanded, service_sets, category_visit_groups
 
 
 def tag_booking_service_sets(
