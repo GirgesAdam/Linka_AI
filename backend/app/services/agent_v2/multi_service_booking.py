@@ -60,6 +60,9 @@ def service_duration_minutes(catalog: dict[str, Any], service_id: str) -> int:
 
 
 def select_main_service_id(catalog: dict[str, Any], service_ids: list[str]) -> str:
+    # DOMAIN CONTRACT: this chooses a persistence/execution representative only.
+    # It must never turn one requested service into a semantically primary service;
+    # the LLM and planning layers treat all requested services as equal peers.
     ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
     if not ordered:
         raise MultiServiceBookingError("At least one canonical service is required.")

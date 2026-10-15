@@ -148,6 +148,13 @@ class BookingProposal(StrictStateModel):
     proposal_id: str
     patient_id: str
     service_ids: list[str] = Field(default_factory=list)
+    # DOMAIN CONTRACT - MULTI-SERVICE SEMANTICS:
+    # main_service_id and additional_service_ids are persistence/execution labels only.
+    # The LLM, semantic interpretation, and planning layers must treat every requested
+    # service as an equal peer. Never infer priority, intent, ordering, doctor/device
+    # choice, or conversational meaning from the main/additional labels. The distinction
+    # exists only because one same-session visit may be persisted as one Appointment row
+    # plus additional-service rows.
     main_service_id: str
     additional_service_ids: list[str] = Field(default_factory=list)
     branch_id: str
