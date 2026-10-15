@@ -5,8 +5,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from app.agents.structured_output import StructuredOutputError
+from app.agents.v2.availability_reference_interpreter import (
+    ReferenceDecision,
+    ReferenceInterpretation,
+)
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
@@ -939,3 +944,161 @@ def test_availability_update_does_not_carry_unrelated_pending_choice() -> None:
     assert runtime._is_pure_informational_side_question(TiaTurnUnderstanding(operations=[TurnOperation(type="clinic_info", entities=TurnEntities(), execution_intent="informational")])) is True
     assert runtime._is_pure_informational_side_question(_understanding("availability")) is False
     assert runtime._is_pure_informational_side_question(_understanding("book")) is False
+
+
+
+def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-b", branch_id="branch-1"),
+        requested_service_ids=["service-a", "service-b"],
+        option_snapshot=OptionSnapshot(
+            snapshot_id="old-bikini-only",
+            purpose="booking_slot",
+            task_version=2,
+            created_at=_NOW,
+            expires_at=_NOW + timedelta(minutes=15),
+            options=[
+                OptionChoice(
+                    ref="slot-old",
+                    label="20:00",
+                    payload={
+                        "service_id": "service-b",
+                        "branch_id": "branch-1",
+                        "doctor_id": "doctor-1",
+                        "start_local": "2026-09-12T20:00:00+03:00",
+                        "start_time_24h": "20:00",
+                    },
+                )
+            ],
+        ),
+        version=2,
+    )
+    persisted = PersistedActiveTask(active_task=task, flow_id=uuid4(), flow_version=4)
+    catalog = {
+        "services": [
+            {"id": "service-a", "name": "Service A", "duration_minutes": 15},
+            {"id": "service-b", "name": "Service B", "duration_minutes": 20},
+        ],
+        "doctors": [
+            {
+                "id": "doctor-1",
+                "name": "Doctor 1",
+                "service_ids": ["service-a", "service-b"],
+                "branch_ids": ["branch-1"],
+            }
+        ],
+        "branches": [{"id": "branch-1", "name": "Clinic"}],
+        "appointments": [],
+    }
+    reference_context = {
+        "operation_type": "availability",
+        "requested_service_ids": ["service-a", "service-b"],
+        "multi_service_single_appointment": True,
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "service_id": "service-a",
+                "start_time_24h": "20:00",
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "slot": {
+                    "service_id": "service-a",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                    "start_time_24h": "20:00",
+                },
+            },
+            {
+                "option_ref": "opt_2",
+                "index": 2,
+                "concrete": True,
+                "service_id": "service-b",
+                "start_time_24h": "20:00",
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "slot": {
+                    "service_id": "service-b",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                    "start_time_24h": "20:00",
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr(runtime, "load_active_task", lambda *args, **kwargs: persisted)
+    monkeypatch.setattr(
+        runtime,
+        "interpret_availability_reference_turn",
+        lambda **kwargs: ReferenceInterpretation(
+            decision=ReferenceDecision(action="clarify", option_ref=None, exact_time="20:00"),
+            model_name="deterministic-test",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "interpret_customer_turn_v2",
+        lambda **kwargs: pytest.fail("grouped reference selection must not call the full interpreter"),
+    )
+    captured: list[TurnPlan] = []
+
+    def capture_preflight(plan: TurnPlan, **_kwargs: object) -> TurnPlan:
+        captured.append(plan)
+        return plan
+
+    monkeypatch.setattr(runtime, "preflight_compound_visit_plan", capture_preflight)
+    monkeypatch.setattr(
+        runtime,
+        "execute_step_reads",
+        lambda *args, **kwargs: ReadExecutionBundle(),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("visit-level selection", "deterministic-test"),
+    )
+    saved: list[BookingTaskState] = []
+
+    def save_task(*args: object, **kwargs: object) -> PersistedActiveTask:
+        active = kwargs["active_task"]
+        assert isinstance(active, BookingTaskState)
+        saved.append(active)
+        return PersistedActiveTask(active_task=active, flow_id=persisted.flow_id, flow_version=5)
+
+    monkeypatch.setattr(runtime, "save_active_task", save_task)
+
+    args = _runtime_args()
+    args.update(
+        {
+            "catalog": catalog,
+            "history": [HumanMessage(content="?????? 8 ???? ??????")],
+            "availability_reference_context": reference_context,
+        }
+    )
+    result = runtime.orchestrate_v2_turn(**args)
+
+    assert captured
+    preflight_plan = captured[0]
+    assert len(preflight_plan.steps) == 2
+    assert {step.facts.get("service_id") for step in preflight_plan.steps} == {
+        "service-a",
+        "service-b",
+    }
+    assert all(step.write_intent is None for step in preflight_plan.steps)
+    assert all(step.clarification_field != "service" for step in preflight_plan.steps)
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.requested_service_ids == ["service-a", "service-b"]
+    assert result.active_task.grouped is not None
+    assert {component.service_id for component in result.active_task.grouped.components} == {
+        "service-a",
+        "service-b",
+    }
+    assert result.active_task.write_authorization.authorized is False
+    assert saved and saved[-1].requested_service_ids == ["service-a", "service-b"]

@@ -133,14 +133,44 @@ def grouped_booking_task_from_plan(
         for step in steps
     ]
     grouped = GroupedBookingState(components=components)
-    if existing is not None and existing.grouped is not None:
-        if existing.grouped == grouped and existing.constraints == components[0]:
+    if existing is not None:
+        main_constraints = components[0]
+        if existing.grouped is None and existing.constraints.service_id is not None:
+            main_constraints = next(
+                (
+                    component
+                    for component in components
+                    if component.service_id == existing.constraints.service_id
+                ),
+                main_constraints,
+            )
+        if existing.grouped == grouped and existing.constraints == main_constraints:
             return existing
+        requested = list(existing.requested_service_ids) or [
+            component.service_id
+            for component in components
+            if component.service_id is not None
+        ]
+        service_device_keys = {
+            key: value
+            for key, value in existing.service_device_keys.items()
+            if key in requested
+        }
+        service_device_keys.update(
+            {
+                component.service_id: component.device_key
+                for component in components
+                if component.service_id is not None and component.device_key is not None
+            }
+        )
         return existing.model_copy(
             update={
                 "status": "collecting",
-                "constraints": components[0],
+                "constraints": main_constraints,
+                "requested_service_ids": requested,
+                "service_device_keys": service_device_keys,
                 "grouped": grouped,
+                "proposal": None,
                 "derived": DerivedBookingState(),
                 "option_snapshot": None,
                 "version": existing.version + 1,
@@ -241,7 +271,7 @@ def _operation_for_component(
             "source_appointment": None,
             "selection": None,
             "package_usage": component.package_usage,
-            "execution_intent": "execute",
+            "execution_intent": template.execution_intent,
             "grouped_booking_action": "preserve_group",
         }
     )
@@ -282,14 +312,28 @@ def restore_grouped_booking_understanding(
     context: SemanticContext,
 ) -> tuple[TiaTurnUnderstanding, dict[int, str]]:
     """Restore all durable components when a continuation mentions only one of them."""
-    if active_task is None or active_task.grouped is None:
+    if active_task is None:
+        return turn, {}
+    if active_task.grouped is not None:
+        durable_components = list(active_task.grouped.components)
+    elif len(active_task.requested_service_ids) > 1:
+        durable_components = [
+            active_task.constraints.model_copy(
+                update={
+                    "service_id": service_id,
+                    "device_key": active_task.service_device_keys.get(service_id),
+                }
+            )
+            for service_id in active_task.requested_service_ids
+        ]
+    else:
         return turn, {}
 
     executable = [
         (index, operation)
         for index, operation in enumerate(turn.operations)
         if operation.type in _BOOKING_OPERATION_TYPES
-        and operation.execution_intent == "execute"
+        and operation.execution_intent in {"execute", "informational"}
     ]
     if len(executable) != 1:
         return turn, {}
@@ -301,14 +345,14 @@ def restore_grouped_booking_understanding(
     target_service = params.get("service_id")
     service_ids = {
         component.service_id
-        for component in active_task.grouped.components
+        for component in durable_components
         if component.service_id is not None
     }
     if target_service is not None and str(target_service) not in service_ids:
         return turn, {}
 
     rebuilt: list[TurnOperation] = []
-    for component in active_task.grouped.components:
+    for component in durable_components:
         apply_to_all = target_service is None
         if target_service is not None and component.service_id != str(target_service):
             merged = component

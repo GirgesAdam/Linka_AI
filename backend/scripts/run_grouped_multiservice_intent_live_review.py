@@ -28,6 +28,10 @@ from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from app.models.workspace import Workspace
+from app.services.agent_v2.live_chat import (
+    _availability_reference_context_from_turn,
+    _verified_read_context_from_turn,
+)
 from app.services.agent_v2.orchestrator import V2OrchestratedTurn, orchestrate_v2_turn
 from app.services.agent_v2.state import BookingTaskState
 
@@ -45,6 +49,13 @@ C7_REPLACEMENT_VARIANT_1 = "\u0634\u064a\u0644 \u0627\u0644\u0628\u0643\u064a\u0
 C7_REPLACEMENT_VARIANT_2 = "\u062e\u0644\u064a \u0627\u0644\u0625\u0628\u0637 \u0648Full Arms \u0628\u0633"
 C7_ADDITION = "\u0636\u064a\u0641 Full Arms \u0643\u0645\u0627\u0646"
 C7_REMOVAL = "\u0634\u064a\u0644 \u0627\u0644\u0628\u0643\u064a\u0646\u064a \u0648\u062e\u0644\u064a \u0627\u0644\u0625\u0628\u0637 \u0628\u0633"
+RA_G6_INITIAL = (
+    "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0648\u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a "
+    "\u0645\u0639 \u0628\u0639\u0636 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0632\u064a\u0627\u0631\u0629 \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a 17 \u0623\u0643\u062a\u0648\u0628\u0631\u060c "
+    "\u0648\u0631\u064a\u0646\u064a \u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f \u0627\u0644\u0645\u062a\u0627\u062d\u0629 \u0642\u0628\u0644 \u0645\u0627 \u062a\u062d\u062c\u0632"
+)
+RA_G6_PRICE = "\u0627\u0644\u0633\u0639\u0631 \u0627\u0644\u0625\u062c\u0645\u0627\u0644\u064a \u0643\u0627\u0645\u061f"
+RA_G6_TIME = "\u0627\u0644\u0633\u0627\u0639\u0629 8 \u0645\u0633\u0627\u0621 \u0645\u0646\u0627\u0633\u0628\u0629"
 
 
 @contextmanager
@@ -338,7 +349,15 @@ def appointment_count(db: Session, workspace_id: UUID) -> int:
     )
 
 
-def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, object]], stages: list[dict[str, object]], active_task_before) -> dict[str, object]:
+def turn_record(
+    turn: V2OrchestratedTurn,
+    *,
+    customer: str,
+    raw: list[dict[str, object]],
+    stages: list[dict[str, object]],
+    active_task_before,
+    availability_reference_context: dict[str, object] | None = None,
+) -> dict[str, object]:
     task = turn.active_task
     return {
         "customer": customer,
@@ -355,6 +374,7 @@ def turn_record(turn: V2OrchestratedTurn, *, customer: str, raw: list[dict[str, 
         "doctor_id": task.constraints.doctor_id if isinstance(task, BookingTaskState) else None,
         "proposal": dump(task.proposal) if isinstance(task, BookingTaskState) else None,
         "pending_write": dump(turn.pending_write),
+        "availability_reference_context": availability_reference_context,
         "reply": turn.reply,
         "responder_model": turn.responder_model,
     }
@@ -395,6 +415,8 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
         before = appointment_count(db, workspace.id)
         records: list[dict[str, object]] = []
         previous_task = None
+        recent_read_context: dict[str, object] | None = None
+        availability_reference_context: dict[str, object] | None = None
         for index, customer in enumerate(messages, start=1):
             history.append(HumanMessage(content=customer))
             RAW.clear()
@@ -411,8 +433,30 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
                 clinic_name=workspace.name,
                 turn_id=f"{name.lower()}-{index}",
                 write_executor=None,
+                recent_read_context=recent_read_context,
+                availability_reference_context=availability_reference_context,
             )
-            records.append(turn_record(result, customer=customer, raw=list(RAW), stages=list(STAGES), active_task_before=previous_task))
+            recent_read_context = _verified_read_context_from_turn(
+                db,
+                workspace=workspace,
+                turn=result,
+                previous_read_context=recent_read_context,
+            )
+            availability_reference_context = _availability_reference_context_from_turn(
+                result,
+                previous_context=availability_reference_context,
+                verified_read_context=recent_read_context,
+            )
+            records.append(
+                turn_record(
+                    result,
+                    customer=customer,
+                    raw=list(RAW),
+                    stages=list(STAGES),
+                    active_task_before=previous_task,
+                    availability_reference_context=availability_reference_context,
+                )
+            )
             previous_task = result.active_task
             if result.reply:
                 history.append(AIMessage(content=result.reply))
@@ -548,6 +592,61 @@ def validate_g5(records, ids):
     assert final["pending_write"] is None
 
 
+
+def validate_g6_visit_time_selection(records, ids):
+    expected = {ids["underarm"], ids["bikini"]}
+    assert len(records) == 3
+    for record in records:
+        assert set(_task_ids(record)) == expected
+        assert record["pending_write"] is None
+
+    presented = records[0].get("availability_reference_context")
+    assert isinstance(presented, dict)
+    assert set(presented.get("requested_service_ids") or []) == expected
+    presented_options = presented.get("availability_reference_options")
+    assert isinstance(presented_options, list) and presented_options
+    assert {
+        str(item.get("service_id"))
+        for item in presented_options
+        if isinstance(item, dict) and item.get("service_id")
+    } == expected
+
+    after_side = records[1].get("availability_reference_context")
+    assert isinstance(after_side, dict)
+    assert set(after_side.get("requested_service_ids") or []) == expected
+
+    final = records[2]
+    final_plan = final.get("plan")
+    assert isinstance(final_plan, dict)
+    steps = final_plan.get("steps")
+    assert isinstance(steps, list) and len(steps) == 2
+    assert all(
+        isinstance(step, dict) and step.get("clarification_field") != "service"
+        for step in steps
+    )
+    final_task = final.get("active_task")
+    assert isinstance(final_task, dict)
+    authorization = final_task.get("write_authorization")
+    assert isinstance(authorization, dict) and authorization.get("authorized") is False
+    grouped = final_task.get("grouped")
+    assert isinstance(grouped, dict)
+    components = grouped.get("components")
+    assert isinstance(components, list) and len(components) == 2
+    assert {str(item.get("service_id")) for item in components if isinstance(item, dict)} == expected
+    device_keys = {
+        str(item.get("device_key"))
+        for item in components
+        if isinstance(item, dict) and item.get("device_key")
+    }
+    doctor_ids = {
+        str(item.get("doctor_id"))
+        for item in components
+        if isinstance(item, dict) and item.get("doctor_id")
+    }
+    assert len(device_keys) == 1
+    assert len(doctor_ids) == 1
+
+
 def main() -> int:
     if MODE not in {"standalone", "batch1-overlay"}:
         raise RuntimeError(f"Unsupported RA_G_MODE={MODE}")
@@ -580,6 +679,11 @@ def main() -> int:
             "تمام، السعر مناسب. كملي نفس الحجز يوم السبت الساعة 6 مساء ووريني التفاصيل قبل التأكيد النهائي",
         ],
         validate_g5,
+    )
+    run_scenario(
+        "RA-G6-VISIT-TIME-SELECTION",
+        [RA_G6_INITIAL, RA_G6_PRICE, RA_G6_TIME],
+        validate_g6_visit_time_selection,
     )
     print(f"RA_G_SUMMARY={{\"mode\":\"{MODE}\",\"status\":\"PASS\"}}", flush=True)
     return 0

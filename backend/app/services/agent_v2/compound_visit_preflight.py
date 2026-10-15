@@ -113,6 +113,72 @@ def _required_next_start(
     return _ceil_local(required, interval_minutes, timezone_name)
 
 
+def _device_compatible_with_selected(
+    selected: list[AvailabilitySlot],
+    candidate: AvailabilitySlot,
+) -> bool:
+    selected_keys = {slot.laser_device_key for slot in selected if slot.laser_device_key}
+    if not selected_keys or not candidate.laser_device_key:
+        return True
+    return candidate.laser_device_key in selected_keys
+
+
+def _matching_followup_slots(
+    selected: list[AvailabilitySlot],
+    *,
+    result: AvailabilityResult,
+    step: PlanStep,
+    context: ReadExecutionContext,
+    interval_minutes: int,
+    timezone_name: str,
+) -> list[AvailabilitySlot]:
+    params = _params(step)
+    matches: list[AvailabilitySlot] = []
+    for slot in result.slots:
+        if not _device_compatible_with_selected(selected, slot):
+            continue
+        required = _required_next_start(
+            selected,
+            next_service_id=params.get("service_id"),
+            context=context,
+            interval_minutes=interval_minutes,
+            timezone_name=timezone_name,
+            candidate_resource=slot,
+        )
+        if slot.start_at == required:
+            matches.append(slot)
+    matches.sort(key=lambda slot: (slot.start_at, slot.doctor_id, slot.laser_device_key or ""))
+    return matches
+
+
+def _chains_for_first(
+    first: AvailabilitySlot,
+    results: list[AvailabilityResult],
+    steps: list[PlanStep],
+    *,
+    context: ReadExecutionContext,
+    timezone_name: str,
+) -> list[list[AvailabilitySlot]]:
+    chains = [[first]]
+    interval = _slot_interval_minutes(results)
+    for result, step in zip(results[1:], steps[1:], strict=True):
+        next_chains: list[list[AvailabilitySlot]] = []
+        for selected in chains:
+            for slot in _matching_followup_slots(
+                selected,
+                result=result,
+                step=step,
+                context=context,
+                interval_minutes=interval,
+                timezone_name=timezone_name,
+            ):
+                next_chains.append([*selected, slot])
+        chains = next_chains
+        if not chains:
+            break
+    return chains
+
+
 def _chain_for_first(
     first: AvailabilitySlot,
     results: list[AvailabilityResult],
@@ -121,27 +187,14 @@ def _chain_for_first(
     context: ReadExecutionContext,
     timezone_name: str,
 ) -> list[AvailabilitySlot] | None:
-    selected = [first]
-    interval = _slot_interval_minutes(results)
-    for result, step in zip(results[1:], steps[1:], strict=True):
-        params = _params(step)
-        matches: list[AvailabilitySlot] = []
-        for slot in result.slots:
-            required = _required_next_start(
-                selected,
-                next_service_id=params.get("service_id"),
-                context=context,
-                interval_minutes=interval,
-                timezone_name=timezone_name,
-                candidate_resource=slot,
-            )
-            if slot.start_at == required:
-                matches.append(slot)
-        if not matches:
-            return None
-        matches.sort(key=lambda slot: (slot.start_at, slot.doctor_id, slot.laser_device_key or ""))
-        selected.append(matches[0])
-    return selected
+    chains = _chains_for_first(
+        first,
+        results,
+        steps,
+        context=context,
+        timezone_name=timezone_name,
+    )
+    return chains[0] if chains else None
 
 
 def _availability_for_day(
@@ -235,6 +288,69 @@ def _find_joint_chain(
     return None, False
 
 
+
+def _exact_joint_chains(
+    steps: list[PlanStep],
+    *,
+    requested_anchor: datetime,
+    context: ReadExecutionContext,
+    timezone_name: str,
+    forced_doctor_id: str,
+) -> list[list[AvailabilitySlot]]:
+    results = _availability_for_day(
+        steps,
+        booking_date=requested_anchor.date(),
+        context=context,
+        forced_doctor_id=forced_doctor_id,
+    )
+    if results is None:
+        return []
+    anchor_aware = requested_anchor.replace(tzinfo=ZoneInfo(timezone_name)).astimezone(UTC)
+    chains: list[list[AvailabilitySlot]] = []
+    for first in sorted(
+        (slot for slot in results[0].slots if slot.start_at == anchor_aware),
+        key=lambda slot: (slot.doctor_id, slot.laser_device_key or ""),
+    ):
+        chains.extend(
+            _chains_for_first(
+                first,
+                results,
+                steps,
+                context=context,
+                timezone_name=timezone_name,
+            )
+        )
+    return chains
+
+
+def _chain_visit_device(chain: list[AvailabilitySlot]) -> str | None:
+    keys = {slot.laser_device_key for slot in chain if slot.laser_device_key}
+    return next(iter(keys)) if len(keys) == 1 else None
+
+
+def _clarify_group_dimension(
+    step: PlanStep,
+    *,
+    field: str,
+    fact_key: str,
+) -> PlanStep:
+    return step.model_copy(
+        update={
+            "disposition": "clarify",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "ask_doctor_choice" if field == "doctor" else "clarification",
+            "clarification_field": field,
+            "facts": {
+                **_strip_sequence_facts(step.facts),
+                "compound_visit_preflight_resolved": True,
+                fact_key: True,
+            },
+        }
+    )
+
+
 def _constraints_for_slot(slot: AvailabilitySlot, timezone_name: str) -> tuple[dict[str, object], dict[str, object]]:
     local = slot.start_at.astimezone(ZoneInfo(timezone_name))
     return (
@@ -284,6 +400,9 @@ def _rewrite_step_for_slot(
     ]
     facts = {
         **_strip_sequence_facts(step.facts),
+        "branch_id": slot.branch_id,
+        "service_id": slot.service_id,
+        "doctor_id": slot.doctor_id,
         "date": date_constraint,
         "time": time_constraint,
         "exact_time_requested": allow_write,
@@ -291,6 +410,8 @@ def _rewrite_step_for_slot(
         "compound_visit_requested_anchor_local": requested_anchor.isoformat(timespec="minutes"),
         "compound_visit_alternative": not allow_write,
     }
+    if slot.laser_device_key:
+        facts["device_key"] = slot.laser_device_key
     write_intent = None
     if allow_write and step.write_intent is not None:
         write_intent = step.write_intent.model_copy(update={"parameters": parameters})
@@ -553,19 +674,59 @@ def _auto_resolve_grouped_visits(
 
         requested_anchor, request_mode = anchor
         best: tuple[datetime, str, list[AvailabilitySlot], bool] | None = None
-        for doctor_id in common_doctors:
-            chain, exact_fits = _find_joint_chain(
-                ordered,
-                requested_anchor=requested_anchor,
-                context=context,
-                timezone_name=timezone_name,
-                forced_doctor_id=doctor_id,
-            )
-            if chain is None:
+        if request_mode == "exact":
+            exact_candidates: list[tuple[str, list[AvailabilitySlot]]] = []
+            for doctor_id in common_doctors:
+                exact_candidates.extend(
+                    (doctor_id, chain)
+                    for chain in _exact_joint_chains(
+                        ordered,
+                        requested_anchor=requested_anchor,
+                        context=context,
+                        timezone_name=timezone_name,
+                        forced_doctor_id=doctor_id,
+                    )
+                )
+            exact_doctors = {doctor_id for doctor_id, _chain in exact_candidates}
+            if len(exact_doctors) > 1:
+                for step in ordered:
+                    replacements[step.operation_index] = _clarify_group_dimension(
+                        step,
+                        field="doctor",
+                        fact_key="compound_visit_ambiguous_doctors",
+                    )
                 continue
-            candidate = (chain[0].start_at, doctor_id, chain, exact_fits)
-            if best is None or candidate[:2] < best[:2]:
-                best = candidate
+            if exact_candidates:
+                exact_devices = {
+                    key
+                    for _doctor_id, chain in exact_candidates
+                    if (key := _chain_visit_device(chain)) is not None
+                }
+                if len(exact_devices) > 1:
+                    for step in ordered:
+                        replacements[step.operation_index] = _clarify_group_dimension(
+                            step,
+                            field="device",
+                            fact_key="compound_visit_ambiguous_devices",
+                        )
+                    continue
+                doctor_id, chain = exact_candidates[0]
+                best = (chain[0].start_at, doctor_id, chain, True)
+
+        if best is None:
+            for doctor_id in common_doctors:
+                chain, exact_fits = _find_joint_chain(
+                    ordered,
+                    requested_anchor=requested_anchor,
+                    context=context,
+                    timezone_name=timezone_name,
+                    forced_doctor_id=doctor_id,
+                )
+                if chain is None:
+                    continue
+                candidate = (chain[0].start_at, doctor_id, chain, exact_fits)
+                if best is None or candidate[:2] < best[:2]:
+                    best = candidate
 
         if best is None:
             for step in ordered:

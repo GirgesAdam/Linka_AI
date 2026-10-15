@@ -63,6 +63,8 @@ def _slot(
     doctor_id: str,
     start_utc: str,
     end_utc: str,
+    *,
+    device_key: str | None = None,
 ) -> AvailabilitySlot:
     return AvailabilitySlot(
         branch_id=BRANCH,
@@ -75,6 +77,8 @@ def _slot(
         end_at=datetime.fromisoformat(end_utc),
         duration_minutes=30,
         price_minor=10000,
+        laser_device_key=device_key,
+        laser_device_name=device_key,
         currency="EGP",
     )
 
@@ -103,6 +107,28 @@ class _Adapter:
         return self.results.get(
             (request.service_id, request.booking_date),
             _result(request.service_id, []),
+        )
+
+
+
+class _DoctorFilteringAdapter(_Adapter):
+    def get_availability(self, request):
+        result = super().get_availability(request)
+        slots = tuple(
+            slot
+            for slot in result.slots
+            if request.doctor_id is None or slot.doctor_id == request.doctor_id
+        )
+        return AvailabilityResult(
+            timezone=result.timezone,
+            branch_id=result.branch_id,
+            branch_name=result.branch_name,
+            service_id=result.service_id,
+            service_name=result.service_name,
+            service_duration_minutes=result.service_duration_minutes,
+            service_price_minor=result.service_price_minor,
+            service_currency=result.service_currency,
+            slots=slots,
         )
 
 
@@ -166,6 +192,50 @@ def _normalized(
                 {"id": SERVICE_B, "duration_minutes": 30},
             ]
         },
+    )
+
+
+
+def _with_doctor_candidates(plan: TurnPlan, doctor_ids: list[str]) -> TurnPlan:
+    steps: list[PlanStep] = []
+    for step in plan.steps:
+        reads = []
+        for request in step.reads:
+            params = dict(request.parameters)
+            params.pop("doctor_id", None)
+            params["doctor_ids"] = list(doctor_ids)
+            reads.append(request.model_copy(update={"parameters": params}))
+        write_intent = step.write_intent
+        if write_intent is not None:
+            params = dict(write_intent.parameters)
+            params.pop("doctor_id", None)
+            params["doctor_ids"] = list(doctor_ids)
+            write_intent = write_intent.model_copy(update={"parameters": params})
+        facts = dict(step.facts)
+        facts.pop("doctor_id", None)
+        facts["doctor_ids"] = list(doctor_ids)
+        steps.append(
+            step.model_copy(
+                update={"reads": reads, "write_intent": write_intent, "facts": facts}
+            )
+        )
+    return plan.model_copy(update={"steps": steps})
+
+
+
+def _read_only(plan: TurnPlan) -> TurnPlan:
+    return plan.model_copy(
+        update={
+            "steps": [
+                step.model_copy(
+                    update={
+                        "disposition": "read",
+                        "write_intent": None,
+                    }
+                )
+                for step in plan.steps
+            ]
+        }
     )
 
 
@@ -481,3 +551,144 @@ def test_grouped_missing_laser_device_requests_device_clarification() -> None:
     assert planned.steps[1].facts["compound_visit_missing_device"] is True
     assert "compound_visit_no_joint_window" not in planned.steps[1].facts
     assert adapter.requests == []
+
+
+
+def test_h3_r4_exact_visit_anchor_with_two_doctors_asks_doctor_not_service() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00"),
+                    _slot(SERVICE_A, DOCTOR_B, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00"),
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00"),
+                    _slot(SERVICE_B, DOCTOR_B, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00"),
+                ],
+            ),
+        }
+    )
+    plan = _with_doctor_candidates(_normalized(same_doctor=True), [DOCTOR_A, DOCTOR_B])
+
+    planned = preflight_compound_visit_plan(
+        plan,
+        context=_context(
+            adapter,
+            catalog={
+                "doctors": [
+                    {"id": DOCTOR_A, "service_ids": [SERVICE_A, SERVICE_B]},
+                    {"id": DOCTOR_B, "service_ids": [SERVICE_A, SERVICE_B]},
+                ]
+            },
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert [step.clarification_field for step in planned.steps] == ["doctor", "doctor"]
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert all(step.facts["compound_visit_ambiguous_doctors"] is True for step in planned.steps)
+
+
+def test_h3_r5_exact_visit_anchor_with_two_devices_asks_device_not_service() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00", device_key="candela"),
+                    _slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00", device_key="prime"),
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00", device_key="candela"),
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00", device_key="prime"),
+                ],
+            ),
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert [step.clarification_field for step in planned.steps] == ["device", "device"]
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert all(step.facts["compound_visit_ambiguous_devices"] is True for step in planned.steps)
+
+
+def test_h3_r6_exact_visit_anchor_with_no_joint_chain_never_partially_writes() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [_slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00")],
+            ),
+            (SERVICE_B, DAY): _result(SERVICE_B, []),
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert all(step.facts["compound_visit_no_joint_window"] is True for step in planned.steps)
+
+
+
+def test_h3_r2_unique_joint_candidate_binds_visit_resources_without_write() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(
+                        SERVICE_A,
+                        DOCTOR_A,
+                        "2026-09-20T09:00:00+00:00",
+                        "2026-09-20T09:30:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(
+                        SERVICE_B,
+                        DOCTOR_A,
+                        "2026-09-20T09:30:00+00:00",
+                        "2026-09-20T10:00:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        _read_only(_normalized(same_doctor=True)),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert [_time(step) for step in planned.steps] == ["12:00", "12:30"]
+    assert {step.facts.get("doctor_id") for step in planned.steps} == {DOCTOR_A}
+    assert {step.facts.get("device_key") for step in planned.steps} == {"candela"}
+    assert all(step.facts["compound_visit_preflight_resolved"] is True for step in planned.steps)

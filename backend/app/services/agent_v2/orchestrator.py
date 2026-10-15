@@ -452,6 +452,121 @@ def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
     return active_task.model_dump(mode="json") if active_task is not None else None
 
 
+
+def _reference_option_time(
+    decision: object,
+    availability_context: dict[str, Any] | None,
+) -> str | None:
+    exact = str(getattr(decision, "exact_time", None) or "").strip()[:5]
+    if exact:
+        return exact
+    if (
+        getattr(decision, "action", None) != "select_presented_option"
+        or getattr(decision, "selection_scope", "none") != "none"
+    ):
+        return None
+    option_ref = str(getattr(decision, "option_ref", None) or "")
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not option_ref or not isinstance(raw_options, list):
+        return None
+    matches = [
+        item
+        for item in raw_options
+        if isinstance(item, dict) and str(item.get("option_ref") or "") == option_ref
+    ]
+    if len(matches) != 1:
+        return None
+    option = matches[0]
+    slot = option.get("slot")
+    if isinstance(slot, dict):
+        clock = str(slot.get("start_time_24h") or "").strip()[:5]
+        if clock:
+            return clock
+    return str(option.get("start_time_24h") or "").strip()[:5] or None
+
+
+def _grouped_reference_date(
+    availability_context: dict[str, Any] | None,
+    *,
+    exact_time: str,
+) -> DateConstraint | None:
+    raw_date = (availability_context or {}).get("date")
+    if isinstance(raw_date, dict):
+        try:
+            date_constraint = DateConstraint.model_validate(raw_date)
+        except ValueError:
+            date_constraint = None
+        if date_constraint is not None and date_constraint.mode == "exact":
+            return date_constraint
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+    dates: set[str] = set()
+    for item in raw_options:
+        if not isinstance(item, dict):
+            continue
+        slot = item.get("slot")
+        clock = str(item.get("start_time_24h") or "").strip()[:5]
+        start_local = str(item.get("start_local") or "")
+        if isinstance(slot, dict):
+            clock = str(slot.get("start_time_24h") or clock).strip()[:5]
+            start_local = str(slot.get("start_local") or start_local)
+        if clock != exact_time or len(start_local) < 10:
+            continue
+        dates.add(start_local[:10])
+    if len(dates) != 1:
+        return None
+    return DateConstraint(mode="exact", start_date=next(iter(dates)))
+
+
+def _grouped_visit_reference_understanding(
+    task: ActiveTaskState | None,
+    *,
+    decision: object | None,
+    availability_context: dict[str, Any] | None,
+) -> TiaTurnUnderstanding | None:
+    if not isinstance(task, BookingTaskState) or len(task.requested_service_ids) < 2:
+        return None
+    if decision is None or getattr(decision, "action", None) not in {
+        "clarify",
+        "select_presented_option",
+    }:
+        return None
+    context_services = (availability_context or {}).get("requested_service_ids")
+    if not isinstance(context_services, list) or set(map(str, context_services)) != set(
+        task.requested_service_ids
+    ):
+        return None
+    exact_time = _reference_option_time(decision, availability_context)
+    if exact_time is None:
+        return None
+    date_constraint = _grouped_reference_date(
+        availability_context,
+        exact_time=exact_time,
+    )
+    if date_constraint is None:
+        return None
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    date=date_constraint,
+                    time=TimeConstraint(
+                        mode="exact",
+                        start_time=exact_time,
+                        start_time_ambiguity="none",
+                    ),
+                ),
+                execution_intent="informational",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                continues_previous=True,
+            )
+        ]
+    )
+
+
 def _terminal_no_reply_allowed(
     understanding: TiaTurnUnderstanding,
     *,
@@ -1996,7 +2111,15 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    if (
+    grouped_reference_understanding = _grouped_visit_reference_understanding(
+        initial_task,
+        decision=decision,
+        availability_context=availability_reference_context,
+    )
+    if grouped_reference_understanding is not None:
+        understanding = grouped_reference_understanding
+        full_interpreter_called = False
+    elif (
         decision is not None
         and decision.action == "new_search"
         and exact_reference_time is not None

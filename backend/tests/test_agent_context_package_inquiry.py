@@ -1260,3 +1260,177 @@ def test_newly_presented_availability_replaces_stale_reference_context_after_sel
         for item in updated["availability_reference_options"]
     ] == ["17:00", "17:15"]
     assert "last_selected_option_ref" not in updated
+
+
+
+def test_multiservice_availability_context_preserves_all_displayed_service_memberships() -> None:
+    first = _availability_turn_for_context(date_value="2026-10-10", times=["19:00", "20:00"])
+    second = _availability_turn_for_context(date_value="2026-10-10", times=["20:00"])
+    second_operation = second.understanding.operations[0].model_copy(
+        update={
+            "entities": second.understanding.operations[0].entities.model_copy(
+                update={"service": EntityReference(ref="S2")}
+            )
+        }
+    )
+    second_step = second.plan.steps[0].model_copy(
+        update={
+            "operation_index": 1,
+            "facts": {**second.plan.steps[0].facts, "service_id": "service-bikini"},
+            "reads": [
+                request.model_copy(
+                    update={"parameters": {**request.parameters, "service_id": "service-bikini"}}
+                )
+                for request in second.plan.steps[0].reads
+            ],
+        }
+    )
+    second_outcome = second.outcomes[0].model_copy(
+        update={
+            "facts": {
+                **second.outcomes[0].facts,
+                "availability": {
+                    **second.outcomes[0].facts["availability"],
+                    "service_name": "Bikini Laser",
+                },
+            }
+        }
+    )
+    second_slots = []
+    for slot in second.traces[0].availability_slots:
+        row = dict(slot)
+        row["service_id"] = "service-bikini"
+        row["service_name"] = "Bikini Laser"
+        second_slots.append(row)
+    second_trace = replace(
+        second.traces[0],
+        operation_index=1,
+        outcome=second_outcome,
+        availability_slots=tuple(second_slots),
+    )
+    combined = V2OrchestratedTurn(
+        understanding=TiaTurnUnderstanding(
+            operations=[first.understanding.operations[0], second_operation]
+        ),
+        plan=TurnPlan(steps=[first.plan.steps[0], second_step]),
+        traces=(first.traces[0], second_trace),
+        outcomes=(first.outcomes[0], second_outcome),
+        reply="grouped availability",
+        responder_model=None,
+        active_task=BookingTaskState(
+            status="awaiting_choice",
+            write_authorization=WriteAuthorization(operation="booking", authorized=False),
+            constraints=CustomerConstraints(service_id="service-bikini"),
+            requested_service_ids=[SERVICE_ID, "service-bikini"],
+        ),
+        persisted_task=None,
+        pending_write=None,
+    )
+
+    context = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=combined,
+    )
+
+    assert context is not None
+    options = context["availability_reference_options"]
+    assert {item["slot"]["service_id"] for item in options} == {
+        SERVICE_ID,
+        "service-bikini",
+    }
+    assert context["requested_service_ids"] == [SERVICE_ID, "service-bikini"]
+
+
+
+def _grouped_reference_side_turn(
+    task: BookingTaskState,
+    operation_type: str,
+) -> V2OrchestratedTurn:
+    operation = TurnOperation(
+        type=operation_type,
+        entities=TurnEntities(),
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type=operation_type,
+        disposition="read",
+        reads=[ReadRequest(kind="service_catalog_set")],
+        response_goal="answer_price" if operation_type == "pricing" else "answer_service",
+    )
+    return V2OrchestratedTurn(
+        understanding=TiaTurnUnderstanding(operations=[operation]),
+        plan=TurnPlan(steps=[step]),
+        traces=(),
+        outcomes=(),
+        reply="side answer",
+        responder_model=None,
+        active_task=task,
+        persisted_task=None,
+        pending_write=None,
+    )
+
+
+def _grouped_reference_context() -> dict[str, object]:
+    return {
+        "operation_type": "availability",
+        "requested_service_ids": [SERVICE_ID, "service-bikini"],
+        "multi_service_single_appointment": True,
+        "date": {"mode": "exact", "start_date": "2026-10-10", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "service_id": SERVICE_ID,
+                "start_time_24h": "20:00",
+            },
+            {
+                "option_ref": "opt_2",
+                "index": 2,
+                "service_id": "service-bikini",
+                "start_time_24h": "20:00",
+            },
+        ],
+    }
+
+
+def test_h3_r1_long_side_question_chain_preserves_grouped_selection_context() -> None:
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-bikini"),
+        requested_service_ids=[SERVICE_ID, "service-bikini"],
+    )
+    context = _grouped_reference_context()
+
+    for operation_type in ("doctor_info", "clinic_info", "pricing"):
+        context = _availability_reference_context_from_turn(
+            _grouped_reference_side_turn(task, operation_type),
+            previous_context=context,
+            verified_read_context=None,
+        )
+        assert context is not None
+        assert context["requested_service_ids"] == [SERVICE_ID, "service-bikini"]
+        assert {
+            item["service_id"]
+            for item in context["availability_reference_options"]
+            if isinstance(item, dict)
+        } == {SERVICE_ID, "service-bikini"}
+
+
+def test_h3_r3_pricing_side_question_does_not_stale_grouped_selection_context() -> None:
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-bikini"),
+        requested_service_ids=[SERVICE_ID, "service-bikini"],
+    )
+    before = _grouped_reference_context()
+    after = _availability_reference_context_from_turn(
+        _grouped_reference_side_turn(task, "pricing"),
+        previous_context=before,
+        verified_read_context=None,
+    )
+
+    assert after == before
