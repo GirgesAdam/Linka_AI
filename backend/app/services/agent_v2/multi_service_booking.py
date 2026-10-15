@@ -86,6 +86,45 @@ def _catalog_service_row(catalog: dict[str, Any], service_id: str) -> dict[str, 
     raise MultiServiceBookingError("Requested service is not in the active catalog.")
 
 
+def service_operational_category(catalog: dict[str, Any], service_id: str) -> str | None:
+    """Return the canonical server-owned operational category for one service.
+
+    Missing/blank categories remain unknown; callers must fail closed rather than infer
+    grouping from names, free-form category labels, or laser requirements.
+    """
+    row = _catalog_service_row(catalog, service_id)
+    value = row.get("operational_category")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().casefold()
+    return normalized or None
+
+
+def partition_service_ids_by_operational_category(
+    catalog: dict[str, Any], service_ids: list[str]
+) -> list[tuple[str | None, list[str]]]:
+    """Partition requested peer services by canonical operational category.
+
+    Unknown-category services are deliberately isolated into singleton groups so they
+    can never collapse into one Appointment without canonical category authority.
+    """
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    grouped: list[tuple[str | None, list[str]]] = []
+    indexes: dict[str, int] = {}
+    for service_id in ordered:
+        category = service_operational_category(catalog, service_id)
+        if category is None:
+            grouped.append((None, [service_id]))
+            continue
+        index = indexes.get(category)
+        if index is None:
+            indexes[category] = len(grouped)
+            grouped.append((category, [service_id]))
+        else:
+            grouped[index][1].append(service_id)
+    return grouped
+
+
 def laser_service_ids(catalog: dict[str, Any], service_ids: list[str]) -> list[str]:
     ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
     return [

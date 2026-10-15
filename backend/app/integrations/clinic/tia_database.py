@@ -1003,6 +1003,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
                     "id": str(row.id),
                     "name": row.name,
                     "category": row.category,
+                    "operational_category": row.operational_category,
                     "description": _description(row.description),
                     "duration_minutes": row.duration_minutes,
                     "price_minor": row.price_minor,
