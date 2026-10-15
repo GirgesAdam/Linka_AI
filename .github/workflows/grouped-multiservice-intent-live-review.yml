@@ -98,7 +98,19 @@ jobs:
           RA_G_SCENARIOS: RA-C7-ADDITION
         run: python scripts/run_grouped_multiservice_intent_live_review.py
       - name: Run full grouped multi-service review
-        run: python scripts/run_grouped_multiservice_intent_live_review.py
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-standalone.log
+      - name: Upload RA-G standalone diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra-g-standalone-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/ra-g-standalone.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   batch1-compatibility:
     name: RA-G Batch-1 compatibility overlay
@@ -191,4 +203,16 @@ jobs:
       - name: Apply clean migrations
         run: python -m alembic upgrade head
       - name: Run RA-G1 through RA-G5 on audit-only #241 + #249 overlay
-        run: python scripts/run_grouped_multiservice_intent_live_review.py
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-batch1-compatibility.log
+      - name: Upload RA-G Batch-1 compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra-g-batch1-compatibility-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/ra-g-batch1-compatibility.log
+          if-no-files-found: ignore
+          retention-days: 7
