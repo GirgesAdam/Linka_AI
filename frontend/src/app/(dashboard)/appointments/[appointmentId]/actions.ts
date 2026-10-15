@@ -184,12 +184,11 @@ export async function changeAppointmentService(
 export async function cancelAppointment(formData: FormData) {
   const appointmentId = String(formData.get("appointment_id") || "");
   const patientId = String(formData.get("patient_id") || "");
-  const reason = String(formData.get("reason") || "").trim();
   const overridePolicy = formData.get("override_policy") === "1" || formData.get("override_policy") === "on";
-  if (!appointmentId || !reason) return;
+  if (!appointmentId) return;
   await tiaRequest(`/booking/appointments/${appointmentId}/cancel`, {
     method: "POST",
-    body: JSON.stringify({ reason, override_policy: overridePolicy }),
+    body: JSON.stringify({ reason: "تم إلغاء الموعد يدويًا من لوحة المواعيد", override_policy: overridePolicy }),
   });
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }

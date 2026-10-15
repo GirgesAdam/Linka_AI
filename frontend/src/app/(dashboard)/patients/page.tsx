@@ -19,30 +19,22 @@ function statusDescription(patient: Patient) {
   return labelForStatus(patient.status);
 }
 
-export default async function PatientsPage({ searchParams }: { searchParams: Promise<{ q?: string; status?: string; source?: string }> }) {
-  const { q = "", status = "", source = "" } = await searchParams;
+export default async function PatientsPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
+  const { q = "" } = await searchParams;
   const query = new URLSearchParams({ limit: "100" });
   if (q) query.set("q", q);
-  if (status) query.set("status", status);
-  if (source) query.set("source", source);
-  const hasActiveFilters = Boolean(q || status || source);
+  const hasActiveFilters = Boolean(q);
   const patients = await tiaRequest<Patient[]>(`/crm/patients?${query.toString()}`);
 
   return (
     <>
       <PageHeader title="العملاء" description="ابحث عن أي عميل وافتح ملفه لمراجعة بيانات التواصل والمواعيد والمتابعات." />
 
-      <form className="mb-4 grid gap-2 md:grid-cols-[minmax(260px,1fr)_180px_190px_auto]">
-        <div className="relative">
+      <form className="mb-4 flex max-w-2xl gap-2">
+        <div className="relative flex-1">
           <Search className="absolute right-3 top-3.5 text-slate-400" size={16} />
           <Input name="q" defaultValue={q} placeholder="ابحث بالاسم أو رقم الهاتف" className="pr-9" />
         </div>
-        <select name="status" defaultValue={status} className="form-control h-10 min-h-10" aria-label="حالة العميل">
-          <option value="">كل الحالات</option><option value="active">نشط</option><option value="inactive">غير نشط</option><option value="blocked">محظور</option>
-        </select>
-        <select name="source" defaultValue={source} className="form-control h-10 min-h-10" aria-label="مصدر العميل">
-          <option value="">كل المصادر</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option><option value="facebook">Facebook</option><option value="website">الموقع</option><option value="referral">ترشيح</option><option value="walk_in">زيارة مباشرة</option><option value="campaign">حملة</option><option value="phone">هاتف</option><option value="other">أخرى</option>
-        </select>
         <Button type="submit" className="px-5">تطبيق</Button>
       </form>
 
