@@ -755,22 +755,59 @@ def _normalize_active_package_egypt_phone(value: Any) -> tuple[str, str]:
     return compact, f"+20{compact[1:]}"
 
 
-def _parse_active_package_purchase_date(value: Any) -> date | None:
-    """Parse an Egypt-facing package purchase date without US month/day ambiguity."""
-    if value is None:
+def _most_recent_active_package_partial_date(
+    *,
+    month: int,
+    day: int,
+    reference_date: date,
+) -> date | None:
+    """Return the most recent valid day/month occurrence that is not in the future."""
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
         return None
+    # Eight years comfortably spans leap-day recovery while keeping impossible dates invalid.
+    for year in range(reference_date.year, reference_date.year - 9, -1):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue
+        if candidate <= reference_date:
+            return candidate
+    return None
+
+
+def _parse_active_package_purchase_date(
+    value: Any,
+    *,
+    reference_date: date | None = None,
+) -> date | None:
+    """Parse historical purchase dates using Egypt-facing, non-future partial-date rules."""
+    effective_reference = reference_date or datetime.now(EGYPT_TZ).date()
+    if value is None:
+        return effective_reference
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
-    if isinstance(value, (int, float, bool)):
-        # Proper Excel date cells are returned by openpyxl as datetime/date.
-        # A raw number is ambiguous and should not silently become a date.
-        return None
+    if isinstance(value, bool):
+        return effective_reference
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not value.is_integer():
+            return effective_reference
+        month = int(value)
+        if 1 <= month <= 12:
+            return _most_recent_active_package_partial_date(
+                month=month,
+                day=1,
+                reference_date=effective_reference,
+            )
+        # Proper Excel date cells are returned by openpyxl as datetime/date. If a
+        # raw numeric is not a month, keep the row importable and use upload day.
+        return effective_reference
 
     text = (_clean(value) or "").strip()
     if not text:
-        return None
+        return effective_reference
+    text = text.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
 
     for fmt in (
         "%Y-%m-%d",
@@ -785,10 +822,28 @@ def _parse_active_package_purchase_date(value: Any) -> date | None:
         except ValueError:
             pass
 
+    day_month_match = re.fullmatch(r"(\d{1,2})\s*[/.-]\s*(\d{1,2})", text)
+    if day_month_match:
+        return _most_recent_active_package_partial_date(
+            day=int(day_month_match.group(1)),
+            month=int(day_month_match.group(2)),
+            reference_date=effective_reference,
+        ) or effective_reference
+
+    month_match = re.fullmatch(r"\d{1,2}", text)
+    if month_match:
+        return _most_recent_active_package_partial_date(
+            day=1,
+            month=int(text),
+            reference_date=effective_reference,
+        ) or effective_reference
+
     try:
         return datetime.fromisoformat(text).date()
     except ValueError:
-        return None
+        # Purchase date is historical context, not an import gate. Preserve the
+        # row and use upload/preview day when the supplied value is unusable.
+        return effective_reference
 
 
 def _normalize_active_package(

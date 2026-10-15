@@ -106,7 +106,7 @@ function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] 
                   <input type="time" value={row.end_time} onChange={(event) => updateInterval(index, "end_time", event.target.value)} className="form-control h-9 min-h-9 w-[125px]" aria-label={`نهاية ${day.label}`} />
                   <button type="button" onClick={() => removeInterval(index)} className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-700" aria-label={`حذف فترة ${day.label}`}><Trash2 size={14} /></button>
                 </div>
-              )) : <span className="text-xs font-semibold text-slate-400">مغلق</span>}
+              )) : null}
             </div>
             <Button type="button" size="sm" variant="ghost" onClick={() => addInterval(day.weekday)} className="justify-self-start sm:justify-self-end"><Plus size={13} /> فترة</Button>
           </div>
@@ -158,8 +158,6 @@ function CreateDoctorForm() {
         <form action={action} className="mt-5 space-y-5">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <label className="text-xs font-bold text-slate-700">الاسم<input name="name" maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
-            <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" maxLength={200} className="form-control mt-1.5 h-10 min-h-10" placeholder="مثال: جلدية وتجميل" /></label>
-            <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
           </div>
           <div><div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات التي يقدمها الدكتور</div><CategoryChecklist /></div>
           <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
@@ -178,8 +176,6 @@ function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
       <input type="hidden" name="doctor_id" value={doctor.id} />
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <label className="text-xs font-bold text-slate-700">الاسم<input name="name" defaultValue={doctor.name} maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
-        <label className="text-xs font-bold text-slate-700">التخصص<input name="specialization" defaultValue={doctor.specialization || ""} maxLength={200} className="form-control mt-1.5 h-10 min-h-10" /></label>
-        <label className="text-xs font-bold text-slate-700">الهاتف<input name="phone" defaultValue={doctor.phone || ""} maxLength={40} dir="ltr" className="form-control mt-1.5 h-10 min-h-10" /></label>
         <label className="flex items-center gap-2 self-end rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700"><input type="checkbox" name="booking_enabled" defaultChecked={doctor.booking_enabled} /> متاح للحجز</label>
       </div>
       <div>
@@ -229,7 +225,7 @@ function DoctorEditorCard({ doctor }: { doctor: DoctorAdminItem }) {
         className="w-full cursor-pointer text-start text-sm font-black text-slate-950"
         aria-expanded={open}
       >
-        {doctor.name || "دكتور"}{doctor.specialization ? ` · ${doctor.specialization}` : ""}
+        {doctor.name || "دكتور"}
       </button>
       {open && (
         <div className="mt-5 space-y-5">
@@ -249,7 +245,6 @@ export function DoctorManagementPanel({ doctors }: { doctors: DoctorAdminItem[] 
     <Card className="mb-5">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Stethoscope size={18} /> إدارة الدكاترة</CardTitle>
-        <p className="text-xs font-semibold text-slate-500">للـAdmin فقط: كل بيانات الدكتور اختيارية. أضف أو عدّل الاسم، التخصص، الهاتف، تصنيفات الخدمات ومواعيد العمل حسب احتياج العيادة.</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <CreateDoctorForm />

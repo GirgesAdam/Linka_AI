@@ -10,8 +10,6 @@ export type DoctorAdminState = {
   saved?: {
     doctor_id: string;
     name: string;
-    specialization: string | null;
-    phone: string | null;
     booking_enabled: boolean;
   } | null;
 };
@@ -89,8 +87,6 @@ export async function createDoctorAction(
       method: "POST",
       body: JSON.stringify({
         name: clean(formData.get("name")),
-        phone: clean(formData.get("phone")),
-        specialization: clean(formData.get("specialization")),
         service_categories: serviceCategories(formData),
         booking_enabled: true,
         working_hours: { intervals: parseIntervals(formData) },
@@ -112,16 +108,12 @@ export async function updateDoctorAction(
     if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور.", saved: null };
 
     const name = clean(formData.get("name"));
-    const phone = clean(formData.get("phone"));
-    const specialization = clean(formData.get("specialization"));
     const bookingEnabled = formData.get("booking_enabled") === "on";
 
     await tiaRequest(`/clinic/doctor-admin/${doctorId}`, {
       method: "PATCH",
       body: JSON.stringify({
         name,
-        phone,
-        specialization,
         service_categories: serviceCategories(formData),
         booking_enabled: bookingEnabled,
       }),
@@ -136,8 +128,6 @@ export async function updateDoctorAction(
       saved: {
         doctor_id: doctorId,
         name: name || "",
-        specialization,
-        phone,
         booking_enabled: bookingEnabled,
       },
     };
