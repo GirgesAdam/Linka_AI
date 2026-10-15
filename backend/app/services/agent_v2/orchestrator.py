@@ -75,6 +75,7 @@ from app.services.agent_v2.grouped_write_transaction import (
 )
 from app.services.agent_v2.multi_service_booking import (
     MultiServiceBookingError,
+    common_doctor_ids,
     common_laser_device_keys,
     laser_service_ids,
     resolve_additional_services,
@@ -287,7 +288,12 @@ def _prepare_booking_proposal(
                 "facts": {**step.facts, "booking_proposal_invalid": True},
             }
         ), None
-    expected_main_service_id = select_main_service_id(catalog, requested)
+    requested_laser_ids = laser_service_ids(catalog, requested)
+    common_device_keys = common_laser_device_keys(catalog, requested)
+    visit_device_key = str(params.get("device_key") or "").strip() or None
+    expected_main_service_id = select_main_service_id(
+        catalog, requested, device_key=visit_device_key
+    )
     if main_service_id != expected_main_service_id:
         return step.model_copy(
             update={
@@ -301,9 +307,6 @@ def _prepare_booking_proposal(
                 },
             }
         ), None
-    requested_laser_ids = laser_service_ids(catalog, requested)
-    common_device_keys = common_laser_device_keys(catalog, requested)
-    visit_device_key = str(params.get("device_key") or "").strip() or None
     if requested_laser_ids and (
         not common_device_keys or visit_device_key not in common_device_keys
     ):
@@ -327,6 +330,21 @@ def _prepare_booking_proposal(
                 "write_intent": None,
                 "response_goal": "clarification",
                 "facts": {**step.facts, "booking_proposal_unexpected_device": True},
+            }
+        ), None
+    compatible_doctors = common_doctor_ids(catalog, requested, branch_id=branch_id)
+    if doctor_id not in compatible_doctors:
+        return step.model_copy(
+            update={
+                "disposition": "clarify",
+                "write_intent": None,
+                "clarification_field": "doctor",
+                "response_goal": "clarification",
+                "facts": {
+                    **step.facts,
+                    "multi_service_doctor_incompatible": True,
+                    "compatible_visit_doctor_ids": compatible_doctors,
+                },
             }
         ), None
     slot = _proposal_slot(reads, start_at=start_raw, doctor_id=doctor_id)

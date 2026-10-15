@@ -57,7 +57,7 @@ def _catalog() -> dict[str, object]:
             {"id": C, "name": "Full Arms", "duration_minutes": 40, "requires_laser_device": True, "laser_devices": [_device("v1"), _device("v2")]},
             {"id": D, "name": "Device Two Only", "duration_minutes": 50, "requires_laser_device": True, "laser_devices": [_device("v2")]},
         ],
-        "doctors": [{"id": DOCTOR, "name": "Dr Test", "service_ids": [A, B, C, D]}],
+        "doctors": [{"id": DOCTOR, "name": "Dr Test", "service_ids": [A, B, C, D], "branch_ids": [BRANCH]}],
         "branches": [{"id": BRANCH, "name": "Main"}],
         "appointments": [],
     }

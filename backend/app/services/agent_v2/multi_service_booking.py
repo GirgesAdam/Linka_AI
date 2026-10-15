@@ -59,17 +59,37 @@ def service_duration_minutes(catalog: dict[str, Any], service_id: str) -> int:
     raise MultiServiceBookingError("Requested service is not in the active catalog.")
 
 
-def select_main_service_id(catalog: dict[str, Any], service_ids: list[str]) -> str:
+def select_main_service_id(
+    catalog: dict[str, Any],
+    service_ids: list[str],
+    *,
+    device_key: str | None = None,
+) -> str:
     # DOMAIN CONTRACT: this chooses a persistence/execution representative only.
     # It must never turn one requested service into a semantically primary service;
     # the LLM and planning layers treat all requested services as equal peers.
     ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
     if not ordered:
         raise MultiServiceBookingError("At least one canonical service is required.")
+    selected_device = (device_key or "").strip() or None
+    if selected_device is None:
+        categories = {service_operational_category(catalog, item) for item in ordered}
+        if categories == {"laser"}:
+            common_devices = common_laser_device_keys(catalog, ordered)
+            if len(common_devices) == 1:
+                selected_device = common_devices[0]
+
+    def duration(service_id: str) -> int:
+        if selected_device is not None:
+            return effective_service_duration_minutes(
+                catalog, service_id, device_key=selected_device
+            )
+        return service_duration_minutes(catalog, service_id)
+
     # Stable max: customer-request canonical order wins duration ties.
     return max(
         enumerate(ordered),
-        key=lambda item: (service_duration_minutes(catalog, item[1]), -item[0]),
+        key=lambda item: (duration(item[1]), -item[0]),
     )[1]
 
 
@@ -167,6 +187,96 @@ def common_laser_device_keys(catalog: dict[str, Any], service_ids: list[str]) ->
         allowed = set(configured_laser_device_keys(catalog, service_id))
         common = [device_key for device_key in common if device_key in allowed]
     return common
+
+
+def effective_service_duration_minutes(
+    catalog: dict[str, Any],
+    service_id: str,
+    *,
+    device_key: str | None = None,
+) -> int:
+    """Return the booking duration for one service from canonical backend facts."""
+    category = service_operational_category(catalog, service_id)
+    if category != "laser":
+        return service_duration_minutes(catalog, service_id)
+    selected_device = (device_key or "").strip() or None
+    if selected_device is None:
+        raise MultiServiceBookingError(
+            "A selected configured laser device is required to determine service duration.",
+            dimension="device",
+        )
+    row = _catalog_service_row(catalog, service_id)
+    variants = row.get("laser_devices")
+    if not isinstance(variants, list):
+        raise MultiServiceBookingError(
+            "Laser device duration is unavailable.", dimension="device"
+        )
+    for variant in variants:
+        if not isinstance(variant, dict) or variant.get("configured") is False:
+            continue
+        if str(variant.get("device_key") or "").strip() != selected_device:
+            continue
+        try:
+            duration = int(variant.get("duration_minutes"))
+        except (TypeError, ValueError) as exc:
+            raise MultiServiceBookingError(
+                "Laser device duration is unavailable.", dimension="device"
+            ) from exc
+        if duration <= 0:
+            raise MultiServiceBookingError(
+                "Laser device duration is invalid.", dimension="device"
+            )
+        return duration
+    raise MultiServiceBookingError(
+        "The selected laser device is not configured for every requested service.",
+        dimension="device",
+    )
+
+
+def category_group_duration_minutes(
+    catalog: dict[str, Any],
+    service_ids: list[str],
+    *,
+    device_key: str | None = None,
+) -> int:
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    if not ordered:
+        raise MultiServiceBookingError("At least one canonical service is required.")
+    categories = {service_operational_category(catalog, item) for item in ordered}
+    if len(categories) != 1 or None in categories:
+        raise MultiServiceBookingError(
+            "Only services with the same known operational category can share one appointment."
+        )
+    return max(
+        effective_service_duration_minutes(catalog, item, device_key=device_key)
+        for item in ordered
+    )
+
+
+def common_doctor_ids(
+    catalog: dict[str, Any],
+    service_ids: list[str],
+    *,
+    branch_id: str | None = None,
+) -> list[str]:
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    doctors = catalog.get("doctors")
+    if not ordered or not isinstance(doctors, list):
+        return []
+    required = set(ordered)
+    result: list[str] = []
+    for row in doctors:
+        if not isinstance(row, dict) or row.get("id") in (None, ""):
+            continue
+        available = row.get("service_ids")
+        if not isinstance(available, list) or not required.issubset({str(item) for item in available}):
+            continue
+        if branch_id is not None:
+            branches = row.get("branch_ids")
+            if not isinstance(branches, list) or str(branch_id) not in {str(item) for item in branches}:
+                continue
+        result.append(str(row["id"]))
+    return sorted(dict.fromkeys(result))
 
 
 def validate_additional_service_compatibility(

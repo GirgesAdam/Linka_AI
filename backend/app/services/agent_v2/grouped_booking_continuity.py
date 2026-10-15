@@ -475,7 +475,6 @@ def explicitly_narrow_grouped_booking_task(
         if component.service_id is not None
     ]
     if catalog is not None:
-        main_service_id = select_main_service_id(catalog, retained_service_ids)
         laser_ids = laser_service_ids(catalog, retained_service_ids)
         common_devices = common_laser_device_keys(catalog, retained_service_ids)
         selected_device = active_task.constraints.device_key
@@ -483,6 +482,9 @@ def explicitly_narrow_grouped_booking_task(
             selected_device = None
         elif selected_device not in common_devices:
             selected_device = common_devices[0] if len(common_devices) == 1 else None
+        main_service_id = select_main_service_id(
+            catalog, retained_service_ids, device_key=selected_device
+        )
 
         normalized_components = [
             component.model_copy(

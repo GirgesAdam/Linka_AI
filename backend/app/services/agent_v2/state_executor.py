@@ -348,20 +348,18 @@ def reconcile_booking_service_set_state(
         return state
 
     current = state
-    main_service_id = select_main_service_id(catalog, current.requested_service_ids)
-    if current.constraints.service_id != main_service_id:
-        current = apply_booking_service_change(current, service_id=main_service_id)
-
     laser_ids = laser_service_ids(catalog, current.requested_service_ids)
     common_devices = common_laser_device_keys(catalog, current.requested_service_ids)
     selected_device = current.constraints.device_key
     if not laser_ids:
         if selected_device is not None:
             current = apply_booking_device_change(current, device_key=None)
+        selected_device = None
         visit_devices: dict[str, str] = {}
     elif selected_device is not None and selected_device not in common_devices:
         replacement_device = common_devices[0] if len(common_devices) == 1 else None
         current = apply_booking_device_change(current, device_key=replacement_device)
+        selected_device = replacement_device
         visit_devices = (
             {service_id: replacement_device for service_id in laser_ids}
             if replacement_device is not None
@@ -375,6 +373,16 @@ def reconcile_booking_service_set_state(
         visit_devices = {service_id: selected_device for service_id in laser_ids}
     else:
         visit_devices = {}
+
+    main_service_id = select_main_service_id(
+        catalog,
+        current.requested_service_ids,
+        device_key=selected_device,
+    )
+    if current.constraints.service_id != main_service_id:
+        current = apply_booking_service_change(current, service_id=main_service_id)
+        if selected_device is not None:
+            current = apply_booking_device_change(current, device_key=selected_device)
 
     if current.service_device_keys != visit_devices:
         current = current.model_copy(update={"service_device_keys": visit_devices})
