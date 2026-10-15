@@ -312,6 +312,7 @@ def restore_grouped_booking_understanding(
     *,
     active_task: BookingTaskState | None,
     context: SemanticContext,
+    booking_service_sets: dict[int, list[str]] | None = None,
 ) -> tuple[TiaTurnUnderstanding, dict[int, str]]:
     """Restore all durable components when a continuation mentions only one of them."""
     if active_task is None:
@@ -350,6 +351,19 @@ def restore_grouped_booking_understanding(
         for component in durable_components
         if component.service_id is not None
     }
+    representative_set = (
+        booking_service_sets.get(source_index)
+        if booking_service_sets is not None
+        else None
+    )
+    representative_is_full_group = (
+        operation.grouped_booking_action == "preserve_group"
+        and representative_set is not None
+        and len(representative_set) > 1
+        and {str(service_id) for service_id in representative_set} == service_ids
+    )
+    if representative_is_full_group:
+        target_service = None
     if target_service is not None and str(target_service) not in service_ids:
         return turn, {}
 

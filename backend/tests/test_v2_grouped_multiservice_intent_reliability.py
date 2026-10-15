@@ -980,6 +980,7 @@ def test_integrated_grouped_spoken_clock_addition_preserves_canonical_time() -> 
 def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing() -> None:
     catalog = _catalog(common_devices=1)
     context = build_semantic_context(catalog)
+    refs = _refs(context)
     state = _start_state(_grouped_availability(context, [A, B]), catalog)
     continuation = TiaTurnUnderstanding(
         operations=[
@@ -987,8 +988,13 @@ def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing()
                 type="continue_active",
                 execution_intent="execute",
                 active_task_relationship="continue",
+                active_task_explicit_fields=["date", "time"],
                 grouped_booking_action="preserve_group",
                 entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B]],
+                        candidate_mode="set",
+                    ),
                     date=DateConstraint(mode="exact", start_date="2026-10-17"),
                     time=TimeConstraint(mode="exact", start_time="18:00"),
                 ),
@@ -1003,6 +1009,7 @@ def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing()
         catalog=catalog,
         active_task=state,
     )
+    assert list(service_sets.values()) == [[A, B]]
     normalized, semantic_groups = expand_multi_service_operations(
         normalized,
         semantic_context=context,
@@ -1012,6 +1019,7 @@ def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing()
         normalized,
         active_task=state,
         context=context,
+        booking_service_sets=service_sets,
     )
     normalized, restored_service_sets, restored_groups = (
         recollapse_restored_booking_visit_groups(
@@ -1040,8 +1048,8 @@ def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing()
     assert len(plan.steps) == 1
     step = plan.steps[0]
     assert step.facts["requested_service_ids"] == [A, B]
-    assert step.facts["service_id"] == B
     assert step.facts["time"]["start_time"] == "18:00"
+    assert step.facts["date"]["start_date"] == "2026-10-17"
     assert step.facts.get("compound_visit_sequence_index") is None
     duration = category_group_duration_minutes(catalog, [A, B], device_key="v1")
     assert duration == 30
