@@ -632,6 +632,7 @@ def test_remove_longest_additional_service_shrinks_visit_duration(monkeypatch) -
 
 def test_appointment_end_and_busy_end_follow_recalculated_duration() -> None:
     from datetime import UTC, datetime, timedelta
+
     from app.models.appointment import Appointment
 
     start = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)

@@ -49,7 +49,12 @@ def test_free_form_category_and_requires_laser_do_not_override_canonical_categor
 
 def test_mixed_category_set_collapses_to_one_operation_per_category_group() -> None:
     from app.agents.v2.semantic_context import build_semantic_context
-    from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnEntities, TurnOperation
+    from app.agents.v2.turn_contract import (
+        EntityReference,
+        TiaTurnUnderstanding,
+        TurnEntities,
+        TurnOperation,
+    )
     from app.services.agent_v2.turn_normalization import collapse_booking_service_sets
 
     catalog = _catalog()
@@ -84,7 +89,12 @@ def test_mixed_category_set_collapses_to_one_operation_per_category_group() -> N
 
 def test_same_category_set_stays_one_booking_operation() -> None:
     from app.agents.v2.semantic_context import build_semantic_context
-    from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnEntities, TurnOperation
+    from app.agents.v2.turn_contract import (
+        EntityReference,
+        TiaTurnUnderstanding,
+        TurnEntities,
+        TurnOperation,
+    )
     from app.services.agent_v2.turn_normalization import collapse_booking_service_sets
 
     catalog = _catalog()
@@ -103,7 +113,12 @@ def test_same_category_set_stays_one_booking_operation() -> None:
 
 def test_unknown_category_services_are_split_into_independent_operations() -> None:
     from app.agents.v2.semantic_context import build_semantic_context
-    from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnEntities, TurnOperation
+    from app.agents.v2.turn_contract import (
+        EntityReference,
+        TiaTurnUnderstanding,
+        TurnEntities,
+        TurnOperation,
+    )
     from app.services.agent_v2.turn_normalization import collapse_booking_service_sets
 
     catalog = _catalog()

@@ -4,8 +4,6 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
-import pytest
-
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
 from app.models.service import Service
 from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan

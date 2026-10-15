@@ -14,17 +14,16 @@ from app.agents.v2.turn_contract import (
 )
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
 from app.services.agent_v2.compound_turn_policy import (
-    compound_write_group,
     normalize_compound_turn_plan,
 )
 from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
 from app.services.agent_v2.planner import PlannerContext, plan_turn
+from app.services.agent_v2.read_executor import ReadExecutionContext
 from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     merge_same_visit_booking_operations,
     tag_booking_service_sets,
 )
-from app.services.agent_v2.read_executor import ReadExecutionContext
 
 NOW = datetime(2026, 9, 13, 8, 0, tzinfo=UTC)
 SERVICE_A = "11111111-1111-1111-1111-111111111111"

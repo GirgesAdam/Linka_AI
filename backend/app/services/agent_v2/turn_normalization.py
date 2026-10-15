@@ -144,7 +144,7 @@ def collapse_booking_service_sets(
     """
     normalized: list[TurnOperation] = []
     service_sets: dict[int, list[str]] = {}
-    for index, operation in enumerate(turn.operations):
+    for operation in turn.operations:
         entity = operation.entities.service
         operation_type = getattr(operation, "type", None)
         execution_intent = getattr(operation, "execution_intent", "execute")

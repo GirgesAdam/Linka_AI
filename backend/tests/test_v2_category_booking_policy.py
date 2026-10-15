@@ -79,4 +79,3 @@ def test_no_common_laser_device_returns_empty() -> None:
     catalog = _catalog()
     catalog["services"][1]["laser_devices"] = [_device("alex", 30)]
     assert common_laser_device_keys(catalog, ["a", "b"]) == []
-

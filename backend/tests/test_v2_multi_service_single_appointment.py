@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-
-import pytest
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
+import app.services.agent_v2.multi_service_booking as multi_service_booking
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
     DateConstraint,
@@ -15,7 +16,6 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-import app.services.agent_v2.multi_service_booking as multi_service_booking
 from app.services.agent_v2.multi_service_booking import (
     AdditionalServiceResolution,
     execute_booking_proposal,
