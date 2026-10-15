@@ -384,3 +384,60 @@ def test_replacement_proposal_boundary_uses_only_final_service_set(monkeypatch) 
     assert proposal.main_service_id == C
     assert proposal.additional_service_ids == [A]
     assert B not in proposal.service_ids
+
+
+def test_sr_singleton_preserve_group_accepts_ambiguous_provider_shape() -> None:
+    state = _state([A, B], main=B)
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        ref=refs[C],
+                        candidate_mode="ambiguous",
+                    )
+                ),
+            )
+        ]
+    )
+    _collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B, C]}
+
+
+def test_sr_singleton_preserve_group_deduplicates_existing_component() -> None:
+    state = _state([A, B], main=B)
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(ref=refs[A], candidate_mode="ambiguous")
+                ),
+            )
+        ]
+    )
+    _collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [A, B]}

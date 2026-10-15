@@ -1,4 +1,4 @@
-name: Clinic Hours Clock Real Agent Review
+﻿name: Spoken Clock Policy Real Agent Review
 
 on:
   pull_request:
@@ -7,8 +7,8 @@ on:
     paths:
       - .github/workflows/clinic-hours-clock-real-agent-review.yml
       - backend/scripts/run_clinic_hours_clock_live_review.py
-      - backend/tests/test_v2_clinic_hours_clock_semantics.py
-      - backend/tests/test_v2_explicit_daypart_semantics.py
+      - backend/scripts/agent_v2_live_review_support.py
+      - backend/tests/test_v2_spoken_clock_policy.py
       - backend/app/agents/v2/turn_contract.py
       - backend/app/agents/v2/turn_interpreter.py
       - backend/app/agents/v2/time_resolution.py
@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   real-agent:
-    name: RT1-RT10 clinic-hours clock boundary
+    name: RA-T1-RA-T10 spoken-clock policy
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
@@ -104,9 +104,9 @@ jobs:
         run: test -n "$OPENAI_API_KEY"
       - name: Validate focused semantics and tooling
         run: |
-          ruff check app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/agents/v2/time_resolution.py app/agents/v2/semantic_state_view.py app/services/agent_v2/planner.py app/services/agent_v2/active_task_progress.py app/services/agent_v2/state.py app/services/agent_v2/state_rules.py app/services/agent_v2/state_executor.py app/services/agent_v2/grouped_booking_continuity.py app/services/agent_v2/orchestrator.py tests/test_v2_active_task_bare_clock_boundary.py tests/test_v2_clinic_hours_clock_semantics.py tests/test_v2_explicit_daypart_semantics.py scripts/run_clinic_hours_clock_live_review.py
-          python -m compileall -q app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/agents/v2/time_resolution.py app/agents/v2/semantic_state_view.py app/services/agent_v2/planner.py app/services/agent_v2/active_task_progress.py app/services/agent_v2/state.py app/services/agent_v2/state_rules.py app/services/agent_v2/state_executor.py app/services/agent_v2/grouped_booking_continuity.py app/services/agent_v2/orchestrator.py tests/test_v2_active_task_bare_clock_boundary.py tests/test_v2_clinic_hours_clock_semantics.py tests/test_v2_explicit_daypart_semantics.py scripts/run_clinic_hours_clock_live_review.py
-          python -m pytest -q tests/test_v2_active_task_bare_clock_boundary.py tests/test_v2_clinic_hours_clock_semantics.py tests/test_v2_explicit_daypart_semantics.py tests/test_agent_explicit_time_safety.py tests/test_v2_business_hour_time_resolution.py tests/test_v2_booking_time_correction_authority.py tests/test_v2_device_write_safety.py tests/test_v2_date_scope_continuation.py tests/test_v2_availability_device_cardinality_integrity.py tests/test_v2_booking_status_truth.py tests/test_appointment_confirmation_policy.py tests/test_v2_grouped_multiservice_intent_reliability.py tests/test_agent_v2_orchestrator.py tests/test_provider_schema_compatibility.py
+          ruff check app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/agents/v2/time_resolution.py app/agents/v2/semantic_state_view.py app/services/agent_v2/planner.py app/services/agent_v2/active_task_progress.py app/services/agent_v2/state.py app/services/agent_v2/state_rules.py app/services/agent_v2/state_executor.py app/services/agent_v2/grouped_booking_continuity.py app/services/agent_v2/orchestrator.py tests/test_v2_active_task_bare_clock_boundary.py tests/test_v2_spoken_clock_policy.py scripts/run_clinic_hours_clock_live_review.py scripts/agent_v2_live_review_support.py
+          python -m compileall -q app/agents/v2/turn_contract.py app/agents/v2/turn_interpreter.py app/agents/v2/time_resolution.py app/agents/v2/semantic_state_view.py app/services/agent_v2/planner.py app/services/agent_v2/active_task_progress.py app/services/agent_v2/state.py app/services/agent_v2/state_rules.py app/services/agent_v2/state_executor.py app/services/agent_v2/grouped_booking_continuity.py app/services/agent_v2/orchestrator.py tests/test_v2_active_task_bare_clock_boundary.py tests/test_v2_spoken_clock_policy.py scripts/run_clinic_hours_clock_live_review.py scripts/agent_v2_live_review_support.py
+          python -m pytest -q tests/test_v2_active_task_bare_clock_boundary.py tests/test_v2_spoken_clock_policy.py tests/test_agent_explicit_time_safety.py tests/test_v2_business_hour_time_resolution.py tests/test_v2_booking_time_correction_authority.py tests/test_v2_device_write_safety.py tests/test_v2_date_scope_continuation.py tests/test_v2_availability_device_cardinality_integrity.py tests/test_v2_booking_status_truth.py tests/test_appointment_confirmation_policy.py tests/test_v2_grouped_multiservice_intent_reliability.py tests/test_agent_v2_orchestrator.py tests/test_provider_schema_compatibility.py
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
@@ -127,39 +127,7 @@ jobs:
         run: |
           python -m alembic heads
           python -m alembic upgrade head
-      - name: Run focused bare-3 booking
-        env:
-          CLOCK_RT_SCENARIOS: RT1
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-bare3.json
-        run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run focused explicit 3 afternoon booking
-        env:
-          CLOCK_RT_SCENARIOS: RT10
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-explicit3pm.json
-        run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run focused literal 03:00 booking
-        env:
-          CLOCK_RT_SCENARIOS: RT7
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-literal0300.json
-        run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run focused bare 10/11 boundary
-        env:
-          CLOCK_RT_SCENARIOS: RT2,RT3,RT4,RT5
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-focused-10-11.json
-        run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run focused RT3 night continuation
-        env:
-          CLOCK_RT_SCENARIOS: RT3
-          CLOCK_RT3_CONTINUATION: night
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-rt3-night-focused.json
-        run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run focused RT3 morning continuation
-        env:
-          CLOCK_RT_SCENARIOS: RT3
-          CLOCK_RT3_CONTINUATION: morning
-          CLOCK_RT_REPORT_PATH: artifacts/clinic-hours-clock-rt3-morning-focused.json
-        run: python scripts/run_clinic_hours_clock_live_review.py
-      - name: Run RT1-RT10 through real Agent path
+      - name: Run RA-T1-RA-T10 through real Agent path
         run: python scripts/run_clinic_hours_clock_live_review.py
       - name: Upload clock-boundary reports
         if: always()
@@ -167,12 +135,6 @@ jobs:
         with:
           name: clinic-hours-clock-real-agent-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
-            backend/artifacts/clinic-hours-clock-focused-bare3.json
-            backend/artifacts/clinic-hours-clock-focused-explicit3pm.json
-            backend/artifacts/clinic-hours-clock-focused-literal0300.json
-            backend/artifacts/clinic-hours-clock-focused-10-11.json
-            backend/artifacts/clinic-hours-clock-rt3-night-focused.json
-            backend/artifacts/clinic-hours-clock-rt3-morning-focused.json
             backend/artifacts/clinic-hours-clock-live-review.json
           if-no-files-found: warn
           retention-days: 14

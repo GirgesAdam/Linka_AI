@@ -4,18 +4,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage
 
 from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
 from app.agents.v2.semantic_state_view import with_safe_task_context
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.services.agent_v2.active_task_progress import (
     adapt_matching_active_task_step,
     persist_initial_task_intent,
     plan_active_task_progress,
-    resolve_pending_bare_clock_period,
 )
 from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
 from app.services.agent_v2.grouped_booking_continuity import (
@@ -173,45 +172,12 @@ def run_v2_stateful_fixture_turn(
         semantic_context,
         active_task=_task_dict(active_task),
     )
-    latest_customer_text = next(
-        (
-            str(message.content).strip()
-            for message in reversed(history)
-            if isinstance(message, HumanMessage)
-            and isinstance(message.content, str)
-            and message.content.strip()
-        ),
-        "",
+    understanding = interpret_customer_turn_v2(
+        history=history,
+        semantic_context=semantic_context,
+        timezone_name=timezone_name,
+        local_now=local_now,
     )
-    contextual_period_resolution = resolve_pending_bare_clock_period(
-        active_task,
-        latest_customer_text,
-        context=semantic_context,
-    )
-    if contextual_period_resolution is not None:
-        active_task, _resolved_period = contextual_period_resolution
-        semantic_context = with_safe_task_context(
-            semantic_context,
-            active_task=_task_dict(active_task),
-        )
-        understanding = TiaTurnUnderstanding(
-            operations=[
-                TurnOperation(
-                    type="continue_active",
-                    entities=TurnEntities(),
-                    execution_intent="execute",
-                    active_task_relationship="continue",
-                    continues_previous=True,
-                )
-            ]
-        )
-    else:
-        understanding = interpret_customer_turn_v2(
-            history=history,
-            semantic_context=semantic_context,
-            timezone_name=timezone_name,
-            local_now=local_now,
-        )
     understanding = merge_same_visit_booking_operations(understanding)
     initial_booking_task = active_task if isinstance(active_task, BookingTaskState) else None
     understanding, booking_service_sets = collapse_booking_service_sets(

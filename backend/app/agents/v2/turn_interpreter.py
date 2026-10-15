@@ -22,6 +22,7 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
     Selection,
+    SpokenPeriodHint,
     TiaTurnUnderstanding,
     TimeAmbiguity,
     TimeConstraint,
@@ -440,12 +441,10 @@ DATE/TIME REPRESENTATION
 - date range: mode=range with start_date/end_date.
 - starting from a date: mode=from_date with start_date.
 - nearest available date: mode=next_available with no invented date.
-- exact time: mode=exact with start_time.
-- after/before constraints: mode=after or mode=before with start_time. After/from a time includes the
-  boundary itself; Python treats this lower bound as inclusive.
-- time range: mode=range with start_time/end_time.
-- nearest time: mode=nearest. Supply start_time only when the customer gives an anchor in this turn;
-  on a continuation Python may inherit the previous verified exact-time anchor.
+- Time modes: exact uses start_time; after/before use start_time; range uses start_time/end_time; nearest
+  may omit its anchor on a continuation. Python treats lower time bounds as inclusive.
+- Spoken clocks: return the expressed clock/minutes. Set spoken_period_hint only for an explicit period.
+  Python resolves AM/PM from clinic hours; a pending 10/11 period reply keeps that clock and sets the hint.
 
 Clinic timezone: {timezone_name}
 Clinic local time: {local_now.isoformat()}
@@ -1356,8 +1355,8 @@ def merge_verified_action_context(
 
 
 
-def _normalize_periodless_clock(value: str | None) -> str | None:
-    """Remove an inferred AM/PM choice while preserving the model's minute meaning."""
+def _normalize_spoken_clock_base(value: str | None) -> str | None:
+    """Strip a model AM/PM guess while preserving the customer's spoken clock/minutes."""
     raw = str(value or "").strip()[:5]
     try:
         parsed = time.fromisoformat(raw)
@@ -1371,25 +1370,10 @@ def _normalize_periodless_clock(value: str | None) -> str | None:
     return f"{hour:02d}:{parsed.minute:02d}"
 
 
-def _explicit_clock_conflicts_with_literal(value: str | None, literal_clock: str) -> bool:
-    """Validate semantic explicit-period time against structural HH:MM evidence only."""
-    raw = str(value or "").strip()[:5]
-    try:
-        semantic = time.fromisoformat(raw)
-        literal = time.fromisoformat(literal_clock)
-    except ValueError:
-        return True
-    if semantic.minute != literal.minute:
-        return True
-    if literal.hour == 0 or literal.hour > 12:
-        return semantic.hour != literal.hour
-    return not (semantic.hour == literal.hour or abs(semantic.hour - literal.hour) == 12)
-
-
-def _derive_periodless_clock_ambiguity(
+def _derive_spoken_clock_ambiguity(
     value: str | None, *, literal_clock: str | None
 ) -> TimeAmbiguity:
-    """Derive bare 12-hour ambiguity at the latest-turn boundary, never from keywords."""
+    """Mark non-structural spoken clocks for deterministic clinic-hours resolution."""
     if value is None or literal_clock is not None:
         return "none"
     try:
@@ -1411,83 +1395,31 @@ def _count_time_targets(turn: TiaTurnUnderstanding) -> int:
     return count
 
 
-def _verified_period_evidence(
-    evidence_text: str | None,
-    *,
-    latest_customer_text: str,
-) -> bool | None:
-    """Verify model-reported semantic evidence without parsing customer language."""
-    if evidence_text is None:
-        return False
-    evidence = str(evidence_text).strip()
-    if not evidence:
-        return None
-    if evidence not in latest_customer_text:
-        return None
-    # Period evidence must be semantic wording, not the clock digits themselves.
-    if any(char.isdigit() for char in evidence) or ":" in evidence:
-        return None
-    return True
-
-
 def _normalize_one_clock(
     value: str,
     *,
-    existing_status: str,
     existing_ambiguity: TimeAmbiguity,
-    evidence_text: str | None,
+    spoken_period_hint: SpokenPeriodHint,
     latest_customer_text: str,
     literal_clock: str | None,
-) -> tuple[str, TimeAmbiguity, str]:
-    """Convert semantic clock output into backend-owned authority metadata."""
+) -> tuple[str, TimeAmbiguity, SpokenPeriodHint]:
+    """Turn provider clock meaning into backend-owned spoken-clock metadata."""
     if not latest_customer_text.strip():
-        # Internal/unit-test construction has no latest-turn language evidence.
-        return value, existing_ambiguity, existing_status
+        return value, existing_ambiguity, spoken_period_hint
 
-    # period_status is runtime-only now. Preserve explicit/conflict authority only
-    # for internal callers that set it deliberately; the provider cannot emit it.
-    if evidence_text is None and existing_status == "conflict":
-        return value, "none", "conflict"
-    if evidence_text is None and existing_status == "explicit":
-        if literal_clock is not None and _explicit_clock_conflicts_with_literal(
-            value, literal_clock
-        ):
-            return value, "none", "conflict"
-        return value, "none", "explicit"
-
-    evidence_state = _verified_period_evidence(
-        evidence_text,
-        latest_customer_text=latest_customer_text,
-    )
-    if evidence_state is None:
-        return value, "none", "conflict"
-
-    if evidence_state:
-        if literal_clock is not None and _explicit_clock_conflicts_with_literal(
-            value, literal_clock
-        ):
-            return value, "none", "conflict"
-        # The LLM owns language understanding only. Once its explicit-period evidence
-        # is proven to exist in the latest customer message, its normalized semantic
-        # clock can be treated as exact. Clinic hours never reinterpret it.
-        return value, "none", "explicit"
-
+    # #230: a structural customer HH:MM literal is exact authority. Daypart hints
+    # never reinterpret a colon clock.
     if literal_clock is not None:
-        # Defensive compatibility: a customer-typed colon HH:MM remains structural
-        # exact authority when no semantic period wording is present (#230).
         return literal_clock, "none", "none"
 
-    # No explicit period evidence: strip any AM/PM choice invented by the semantic
-    # model and let deterministic clinic-hours policy own the 12-hour resolution.
-    neutral = _normalize_periodless_clock(value)
+    neutral = _normalize_spoken_clock_base(value)
     if neutral is None:
-        return value, "none", "conflict"
+        return value, "none", spoken_period_hint
     return (
         neutral,
-        _derive_periodless_clock_ambiguity(neutral, literal_clock=None),
-        "none",
+        _derive_spoken_clock_ambiguity(neutral, literal_clock=None),
+        spoken_period_hint,
     )
-
 
 def _normalize_time_semantics_v2(
     turn: TiaTurnUnderstanding,
@@ -1507,11 +1439,10 @@ def _normalize_time_semantics_v2(
         selection = operation.selection
 
         if constraint is not None and constraint.start_time is not None:
-            value, ambiguity, status = _normalize_one_clock(
+            value, ambiguity, hint = _normalize_one_clock(
                 constraint.start_time,
-                existing_status=constraint.period_status,
                 existing_ambiguity=constraint.start_time_ambiguity,
-                evidence_text=constraint.period_evidence_text,
+                spoken_period_hint=constraint.spoken_period_hint,
                 latest_customer_text=latest_customer_text,
                 literal_clock=literal_clock,
             )
@@ -1519,7 +1450,7 @@ def _normalize_time_semantics_v2(
                 update={
                     "start_time": value,
                     "start_time_ambiguity": ambiguity,
-                    "period_status": status,
+                    "spoken_period_hint": hint,
                 }
             )
             entities = entities.model_copy(update={"time": constraint})
@@ -1535,18 +1466,16 @@ def _normalize_time_semantics_v2(
                         mode="exact",
                         start_time=literal_clock,
                         start_time_ambiguity="none",
-                        period_evidence_text=None,
-                        period_status="none",
+                        spoken_period_hint="none",
                     )
                 }
             )
 
         if selection is not None and selection.kind == "time" and selection.time is not None:
-            value, ambiguity, status = _normalize_one_clock(
+            value, ambiguity, hint = _normalize_one_clock(
                 selection.time,
-                existing_status=selection.period_status,
                 existing_ambiguity=selection.time_ambiguity,
-                evidence_text=selection.period_evidence_text,
+                spoken_period_hint=selection.spoken_period_hint,
                 latest_customer_text=latest_customer_text,
                 literal_clock=literal_clock,
             )
@@ -1554,7 +1483,7 @@ def _normalize_time_semantics_v2(
                 update={
                     "time": value,
                     "time_ambiguity": ambiguity,
-                    "period_status": status,
+                    "spoken_period_hint": hint,
                 }
             )
 
@@ -1573,7 +1502,7 @@ def interpret_customer_turn_v2(
     timezone_name: str,
     local_now: datetime,
 ) -> TiaTurnUnderstanding:
-    """One semantic LLM call; Python verifies period evidence and owns clock authority."""
+    """One semantic LLM call; Python owns canonical spoken-clock authority."""
 
     messages = _build_interpreter_messages(
         history=history,
