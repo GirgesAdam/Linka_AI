@@ -14,6 +14,7 @@ from app.services.agent_v2.compound_turn_policy import (
     compound_sequence_index,
     compound_visit_group,
 )
+from app.services.agent_v2.multi_service_booking import service_operational_category
 from app.services.agent_v2.planner import PlanStep, TurnPlan
 from app.services.agent_v2.read_executor import ReadExecutionContext
 from app.services.booking import BookingCompatibilityError
@@ -131,11 +132,12 @@ def _matching_followup_slots(
     context: ReadExecutionContext,
     interval_minutes: int,
     timezone_name: str,
+    enforce_shared_device: bool = True,
 ) -> list[AvailabilitySlot]:
     params = _params(step)
     matches: list[AvailabilitySlot] = []
     for slot in result.slots:
-        if not _device_compatible_with_selected(selected, slot):
+        if enforce_shared_device and not _device_compatible_with_selected(selected, slot):
             continue
         required = _required_next_start(
             selected,
@@ -158,6 +160,7 @@ def _chains_for_first(
     *,
     context: ReadExecutionContext,
     timezone_name: str,
+    enforce_shared_device: bool = True,
 ) -> list[list[AvailabilitySlot]]:
     chains = [[first]]
     interval = _slot_interval_minutes(results)
@@ -171,6 +174,7 @@ def _chains_for_first(
                 context=context,
                 interval_minutes=interval,
                 timezone_name=timezone_name,
+                enforce_shared_device=enforce_shared_device,
             ):
                 next_chains.append([*selected, slot])
         chains = next_chains
@@ -186,6 +190,7 @@ def _chain_for_first(
     *,
     context: ReadExecutionContext,
     timezone_name: str,
+    enforce_shared_device: bool = True,
 ) -> list[AvailabilitySlot] | None:
     chains = _chains_for_first(
         first,
@@ -193,6 +198,7 @@ def _chain_for_first(
         steps,
         context=context,
         timezone_name=timezone_name,
+        enforce_shared_device=enforce_shared_device,
     )
     return chains[0] if chains else None
 
@@ -203,6 +209,7 @@ def _availability_for_day(
     booking_date: date,
     context: ReadExecutionContext,
     forced_doctor_id: str | None = None,
+    allow_independent_doctors: bool = False,
 ) -> list[AvailabilityResult] | None:
     adapter = context.adapter or get_clinic_adapter(db=context.db, workspace=context.workspace)
     branch_default: str | None = None
@@ -224,7 +231,9 @@ def _availability_for_day(
                 )
                 branch_default_resolved = True
             branch_id = branch_default
-        if service_id is None or doctor_id is None or branch_id is None:
+        if service_id is None or branch_id is None:
+            return None
+        if doctor_id is None and not allow_independent_doctors:
             return None
         if bool(step.facts.get("service_requires_laser_device")) and not params.get("device_key"):
             return None
@@ -254,6 +263,7 @@ def _find_joint_chain(
     context: ReadExecutionContext,
     timezone_name: str,
     forced_doctor_id: str | None = None,
+    independent_resources: bool = False,
 ) -> tuple[list[AvailabilitySlot] | None, bool]:
     tz = ZoneInfo(timezone_name)
     anchor_aware = requested_anchor.replace(tzinfo=tz).astimezone(UTC)
@@ -264,6 +274,7 @@ def _find_joint_chain(
             booking_date=current_date,
             context=context,
             forced_doctor_id=forced_doctor_id,
+            allow_independent_doctors=independent_resources,
         )
         if results is None:
             return None, False
@@ -282,6 +293,7 @@ def _find_joint_chain(
                 steps,
                 context=context,
                 timezone_name=timezone_name,
+                enforce_shared_device=not independent_resources,
             )
             if chain is not None:
                 return chain, first.start_at == anchor_aware
@@ -295,13 +307,15 @@ def _exact_joint_chains(
     requested_anchor: datetime,
     context: ReadExecutionContext,
     timezone_name: str,
-    forced_doctor_id: str,
+    forced_doctor_id: str | None,
+    independent_resources: bool = False,
 ) -> list[list[AvailabilitySlot]]:
     results = _availability_for_day(
         steps,
         booking_date=requested_anchor.date(),
         context=context,
         forced_doctor_id=forced_doctor_id,
+        allow_independent_doctors=independent_resources,
     )
     if results is None:
         return []
@@ -318,6 +332,7 @@ def _exact_joint_chains(
                 steps,
                 context=context,
                 timezone_name=timezone_name,
+                enforce_shared_device=not independent_resources,
             )
         )
     return chains
@@ -409,6 +424,8 @@ def _rewrite_step_for_slot(
         "compound_visit_preflight_resolved": True,
         "compound_visit_requested_anchor_local": requested_anchor.isoformat(timespec="minutes"),
         "compound_visit_alternative": not allow_write,
+        "compound_verified_start_at": slot.start_at.isoformat(),
+        "compound_verified_end_at": slot.end_at.isoformat(),
     }
     if slot.laser_device_key:
         facts["device_key"] = slot.laser_device_key
@@ -558,6 +575,79 @@ def _requested_group_anchor(
     return datetime.combine(day, datetime.min.time()), "date_only"
 
 
+def _step_service_ids(step: PlanStep) -> list[str]:
+    requested = step.facts.get("requested_service_ids")
+    if isinstance(requested, list) and requested:
+        return [str(item) for item in requested if item not in (None, "")]
+    service_id = str(_params(step).get("service_id") or "")
+    return [service_id] if service_id else []
+
+
+def _category_catalog_covers_steps(
+    steps: list[PlanStep], context: ReadExecutionContext
+) -> bool:
+    catalog = context.catalog if isinstance(context.catalog, dict) else {}
+    rows = catalog.get("services")
+    if not isinstance(rows, list):
+        return False
+    available = {
+        str(row.get("id"))
+        for row in rows
+        if isinstance(row, dict) and row.get("id") not in (None, "")
+    }
+    requested = {service_id for step in steps for service_id in _step_service_ids(step)}
+    return bool(requested) and requested.issubset(available)
+
+
+def _step_operational_category(
+    step: PlanStep, context: ReadExecutionContext
+) -> str | None:
+    catalog = context.catalog if isinstance(context.catalog, dict) else {}
+    categories = {
+        service_operational_category(catalog, service_id)
+        for service_id in _step_service_ids(step)
+    }
+    return next(iter(categories)) if len(categories) == 1 else None
+
+
+def _independent_category_groups(
+    steps: list[PlanStep], context: ReadExecutionContext
+) -> bool:
+    if len(steps) < 2 or not _category_catalog_covers_steps(steps, context):
+        # Legacy/synthetic contexts without service rows keep their established path.
+        # A present service row with a missing operational_category is different: it is
+        # canonical unknown category authority and must fail closed as an independent group.
+        return False
+    categories = [_step_operational_category(step, context) for step in steps]
+    return any(category is None for category in categories) or len(set(categories)) > 1
+
+
+def _attach_independent_visit_group(
+    step: PlanStep, visit_group_id: str
+) -> PlanStep:
+    write_intent = step.write_intent
+    if write_intent is not None:
+        write_intent = write_intent.model_copy(
+            update={
+                "parameters": {
+                    **write_intent.parameters,
+                    "visit_group_id": visit_group_id,
+                }
+            }
+        )
+    return step.model_copy(
+        update={
+            "write_intent": write_intent,
+            "facts": {
+                **step.facts,
+                "visit_group_id": visit_group_id,
+                "compound_visit_independent_category_resources": True,
+                "compound_visit_preflight_resolved": True,
+            },
+        }
+    )
+
+
 def _attach_visit_group(step: PlanStep, visit_group_id: str, doctor_id: str) -> PlanStep:
     reads = []
     for request in step.reads:
@@ -619,8 +709,66 @@ def _auto_resolve_grouped_visits(
                     is_missing=step.operation_index in missing_device_indexes,
                 )
             continue
-        common_doctors = _common_doctors(ordered, context)
         anchor = _requested_group_anchor(ordered, context=context, timezone_name=timezone_name)
+        if _independent_category_groups(ordered, context):
+            requested = (
+                anchor[0]
+                if anchor is not None
+                else context.now.astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
+            )
+            if anchor is None:
+                for step in ordered:
+                    replacements[step.operation_index] = _suppress_group_write(
+                        step, requested_anchor=requested
+                    )
+                continue
+            requested_anchor, request_mode = anchor
+            chain: list[AvailabilitySlot] | None = None
+            exact_fits = False
+            if request_mode == "exact":
+                exact_chains = _exact_joint_chains(
+                    ordered,
+                    requested_anchor=requested_anchor,
+                    context=context,
+                    timezone_name=timezone_name,
+                    forced_doctor_id=None,
+                    independent_resources=True,
+                )
+                if exact_chains:
+                    chain = exact_chains[0]
+                    exact_fits = True
+            if chain is None:
+                chain, exact_fits = _find_joint_chain(
+                    ordered,
+                    requested_anchor=requested_anchor,
+                    context=context,
+                    timezone_name=timezone_name,
+                    independent_resources=True,
+                )
+            if chain is None:
+                for step in ordered:
+                    replacements[step.operation_index] = _suppress_group_write(
+                        step, requested_anchor=requested_anchor
+                    )
+                continue
+            allow_write = request_mode == "next_available" or (
+                request_mode == "exact" and exact_fits
+            )
+            group_id = visit_group_id or str(uuid4())
+            for step, slot in zip(ordered, chain, strict=True):
+                rewritten = _rewrite_step_for_slot(
+                    step,
+                    slot,
+                    timezone_name=timezone_name,
+                    requested_anchor=requested_anchor,
+                    allow_write=allow_write,
+                )
+                replacements[step.operation_index] = _attach_independent_visit_group(
+                    rewritten, group_id
+                )
+            continue
+
+        common_doctors = _common_doctors(ordered, context)
         if not common_doctors:
             explicit_doctors = {
                 str(value)

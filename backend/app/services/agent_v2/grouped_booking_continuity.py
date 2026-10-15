@@ -86,6 +86,8 @@ def _grouped_booking_steps(plan: TurnPlan) -> list[PlanStep] | None:
     for step in plan.steps:
         if step.operation_type not in _BOOKING_OPERATION_TYPES:
             continue
+        if step.facts.get("compound_visit_independent_category_resources") is True:
+            continue
         group = compound_visit_group(step)
         if group is None or step.facts.get("service_id") in (None, ""):
             continue

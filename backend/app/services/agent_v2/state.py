@@ -144,6 +144,43 @@ class OptionSnapshot(StrictStateModel):
         return self.task_version == task_version and now < self.expires_at
 
 
+class BookingProposalVisit(StrictStateModel):
+    """One persistence appointment inside a customer-level booking proposal."""
+
+    service_ids: list[str] = Field(default_factory=list)
+    main_service_id: str
+    additional_service_ids: list[str] = Field(default_factory=list)
+    branch_id: str
+    doctor_id: str
+    start_at: datetime
+    end_at: datetime
+    device_key: str | None = None
+    additional_service_device_keys: dict[str, str] = Field(default_factory=dict)
+    package_usage: PackageUsage = "unspecified"
+    package_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_visit(self) -> BookingProposalVisit:
+        ordered = list(dict.fromkeys(item for item in self.service_ids if item))
+        if not ordered or ordered != self.service_ids:
+            raise ValueError("booking proposal visit services must be unique and non-empty.")
+        if self.main_service_id not in ordered:
+            raise ValueError("booking proposal visit main service must be in service_ids.")
+        expected_additional = [item for item in ordered if item != self.main_service_id]
+        if self.additional_service_ids != expected_additional:
+            raise ValueError("booking proposal visit additional services must match non-main services.")
+        if self.end_at <= self.start_at:
+            raise ValueError("booking proposal visit end_at must be after start_at.")
+        if set(self.additional_service_device_keys) - set(self.additional_service_ids):
+            raise ValueError("booking proposal visit device map contains a non-additional service.")
+        if self.additional_service_device_keys:
+            if self.device_key is None:
+                raise ValueError("booking proposal visit laser devices require a visit device.")
+            if any(value != self.device_key for value in self.additional_service_device_keys.values()):
+                raise ValueError("booking proposal visit cannot split laser devices within one appointment.")
+        return self
+
+
 class BookingProposal(StrictStateModel):
     proposal_id: str
     patient_id: str
@@ -165,6 +202,7 @@ class BookingProposal(StrictStateModel):
     additional_service_device_keys: dict[str, str] = Field(default_factory=dict)
     package_usage: PackageUsage = "unspecified"
     package_id: str | None = None
+    visits: list[BookingProposalVisit] = Field(default_factory=list)
     task_version: int = 1
     proposal_version: int = 1
     created_at: datetime
@@ -177,9 +215,30 @@ class BookingProposal(StrictStateModel):
             raise ValueError("booking proposal services must be unique and non-empty.")
         if self.main_service_id not in ordered:
             raise ValueError("booking proposal main service must be in service_ids.")
-        expected_additional = [item for item in ordered if item != self.main_service_id]
-        if self.additional_service_ids != expected_additional:
-            raise ValueError("booking proposal additional services must match non-main services.")
+        if self.visits:
+            flattened = [service_id for visit in self.visits for service_id in visit.service_ids]
+            if flattened != ordered:
+                raise ValueError("compound booking proposal visits must partition service_ids in order.")
+            if len(self.visits) < 2:
+                raise ValueError("compound booking proposal requires at least two visits.")
+            first = self.visits[0]
+            if (
+                self.main_service_id != first.main_service_id
+                or self.additional_service_ids != first.additional_service_ids
+                or self.branch_id != first.branch_id
+                or self.doctor_id != first.doctor_id
+                or self.start_at != first.start_at
+                or self.end_at != first.end_at
+                or self.device_key != first.device_key
+            ):
+                raise ValueError("compound booking proposal compatibility summary must mirror first visit.")
+            for previous, current in zip(self.visits, self.visits[1:], strict=False):
+                if current.start_at < previous.end_at:
+                    raise ValueError("compound booking proposal visits cannot overlap.")
+        else:
+            expected_additional = [item for item in ordered if item != self.main_service_id]
+            if self.additional_service_ids != expected_additional:
+                raise ValueError("booking proposal additional services must match non-main services.")
         if self.end_at <= self.start_at:
             raise ValueError("booking proposal end_at must be after start_at.")
         if self.expires_at <= self.created_at:

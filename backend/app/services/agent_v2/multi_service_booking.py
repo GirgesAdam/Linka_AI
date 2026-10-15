@@ -16,7 +16,7 @@ from app.models.patient import Patient
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.agent_v2.package_booking_policy import resolve_booking_package
-from app.services.agent_v2.state import BookingProposal
+from app.services.agent_v2.state import BookingProposal, BookingProposalVisit
 from app.services.appointment_commerce import add_additional_service
 from app.services.appointment_creation import create_appointment_operation
 from app.services.appointment_operations import AppointmentOperationError
@@ -354,7 +354,7 @@ def resolve_additional_services(
     db: Session,
     *,
     workspace: Workspace,
-    proposal: BookingProposal,
+    proposal: BookingProposal | BookingProposalVisit,
 ) -> list[AdditionalServiceResolution]:
     branch_id = UUID(proposal.branch_id)
     doctor_id = UUID(proposal.doctor_id)
@@ -378,7 +378,7 @@ def _main_appointment_device_key(
     db: Session,
     *,
     workspace: Workspace,
-    proposal: BookingProposal,
+    proposal: BookingProposal | BookingProposalVisit,
 ) -> str | None:
     service = db.scalar(
         select(Service).where(
@@ -453,51 +453,75 @@ def booking_proposal_alternatives(
     return alternatives
 
 
-def execute_booking_proposal(
+def _validate_proposal_visit_category(
+    db: Session,
+    *,
+    workspace: Workspace,
+    visit: BookingProposal | BookingProposalVisit,
+) -> None:
+    service_ids = [UUID(value) for value in visit.service_ids]
+    rows = list(
+        db.scalars(
+            select(Service).where(
+                Service.workspace_id == workspace.id,
+                Service.id.in_(service_ids),
+                Service.is_active.is_(True),
+            )
+        )
+    )
+    if len(rows) != len(service_ids):
+        raise MultiServiceBookingError("One or more proposed services are unavailable.")
+    categories = {
+        str(row.operational_category).strip().casefold()
+        if row.operational_category not in (None, "")
+        else None
+        for row in rows
+    }
+    if len(service_ids) > 1 and (None in categories or len(categories) != 1):
+        raise MultiServiceBookingError(
+            "Cross-category services require separate appointments."
+        )
+
+
+def _execute_booking_proposal_visit(
     db: Session,
     *,
     workspace: Workspace,
     patient: Patient,
-    proposal: BookingProposal,
+    visit: BookingProposal | BookingProposalVisit,
+    visit_group_id: UUID | None,
     idempotency_key: str | None,
 ) -> dict[str, object]:
-    if str(patient.id) != proposal.patient_id:
-        raise MultiServiceBookingError("Booking proposal does not belong to this patient.")
-    if patient.status == "blocked":
-        raise MultiServiceBookingError("Blocked patients cannot receive new appointments.")
+    _validate_proposal_visit_category(db, workspace=workspace, visit=visit)
+    additionals = resolve_additional_services(db, workspace=workspace, proposal=visit)
 
-    # Resolve every additional service against the single visit-level device before
-    # creating the main appointment. This fail-closed boundary prevents partial or
-    # cross-device same-visit writes.
-    additionals = resolve_additional_services(db, workspace=workspace, proposal=proposal)
-
-    main_service_id = UUID(proposal.main_service_id)
+    main_service_id = UUID(visit.main_service_id)
     main_appointment_device_key = _main_appointment_device_key(
-        db, workspace=workspace, proposal=proposal
+        db, workspace=workspace, proposal=visit
     )
     package_resolution = resolve_booking_package(
         db,
         workspace=workspace,
         patient=patient,
         service_id=main_service_id,
-        start_at=proposal.start_at,
+        start_at=visit.start_at,
         device_key=main_appointment_device_key,
-        package_usage=proposal.package_usage,
-        requested_package_id=(UUID(proposal.package_id) if proposal.package_id else None),
+        package_usage=visit.package_usage,
+        requested_package_id=(UUID(visit.package_id) if visit.package_id else None),
     )
     try:
         appointment = create_appointment_operation(
             db,
             workspace=workspace,
             patient_id=patient.id,
-            branch_id=UUID(proposal.branch_id),
-            doctor_id=UUID(proposal.doctor_id),
+            branch_id=UUID(visit.branch_id),
+            doctor_id=UUID(visit.doctor_id),
             service_id=main_service_id,
-            requested_start_at=proposal.start_at,
+            requested_start_at=visit.start_at,
             created_by_user_id=None,
             patient_package_id=package_resolution.package_id,
             use_pulse_balance=False,
-            visit_group_id=None,
+            visit_group_id=visit_group_id,
             source="ai",
             laser_device_key=main_appointment_device_key,
             idempotency_key=(f"{idempotency_key}:main" if idempotency_key else None),
@@ -508,7 +532,7 @@ def execute_booking_proposal(
             raise MultiServiceBookingUnavailable(
                 "The proposed appointment time is no longer available.",
                 alternatives=booking_proposal_alternatives(
-                    db, workspace=workspace, proposal=proposal
+                    db, workspace=workspace, proposal=visit
                 ),
             ) from exc
         raise
@@ -530,14 +554,76 @@ def execute_booking_proposal(
         lines.append(line)
 
     return {
-        "ok": True,
-        "write_kind": "booking_proposal",
         "appointment_id": str(appointment.id),
         "status": appointment.status,
         "main_service_id": str(appointment.service_id),
         "additional_service_ids": [str(line.service_id) for line in lines],
         "additional_service_row_ids": [str(line.id) for line in lines],
         "reserved_duration_minutes": int(appointment.duration_minutes),
-        "proposal_id": proposal.proposal_id,
         "package_used": bool(package_resolution.package_used),
+    }
+
+
+def execute_booking_proposal(
+    db: Session,
+    *,
+    workspace: Workspace,
+    patient: Patient,
+    proposal: BookingProposal,
+    idempotency_key: str | None,
+) -> dict[str, object]:
+    if str(patient.id) != proposal.patient_id:
+        raise MultiServiceBookingError("Booking proposal does not belong to this patient.")
+    if patient.status == "blocked":
+        raise MultiServiceBookingError("Blocked patients cannot receive new appointments.")
+
+    if not proposal.visits:
+        result = _execute_booking_proposal_visit(
+            db,
+            workspace=workspace,
+            patient=patient,
+            visit=proposal,
+            visit_group_id=None,
+            idempotency_key=idempotency_key,
+        )
+        return {
+            "ok": True,
+            "write_kind": "booking_proposal",
+            **result,
+            "proposal_id": proposal.proposal_id,
+        }
+
+    try:
+        group_id = UUID(proposal.proposal_id)
+    except ValueError:
+        group_id = None
+    results: list[dict[str, object]] = []
+    with db.begin_nested():
+        for index, visit in enumerate(proposal.visits):
+            results.append(
+                _execute_booking_proposal_visit(
+                    db,
+                    workspace=workspace,
+                    patient=patient,
+                    visit=visit,
+                    visit_group_id=group_id,
+                    idempotency_key=(
+                        f"{idempotency_key}:visit:{index}" if idempotency_key else None
+                    ),
+                )
+            )
+    first = results[0]
+    return {
+        "ok": True,
+        "write_kind": "booking_proposal",
+        "appointment_id": first["appointment_id"],
+        "appointment_ids": [result["appointment_id"] for result in results],
+        "appointments": results,
+        "status": first["status"],
+        "main_service_id": first["main_service_id"],
+        "additional_service_ids": first["additional_service_ids"],
+        "additional_service_row_ids": first["additional_service_row_ids"],
+        "reserved_duration_minutes": first["reserved_duration_minutes"],
+        "proposal_id": proposal.proposal_id,
+        "package_used": any(bool(result["package_used"]) for result in results),
     }

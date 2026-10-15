@@ -32,48 +32,48 @@ ARMS = "svc-full-arms"
 COMBO = "svc-underarm-bikini-combo"
 
 
-def _device(key: str) -> dict[str, object]:
+def _device(key: str, duration: int) -> dict[str, object]:
     return {
         "device_key": key,
         "device_name": key,
         "price_minor": 50_000,
-        "duration_minutes": 20,
+        "duration_minutes": duration,
         "configured": True,
     }
 
 
 def _catalog(*, common_devices: int = 1) -> dict[str, object]:
-    a_devices = [_device("v1"), _device("v2")]
-    b_devices = [_device("v1")] if common_devices == 1 else [_device("v1"), _device("v2")]
+    a_devices = [_device("v1", 20), _device("v2", 20)]
+    b_devices = [_device("v1", 30)] if common_devices == 1 else [_device("v1", 30), _device("v2", 30)]
     return {
         "services": [
             {
                 "id": A,
                 "name": "Underarm",
                 "duration_minutes": 20,
-                "requires_laser_device": True,
+                "operational_category": "laser", "requires_laser_device": True,
                 "laser_devices": a_devices,
             },
             {
                 "id": B,
                 "name": "Bikini",
                 "duration_minutes": 30,
-                "requires_laser_device": True,
+                "operational_category": "laser", "requires_laser_device": True,
                 "laser_devices": b_devices,
             },
             {
                 "id": ARMS,
                 "name": "Full Arms",
                 "duration_minutes": 40,
-                "requires_laser_device": True,
-                "laser_devices": [_device("v1"), _device("v2")],
+                "operational_category": "laser", "requires_laser_device": True,
+                "laser_devices": [_device("v1", 40), _device("v2", 40)],
             },
             {
                 "id": COMBO,
                 "name": "Underarm + Bikini",
                 "duration_minutes": 50,
-                "requires_laser_device": True,
-                "laser_devices": [_device("v1")],
+                "operational_category": "laser", "requires_laser_device": True,
+                "laser_devices": [_device("v1", 50)],
             },
         ],
         "doctors": [

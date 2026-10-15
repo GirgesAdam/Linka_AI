@@ -80,6 +80,7 @@ from app.services.agent_v2.multi_service_booking import (
     laser_service_ids,
     resolve_additional_services,
     select_main_service_id,
+    service_operational_category,
 )
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
@@ -103,10 +104,13 @@ from app.services.agent_v2.reference_resolution import (
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingProposal,
+    BookingProposalVisit,
     BookingTaskState,
+    CustomerConstraints,
     OptionChoice,
     OptionSnapshot,
     RescheduleTaskState,
+    WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import (
     apply_step_state,
@@ -464,6 +468,196 @@ def _prepare_booking_proposal(
             "facts": {**step.facts, "booking_proposal_summary": summary},
         }
     ), proposal
+
+
+def _prepare_cross_category_compound_proposal(
+    plan: TurnPlan,
+    *,
+    current_task: BookingTaskState | None,
+    workspace: Workspace,
+    patient: Patient,
+    catalog: dict[str, object],
+    now: datetime,
+    turn_id: str,
+) -> tuple[TurnPlan, BookingTaskState | None]:
+    bookings = [
+        step
+        for step in plan.steps
+        if step.write_intent is not None
+        and step.write_intent.kind == "booking"
+        and step.facts.get("compound_visit_independent_category_resources") is True
+        and compound_write_group(step) is not None
+    ]
+    if len(bookings) < 2:
+        return plan, None
+    group_keys = {compound_write_group(step) for step in bookings}
+    if len(group_keys) != 1:
+        return plan, None
+
+    visits: list[BookingProposalVisit] = []
+    all_services: list[str] = []
+    service_devices: dict[str, str] = {}
+    for step in bookings:
+        assert step.write_intent is not None
+        params = step.write_intent.parameters
+        main_service_id = str(params.get("service_id") or "")
+        branch_id = str(params.get("branch_id") or "")
+        doctor_id = str(params.get("doctor_id") or "")
+        start_raw = step.facts.get("compound_verified_start_at")
+        end_raw = step.facts.get("compound_verified_end_at")
+        if not all((main_service_id, branch_id, doctor_id, start_raw, end_raw)):
+            return plan, None
+        requested_raw = step.facts.get("requested_service_ids")
+        requested = (
+            list(dict.fromkeys(str(item) for item in requested_raw if item not in (None, "")))
+            if isinstance(requested_raw, list) and requested_raw
+            else [main_service_id]
+        )
+        categories = {service_operational_category(catalog, item) for item in requested}
+        if len(requested) > 1 and (len(categories) != 1 or None in categories):
+            return plan, None
+        device_key = str(params.get("device_key") or "").strip() or None
+        expected_main = select_main_service_id(
+            catalog, requested, device_key=device_key
+        )
+        if main_service_id != expected_main:
+            return plan, None
+        compatible_doctors = common_doctor_ids(catalog, requested, branch_id=branch_id)
+        if doctor_id not in compatible_doctors:
+            return plan, None
+        laser_ids = laser_service_ids(catalog, requested)
+        if laser_ids:
+            common_devices = common_laser_device_keys(catalog, requested)
+            if device_key not in common_devices:
+                return plan, None
+        elif device_key is not None:
+            return plan, None
+        start_at = datetime.fromisoformat(str(start_raw))
+        end_at = datetime.fromisoformat(str(end_raw))
+        visit = BookingProposalVisit(
+            service_ids=requested,
+            main_service_id=main_service_id,
+            additional_service_ids=[item for item in requested if item != main_service_id],
+            branch_id=branch_id,
+            doctor_id=doctor_id,
+            start_at=start_at,
+            end_at=end_at,
+            device_key=device_key,
+            additional_service_device_keys={
+                item: device_key
+                for item in laser_ids
+                if item != main_service_id and device_key is not None
+            },
+            package_usage=str(params.get("package_usage") or "unspecified"),
+            package_id=str(params["package_id"]) if params.get("package_id") else None,
+        )
+        visits.append(visit)
+        all_services.extend(requested)
+        if device_key is not None:
+            service_devices.update({item: device_key for item in laser_ids})
+
+    if len(all_services) != len(set(all_services)):
+        return plan, None
+    for previous, current in zip(visits, visits[1:], strict=False):
+        if current.start_at < previous.end_at:
+            return plan, None
+
+    first = visits[0]
+    proposal = BookingProposal(
+        proposal_id=str(
+            uuid5(
+                NAMESPACE_URL,
+                "tia-compound-category-proposal:"
+                f"{workspace.id}:{patient.id}:{turn_id}:"
+                + ";".join(
+                    f"{','.join(visit.service_ids)}:{visit.start_at.isoformat()}"
+                    for visit in visits
+                ),
+            )
+        ),
+        patient_id=str(patient.id),
+        service_ids=all_services,
+        main_service_id=first.main_service_id,
+        additional_service_ids=first.additional_service_ids,
+        branch_id=first.branch_id,
+        doctor_id=first.doctor_id,
+        start_at=first.start_at,
+        end_at=first.end_at,
+        device_key=first.device_key,
+        additional_service_device_keys=first.additional_service_device_keys,
+        package_usage=first.package_usage,
+        package_id=first.package_id,
+        visits=visits,
+        task_version=max(getattr(current_task, "version", 1), 1),
+        proposal_version=(
+            current_task.proposal.proposal_version + 1
+            if current_task is not None and current_task.proposal is not None
+            else 1
+        ),
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+    )
+    first_params = bookings[0].write_intent.parameters if bookings[0].write_intent else {}
+    constraints = CustomerConstraints.model_validate(
+        {
+            "service_id": first.main_service_id,
+            "doctor_id": first.doctor_id,
+            "branch_id": first.branch_id,
+            "device_key": first.device_key,
+            "date": first_params.get("date"),
+            "time": first_params.get("time"),
+            "package_usage": first.package_usage,
+        }
+    )
+    if current_task is None:
+        base_task = BookingTaskState(
+            write_authorization=WriteAuthorization(operation="booking", authorized=False),
+            constraints=constraints,
+            requested_service_ids=all_services,
+            service_device_keys=service_devices,
+        )
+    else:
+        base_task = current_task.model_copy(
+            update={
+                "status": "collecting",
+                "constraints": constraints,
+                "requested_service_ids": all_services,
+                "service_device_keys": service_devices,
+                "grouped": None,
+                "proposal": None,
+                "option_snapshot": None,
+            }
+        )
+    proposal_task = attach_booking_proposal(base_task, proposal=proposal)
+    summary = {
+        "services": _service_names(catalog, all_services),
+        "visits": [
+            {
+                "services": _service_names(catalog, visit.service_ids),
+                "start_at": visit.start_at.isoformat(),
+                "end_at": visit.end_at.isoformat(),
+                "doctor_id": visit.doctor_id,
+                "branch_id": visit.branch_id,
+                "device_key": visit.device_key,
+            }
+            for visit in visits
+        ],
+    }
+    response_step = bookings[0].model_copy(
+        update={
+            "disposition": "respond",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "booking_proposal",
+            "facts": {
+                **bookings[0].facts,
+                "booking_proposal_summary": summary,
+                "compound_category_proposal": True,
+            },
+        }
+    )
+    return plan.model_copy(update={"steps": [response_step]}), proposal_task
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -2538,6 +2732,17 @@ def orchestrate_v2_turn(
         now=local_now,
         turn_id=resolved_turn_id,
     )
+    plan, compound_category_task = _prepare_cross_category_compound_proposal(
+        plan,
+        current_task=initial_booking_task,
+        workspace=workspace,
+        patient=patient,
+        catalog=canonical_catalog,
+        now=local_now,
+        turn_id=resolved_turn_id,
+    )
+    if compound_category_task is not None:
+        grouped_booking_task = compound_category_task
     plan = enforce_grouped_booking_write_guard(
         plan,
         active_task=initial_booking_task,

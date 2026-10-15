@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
-from app.services.agent_v2.multi_service_booking import select_main_service_id
+from app.services.agent_v2.multi_service_booking import (
+    partition_service_ids_by_operational_category,
+    select_main_service_id,
+)
 from app.services.agent_v2.planner import TurnPlan
 from app.services.agent_v2.state import BookingTaskState
 
@@ -97,6 +100,11 @@ def guard_multiple_booking_writes(plan: TurnPlan) -> TurnPlan:
         if step.write_intent is not None and step.write_intent.kind == "booking"
     ]
     if len(bookings) < 2:
+        return plan
+    compound_groups = {
+        str(step.facts.get("compound_write_group") or "") for step in bookings
+    }
+    if len(compound_groups) == 1 and "" not in compound_groups:
         return plan
     first = bookings[0]
     guarded = first.model_copy(
@@ -221,39 +229,50 @@ def collapse_booking_service_sets(
                     *(service_id for service_id in current_ids if service_id in selected),
                     *(service_id for service_id in canonical_ids if service_id not in current_ids),
                 ]
-        main_id = select_main_service_id(catalog, canonical_ids)
+        category_groups = partition_service_ids_by_operational_category(
+            catalog, canonical_ids
+        )
         ref_by_id = {canonical: ref for ref, canonical in resolved}
         for ref, target in semantic_context.reference_map.items():
             if target.kind == "service" and target.canonical_id in canonical_ids:
                 ref_by_id.setdefault(target.canonical_id, ref)
-        main_ref = ref_by_id.get(main_id)
-        if main_ref is None:
-            normalized.append(operation)
-            continue
-        # Equivalent provider shapes must not change single-service business semantics.
-        # A one-item candidate_mode=set becomes the same grounded singleton ref unless
-        # it is authoritatively narrowing an existing grouped booking.
-        if len(canonical_ids) > 1 or explicit_grouped_service_correction:
-            service_sets[index] = canonical_ids
-        normalized.append(
-            operation.model_copy(
-                update={
-                    "entities": operation.entities.model_copy(
-                        update={
-                            "service": entity.model_copy(
-                                update={
-                                    "ref": main_ref,
-                                    "candidate_refs": [],
-                                    "candidate_mode": "ambiguous",
-                                }
-                            )
-                        }
-                    )
-                }
-            )
-        )
 
-    if all(current is original for current, original in zip(normalized, turn.operations, strict=True)):
+        emitted = False
+        for _category, category_ids in category_groups:
+            main_id = select_main_service_id(catalog, category_ids)
+            main_ref = ref_by_id.get(main_id)
+            if main_ref is None:
+                continue
+            output_index = len(normalized)
+            if len(category_ids) > 1 or (
+                explicit_grouped_service_correction and len(category_groups) == 1
+            ):
+                service_sets[output_index] = list(category_ids)
+            normalized.append(
+                operation.model_copy(
+                    update={
+                        "entities": operation.entities.model_copy(
+                            update={
+                                "service": entity.model_copy(
+                                    update={
+                                        "ref": main_ref,
+                                        "candidate_refs": [],
+                                        "candidate_mode": "ambiguous",
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            )
+            emitted = True
+        if not emitted:
+            normalized.append(operation)
+
+    if len(normalized) == len(turn.operations) and all(
+        current is original
+        for current, original in zip(normalized, turn.operations, strict=True)
+    ):
         return turn, service_sets
     normalized_turn = turn.model_copy(update={"operations": normalized})
     return normalized_turn, service_sets

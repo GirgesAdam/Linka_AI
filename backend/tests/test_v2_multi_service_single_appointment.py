@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+
+import pytest
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -13,6 +15,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+import app.services.agent_v2.multi_service_booking as multi_service_booking
 from app.services.agent_v2.multi_service_booking import (
     AdditionalServiceResolution,
     execute_booking_proposal,
@@ -57,10 +60,10 @@ FULL_ARMS = "77777777-7777-7777-7777-777777777777"
 def _catalog() -> dict[str, object]:
     return {
         "services": [
-            {"id": UNDERARM, "name": "Underarm", "duration_minutes": 20},
-            {"id": BIKINI, "name": "Bikini", "duration_minutes": 25},
-            {"id": COMBO, "name": "Underarm + Bikini", "duration_minutes": 45},
-            {"id": FULL_ARMS, "name": "Full Arms", "duration_minutes": 30},
+            {"id": UNDERARM, "name": "Underarm", "duration_minutes": 20, "operational_category": "dermatology"},
+            {"id": BIKINI, "name": "Bikini", "duration_minutes": 25, "operational_category": "dermatology"},
+            {"id": COMBO, "name": "Underarm + Bikini", "duration_minutes": 45, "operational_category": "dermatology"},
+            {"id": FULL_ARMS, "name": "Full Arms", "duration_minutes": 30, "operational_category": "dermatology"},
         ],
         "branches": [{"id": BRANCH_ID, "name": "New Cairo"}],
         "doctors": [
@@ -553,6 +556,11 @@ def test_proposal_executor_creates_one_appointment_then_additional_rows(monkeypa
         "app.services.agent_v2.multi_service_booking.add_additional_service",
         fake_add,
     )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._validate_proposal_visit_category",
+        lambda *_args, **_kwargs: None,
+    )
+
     result = execute_booking_proposal(
         SimpleNamespace(),
         workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
@@ -617,6 +625,11 @@ def test_replacement_final_set_executes_one_appointment_without_removed_service(
         "app.services.agent_v2.multi_service_booking.add_additional_service",
         fake_add,
     )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._validate_proposal_visit_category",
+        lambda *_args, **_kwargs: None,
+    )
+
     result = execute_booking_proposal(
         SimpleNamespace(),
         workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
@@ -685,6 +698,11 @@ def test_d6_grouped_explicit_pm_executes_one_pending_appointment_with_shared_vis
     )
     monkeypatch.setattr(
         "app.services.agent_v2.multi_service_booking.add_additional_service", fake_add
+    )
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._validate_proposal_visit_category",
+        lambda *_args, **_kwargs: None,
     )
 
     result = execute_booking_proposal(
@@ -759,6 +777,11 @@ def test_ra6_confirmation_creates_one_bikini_appointment_plus_underarm_on_same_d
         "app.services.agent_v2.multi_service_booking.add_additional_service", fake_add
     )
 
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._validate_proposal_visit_category",
+        lambda *_args, **_kwargs: None,
+    )
+
     result = execute_booking_proposal(
         SimpleNamespace(),
         workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
@@ -773,3 +796,81 @@ def test_ra6_confirmation_creates_one_bikini_appointment_plus_underarm_on_same_d
     ]
     assert result["main_service_id"] == BIKINI
     assert result["additional_service_ids"] == [UNDERARM]
+
+
+def test_compound_booking_proposal_executes_all_visits_inside_one_savepoint(monkeypatch) -> None:
+    from app.services.agent_v2.state import BookingProposalVisit
+
+    first = BookingProposalVisit(
+        service_ids=[UNDERARM],
+        main_service_id=UNDERARM,
+        branch_id=BRANCH_ID,
+        doctor_id=DOCTOR_ID,
+        start_at=NOW + timedelta(days=1),
+        end_at=NOW + timedelta(days=1, minutes=20),
+    )
+    second = BookingProposalVisit(
+        service_ids=[BIKINI],
+        main_service_id=BIKINI,
+        branch_id=BRANCH_ID,
+        doctor_id=DOCTOR_ID,
+        start_at=NOW + timedelta(days=1, minutes=20),
+        end_at=NOW + timedelta(days=1, minutes=45),
+    )
+    proposal = BookingProposal(
+        proposal_id="aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",
+        patient_id=PATIENT_ID,
+        service_ids=[UNDERARM, BIKINI],
+        main_service_id=UNDERARM,
+        additional_service_ids=[],
+        branch_id=BRANCH_ID,
+        doctor_id=DOCTOR_ID,
+        start_at=first.start_at,
+        end_at=first.end_at,
+        visits=[first, second],
+        created_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+
+    class _Savepoint:
+        def __init__(self):
+            self.saw_exception = False
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            self.saw_exception = exc_type is not None
+            return False
+
+    class _Db:
+        def __init__(self):
+            self.savepoint = _Savepoint()
+        def begin_nested(self):
+            return self.savepoint
+
+    db = _Db()
+    calls = []
+    def fake_execute(*_args, visit, **_kwargs):
+        calls.append(visit.main_service_id)
+        if len(calls) == 2:
+            raise RuntimeError("second visit failed")
+        return {
+            "appointment_id": "appointment-1",
+            "status": "pending",
+            "main_service_id": visit.main_service_id,
+            "additional_service_ids": [],
+            "additional_service_row_ids": [],
+            "reserved_duration_minutes": 20,
+            "package_used": False,
+        }
+    monkeypatch.setattr(multi_service_booking, "_execute_booking_proposal_visit", fake_execute)
+
+    with pytest.raises(RuntimeError, match="second visit failed"):
+        multi_service_booking.execute_booking_proposal(
+            db,
+            workspace=SimpleNamespace(id="workspace"),
+            patient=SimpleNamespace(id=PATIENT_ID, status="active"),
+            proposal=proposal,
+            idempotency_key="compound",
+        )
+    assert calls == [UNDERARM, BIKINI]
+    assert db.savepoint.saw_exception is True
