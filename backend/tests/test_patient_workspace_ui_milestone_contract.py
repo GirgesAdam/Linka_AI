@@ -5,18 +5,19 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def test_patient_list_preserves_search_filters_and_responsive_views() -> None:
+def test_patient_list_preserves_search_only_and_responsive_views() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/patients/page.tsx").read_text(encoding="utf-8")
 
     assert 'name="q"' in page
-    assert 'name="status"' in page
-    assert 'name="source"' in page
+    assert 'name="status"' not in page
+    assert 'name="source"' not in page
+    assert 'query.set("status"' not in page
+    assert 'query.set("source"' not in page
     assert 'md:hidden' in page
     assert 'hidden md:block' in page
     assert '<StatusBadge domain="patient"' in page
-    assert "hasActiveFilters = Boolean(q || status || source)" in page
+    assert "hasActiveFilters = Boolean(q)" in page
     assert 'href="/patients"' in page
-
 
 def test_patient_workspace_prioritizes_current_context_before_history() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/patients/[patientId]/page.tsx").read_text(encoding="utf-8")
