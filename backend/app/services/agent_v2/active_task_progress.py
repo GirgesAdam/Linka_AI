@@ -400,6 +400,14 @@ def adapt_matching_active_task_step(
     now: datetime | None = None,
 ) -> PlanStep:
     """Merge continuations or mark an explicit fresh task for safe replacement."""
+    if (
+        isinstance(active_task, BookingTaskState)
+        and step.facts.get("verified_booking_slot_selection") is True
+    ):
+        # A concrete server-owned slot selection is already a deterministic workflow event.
+        # Do not reinterpret it through generic active-task progression before fresh verification.
+        return step
+
     grouped_step = step.facts.get("compound_visit_group") not in (None, "") or step.facts.get(
         "compound_write_group"
     ) not in (None, "")

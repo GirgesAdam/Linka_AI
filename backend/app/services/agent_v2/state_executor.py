@@ -37,6 +37,7 @@ from app.services.agent_v2.state_rules import (
     apply_reschedule_service_change,
     apply_reschedule_time_change,
     attach_option_snapshot,
+    invalidate_booking_slot_selection,
     preserve_task_for_side_read,
     record_booking_commercial_basis_presented,
     record_booking_selected_slot,
@@ -539,6 +540,20 @@ def _availability_slots(reads: ReadExecutionBundle | None) -> list[dict[str, obj
     return []
 
 
+def _availability_alternative_slots(
+    reads: ReadExecutionBundle | None,
+) -> list[dict[str, object]]:
+    if reads is None:
+        return []
+    for result in reads.results:
+        if result.kind != "availability":
+            continue
+        rows = result.payload.get("nearest_alternative_slots")
+        if isinstance(rows, list):
+            return [dict(row) for row in rows if isinstance(row, dict)]
+    return []
+
+
 def _slot_payload(row: dict[str, object]) -> dict[str, object]:
     start_local = str(row.get("start_local") or "")
     start_time = str(row.get("start_time_24h") or "")[:5]
@@ -599,7 +614,13 @@ def _attach_availability_snapshot(
     turn_id: str,
 ) -> ActiveTaskState:
     slots = _availability_slots(reads)
-    if not slots or step.disposition == "write_ready":
+    if (
+        not slots
+        and step.facts.get("verified_booking_slot_selection") is True
+        and step.response_goal == "requested_time_unavailable"
+    ):
+        slots = _availability_alternative_slots(reads)
+    if not slots or step.disposition == "write_ready" or step.response_goal == "booking_proposal":
         return state
     if step.response_goal in {"answer_price", "package_information"} and len(slots) == 1:
         # Exact/unique availability verified alongside commercial truth does not
@@ -691,6 +712,14 @@ def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTas
     selected_ref = step.facts.get("selected_option_ref")
     if isinstance(state, BookingTaskState):
         if selected_ref in (None, ""):
+            return state
+        if (
+            (
+                step.facts.get("verified_booking_slot_selection") is True
+                or step.facts.get("booking_proposal_required") is True
+            )
+            and step.response_goal != "booking_proposal"
+        ):
             return state
         return record_booking_selected_slot(
             state,
@@ -836,6 +865,13 @@ def apply_step_state(
                 current,
                 commercial_key=commercial_key,
             )
+
+    if (
+        isinstance(current, BookingTaskState)
+        and step.facts.get("verified_booking_slot_selection") is True
+        and step.response_goal != "booking_proposal"
+    ):
+        current = invalidate_booking_slot_selection(current)
 
     current = _attach_availability_snapshot(
         current,

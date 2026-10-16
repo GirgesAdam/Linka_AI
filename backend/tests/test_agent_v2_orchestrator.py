@@ -15,7 +15,13 @@ from app.agents.v2.availability_reference_interpreter import (
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
-from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.planner import (
+    PlanStep,
+    ReadRequest,
+    TurnPlan,
+    VerificationFacts,
+    WriteIntent,
+)
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import (
     BookingTaskState,
@@ -966,7 +972,7 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
                     ref="slot-old",
                     label="20:00",
                     payload={
-                        "service_id": "service-b",
+                        "service_id": "service-a",
                         "branch_id": "branch-1",
                         "doctor_id": "doctor-1",
                         "device_key": "device-1",
@@ -1091,11 +1097,36 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
         return plan
 
     monkeypatch.setattr(runtime, "preflight_compound_visit_plan", capture_preflight)
+    fresh_slot = {
+        "service_id": "service-b",
+        "branch_id": "branch-1",
+        "doctor_id": "doctor-1",
+        "laser_device_key": "device-1",
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "end_at": "2026-09-12T20:20:00+03:00",
+        "start_local": "2026-09-12T20:00:00+03:00",
+        "start_time_24h": "20:00",
+        "doctor_name": "Doctor 1",
+        "laser_device_name": "Device 1",
+    }
     monkeypatch.setattr(
         runtime,
         "execute_step_reads",
-        lambda *args, **kwargs: ReadExecutionBundle(),
+        lambda *args, **kwargs: ReadExecutionBundle(
+            results=[ReadResult(kind="availability", ok=True, payload={"slots": [fresh_slot]})],
+            verification=VerificationFacts(
+                exact_slot_match_count=1,
+                verified_parameters={
+                    "service_id": "service-b",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "device_key": "device-1",
+                    "start_at": "2026-09-12T20:00:00+03:00",
+                },
+            ),
+        ),
     )
+    monkeypatch.setattr(runtime, "resolve_additional_services", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         runtime,
         "compose_v2_customer_reply",
@@ -1128,7 +1159,12 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
     assert step.facts["requested_service_ids"] == ["service-a", "service-b"]
     assert step.facts["doctor_id"] == "doctor-1"
     assert step.facts["device_key"] == "device-1"
-    assert step.write_intent is None
+    assert step.write_intent is not None
+    assert step.write_intent.kind == "booking"
+    assert step.write_intent.authorized is True
+    assert step.write_intent.requires_verification is True
+    assert step.facts["booking_proposal_required"] is True
+    assert step.facts["verified_booking_slot_selection"] is True
     assert step.clarification_field != "service"
     assert step.response_goal != "answer_price"
     assert any(read.kind == "availability" for read in step.reads)
@@ -1138,18 +1174,21 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
     assert result.full_interpreter_called is False
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.requested_service_ids == ["service-a", "service-b"]
+    assert result.active_task.status == "awaiting_confirmation"
+    assert result.active_task.derived.selected_slot_ref == "opt_1"
+    assert result.active_task.proposal is not None
+    assert result.active_task.proposal.service_ids == ["service-a", "service-b"]
+    assert result.active_task.proposal.doctor_id == "doctor-1"
+    assert result.active_task.proposal.device_key == "device-1"
+    assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
     assert result.active_task.constraints.doctor_id == "doctor-1"
     assert result.active_task.constraints.device_key == "device-1"
     assert result.active_task.constraints.date is not None
     assert result.active_task.constraints.date.start_date == "2026-09-12"
     assert result.active_task.constraints.time is not None
     assert result.active_task.constraints.time.start_time == "20:00"
-    assert result.active_task.proposal is None
-    assert result.active_task.service_device_keys == {
-        "service-a": "device-1",
-        "service-b": "device-1",
-    }
     assert result.active_task.write_authorization.authorized is False
+    assert result.outcomes[0].response_goal == "booking_proposal"
     assert saved and saved[-1].requested_service_ids == ["service-a", "service-b"]
 
 

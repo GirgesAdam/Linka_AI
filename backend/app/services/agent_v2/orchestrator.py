@@ -89,6 +89,7 @@ from app.services.agent_v2.planner import (
     PlanStep,
     ReadRequest,
     TurnPlan,
+    WriteIntent,
     plan_turn,
     resolve_same_turn_verified_service_dependency,
 )
@@ -128,6 +129,7 @@ from app.services.agent_v2.state_rules import (
     apply_booking_branch_change,
     apply_booking_device_change,
     apply_booking_doctor_change,
+    apply_verified_booking_slot_selection,
     attach_booking_proposal,
 )
 from app.services.agent_v2.turn_normalization import (
@@ -274,6 +276,7 @@ def _prepare_booking_proposal(
     catalog: dict[str, Any],
     now: datetime,
     turn_id: str,
+    additional_service_resolver: Callable[[BookingProposal], list[object]] | None = None,
 ) -> tuple[PlanStep, BookingProposal | None]:
     intent = step.write_intent
     requested_raw = step.facts.get("requested_service_ids")
@@ -434,7 +437,11 @@ def _prepare_booking_proposal(
         expires_at=now + timedelta(minutes=15),
     )
     try:
-        resolved = resolve_additional_services(db, workspace=workspace, proposal=proposal)
+        resolved = (
+            additional_service_resolver(proposal)
+            if additional_service_resolver is not None
+            else resolve_additional_services(db, workspace=workspace, proposal=proposal)
+        )
     except MultiServiceBookingError as exc:
         field = exc.dimension if exc.dimension in {"doctor", "device", "branch", "service"} else "service"
         return step.model_copy(
@@ -476,6 +483,39 @@ def _prepare_booking_proposal(
             "facts": {**step.facts, "booking_proposal_summary": summary},
         }
     ), proposal
+
+
+def _attach_verified_booking_proposal_to_task(
+    task: BookingTaskState,
+    *,
+    proposal: BookingProposal,
+    selected_option_ref: str,
+    catalog: dict[str, Any],
+    timezone_name: str,
+) -> BookingTaskState:
+    local_start = proposal.start_at.astimezone(ZoneInfo(timezone_name))
+    proposal_devices = dict(task.service_device_keys)
+    proposal_laser_ids = laser_service_ids(catalog, list(proposal.service_ids))
+    if proposal.device_key is not None:
+        proposal_devices.update(
+            {service_id: proposal.device_key for service_id in proposal_laser_ids}
+        )
+    selected = apply_verified_booking_slot_selection(
+        task,
+        selected_slot_ref=selected_option_ref,
+        main_service_id=proposal.main_service_id,
+        branch_id=proposal.branch_id,
+        doctor_id=proposal.doctor_id,
+        device_key=proposal.device_key,
+        date=DateConstraint(mode="exact", start_date=local_start.date().isoformat()),
+        time=TimeConstraint(
+            mode="exact",
+            start_time=local_start.strftime("%H:%M"),
+            start_time_ambiguity="none",
+        ),
+        service_device_keys=proposal_devices,
+    )
+    return attach_booking_proposal(selected, proposal=proposal)
 
 
 def _prepare_cross_category_compound_proposal(
@@ -737,6 +777,170 @@ def _grouped_reference_date(
     if len(dates) != 1:
         return None
     return DateConstraint(mode="exact", start_date=next(iter(dates)))
+
+
+def _verified_booking_selection_plan(
+    task: ActiveTaskState | None,
+    *,
+    decision: object | None,
+    availability_context: dict[str, Any] | None,
+    catalog: dict[str, Any],
+    selection_time: str | None,
+    now: datetime,
+) -> tuple[TurnPlan, dict[str, Any]] | None:
+    """Plan one fresh verification for a concrete server-owned booking slot."""
+    if not isinstance(task, BookingTaskState) or task.status != "awaiting_slot":
+        return None
+    if (
+        decision is None
+        or getattr(decision, "action", None) != "select_presented_option"
+        or getattr(decision, "selection_scope", "none") != "none"
+    ):
+        return None
+    option_ref = str(getattr(decision, "option_ref", None) or "")
+    if not option_ref:
+        return None
+    validated_context = _active_task_reference_option_context(
+        task,
+        option_ref=option_ref,
+        availability_context=availability_context,
+        explicit_user_time=selection_time,
+        now=now,
+    )
+    if validated_context is None:
+        return None
+    resolution = resolve_verified_availability_reference(
+        Selection(kind="ref", ref=option_ref),
+        validated_context,
+        explicit_user_time=selection_time,
+    )
+    if resolution.get("status") != "resolved":
+        return None
+    option = resolution.get("option")
+    slot = option.get("slot") if isinstance(option, dict) else None
+    if not isinstance(slot, dict):
+        return None
+    slot_time = canonical_availability_slot_time(slot)
+    start_local = str(slot.get("start_local") or "")
+    if slot_time is None or len(start_local) < 10:
+        return None
+
+    requested = list(task.requested_service_ids)
+    if not requested and task.constraints.service_id is not None:
+        requested = [task.constraints.service_id]
+    requested = list(dict.fromkeys(requested))
+    slot_service_id = str(slot.get("service_id") or "")
+    if not requested or slot_service_id not in set(requested):
+        return None
+    if len(requested) > 1:
+        context_services = validated_context.get("requested_service_ids")
+        if not isinstance(context_services, list) or set(map(str, context_services)) != set(requested):
+            return None
+
+    branch_id = str(slot.get("branch_id") or task.constraints.branch_id or "")
+    doctor_id = str(slot.get("doctor_id") or "")
+    device_key = str(slot.get("laser_device_key") or slot.get("device_key") or "").strip() or None
+    if not branch_id or not doctor_id:
+        return None
+    if doctor_id not in common_doctor_ids(catalog, requested, branch_id=branch_id):
+        return (
+            TurnPlan(
+                steps=[
+                    PlanStep(
+                        operation_index=0,
+                        operation_type="book",
+                        disposition="clarify",
+                        state_action="none",
+                        response_goal="clarification",
+                        clarification_field="doctor",
+                        facts={
+                            "verified_booking_slot_selection": True,
+                            "verified_availability_reference": True,
+                            "selected_option_ref": option_ref,
+                            "multi_service_doctor_incompatible": True,
+                        },
+                    )
+                ]
+            ),
+            validated_context,
+        )
+    laser_ids = laser_service_ids(catalog, requested)
+    if laser_ids:
+        common_devices = common_laser_device_keys(catalog, requested)
+        if device_key is None or device_key not in common_devices:
+            return (
+                TurnPlan(
+                    steps=[
+                        PlanStep(
+                            operation_index=0,
+                            operation_type="book",
+                            disposition="clarify",
+                            state_action="none",
+                            response_goal="clarification",
+                            clarification_field="device",
+                            facts={
+                                "verified_booking_slot_selection": True,
+                                "verified_availability_reference": True,
+                                "selected_option_ref": option_ref,
+                                "multi_service_device_incompatible": True,
+                                "compatible_visit_device_keys": list(common_devices),
+                            },
+                        )
+                    ]
+                ),
+                validated_context,
+            )
+    elif device_key is not None:
+        return None
+
+    main_service_id = select_main_service_id(catalog, requested, device_key=device_key)
+    date_constraint = DateConstraint(mode="exact", start_date=start_local[:10])
+    time_constraint = TimeConstraint(
+        mode="exact",
+        start_time=slot_time,
+        start_time_ambiguity="none",
+    )
+    params: dict[str, object] = {
+        "service_id": main_service_id,
+        "branch_id": branch_id,
+        "doctor_id": doctor_id,
+        "date": date_constraint.model_dump(mode="json"),
+        "time": time_constraint.model_dump(mode="json"),
+        "package_usage": task.constraints.package_usage,
+    }
+    if device_key is not None:
+        params["device_key"] = device_key
+    if task.derived.selected_package_id is not None:
+        params["package_id"] = task.derived.selected_package_id
+
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters=dict(params))],
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=True,
+            parameters=dict(params),
+            requires_verification=True,
+        ),
+        state_action="select_active",
+        response_goal="present_availability",
+        facts={
+            **params,
+            "requested_service_ids": requested,
+            "booking_proposal_required": True,
+            "exact_time_requested": True,
+            "service_requires_laser_device": bool(laser_ids),
+            "multi_service_single_appointment": len(requested) > 1,
+            "verified_booking_slot_selection": True,
+            "verified_availability_reference": True,
+            "selected_option_ref": option_ref,
+            "verified_selection_date": date_constraint.model_dump(mode="json"),
+            "verified_selection_time": time_constraint.model_dump(mode="json"),
+        },
+    )
+    return TurnPlan(steps=[step]), validated_context
 
 
 def _grouped_visit_reference_understanding(
@@ -2423,13 +2627,41 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    grouped_reference = _grouped_visit_reference_understanding(
+    selection_time = explicit_user_time or exact_reference_time or carried_pending_time
+    verified_booking_selection = _verified_booking_selection_plan(
         initial_task,
         decision=decision,
         availability_context=availability_reference_context,
         catalog=canonical_catalog,
+        selection_time=selection_time,
+        now=local_now,
     )
-    if grouped_reference is not None:
+    grouped_reference = (
+        _grouped_visit_reference_understanding(
+            initial_task,
+            decision=decision,
+            availability_context=availability_reference_context,
+            catalog=canonical_catalog,
+        )
+        if decision is not None and decision.action == "clarify"
+        else None
+    )
+    if verified_booking_selection is not None:
+        reference_plan_override, availability_reference_context = verified_booking_selection
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="book",
+                    entities=TurnEntities(),
+                    selection=Selection(kind="ref", ref=str(decision.option_ref)),
+                    execution_intent="informational",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+        full_interpreter_called = False
+    elif grouped_reference is not None:
         understanding, initial_task = grouped_reference
         full_interpreter_called = False
     elif (
@@ -2471,7 +2703,6 @@ def orchestrate_v2_turn(
             if isinstance(initial_task, RescheduleTaskState)
             else "availability"
         )
-        selection_time = explicit_user_time or exact_reference_time or carried_pending_time
         validated_reference_context = (
             _active_task_reference_option_context(
                 initial_task,
@@ -3112,10 +3343,20 @@ def orchestrate_v2_turn(
             pending_proposal_for_step is not None
             and isinstance(transition.active_task, BookingTaskState)
         ):
-            proposal_task = attach_booking_proposal(
-                transition.active_task,
-                proposal=pending_proposal_for_step,
-            )
+            proposal_base = transition.active_task
+            if advanced.facts.get("verified_booking_slot_selection") is True:
+                proposal_task = _attach_verified_booking_proposal_to_task(
+                    proposal_base,
+                    proposal=pending_proposal_for_step,
+                    selected_option_ref=str(advanced.facts.get("selected_option_ref") or ""),
+                    catalog=canonical_catalog,
+                    timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
+                )
+            else:
+                proposal_task = attach_booking_proposal(
+                    proposal_base,
+                    proposal=pending_proposal_for_step,
+                )
             transition = transition.__class__(
                 active_task=proposal_task,
                 changed=True,
