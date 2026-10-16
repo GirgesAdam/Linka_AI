@@ -78,6 +78,11 @@ def _turn_evidence(result) -> dict[str, object]:
             }
             for trace in result.traces
         ],
+        "reference_semantic_path_used": result.reference_semantic_path_used,
+        "reference_action": result.reference_action,
+        "selected_option_ref": result.selected_option_ref,
+        "full_interpreter_called": result.full_interpreter_called,
+        "reference_structured_output_error": result.reference_structured_output_error,
         "active_task": _task_evidence(result.active_task),
     }
 
