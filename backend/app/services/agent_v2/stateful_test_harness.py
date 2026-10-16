@@ -93,6 +93,7 @@ def _fixture_availability_context(
         if isinstance(active_task, BookingTaskState)
         else []
     )
+    canonical_grouped_requested: list[str] = []
     components: list[tuple[str, dict[str, object], list[dict[str, object]], list[str]]] = []
     for trace in traces:
         if trace.outcome.response_goal != "present_availability":
@@ -103,6 +104,18 @@ def _fixture_availability_context(
         )
         if step is None:
             continue
+        step_requested = step.facts.get("requested_service_ids")
+        if (
+            step.facts.get("multi_service_single_appointment") is True
+            and isinstance(step_requested, list)
+        ):
+            canonical_requested = list(
+                dict.fromkeys(
+                    str(item) for item in step_requested if item not in (None, "")
+                )
+            )
+            if len(canonical_requested) > 1 and set(canonical_requested) == set(requested):
+                canonical_grouped_requested = canonical_requested
         availability_read = next(
             (request for request in step.reads if request.kind == "availability"),
             None,
@@ -135,7 +148,12 @@ def _fixture_availability_context(
     if not components:
         return None
 
-    if len(requested) > 1 and {item[0] for item in components} >= set(requested):
+    if canonical_grouped_requested:
+        selected_components = [
+            item for item in components if item[0] in canonical_grouped_requested
+        ]
+        requested = canonical_grouped_requested
+    elif len(requested) > 1 and {item[0] for item in components} >= set(requested):
         selected_components = [item for item in components if item[0] in requested]
     else:
         selected_components = [components[-1]]

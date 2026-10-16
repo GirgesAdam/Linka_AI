@@ -593,6 +593,8 @@ def test_stateful_harness_uses_same_grouped_normalization_as_runtime(monkeypatch
     assert result.active_task.write_authorization.authorized is False
     assert len(result.traces) == 1
     assert result.traces[0].read_kinds == ("availability",)
+    assert result.availability_reference_context is not None
+    assert result.availability_reference_context["requested_service_ids"] == [A, B]
     assert result.traces[0].simulated_write is None
 
 
