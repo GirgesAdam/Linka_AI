@@ -31,6 +31,7 @@ from app.services.agent_v2.state_rules import apply_booking_requested_services_c
 from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     expand_multi_service_operations,
+    merge_same_turn_grouped_availability_operations,
     merge_same_visit_booking_operations,
     recollapse_restored_booking_visit_groups,
     tag_booking_service_sets,
@@ -1057,6 +1058,188 @@ def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing()
     assert start + timedelta(minutes=duration) == datetime(2026, 10, 17, 18, 30)
     assert common_doctor_ids(catalog, [A, B]) == ["doc-common"]
     assert common_laser_device_keys(catalog, [A, B]) == ["v1"]
+
+
+def test_same_turn_same_category_availability_operations_collapse_to_one_service_set() -> None:
+    catalog = _catalog(common_devices=1)
+    context = build_semantic_context(catalog)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                execution_intent="informational",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1"),
+                    date=DateConstraint(mode="next_available"),
+                ),
+            ),
+            TurnOperation(
+                type="availability",
+                execution_intent="informational",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S2"),
+                    date=DateConstraint(mode="next_available"),
+                ),
+            ),
+        ]
+    )
+
+    normalized = merge_same_turn_grouped_availability_operations(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+    )
+
+    assert len(normalized.operations) == 1
+    service = normalized.operations[0].entities.service
+    assert service is not None
+    assert service.ref is None
+    assert service.candidate_mode == "set"
+    assert service.candidate_refs == ["S1", "S2"]
+
+
+def test_same_turn_different_category_availability_operations_do_not_collapse() -> None:
+    catalog = _catalog(common_devices=1)
+    catalog["services"].append(
+        {
+            "id": "svc-dermatology",
+            "name": "Dermatology Consultation",
+            "operational_category": "dermatology",
+            "duration_minutes": 30,
+            "requires_laser_device": False,
+            "currency": "EGP",
+            "price_minor": 100_000,
+        }
+    )
+    context = build_semantic_context(catalog)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                execution_intent="informational",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1"),
+                    date=DateConstraint(mode="next_available"),
+                ),
+            ),
+            TurnOperation(
+                type="availability",
+                execution_intent="informational",
+                entities=TurnEntities(
+                    service=EntityReference(ref="svc-dermatology"),
+                    date=DateConstraint(mode="next_available"),
+                ),
+            ),
+        ]
+    )
+
+    normalized = merge_same_turn_grouped_availability_operations(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+    )
+
+    assert len(normalized.operations) == 2
+    assert [op.entities.service.ref for op in normalized.operations] == [
+        "S1",
+        "svc-dermatology",
+    ]
+
+
+def test_ra_h2_live_shaped_two_turn_availability_persists_grouped_task_then_prices_both_services(monkeypatch) -> None:
+    from langchain_core.messages import HumanMessage
+
+    import app.services.agent_v2.stateful_test_harness as stateful_harness
+    from app.services.agent_v2.test_harness import V2FixtureEnvironment
+
+    catalog = _catalog(common_devices=1)
+    underarm = next(row for row in catalog["services"] if row["id"] == A)
+    bikini = next(row for row in catalog["services"] if row["id"] == B)
+    underarm["currency"] = "EGP"
+    bikini["currency"] = "EGP"
+    bikini["laser_devices"][0]["price_minor"] = 70_000
+
+    date = DateConstraint(mode="next_available")
+    availability_turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                execution_intent="informational",
+                entities=TurnEntities(service=EntityReference(ref="S1"), date=date),
+            ),
+            TurnOperation(
+                type="availability",
+                execution_intent="informational",
+                entities=TurnEntities(service=EntityReference(ref="S2"), date=date),
+            ),
+        ]
+    )
+    pricing_turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                execution_intent="informational",
+                entities=TurnEntities(),
+                requested_service_details=["price"],
+            )
+        ]
+    )
+
+    def interpret(**kwargs):
+        history = kwargs["history"]
+        latest = next(
+            message.content
+            for message in reversed(history)
+            if isinstance(message, HumanMessage)
+        )
+        return availability_turn if "أحجز" in latest else pricing_turn
+
+    monkeypatch.setattr(stateful_harness, "interpret_customer_turn_v2", interpret)
+    monkeypatch.setattr(
+        stateful_harness,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("ok", "deterministic:test"),
+    )
+
+    env = V2FixtureEnvironment(catalog=catalog)
+    first = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[HumanMessage(content="عايزة أحجز ليزر إبط وليزر بكيني مع بعض في نفس الزيارة")],
+        local_now=NOW,
+        env=env,
+        simulate_writes=False,
+        turn_id="ra-h2-turn-1",
+    )
+
+    assert isinstance(first.active_task, BookingTaskState)
+    assert first.active_task.requested_service_ids == [A, B]
+    assert first.active_task.write_authorization.authorized is False
+    assert first.active_task.proposal is None
+    assert len(first.plan.steps) == 1
+    assert first.plan.steps[0].facts["requested_service_ids"] == [A, B]
+    assert all(trace.simulated_write is None for trace in first.traces)
+
+    second = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[
+            HumanMessage(content="عايزة أحجز ليزر إبط وليزر بكيني مع بعض في نفس الزيارة"),
+            HumanMessage(content="السعر الإجمالي كام؟"),
+        ],
+        local_now=NOW,
+        env=env,
+        active_task=first.active_task,
+        simulate_writes=False,
+        turn_id="ra-h2-turn-2",
+    )
+
+    assert isinstance(second.active_task, BookingTaskState)
+    assert second.active_task.requested_service_ids == [A, B]
+    assert len(second.plan.steps) == 1
+    step = second.plan.steps[0]
+    assert step.response_goal == "answer_price"
+    assert step.clarification_field is None
+    assert step.facts["requested_service_ids"] == [A, B]
+    assert step.reads[0].kind == "service_catalog_set"
+    assert step.reads[0].parameters["service_ids"] == [A, B]
+    assert all(trace.simulated_write is None for trace in second.traces)
 
 
 def test_ra_h2_grouped_availability_task_prices_both_services_without_clarification() -> None:

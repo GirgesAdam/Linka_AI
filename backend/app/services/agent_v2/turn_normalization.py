@@ -93,6 +93,89 @@ def merge_same_visit_booking_operations(
     return turn.model_copy(update={"operations": operations})
 
 
+def merge_same_turn_grouped_availability_operations(
+    turn: TiaTurnUnderstanding,
+    *,
+    semantic_context: SemanticContext,
+    catalog: dict[str, object],
+) -> TiaTurnUnderstanding:
+    """Collapse same-category availability peers from one multi-service turn.
+
+    The interpreter may emit one informational availability operation per requested
+    service even when the customer asks for the services together. Availability is
+    still read-only, so canonicalization is safe only when every service resolves to
+    the same backend operational category and the typed scheduling/resource
+    constraints are identical. Different categories or conflicting constraints stay
+    independent and are never guessed into one visit.
+    """
+    groups: dict[tuple[object, ...], list[int]] = {}
+    for index, operation in enumerate(turn.operations):
+        if operation.type != "availability" or operation.execution_intent != "informational":
+            continue
+        service = operation.entities.service
+        if service is None or service.ref is None:
+            continue
+        canonical = semantic_context.resolve(service.ref, expected_kind="service")
+        if canonical is None:
+            continue
+        category = service_operational_category(catalog, canonical)
+        if category is None:
+            continue
+        signature = (
+            category,
+            _same_visit_signature(operation),
+            operation.package_usage,
+            operation.continuation_condition,
+        )
+        groups.setdefault(signature, []).append(index)
+
+    replacements: dict[int, TurnOperation] = {}
+    removed: set[int] = set()
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        refs: list[str] = []
+        for index in indexes:
+            service = turn.operations[index].entities.service
+            assert service is not None and service.ref is not None
+            if service.ref not in refs:
+                refs.append(service.ref)
+        if len(refs) < 2:
+            continue
+        first_index = indexes[0]
+        first = turn.operations[first_index]
+        service = first.entities.service
+        assert service is not None
+        replacements[first_index] = first.model_copy(
+            update={
+                "entities": first.entities.model_copy(
+                    update={
+                        "service": service.model_copy(
+                            update={
+                                "ref": None,
+                                "candidate_refs": refs,
+                                "candidate_mode": "set",
+                            }
+                        )
+                    }
+                )
+            }
+        )
+        removed.update(indexes[1:])
+
+    if not replacements:
+        return turn
+    return turn.model_copy(
+        update={
+            "operations": [
+                replacements.get(index, operation)
+                for index, operation in enumerate(turn.operations)
+                if index not in removed
+            ]
+        }
+    )
+
+
 def guard_multiple_booking_writes(plan: TurnPlan) -> TurnPlan:
     """Never fall back to legacy multiple Appointment writes for one Agent turn."""
     bookings = [

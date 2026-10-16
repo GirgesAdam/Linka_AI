@@ -128,6 +128,7 @@ from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     expand_multi_service_operations,
     guard_multiple_booking_writes,
+    merge_same_turn_grouped_availability_operations,
     merge_same_visit_booking_operations,
     recollapse_restored_booking_visit_groups,
     tag_booking_service_sets,
@@ -2598,6 +2599,11 @@ def orchestrate_v2_turn(
             )
 
     understanding = merge_same_visit_booking_operations(understanding)
+    understanding = merge_same_turn_grouped_availability_operations(
+        understanding,
+        semantic_context=semantic_context,
+        catalog=canonical_catalog,
+    )
     initial_booking_task = (
         initial_task if isinstance(initial_task, BookingTaskState) else None
     )
