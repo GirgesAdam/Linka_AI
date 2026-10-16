@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,7 +11,9 @@ from app.models.appointment_additional_service import AppointmentAdditionalServi
 from app.models.doctor_service import DoctorService
 from app.models.patient_package import PatientPackage
 from app.models.service import Service
+from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
+from app.services.booking import BookingRuleError, find_exact_slot
 from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.package_offers import (
     PackageOfferError,
@@ -70,6 +73,201 @@ def _require_editable_visit(appointment: Appointment) -> None:
         )
 
 
+def _active_service(
+    db: Session, *, workspace_id: UUID, service_id: UUID
+) -> Service:
+    service = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace_id,
+            Service.id == service_id,
+            Service.is_active.is_(True),
+        )
+    )
+    if service is None:
+        raise AppointmentCommerceNotFound("Service not found or inactive.")
+    return service
+
+
+def _require_same_operational_category(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment: Appointment,
+    candidate: Service,
+) -> str:
+    primary = _active_service(
+        db, workspace_id=workspace_id, service_id=appointment.service_id
+    )
+    primary_category = (primary.operational_category or "").strip().casefold()
+    candidate_category = (candidate.operational_category or "").strip().casefold()
+    if (
+        not primary_category
+        or not candidate_category
+        or primary_category != candidate_category
+    ):
+        raise AppointmentCommerceError(
+            "Cross-category services require separate appointments."
+        )
+    return primary_category
+
+
+def _effective_service_duration(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    service: Service,
+    laser_device_key: str | None,
+) -> int:
+    if not service.requires_laser_device:
+        duration = int(service.duration_minutes or 0)
+        if duration <= 0:
+            raise AppointmentCommerceError("Service duration must be positive.")
+        return duration
+    device_key = (laser_device_key or "").strip() or None
+    if device_key is None:
+        raise AppointmentCommerceError(
+            "A configured laser device is required for this visit service."
+        )
+    try:
+        device_price = configured_device_price(
+            db,
+            workspace_id=workspace_id,
+            service_id=service.id,
+            device_key=device_key,
+        )
+    except InventoryOperationError as exc:
+        raise AppointmentCommerceError(str(exc)) from exc
+    duration = int(device_price.duration_minutes or 0)
+    if duration <= 0:
+        raise AppointmentCommerceError("Configured laser device duration must be positive.")
+    return duration
+
+
+def _current_additional_lines(
+    db: Session, *, workspace_id: UUID, appointment_id: UUID
+) -> list[AppointmentAdditionalService]:
+    return list(
+        db.scalars(
+            select(AppointmentAdditionalService).where(
+                AppointmentAdditionalService.workspace_id == workspace_id,
+                AppointmentAdditionalService.appointment_id == appointment_id,
+            )
+        )
+    )
+
+
+def _visit_duration_authority(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment: Appointment,
+    extra_service: Service | None = None,
+    extra_device_key: str | None = None,
+    excluded_line_id: UUID | None = None,
+) -> tuple[int, Service, str | None]:
+    candidates: list[tuple[int, Service, str | None]] = []
+    primary = _active_service(
+        db, workspace_id=workspace_id, service_id=appointment.service_id
+    )
+    candidates.append(
+        (
+            _effective_service_duration(
+                db,
+                workspace_id=workspace_id,
+                service=primary,
+                laser_device_key=appointment.laser_device_key,
+            ),
+            primary,
+            appointment.laser_device_key,
+        )
+    )
+    for line in _current_additional_lines(
+        db, workspace_id=workspace_id, appointment_id=appointment.id
+    ):
+        if excluded_line_id is not None and line.id == excluded_line_id:
+            continue
+        service = _active_service(
+            db, workspace_id=workspace_id, service_id=line.service_id
+        )
+        _require_same_operational_category(
+            db,
+            workspace_id=workspace_id,
+            appointment=appointment,
+            candidate=service,
+        )
+        candidates.append(
+            (
+                _effective_service_duration(
+                    db,
+                    workspace_id=workspace_id,
+                    service=service,
+                    laser_device_key=line.laser_device_key,
+                ),
+                service,
+                line.laser_device_key,
+            )
+        )
+    if extra_service is not None:
+        candidates.append(
+            (
+                _effective_service_duration(
+                    db,
+                    workspace_id=workspace_id,
+                    service=extra_service,
+                    laser_device_key=extra_device_key,
+                ),
+                extra_service,
+                extra_device_key,
+            )
+        )
+    return max(candidates, key=lambda item: item[0])
+
+
+def _apply_visit_duration(appointment: Appointment, duration_minutes: int) -> None:
+    duration = int(duration_minutes)
+    if duration <= 0:
+        raise AppointmentCommerceError("Appointment duration must be positive.")
+    old_end = appointment.end_at
+    old_busy_end = appointment.busy_end_at
+    after_buffer = max(old_busy_end - old_end, timedelta())
+    appointment.duration_minutes = duration
+    appointment.end_at = appointment.start_at + timedelta(minutes=duration)
+    appointment.busy_end_at = appointment.end_at + after_buffer
+
+
+def _ensure_duration_expansion_available(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment: Appointment,
+    duration_service: Service,
+    duration_device_key: str | None,
+) -> None:
+    if appointment.status == "completed":
+        return
+    workspace = db.scalar(
+        select(Workspace).where(Workspace.id == workspace_id)
+    )
+    if workspace is None:
+        raise AppointmentCommerceNotFound("Workspace not found.")
+    try:
+        find_exact_slot(
+            db,
+            workspace=workspace,
+            branch_id=appointment.branch_id,
+            service_id=duration_service.id,
+            doctor_id=appointment.doctor_id,
+            requested_start_at=appointment.start_at,
+            exclude_appointment_id=appointment.id,
+            laser_device_key=duration_device_key,
+            minimum_notice_minutes_override=0,
+        )
+    except BookingRuleError as exc:
+        raise AppointmentCommerceError(
+            "The additional service would extend the appointment into an unavailable time window."
+        ) from exc
+
+
 def list_additional_services(
     db: Session, *, workspace_id: UUID, appointment_id: UUID
 ) -> list[AppointmentAdditionalService]:
@@ -119,15 +317,15 @@ def add_additional_service(
             "The primary appointment service is already included in this visit."
         )
 
-    service = db.scalar(
-        select(Service).where(
-            Service.workspace_id == workspace_id,
-            Service.id == service_id,
-            Service.is_active.is_(True),
-        )
+    service = _active_service(
+        db, workspace_id=workspace_id, service_id=service_id
     )
-    if service is None:
-        raise AppointmentCommerceNotFound("Service not found or inactive.")
+    _require_same_operational_category(
+        db,
+        workspace_id=workspace_id,
+        appointment=appointment,
+        candidate=service,
+    )
     doctor_service = db.scalar(
         select(DoctorService).where(
             DoctorService.workspace_id == workspace_id,
@@ -136,6 +334,10 @@ def add_additional_service(
             DoctorService.is_active.is_(True),
         )
     )
+    if doctor_service is None:
+        raise AppointmentCommerceError(
+            "The appointment doctor cannot perform this additional service."
+        )
     duplicate = db.scalar(
         select(AppointmentAdditionalService.id).where(
             AppointmentAdditionalService.workspace_id == workspace_id,
@@ -185,6 +387,26 @@ def add_additional_service(
         raise AppointmentCommerceError(
             "The additional service currency must match the appointment currency."
         )
+    if service.requires_laser_device and device_key != appointment.laser_device_key:
+        raise AppointmentCommerceError(
+            "Same-category laser services in one appointment must use the same laser device."
+        )
+
+    new_duration, duration_service, duration_device_key = _visit_duration_authority(
+        db,
+        workspace_id=workspace_id,
+        appointment=appointment,
+        extra_service=service,
+        extra_device_key=device_key,
+    )
+    if new_duration > int(appointment.duration_minutes):
+        _ensure_duration_expansion_available(
+            db,
+            workspace_id=workspace_id,
+            appointment=appointment,
+            duration_service=duration_service,
+            duration_device_key=duration_device_key,
+        )
 
     line = AppointmentAdditionalService(
         workspace_id=workspace_id,
@@ -198,6 +420,8 @@ def add_additional_service(
         created_by_user_id=created_by_user_id,
     )
     db.add(line)
+    if int(appointment.duration_minutes) != new_duration:
+        _apply_visit_duration(appointment, new_duration)
     db.flush()
 
     if pulse_mode != "none":
@@ -269,6 +493,14 @@ def remove_additional_service(
         )
     service_id = line.service_id
     db.delete(line)
+    new_duration, _duration_service, _duration_device_key = _visit_duration_authority(
+        db,
+        workspace_id=workspace_id,
+        appointment=appointment,
+        excluded_line_id=line.id,
+    )
+    if int(appointment.duration_minutes) != new_duration:
+        _apply_visit_duration(appointment, new_duration)
     db.flush()
     refresh_appointment_payment_snapshots(
         db, workspace_id=workspace_id, appointment_ids={appointment.id}

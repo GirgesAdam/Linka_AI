@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -79,10 +79,60 @@ def _capabilities_for_task(active_task: ActiveTaskState) -> list[str]:
     return [_CAPABILITY_BY_TASK[active_task.task_type]]
 
 
+def _inject_unresolved_spoken_period_hint(
+    *,
+    constraints: object,
+    payload: object,
+) -> None:
+    """Persist only unresolved 10/11 disambiguation without polluting general serialization."""
+    time_constraint = getattr(constraints, "time", None)
+    if time_constraint is None or not isinstance(payload, dict):
+        return
+    hint = getattr(time_constraint, "spoken_period_hint", "none")
+    raw_start = getattr(time_constraint, "start_time", None)
+    try:
+        parsed_start = time.fromisoformat(str(raw_start))
+    except ValueError:
+        return
+    if (
+        parsed_start.hour not in {10, 11}
+        or getattr(time_constraint, "start_time_ambiguity", "none") != "twelve_hour"
+        or hint not in {"am", "pm"}
+    ):
+        return
+    time_payload = payload.get("time")
+    if isinstance(time_payload, dict):
+        time_payload["spoken_period_hint"] = hint
+
+
+def _persisted_task_payload(active_task: ActiveTaskState) -> dict[str, object]:
+    payload = active_task.model_dump(mode="json")
+    if isinstance(active_task, BookingTaskState):
+        constraints_payload = payload.get("constraints")
+        _inject_unresolved_spoken_period_hint(
+            constraints=active_task.constraints, payload=constraints_payload
+        )
+        grouped_payload = payload.get("grouped")
+        if active_task.grouped is not None and isinstance(grouped_payload, dict):
+            component_payloads = grouped_payload.get("components")
+            if isinstance(component_payloads, list):
+                for component, component_payload in zip(
+                    active_task.grouped.components, component_payloads, strict=False
+                ):
+                    _inject_unresolved_spoken_period_hint(
+                        constraints=component, payload=component_payload
+                    )
+    else:
+        _inject_unresolved_spoken_period_hint(
+            constraints=active_task.replacement, payload=payload.get("replacement")
+        )
+    return payload
+
+
 def _task_namespace(active_task: ActiveTaskState) -> dict[str, object]:
     return {
         "schema_version": _V2_SCHEMA_VERSION,
-        "active_task": active_task.model_dump(mode="json"),
+        "active_task": _persisted_task_payload(active_task),
     }
 
 

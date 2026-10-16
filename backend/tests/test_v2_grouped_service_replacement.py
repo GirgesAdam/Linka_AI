@@ -39,12 +39,12 @@ TIME = TimeConstraint(mode="exact", start_time="16:00")
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
 
 
-def _device(key: str) -> dict[str, object]:
+def _device(key: str, duration: int) -> dict[str, object]:
     return {
         "device_key": key,
         "device_name": key,
         "price_minor": 50_000,
-        "duration_minutes": 20,
+        "duration_minutes": duration,
         "configured": True,
     }
 
@@ -52,12 +52,12 @@ def _device(key: str) -> dict[str, object]:
 def _catalog() -> dict[str, object]:
     return {
         "services": [
-            {"id": A, "name": "Underarm", "duration_minutes": 20, "requires_laser_device": True, "laser_devices": [_device("v1"), _device("v2")]},
-            {"id": B, "name": "Bikini", "duration_minutes": 30, "requires_laser_device": True, "laser_devices": [_device("v1")]},
-            {"id": C, "name": "Full Arms", "duration_minutes": 40, "requires_laser_device": True, "laser_devices": [_device("v1"), _device("v2")]},
-            {"id": D, "name": "Device Two Only", "duration_minutes": 50, "requires_laser_device": True, "laser_devices": [_device("v2")]},
+            {"id": A, "name": "Underarm", "duration_minutes": 20, "operational_category": "laser", "requires_laser_device": True, "laser_devices": [_device("v1", 20), _device("v2", 20)]},
+            {"id": B, "name": "Bikini", "duration_minutes": 30, "operational_category": "laser", "requires_laser_device": True, "laser_devices": [_device("v1", 30)]},
+            {"id": C, "name": "Full Arms", "duration_minutes": 40, "operational_category": "laser", "requires_laser_device": True, "laser_devices": [_device("v1", 40), _device("v2", 40)]},
+            {"id": D, "name": "Device Two Only", "duration_minutes": 50, "operational_category": "laser", "requires_laser_device": True, "laser_devices": [_device("v2", 50)]},
         ],
-        "doctors": [{"id": DOCTOR, "name": "Dr Test", "service_ids": [A, B, C, D]}],
+        "doctors": [{"id": DOCTOR, "name": "Dr Test", "service_ids": [A, B, C, D], "branch_ids": [BRANCH]}],
         "branches": [{"id": BRANCH, "name": "Main"}],
         "appointments": [],
     }

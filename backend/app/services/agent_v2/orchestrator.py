@@ -75,10 +75,12 @@ from app.services.agent_v2.grouped_write_transaction import (
 )
 from app.services.agent_v2.multi_service_booking import (
     MultiServiceBookingError,
+    common_doctor_ids,
     common_laser_device_keys,
     laser_service_ids,
     resolve_additional_services,
     select_main_service_id,
+    service_operational_category,
 )
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
@@ -96,16 +98,20 @@ from app.services.agent_v2.read_executor import (
     execute_step_reads,
 )
 from app.services.agent_v2.reference_resolution import (
+    canonical_availability_slot_time,
     resolve_verified_availability_reference,
     resolve_verified_availability_scope,
 )
 from app.services.agent_v2.state import (
     ActiveTaskState,
     BookingProposal,
+    BookingProposalVisit,
     BookingTaskState,
+    CustomerConstraints,
     OptionChoice,
     OptionSnapshot,
     RescheduleTaskState,
+    WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import (
     apply_step_state,
@@ -118,12 +124,19 @@ from app.services.agent_v2.state_persistence import (
     load_active_task,
     save_active_task,
 )
-from app.services.agent_v2.state_rules import attach_booking_proposal
+from app.services.agent_v2.state_rules import (
+    apply_booking_branch_change,
+    apply_booking_device_change,
+    apply_booking_doctor_change,
+    attach_booking_proposal,
+)
 from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     expand_multi_service_operations,
     guard_multiple_booking_writes,
+    merge_same_turn_grouped_availability_operations,
     merge_same_visit_booking_operations,
+    recollapse_restored_booking_visit_groups,
     tag_booking_service_sets,
 )
 from app.services.agent_v2.write_policy import advance_step_with_write_policies
@@ -287,7 +300,12 @@ def _prepare_booking_proposal(
                 "facts": {**step.facts, "booking_proposal_invalid": True},
             }
         ), None
-    expected_main_service_id = select_main_service_id(catalog, requested)
+    requested_laser_ids = laser_service_ids(catalog, requested)
+    common_device_keys = common_laser_device_keys(catalog, requested)
+    visit_device_key = str(params.get("device_key") or "").strip() or None
+    expected_main_service_id = select_main_service_id(
+        catalog, requested, device_key=visit_device_key
+    )
     if main_service_id != expected_main_service_id:
         return step.model_copy(
             update={
@@ -301,9 +319,6 @@ def _prepare_booking_proposal(
                 },
             }
         ), None
-    requested_laser_ids = laser_service_ids(catalog, requested)
-    common_device_keys = common_laser_device_keys(catalog, requested)
-    visit_device_key = str(params.get("device_key") or "").strip() or None
     if requested_laser_ids and (
         not common_device_keys or visit_device_key not in common_device_keys
     ):
@@ -327,6 +342,21 @@ def _prepare_booking_proposal(
                 "write_intent": None,
                 "response_goal": "clarification",
                 "facts": {**step.facts, "booking_proposal_unexpected_device": True},
+            }
+        ), None
+    compatible_doctors = common_doctor_ids(catalog, requested, branch_id=branch_id)
+    if doctor_id not in compatible_doctors:
+        return step.model_copy(
+            update={
+                "disposition": "clarify",
+                "write_intent": None,
+                "clarification_field": "doctor",
+                "response_goal": "clarification",
+                "facts": {
+                    **step.facts,
+                    "multi_service_doctor_incompatible": True,
+                    "compatible_visit_doctor_ids": compatible_doctors,
+                },
             }
         ), None
     slot = _proposal_slot(reads, start_at=start_raw, doctor_id=doctor_id)
@@ -448,8 +478,405 @@ def _prepare_booking_proposal(
     ), proposal
 
 
+def _prepare_cross_category_compound_proposal(
+    plan: TurnPlan,
+    *,
+    current_task: BookingTaskState | None,
+    workspace: Workspace,
+    patient: Patient,
+    catalog: dict[str, object],
+    now: datetime,
+    turn_id: str,
+) -> tuple[TurnPlan, BookingTaskState | None]:
+    bookings = [
+        step
+        for step in plan.steps
+        if step.write_intent is not None
+        and step.write_intent.kind == "booking"
+        and step.facts.get("compound_visit_independent_category_resources") is True
+        and compound_write_group(step) is not None
+    ]
+    if len(bookings) < 2:
+        return plan, None
+    group_keys = {compound_write_group(step) for step in bookings}
+    if len(group_keys) != 1:
+        return plan, None
+
+    visits: list[BookingProposalVisit] = []
+    all_services: list[str] = []
+    service_devices: dict[str, str] = {}
+    for step in bookings:
+        assert step.write_intent is not None
+        params = step.write_intent.parameters
+        main_service_id = str(params.get("service_id") or "")
+        branch_id = str(params.get("branch_id") or "")
+        doctor_id = str(params.get("doctor_id") or "")
+        start_raw = step.facts.get("compound_verified_start_at")
+        end_raw = step.facts.get("compound_verified_end_at")
+        if not all((main_service_id, branch_id, doctor_id, start_raw, end_raw)):
+            return plan, None
+        requested_raw = step.facts.get("requested_service_ids")
+        requested = (
+            list(dict.fromkeys(str(item) for item in requested_raw if item not in (None, "")))
+            if isinstance(requested_raw, list) and requested_raw
+            else [main_service_id]
+        )
+        categories = {service_operational_category(catalog, item) for item in requested}
+        if len(requested) > 1 and (len(categories) != 1 or None in categories):
+            return plan, None
+        device_key = str(params.get("device_key") or "").strip() or None
+        expected_main = select_main_service_id(
+            catalog, requested, device_key=device_key
+        )
+        if main_service_id != expected_main:
+            return plan, None
+        compatible_doctors = common_doctor_ids(catalog, requested, branch_id=branch_id)
+        if doctor_id not in compatible_doctors:
+            return plan, None
+        laser_ids = laser_service_ids(catalog, requested)
+        if laser_ids:
+            common_devices = common_laser_device_keys(catalog, requested)
+            if device_key not in common_devices:
+                return plan, None
+        elif device_key is not None:
+            return plan, None
+        start_at = datetime.fromisoformat(str(start_raw))
+        end_at = datetime.fromisoformat(str(end_raw))
+        visit = BookingProposalVisit(
+            service_ids=requested,
+            main_service_id=main_service_id,
+            additional_service_ids=[item for item in requested if item != main_service_id],
+            branch_id=branch_id,
+            doctor_id=doctor_id,
+            start_at=start_at,
+            end_at=end_at,
+            device_key=device_key,
+            additional_service_device_keys={
+                item: device_key
+                for item in laser_ids
+                if item != main_service_id and device_key is not None
+            },
+            package_usage=str(params.get("package_usage") or "unspecified"),
+            package_id=str(params["package_id"]) if params.get("package_id") else None,
+        )
+        visits.append(visit)
+        all_services.extend(requested)
+        if device_key is not None:
+            service_devices.update({item: device_key for item in laser_ids})
+
+    if len(all_services) != len(set(all_services)):
+        return plan, None
+    for previous, current in zip(visits, visits[1:], strict=False):
+        if current.start_at < previous.end_at:
+            return plan, None
+
+    first = visits[0]
+    proposal = BookingProposal(
+        proposal_id=str(
+            uuid5(
+                NAMESPACE_URL,
+                "tia-compound-category-proposal:"
+                f"{workspace.id}:{patient.id}:{turn_id}:"
+                + ";".join(
+                    f"{','.join(visit.service_ids)}:{visit.start_at.isoformat()}"
+                    for visit in visits
+                ),
+            )
+        ),
+        patient_id=str(patient.id),
+        service_ids=all_services,
+        main_service_id=first.main_service_id,
+        additional_service_ids=first.additional_service_ids,
+        branch_id=first.branch_id,
+        doctor_id=first.doctor_id,
+        start_at=first.start_at,
+        end_at=first.end_at,
+        device_key=first.device_key,
+        additional_service_device_keys=first.additional_service_device_keys,
+        package_usage=first.package_usage,
+        package_id=first.package_id,
+        visits=visits,
+        task_version=max(getattr(current_task, "version", 1), 1),
+        proposal_version=(
+            current_task.proposal.proposal_version + 1
+            if current_task is not None and current_task.proposal is not None
+            else 1
+        ),
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+    )
+    first_params = bookings[0].write_intent.parameters if bookings[0].write_intent else {}
+    constraints = CustomerConstraints.model_validate(
+        {
+            "service_id": first.main_service_id,
+            "doctor_id": first.doctor_id,
+            "branch_id": first.branch_id,
+            "device_key": first.device_key,
+            "date": first_params.get("date"),
+            "time": first_params.get("time"),
+            "package_usage": first.package_usage,
+        }
+    )
+    if current_task is None:
+        base_task = BookingTaskState(
+            write_authorization=WriteAuthorization(operation="booking", authorized=False),
+            constraints=constraints,
+            requested_service_ids=all_services,
+            service_device_keys=service_devices,
+        )
+    else:
+        base_task = current_task.model_copy(
+            update={
+                "status": "collecting",
+                "constraints": constraints,
+                "requested_service_ids": all_services,
+                "service_device_keys": service_devices,
+                "grouped": None,
+                "proposal": None,
+                "option_snapshot": None,
+            }
+        )
+    proposal_task = attach_booking_proposal(base_task, proposal=proposal)
+    summary = {
+        "services": _service_names(catalog, all_services),
+        "visits": [
+            {
+                "services": _service_names(catalog, visit.service_ids),
+                "start_at": visit.start_at.isoformat(),
+                "end_at": visit.end_at.isoformat(),
+                "doctor_id": visit.doctor_id,
+                "branch_id": visit.branch_id,
+                "device_key": visit.device_key,
+            }
+            for visit in visits
+        ],
+    }
+    response_step = bookings[0].model_copy(
+        update={
+            "disposition": "respond",
+            "reads": [],
+            "write_intent": None,
+            "state_action": "none",
+            "response_goal": "booking_proposal",
+            "facts": {
+                **bookings[0].facts,
+                "booking_proposal_summary": summary,
+                "compound_category_proposal": True,
+            },
+        }
+    )
+    return plan.model_copy(update={"steps": [response_step]}), proposal_task
+
+
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
     return active_task.model_dump(mode="json") if active_task is not None else None
+
+
+
+def _reference_option_time(
+    decision: object,
+    availability_context: dict[str, Any] | None,
+) -> str | None:
+    exact = str(getattr(decision, "exact_time", None) or "").strip()[:5]
+    if exact:
+        return exact
+    if (
+        getattr(decision, "action", None) != "select_presented_option"
+        or getattr(decision, "selection_scope", "none") != "none"
+    ):
+        return None
+    option_ref = str(getattr(decision, "option_ref", None) or "")
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not option_ref or not isinstance(raw_options, list):
+        return None
+    matches = [
+        item
+        for item in raw_options
+        if isinstance(item, dict) and str(item.get("option_ref") or "") == option_ref
+    ]
+    if len(matches) != 1:
+        return None
+    option = matches[0]
+    slot = option.get("slot")
+    if isinstance(slot, dict):
+        clock = str(slot.get("start_time_24h") or "").strip()[:5]
+        if clock:
+            return clock
+    return str(option.get("start_time_24h") or "").strip()[:5] or None
+
+
+def _grouped_reference_date(
+    availability_context: dict[str, Any] | None,
+    *,
+    exact_time: str,
+) -> DateConstraint | None:
+    raw_date = (availability_context or {}).get("date")
+    if isinstance(raw_date, dict):
+        try:
+            date_constraint = DateConstraint.model_validate(raw_date)
+        except ValueError:
+            date_constraint = None
+        if date_constraint is not None and date_constraint.mode == "exact":
+            return date_constraint
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+    dates: set[str] = set()
+    for item in raw_options:
+        if not isinstance(item, dict):
+            continue
+        slot = item.get("slot")
+        clock = str(item.get("start_time_24h") or "").strip()[:5]
+        start_local = str(item.get("start_local") or "")
+        if isinstance(slot, dict):
+            clock = str(slot.get("start_time_24h") or clock).strip()[:5]
+            start_local = str(slot.get("start_local") or start_local)
+        if clock != exact_time or len(start_local) < 10:
+            continue
+        dates.add(start_local[:10])
+    if len(dates) != 1:
+        return None
+    return DateConstraint(mode="exact", start_date=next(iter(dates)))
+
+
+def _grouped_visit_reference_understanding(
+    task: ActiveTaskState | None,
+    *,
+    decision: object | None,
+    availability_context: dict[str, Any] | None,
+    catalog: dict[str, Any],
+) -> tuple[TiaTurnUnderstanding, BookingTaskState] | None:
+    if not isinstance(task, BookingTaskState) or len(task.requested_service_ids) < 2:
+        return None
+    if decision is None or getattr(decision, "action", None) not in {
+        "clarify",
+        "select_presented_option",
+    }:
+        return None
+    context_services = (availability_context or {}).get("requested_service_ids")
+    if not isinstance(context_services, list) or set(map(str, context_services)) != set(
+        task.requested_service_ids
+    ):
+        return None
+    exact_time = _reference_option_time(decision, availability_context)
+    if exact_time is None:
+        return None
+    date_constraint = _grouped_reference_date(
+        availability_context,
+        exact_time=exact_time,
+    )
+    if date_constraint is None:
+        return None
+
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+    requested = list(task.requested_service_ids)
+    requested_set = set(requested)
+    selected_ref = (
+        str(getattr(decision, "option_ref", None) or "")
+        if getattr(decision, "action", None) == "select_presented_option"
+        else ""
+    )
+    verified_slots: list[dict[str, object]] = []
+    for option in raw_options:
+        if not isinstance(option, dict):
+            continue
+        option_ref = str(option.get("option_ref") or "")
+        if not option_ref or (selected_ref and option_ref != selected_ref):
+            continue
+        resolution = resolve_verified_availability_reference(
+            Selection(kind="ref", ref=option_ref),
+            availability_context,
+            explicit_user_time=exact_time,
+        )
+        if resolution.get("status") != "resolved":
+            continue
+        resolved_option = resolution.get("option")
+        slot = resolved_option.get("slot") if isinstance(resolved_option, dict) else None
+        if not isinstance(slot, dict):
+            continue
+        slot_time = canonical_availability_slot_time(slot)
+        start_local = str(slot.get("start_local") or slot.get("start_at") or "")
+        if slot_time != exact_time or len(start_local) < 10:
+            continue
+        if date_constraint.start_date and start_local[:10] != date_constraint.start_date:
+            continue
+        service_id = str(slot.get("service_id") or "")
+        if service_id not in requested_set:
+            return None
+        verified_slots.append(slot)
+    if not verified_slots:
+        return None
+
+    branch_ids = {
+        str(slot.get("branch_id"))
+        for slot in verified_slots
+        if slot.get("branch_id") not in (None, "")
+    }
+    doctor_ids = {
+        str(slot.get("doctor_id"))
+        for slot in verified_slots
+        if slot.get("doctor_id") not in (None, "")
+    }
+    device_keys = {
+        str(slot.get("laser_device_key") or slot.get("device_key"))
+        for slot in verified_slots
+        if (slot.get("laser_device_key") or slot.get("device_key")) not in (None, "")
+    }
+    if len(branch_ids) > 1 or len(doctor_ids) != 1:
+        return None
+    branch_id = next(iter(branch_ids)) if branch_ids else task.constraints.branch_id
+    doctor_id = next(iter(doctor_ids))
+    if doctor_id not in common_doctor_ids(catalog, requested, branch_id=branch_id):
+        return None
+
+    laser_ids = laser_service_ids(catalog, requested)
+    device_key: str | None = None
+    if laser_ids:
+        if len(device_keys) != 1:
+            return None
+        device_key = next(iter(device_keys))
+        if device_key not in common_laser_device_keys(catalog, requested):
+            return None
+    elif device_keys:
+        return None
+
+    resource_task = task
+    if branch_id is not None:
+        resource_task = apply_booking_branch_change(resource_task, branch_id=branch_id)
+    resource_task = apply_booking_doctor_change(resource_task, doctor_id=doctor_id)
+    if device_key is not None:
+        resource_task = apply_booking_device_change(resource_task, device_key=device_key)
+        resource_task = resource_task.model_copy(
+            update={
+                "service_device_keys": {
+                    **resource_task.service_device_keys,
+                    **{service_id: device_key for service_id in laser_ids},
+                }
+            }
+        )
+
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    date=date_constraint,
+                    time=TimeConstraint(
+                        mode="exact",
+                        start_time=exact_time,
+                        start_time_ambiguity="none",
+                    ),
+                ),
+                execution_intent="informational",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                continues_previous=True,
+            )
+        ]
+    )
+    return understanding, resource_task
 
 
 def _terminal_no_reply_allowed(
@@ -1949,33 +2376,6 @@ def orchestrate_v2_turn(
         semantic_context,
         automation_context=automation_context,
     )
-    contextual_period_understanding: TiaTurnUnderstanding | None = None
-    contextual_period_resolution = resolve_pending_bare_clock_period(
-        initial_task,
-        latest_customer_text,
-        context=semantic_context,
-    )
-    if contextual_period_resolution is not None:
-        initial_task, _resolved_period = contextual_period_resolution
-        semantic_context = with_safe_task_context(
-            semantic_context,
-            active_task=_task_dict(initial_task),
-            pending_choice=(
-                pending_choice.model_dump(mode="json") if pending_choice is not None else None
-            ),
-        )
-        contextual_period_understanding = TiaTurnUnderstanding(
-            operations=[
-                TurnOperation(
-                    type="continue_active",
-                    entities=TurnEntities(),
-                    execution_intent="execute",
-                    active_task_relationship="continue",
-                    continues_previous=True,
-                )
-            ]
-        )
-
     reference_interpretation: ReferenceInterpretation | None = None
     reference_plan_override: TurnPlan | None = None
     full_interpreter_called = True
@@ -1983,8 +2383,7 @@ def orchestrate_v2_turn(
         "availability_reference_options"
     )
     if (
-        contextual_period_understanding is None
-        and latest_customer_text
+        latest_customer_text
         and isinstance(raw_reference_options, list)
         and raw_reference_options
     ):
@@ -2024,8 +2423,14 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    if contextual_period_understanding is not None:
-        understanding = contextual_period_understanding
+    grouped_reference = _grouped_visit_reference_understanding(
+        initial_task,
+        decision=decision,
+        availability_context=availability_reference_context,
+        catalog=canonical_catalog,
+    )
+    if grouped_reference is not None:
+        understanding, initial_task = grouped_reference
         full_interpreter_called = False
     elif (
         decision is not None
@@ -2255,7 +2660,49 @@ def orchestrate_v2_turn(
             raise V2TurnInterpretationStructuredOutputError(
                 "V2 turn semantic interpretation exhausted structured attempts."
             ) from exc
+    typed_period_hints: set[str] = set()
+    for operation in understanding.operations:
+        time_entity = getattr(operation.entities, "time", None)
+        selection = getattr(operation, "selection", None)
+        for hint in (
+            getattr(time_entity, "spoken_period_hint", "none"),
+            getattr(selection, "spoken_period_hint", "none"),
+        ):
+            if hint in {"am", "pm"}:
+                typed_period_hints.add(hint)
+    if len(typed_period_hints) == 1:
+        typed_period_resolution = resolve_pending_bare_clock_period(
+            initial_task,
+            next(iter(typed_period_hints)),
+            context=semantic_context,
+        )
+        if typed_period_resolution is not None:
+            initial_task, _resolved_period = typed_period_resolution
+            semantic_context = with_safe_task_context(
+                semantic_context,
+                active_task=_task_dict(initial_task),
+                pending_choice=(
+                    pending_choice.model_dump(mode="json") if pending_choice is not None else None
+                ),
+            )
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="continue_active",
+                        entities=TurnEntities(),
+                        execution_intent="execute",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                    )
+                ]
+            )
+
     understanding = merge_same_visit_booking_operations(understanding)
+    understanding = merge_same_turn_grouped_availability_operations(
+        understanding,
+        semantic_context=semantic_context,
+        catalog=canonical_catalog,
+    )
     initial_booking_task = (
         initial_task if isinstance(initial_task, BookingTaskState) else None
     )
@@ -2281,7 +2728,18 @@ def orchestrate_v2_turn(
         understanding,
         active_task=initial_booking_task,
         context=semantic_context,
+        booking_service_sets=booking_service_sets,
     )
+    if restored_visit_groups:
+        understanding, restored_service_sets, restored_visit_groups = (
+            recollapse_restored_booking_visit_groups(
+                understanding,
+                semantic_context=semantic_context,
+                catalog=canonical_catalog,
+                restored_visit_groups=restored_visit_groups,
+            )
+        )
+        booking_service_sets = {**booking_service_sets, **restored_service_sets}
     semantic_visit_groups = {
         **semantic_visit_groups,
         **restored_visit_groups,
@@ -2391,6 +2849,17 @@ def orchestrate_v2_turn(
         now=local_now,
         turn_id=resolved_turn_id,
     )
+    plan, compound_category_task = _prepare_cross_category_compound_proposal(
+        plan,
+        current_task=initial_booking_task,
+        workspace=workspace,
+        patient=patient,
+        catalog=canonical_catalog,
+        now=local_now,
+        turn_id=resolved_turn_id,
+    )
+    if compound_category_task is not None:
+        grouped_booking_task = compound_category_task
     plan = enforce_grouped_booking_write_guard(
         plan,
         active_task=initial_booking_task,

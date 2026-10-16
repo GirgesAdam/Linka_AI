@@ -71,10 +71,100 @@ def _time_constraint(value: object) -> TimeConstraint | None:
     return None
 
 
+def _state_time_constraint(
+    value: object,
+    *,
+    semantic: TimeConstraint | None,
+) -> TimeConstraint | None:
+    """Carry only unresolved 10/11 tie-break semantics into durable task state."""
+    constraint = _time_constraint(value if value is not None else semantic)
+    if constraint is None or semantic is None:
+        return constraint
+    if (
+        constraint.start_time_ambiguity != "twelve_hour"
+        or semantic.start_time_ambiguity != "twelve_hour"
+        or constraint.start_time != semantic.start_time
+        or semantic.spoken_period_hint not in {"am", "pm"}
+    ):
+        return constraint
+    try:
+        hour = int(str(constraint.start_time).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return constraint
+    if hour not in {10, 11}:
+        return constraint
+    return constraint.model_copy(
+        update={"spoken_period_hint": semantic.spoken_period_hint}
+    )
+
+
 def _clock_source(value: object, *, fallback: ClockSource = "unspecified") -> ClockSource:
-    if value in {"literal_24h", "bare_spoken_12h", "explicit_period", "inherited", "unspecified"}:
+    if value == "explicit_period":  # Legacy persisted input only.
+        return "bare_spoken_12h"
+    if value in {"literal_24h", "bare_spoken_12h", "inherited", "unspecified"}:
         return value  # type: ignore[return-value]
     return fallback
+
+
+def _time_business_signature(value: TimeConstraint | None) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    return (
+        value.mode,
+        value.start_time,
+        value.end_time,
+        value.start_time_ambiguity,
+        value.end_time_ambiguity,
+    )
+
+
+def _time_fact_has_backend_authority(facts: dict[str, Any]) -> bool:
+    return bool(
+        facts.get("verified_availability_reference") is True
+        or facts.get("bare_clock_resolution_status") == "resolved"
+        or facts.get("_backend_time_state_action") == "clear_past"
+    )
+
+
+def _authoritative_time_update(
+    existing: TimeConstraint | None,
+    *,
+    existing_clock_source: ClockSource,
+    facts: dict[str, Any],
+    operation: TurnOperation,
+) -> tuple[bool, TimeConstraint | None, ClockSource]:
+    """Classify time mutation authority instead of trusting fact presence.
+
+    Progression facts may echo durable constraints after normal serialization,
+    which intentionally excludes ``spoken_period_hint``.  Such echoes must not
+    overwrite richer durable state.  Explicit semantic time, verified backend
+    selections/resolution, and deterministic past-time clears remain authoritative.
+    """
+    if "time" not in facts and operation.entities.time is None:
+        return False, existing, existing_clock_source
+
+    incoming = _state_time_constraint(
+        facts.get("time") if "time" in facts else operation.entities.time,
+        semantic=operation.entities.time,
+    )
+    incoming_source = _clock_source(
+        facts.get("time_clock_source"),
+        fallback=operation.clock_source,
+    )
+
+    explicit_semantic = operation.entities.time is not None
+    backend_authoritative = _time_fact_has_backend_authority(facts)
+    if explicit_semantic or backend_authoritative:
+        return True, incoming, incoming_source
+
+    # Defensive equivalence guard: an inherited echo can be byte-different only
+    # because excluded semantic metadata was stripped.  Keep the durable object.
+    if _time_business_signature(incoming) == _time_business_signature(existing):
+        return False, existing, existing_clock_source
+
+    # Unknown, unproven time changes fail closed.  A materially different fact is
+    # not mutation authority merely because a planner/backend step carried `time`.
+    return False, existing, existing_clock_source
 
 
 def _authorization(
@@ -128,7 +218,7 @@ def _booking_constraints(step: PlanStep, operation: TurnOperation) -> CustomerCo
         branch_id=str(facts["branch_id"]) if facts.get("branch_id") else None,
         device_key=str(facts["device_key"]) if facts.get("device_key") else None,
         date=_date_constraint(facts.get("date") or operation.entities.date),
-        time=_time_constraint(facts.get("time") or operation.entities.time),
+        time=_state_time_constraint(facts.get("time"), semantic=operation.entities.time),
         time_clock_source=_clock_source(
             facts.get("time_clock_source"),
             fallback=operation.clock_source,
@@ -209,20 +299,17 @@ def _apply_booking_updates(
         updated = apply_booking_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_booking_date_change(updated, date=operation.entities.date)
-    if "time" in facts:
+    apply_time, next_time, next_clock_source = _authoritative_time_update(
+        updated.constraints.time,
+        existing_clock_source=updated.constraints.time_clock_source,
+        facts=facts,
+        operation=operation,
+    )
+    if apply_time:
         updated = apply_booking_time_change(
             updated,
-            time=_time_constraint(facts.get("time")),
-            clock_source=_clock_source(
-                facts.get("time_clock_source"),
-                fallback=operation.clock_source,
-            ),
-        )
-    elif operation.entities.time is not None:
-        updated = apply_booking_time_change(
-            updated,
-            time=operation.entities.time,
-            clock_source=operation.clock_source,
+            time=next_time,
+            clock_source=next_clock_source,
         )
     if operation.package_usage != "unspecified":
         updated = apply_booking_package_usage_change(
@@ -261,20 +348,18 @@ def reconcile_booking_service_set_state(
         return state
 
     current = state
-    main_service_id = select_main_service_id(catalog, current.requested_service_ids)
-    if current.constraints.service_id != main_service_id:
-        current = apply_booking_service_change(current, service_id=main_service_id)
-
     laser_ids = laser_service_ids(catalog, current.requested_service_ids)
     common_devices = common_laser_device_keys(catalog, current.requested_service_ids)
     selected_device = current.constraints.device_key
     if not laser_ids:
         if selected_device is not None:
             current = apply_booking_device_change(current, device_key=None)
+        selected_device = None
         visit_devices: dict[str, str] = {}
     elif selected_device is not None and selected_device not in common_devices:
         replacement_device = common_devices[0] if len(common_devices) == 1 else None
         current = apply_booking_device_change(current, device_key=replacement_device)
+        selected_device = replacement_device
         visit_devices = (
             {service_id: replacement_device for service_id in laser_ids}
             if replacement_device is not None
@@ -288,6 +373,16 @@ def reconcile_booking_service_set_state(
         visit_devices = {service_id: selected_device for service_id in laser_ids}
     else:
         visit_devices = {}
+
+    main_service_id = select_main_service_id(
+        catalog,
+        current.requested_service_ids,
+        device_key=selected_device,
+    )
+    if current.constraints.service_id != main_service_id:
+        current = apply_booking_service_change(current, service_id=main_service_id)
+        if selected_device is not None:
+            current = apply_booking_device_change(current, device_key=selected_device)
 
     if current.service_device_keys != visit_devices:
         current = current.model_copy(update={"service_device_keys": visit_devices})
@@ -363,7 +458,7 @@ def _new_reschedule_state(
             else None
         ),
         date=_date_constraint(step.facts.get("date") or operation.entities.date),
-        time=_time_constraint(step.facts.get("time") or operation.entities.time),
+        time=_state_time_constraint(step.facts.get("time"), semantic=operation.entities.time),
         time_clock_source=_clock_source(
             step.facts.get("time_clock_source"),
             fallback=operation.clock_source,
@@ -415,20 +510,17 @@ def _apply_reschedule_updates(
         updated = apply_reschedule_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_reschedule_date_change(updated, date=operation.entities.date)
-    if "time" in facts:
+    apply_time, next_time, next_clock_source = _authoritative_time_update(
+        updated.replacement.time,
+        existing_clock_source=updated.replacement.time_clock_source,
+        facts=facts,
+        operation=operation,
+    )
+    if apply_time:
         updated = apply_reschedule_time_change(
             updated,
-            time=_time_constraint(facts.get("time")),
-            clock_source=_clock_source(
-                facts.get("time_clock_source"),
-                fallback=operation.clock_source,
-            ),
-        )
-    elif operation.entities.time is not None:
-        updated = apply_reschedule_time_change(
-            updated,
-            time=operation.entities.time,
-            clock_source=operation.clock_source,
+            time=next_time,
+            clock_source=next_clock_source,
         )
     return updated
 
