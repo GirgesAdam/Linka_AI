@@ -78,6 +78,12 @@ class V2StatefulHarnessResult:
     active_task: ActiveTaskState | None
     recent_read_context: dict[str, Any] | None = None
     availability_reference_context: dict[str, Any] | None = None
+    reference_semantic_path_used: bool = False
+    reference_action: str | None = None
+    selected_option_ref: str | None = None
+    reference_exact_time: str | None = None
+    full_interpreter_called: bool = True
+    reference_structured_output_error: bool = False
 
 
 
@@ -324,6 +330,8 @@ def run_v2_stateful_fixture_turn(
         ),
         "",
     )
+    reference_interpretation = None
+    full_interpreter_called = False
     grouped_reference_understanding = None
     grouped_reference_task = None
     if (
@@ -372,12 +380,34 @@ def run_v2_stateful_fixture_turn(
         understanding = grouped_reference_understanding
         active_task = grouped_reference_task
     else:
+        full_interpreter_called = True
         understanding = interpret_customer_turn_v2(
             history=history,
             semantic_context=semantic_context,
             timezone_name=timezone_name,
             local_now=local_now,
         )
+    reference_semantic_path_used = reference_interpretation is not None
+    reference_action = (
+        reference_interpretation.decision.action
+        if reference_interpretation is not None
+        else None
+    )
+    selected_option_ref = (
+        reference_interpretation.decision.option_ref
+        if reference_interpretation is not None
+        else None
+    )
+    reference_exact_time = (
+        reference_interpretation.decision.exact_time
+        if reference_interpretation is not None
+        else None
+    )
+    reference_structured_output_error = (
+        reference_interpretation.structured_output_error
+        if reference_interpretation is not None
+        else False
+    )
     understanding = merge_same_visit_booking_operations(understanding)
     understanding = merge_same_turn_grouped_availability_operations(
         understanding,
@@ -460,6 +490,12 @@ def run_v2_stateful_fixture_turn(
             active_task=active_task,
             recent_read_context=recent_read_context,
             availability_reference_context=availability_reference_context,
+            reference_semantic_path_used=reference_semantic_path_used,
+            reference_action=reference_action,
+            selected_option_ref=selected_option_ref,
+            reference_exact_time=reference_exact_time,
+            full_interpreter_called=full_interpreter_called,
+            reference_structured_output_error=reference_structured_output_error,
         )
 
     current_task: ActiveTaskState | None = narrowed_booking_task or active_task
@@ -562,4 +598,10 @@ def run_v2_stateful_fixture_turn(
         active_task=current_task,
         recent_read_context=next_read_context,
         availability_reference_context=next_availability_context,
+        reference_semantic_path_used=reference_semantic_path_used,
+        reference_action=reference_action,
+        selected_option_ref=selected_option_ref,
+        reference_exact_time=reference_exact_time,
+        full_interpreter_called=full_interpreter_called,
+        reference_structured_output_error=reference_structured_output_error,
     )

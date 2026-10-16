@@ -598,6 +598,65 @@ def test_stateful_harness_uses_same_grouped_normalization_as_runtime(monkeypatch
     assert result.traces[0].simulated_write is None
 
 
+def test_stateful_harness_exposes_reference_decision_diagnostics(monkeypatch) -> None:
+    from langchain_core.messages import HumanMessage
+
+    import app.services.agent_v2.stateful_test_harness as stateful_harness
+    from app.services.agent_v2.test_harness import V2FixtureEnvironment
+
+    interpretation = SimpleNamespace(
+        decision=SimpleNamespace(
+            action="select_presented_option",
+            option_ref="opt_1",
+            exact_time="20:00",
+        ),
+        structured_output_error=True,
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="pricing",
+                execution_intent="informational",
+                entities=TurnEntities(service=EntityReference(ref="S1")),
+                requested_service_details=["price"],
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        stateful_harness,
+        "interpret_availability_reference_turn",
+        lambda **_kwargs: interpretation,
+    )
+    monkeypatch.setattr(
+        stateful_harness,
+        "interpret_customer_turn_v2",
+        lambda **_kwargs: turn,
+    )
+    monkeypatch.setattr(
+        stateful_harness,
+        "compose_v2_customer_reply",
+        lambda **_kwargs: ("pricing", "deterministic:test"),
+    )
+
+    result = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[HumanMessage(content="use that option")],
+        local_now=NOW,
+        env=V2FixtureEnvironment(catalog=_catalog()),
+        availability_reference_context={
+            "availability_reference_options": [{"option_ref": "opt_1"}],
+        },
+        simulate_writes=False,
+        turn_id="reference-diagnostics",
+    )
+
+    assert result.reference_semantic_path_used is True
+    assert result.reference_action == "select_presented_option"
+    assert result.selected_option_ref == "opt_1"
+    assert result.reference_exact_time == "20:00"
+    assert result.full_interpreter_called is True
+    assert result.reference_structured_output_error is True
+
+
 def test_stateful_harness_applies_same_explicit_group_narrowing_as_runtime(monkeypatch) -> None:
     from langchain_core.messages import HumanMessage
 
