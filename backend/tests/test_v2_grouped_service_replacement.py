@@ -131,7 +131,7 @@ def _state(
 ) -> BookingTaskState:
     main = main or max(requested, key={A: 20, B: 30, C: 40, D: 50}.get)
     return BookingTaskState(
-        status="awaiting_choice" if with_stale_authority else "collecting",
+        status="collecting",
         write_authorization=WriteAuthorization(operation="booking", authorized=False),
         constraints=CustomerConstraints(
             service_id=main,

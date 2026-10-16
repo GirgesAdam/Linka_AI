@@ -127,7 +127,7 @@ def test_phase0_legacy_awaiting_choice_booking_slot_shape_round_trips() -> None:
     restored = state_persistence._decode_flow_task(_flow(task))
 
     assert isinstance(restored, BookingTaskState)
-    assert restored.status == "awaiting_choice"
+    assert restored.status == "awaiting_slot"
     assert restored.option_snapshot is not None
     assert restored.option_snapshot.purpose == "booking_slot"
     assert restored.derived.availability_snapshot_id == "snapshot-1"
@@ -160,7 +160,7 @@ def test_phase0_legacy_ready_current_proposal_shape_round_trips() -> None:
     restored = state_persistence._decode_flow_task(_flow(task))
 
     assert isinstance(restored, BookingTaskState)
-    assert restored.status == "ready"
+    assert restored.status == "awaiting_confirmation"
     assert restored.option_snapshot is None
     assert restored.derived.selected_slot_ref == "slot-1"
     assert restored.proposal is not None

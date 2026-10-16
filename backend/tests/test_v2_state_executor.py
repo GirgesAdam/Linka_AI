@@ -423,7 +423,7 @@ def test_broad_booking_availability_becomes_current_option_snapshot() -> None:
 
     state = transition.active_task
     assert isinstance(state, BookingTaskState)
-    assert state.status == "awaiting_choice"
+    assert state.status == "awaiting_slot"
     assert state.option_snapshot is not None
     assert state.option_snapshot.task_version == state.version
     assert len(state.option_snapshot.options) == 2

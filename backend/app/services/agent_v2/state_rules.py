@@ -262,7 +262,7 @@ def attach_booking_proposal(
     current = proposal.model_copy(update={"task_version": next_version})
     return state.model_copy(
         update={
-            "status": "ready",
+            "status": "awaiting_confirmation",
             "proposal": current,
             "option_snapshot": None,
             "version": next_version,
@@ -307,6 +307,7 @@ def record_booking_commercial_basis_presented(
     legacy_device = state.constraints.device_key
     return state.model_copy(
         update={
+            "status": "collecting",
             "derived": state.derived.model_copy(
                 update={
                     "commercial_basis_presented_key": commercial_key,
@@ -329,6 +330,7 @@ def record_booking_doctor_compatibility(
         return state
     return state.model_copy(
         update={
+            "status": "collecting",
             "derived": state.derived.model_copy(update={"doctor_compatible": compatible}),
             "version": state.version + 1,
             "proposal": None,
@@ -346,6 +348,7 @@ def record_booking_device_compatibility(
         return state
     return state.model_copy(
         update={
+            "status": "collecting",
             "derived": state.derived.model_copy(update={"device_compatible": compatible}),
             "version": state.version + 1,
             "proposal": None,
@@ -372,8 +375,12 @@ def attach_option_snapshot(
         expires_at=expires_at,
         options=choices,
     )
+    if isinstance(state, BookingTaskState):
+        status = "awaiting_slot" if snapshot.purpose == "booking_slot" else "collecting"
+    else:
+        status = "awaiting_choice"
     update: dict[str, object] = {
-        "status": "awaiting_choice",
+        "status": status,
         "option_snapshot": snapshot,
         "version": next_version,
     }

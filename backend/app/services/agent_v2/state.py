@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.v2.turn_contract import ClockSource, DateConstraint, PackageUsage, TimeConstraint
 
-TaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
+BookingTaskStatus = Literal["collecting", "awaiting_slot", "awaiting_confirmation"]
+RescheduleTaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
 LegacyPulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ChoicePurpose = Literal[
     "service",
@@ -278,7 +279,7 @@ class GroupedBookingState(StrictStateModel):
 
 class BookingTaskState(StrictStateModel):
     task_type: Literal["booking"] = "booking"
-    status: TaskStatus = "collecting"
+    status: BookingTaskStatus = "collecting"
     write_authorization: WriteAuthorization
     constraints: CustomerConstraints = Field(default_factory=CustomerConstraints)
     requested_service_ids: list[str] = Field(default_factory=list)
@@ -288,6 +289,33 @@ class BookingTaskState(StrictStateModel):
     derived: DerivedBookingState = Field(default_factory=DerivedBookingState)
     option_snapshot: OptionSnapshot | None = None
     version: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_status(cls, value: object) -> object:
+        """Decode legacy booking workflow statuses into the internal stage contract."""
+        if not isinstance(value, dict):
+            return value
+        status = value.get("status")
+        if status == "awaiting_choice":
+            snapshot = value.get("option_snapshot")
+            purpose = (
+                snapshot.purpose
+                if isinstance(snapshot, OptionSnapshot)
+                else snapshot.get("purpose")
+                if isinstance(snapshot, dict)
+                else None
+            )
+            normalized = "awaiting_slot" if purpose == "booking_slot" else "collecting"
+        elif status == "ready":
+            normalized = (
+                "awaiting_confirmation" if value.get("proposal") is not None else "collecting"
+            )
+        elif status == "executing":
+            normalized = "collecting"
+        else:
+            return value
+        return {**value, "status": normalized}
 
     @model_validator(mode="after")
     def validate_version(self) -> BookingTaskState:
@@ -299,6 +327,18 @@ class BookingTaskState(StrictStateModel):
             raise ValueError("requested booking services must be unique.")
         if self.proposal is not None and self.proposal.service_ids != self.requested_service_ids:
             raise ValueError("booking proposal must match the current requested service set.")
+        if self.status == "awaiting_slot":
+            if (
+                self.option_snapshot is None
+                or self.option_snapshot.purpose != "booking_slot"
+                or self.proposal is not None
+            ):
+                raise ValueError("awaiting_slot requires a booking-slot snapshot and no proposal.")
+        if self.status == "awaiting_confirmation":
+            if self.proposal is None:
+                raise ValueError("awaiting_confirmation requires a booking proposal.")
+            if self.option_snapshot is not None and self.option_snapshot.purpose == "booking_slot":
+                raise ValueError("awaiting_confirmation cannot retain a booking-slot snapshot.")
         return self
 
 
@@ -321,7 +361,7 @@ class DerivedRescheduleState(StrictStateModel):
 
 class RescheduleTaskState(StrictStateModel):
     task_type: Literal["reschedule"] = "reschedule"
-    status: TaskStatus = "collecting"
+    status: RescheduleTaskStatus = "collecting"
     write_authorization: WriteAuthorization
     target: RescheduleTarget
     replacement: CustomerConstraints

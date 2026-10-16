@@ -670,7 +670,7 @@ def _preserve_verified_window_snapshot(
     )
     return current.model_copy(
         update={
-            "status": "awaiting_choice",
+            "status": "awaiting_slot",
             "option_snapshot": narrowed,
             "derived": current.derived.model_copy(
                 update={
@@ -693,7 +693,9 @@ def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTas
     ):
         return state
     selected_ref = step.facts.get("selected_option_ref")
-    status = "ready" if step.disposition == "write_ready" else state.status
+    status = state.status
+    if isinstance(state, RescheduleTaskState) and step.disposition == "write_ready":
+        status = "ready"
     derived = state.derived.model_copy(
         update={
             "selected_slot_ref": str(selected_ref) if selected_ref else state.derived.selected_slot_ref

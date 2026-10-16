@@ -832,7 +832,7 @@ def test_mixed_category_preflight_builds_one_customer_proposal_with_two_persiste
     )
 
     assert task is not None
-    assert task.status == "ready"
+    assert task.status == "awaiting_confirmation"
     assert task.write_authorization.authorized is False
     assert task.requested_service_ids == [SERVICE_A, SERVICE_B]
     assert task.grouped is None
