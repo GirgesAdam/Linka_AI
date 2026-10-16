@@ -7,7 +7,10 @@ from datetime import datetime, time
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
+if __package__:
+    from .grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
+else:
+    from grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
