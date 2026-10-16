@@ -39,6 +39,8 @@ from app.services.agent_v2.state_rules import (
     attach_option_snapshot,
     preserve_task_for_side_read,
     record_booking_commercial_basis_presented,
+    record_booking_selected_slot,
+    restore_booking_slot_snapshot,
 )
 
 _OPTION_TTL = timedelta(minutes=15)
@@ -624,6 +626,8 @@ def _attach_availability_snapshot(
         created_at=now,
         expires_at=now + _OPTION_TTL,
     )
+    if isinstance(updated, BookingTaskState):
+        return updated
     return updated.model_copy(
         update={
             "derived": updated.derived.model_copy(
@@ -668,17 +672,9 @@ def _preserve_verified_window_snapshot(
             "options": choices,
         }
     )
-    return current.model_copy(
-        update={
-            "status": "awaiting_slot",
-            "option_snapshot": narrowed,
-            "derived": current.derived.model_copy(
-                update={
-                    "availability_snapshot_id": snapshot_id,
-                    "selected_slot_ref": None,
-                }
-            ),
-        }
+    return restore_booking_slot_snapshot(
+        current,
+        snapshot=narrowed,
     )
 
 def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTaskState:
@@ -693,9 +689,14 @@ def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTas
     ):
         return state
     selected_ref = step.facts.get("selected_option_ref")
-    status = state.status
-    if isinstance(state, RescheduleTaskState) and step.disposition == "write_ready":
-        status = "ready"
+    if isinstance(state, BookingTaskState):
+        if selected_ref in (None, ""):
+            return state
+        return record_booking_selected_slot(
+            state,
+            selected_slot_ref=str(selected_ref),
+        )
+    status = "ready" if step.disposition == "write_ready" else state.status
     derived = state.derived.model_copy(
         update={
             "selected_slot_ref": str(selected_ref) if selected_ref else state.derived.selected_slot_ref

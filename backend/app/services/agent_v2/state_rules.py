@@ -357,6 +357,43 @@ def record_booking_device_compatibility(
     )
 
 
+def restore_booking_slot_snapshot(
+    state: BookingTaskState,
+    *,
+    snapshot: OptionSnapshot,
+) -> BookingTaskState:
+    """Restore a verified narrowed booking-slot snapshot without another version bump."""
+    return state.model_copy(
+        update={
+            "status": "awaiting_slot",
+            "proposal": None,
+            "option_snapshot": snapshot,
+            "derived": state.derived.model_copy(
+                update={
+                    "availability_snapshot_id": snapshot.snapshot_id,
+                    "selected_slot_ref": None,
+                }
+            ),
+        }
+    )
+
+def record_booking_selected_slot(
+    state: BookingTaskState,
+    *,
+    selected_slot_ref: str,
+) -> BookingTaskState:
+    """Record verified booking-slot identity without advancing stage or version."""
+    if state.derived.selected_slot_ref == selected_slot_ref:
+        return state
+    return state.model_copy(
+        update={
+            "derived": state.derived.model_copy(
+                update={"selected_slot_ref": selected_slot_ref}
+            )
+        }
+    )
+
+
 def attach_option_snapshot(
     state: ActiveTaskState,
     *,
@@ -386,6 +423,10 @@ def attach_option_snapshot(
     }
     if isinstance(state, BookingTaskState):
         update["proposal"] = None
+        if snapshot.purpose == "booking_slot":
+            update["derived"] = state.derived.model_copy(
+                update={"availability_snapshot_id": snapshot_id}
+            )
     return state.model_copy(update=update)
 
 
