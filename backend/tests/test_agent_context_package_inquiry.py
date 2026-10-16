@@ -822,6 +822,49 @@ def test_explicit_hhmm_guard_rejects_different_presented_option() -> None:
     assert exact["status"] == "resolved"
 
 
+def _context_with_canonical_slot_time(*, start_local: object) -> dict[str, object]:
+    context = _reference_context()
+    options = [dict(item) for item in context["availability_reference_options"]]
+    option = dict(options[0])
+    slot = dict(option["slot"])
+    slot.pop("start_time_24h", None)
+    if start_local is None:
+        slot.pop("start_local", None)
+    else:
+        slot["start_local"] = start_local
+    option["slot"] = slot
+    options[0] = option
+    return {**context, "availability_reference_options": options}
+
+
+def test_explicit_time_guard_uses_canonical_slot_start_local_when_clock_missing() -> None:
+    resolved = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        _context_with_canonical_slot_time(start_local="2026-10-10T12:00:00+03:00"),
+        explicit_user_time="12:00",
+    )
+    assert resolved["status"] == "resolved"
+
+
+def test_explicit_time_guard_rejects_mismatch_from_canonical_slot_start_local() -> None:
+    resolved = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        _context_with_canonical_slot_time(start_local="2026-10-10T20:00:00+03:00"),
+        explicit_user_time="08:00",
+    )
+    assert resolved["status"] == "explicit_time_mismatch"
+
+
+def test_explicit_time_guard_fails_closed_when_canonical_slot_clock_is_unavailable() -> None:
+    for start_local in (None, "not-a-date"):
+        resolved = resolve_verified_availability_reference(
+            Selection(kind="ref", ref="opt_1"),
+            _context_with_canonical_slot_time(start_local=start_local),
+            explicit_user_time="12:00",
+        )
+        assert resolved["status"] == "explicit_time_mismatch"
+
+
 def test_presented_availability_semantic_view_exposes_opaque_refs_not_canonical_slots() -> None:
     semantic = _semantic()
     raw = _reference_context()

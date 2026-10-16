@@ -17,6 +17,14 @@ def _parse_dt(value: object) -> datetime | None:
         return None
 
 
+def canonical_availability_slot_time(slot: dict[str, object]) -> str | None:
+    explicit = str(slot.get("start_time_24h") or "").strip()[:5]
+    if explicit:
+        return explicit
+    start_local = _parse_dt(slot.get("start_local"))
+    return start_local.strftime("%H:%M") if start_local is not None else None
+
+
 def _same_dimension(slot: dict[str, object], window: dict[str, object], key: str) -> bool:
     window_value = str(window.get(key) or "").strip()
     if not window_value:
@@ -231,7 +239,7 @@ def resolve_verified_availability_reference(
     explicit = str(explicit_user_time or "").strip()[:5]
     if explicit:
         slot = option.get("slot")
-        slot_time = str(slot.get("start_time_24h") or "").strip()[:5] if isinstance(slot, dict) else ""
+        slot_time = canonical_availability_slot_time(slot) if isinstance(slot, dict) else None
         if slot_time != explicit:
             result["status"] = "explicit_time_mismatch"
             return result

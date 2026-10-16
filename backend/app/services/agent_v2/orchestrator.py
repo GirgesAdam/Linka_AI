@@ -98,6 +98,7 @@ from app.services.agent_v2.read_executor import (
     execute_step_reads,
 )
 from app.services.agent_v2.reference_resolution import (
+    canonical_availability_slot_time,
     resolve_verified_availability_reference,
     resolve_verified_availability_scope,
 )
@@ -795,7 +796,7 @@ def _grouped_visit_reference_understanding(
         slot = resolved_option.get("slot") if isinstance(resolved_option, dict) else None
         if not isinstance(slot, dict):
             continue
-        slot_time = str(slot.get("start_time_24h") or "").strip()[:5]
+        slot_time = canonical_availability_slot_time(slot)
         start_local = str(slot.get("start_local") or slot.get("start_at") or "")
         if slot_time != exact_time or len(start_local) < 10:
             continue

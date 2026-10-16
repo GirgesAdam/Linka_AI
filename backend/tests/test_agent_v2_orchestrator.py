@@ -1045,7 +1045,6 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
                     "doctor_id": "doctor-1",
                     "laser_device_key": "device-1",
                     "start_local": "2026-09-12T20:00:00+03:00",
-                    "start_time_24h": "20:00",
                 },
             },
             {
@@ -1071,7 +1070,12 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
         runtime,
         "interpret_availability_reference_turn",
         lambda **kwargs: ReferenceInterpretation(
-            decision=ReferenceDecision(action="clarify", option_ref=None, exact_time="20:00"),
+            decision=ReferenceDecision(
+                action="select_presented_option",
+                option_ref="opt_1",
+                exact_time=None,
+                selection_scope="none",
+            ),
             model_name="deterministic-test",
         ),
     )
@@ -1129,6 +1133,9 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
     assert step.response_goal != "answer_price"
     assert any(read.kind == "availability" for read in step.reads)
     assert result.pending_write is None
+    assert result.reference_action == "select_presented_option"
+    assert result.selected_option_ref == "opt_1"
+    assert result.full_interpreter_called is False
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.requested_service_ids == ["service-a", "service-b"]
     assert result.active_task.constraints.doctor_id == "doctor-1"
