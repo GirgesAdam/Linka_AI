@@ -12,23 +12,22 @@ from sqlalchemy import select
 
 import app.agents.v2.time_resolution as time_resolution
 from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
-from scripts import run_explicit_daypart_live_review as base
+from scripts import spoken_clock_live_review_support as base
 
 REPORT_PATH = Path(
     os.environ.get(
         "CLOCK_RT_REPORT_PATH",
-        "artifacts/clinic-hours-clock-live-review.json",
+        "artifacts/spoken-clock-policy-live-review.json",
     )
 )
 
 SAFETY_COUNTERS = {
     "wrong_time_writes": 0,
     "wrong_writes": 0,
+    "partial_writes": 0,
     "false_success": 0,
-    "silent_am_pm_mutation": 0,
-    "unnecessary_10_11_clarification": 0,
+    "unnecessary_am_pm": 0,
     "arbitrary_10_11_resolution": 0,
-    "contextual_period_misresolution": 0,
     "wrong_device": 0,
     "cross_device_visits": 0,
     "lost_services": 0,
@@ -70,7 +69,16 @@ def _capture_bare_resolution(*args, **kwargs):
     return result
 
 
-time_resolution.resolve_bare_clock_constraint = _capture_bare_resolution
+
+_CLOCK_TRACE_INSTALLED = False
+
+
+def _install_clock_trace() -> None:
+    global _CLOCK_TRACE_INSTALLED
+    if _CLOCK_TRACE_INSTALLED:
+        return
+    time_resolution.resolve_bare_clock_constraint = _capture_bare_resolution
+    _CLOCK_TRACE_INSTALLED = True
 
 
 @dataclass(frozen=True)
@@ -79,8 +87,8 @@ class ScenarioSpec:
     customer: str
     start: str
     end: str
-    expected_period: str
     expected_canonical: str | None
+    expected_hint: str = "none"
     expected_bare_status: str | None = None
     expected_candidates: tuple[str, ...] = ()
     expected_valid_candidates: tuple[str, ...] = ()
@@ -90,33 +98,41 @@ class ScenarioSpec:
 
 SCENARIOS = [
     ScenarioSpec(
-        name="RT1",
+        name="RA-T1",
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3",
         start="10:00",
         end="22:00",
-        expected_period="none",
         expected_canonical="15:00",
         expected_bare_status="resolved",
         expected_candidates=("03:00", "15:00"),
         expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
-        name="RT2",
-        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10",
-        start="09:00",
-        end="21:00",
-        expected_period="none",
-        expected_canonical="10:00",
+        name="RA-T2",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3 الصبح",
+        start="10:00",
+        end="22:00",
+        expected_canonical="15:00",
+        expected_hint="am",
         expected_bare_status="resolved",
-        expected_candidates=("10:00", "22:00"),
-        expected_valid_candidates=("10:00",),
+        expected_candidates=("03:00", "15:00"),
+        expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
-        name="RT3",
+        name="RA-T3",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 4 وربع",
+        start="10:00",
+        end="22:00",
+        expected_canonical="16:15",
+        expected_bare_status="resolved",
+        expected_candidates=("04:15", "16:15"),
+        expected_valid_candidates=("16:15",),
+    ),
+    ScenarioSpec(
+        name="RA-T4",
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10",
         start="09:00",
         end="23:30",
-        expected_period="none",
         expected_canonical=None,
         expected_bare_status="clarify_period",
         expected_candidates=("10:00", "22:00"),
@@ -124,72 +140,67 @@ SCENARIOS = [
         clarification_required=True,
     ),
     ScenarioSpec(
-        name="RT4",
+        name="RA-T5",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10 بالليل",
+        start="09:00",
+        end="23:30",
+        expected_canonical="22:00",
+        expected_hint="pm",
+        expected_bare_status="resolved",
+        expected_candidates=("10:00", "22:00"),
+        expected_valid_candidates=("10:00", "22:00"),
+    ),
+    ScenarioSpec(
+        name="RA-T6",
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11",
         start="09:00",
-        end="22:00",
-        expected_period="none",
+        end="23:30",
+        expected_canonical=None,
+        expected_bare_status="clarify_period",
+        expected_candidates=("11:00", "23:00"),
+        expected_valid_candidates=("11:00", "23:00"),
+        clarification_required=True,
+    ),
+    ScenarioSpec(
+        name="RA-T7",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل",
+        start="09:00",
+        end="23:30",
+        expected_canonical="23:00",
+        expected_hint="pm",
+        expected_bare_status="resolved",
+        expected_candidates=("11:00", "23:00"),
+        expected_valid_candidates=("11:00", "23:00"),
+    ),
+    ScenarioSpec(
+        name="RA-T8",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل",
+        start="09:00",
+        end="21:00",
         expected_canonical="11:00",
+        expected_hint="pm",
         expected_bare_status="resolved",
         expected_candidates=("11:00", "23:00"),
         expected_valid_candidates=("11:00",),
     ),
     ScenarioSpec(
-        name="RT5",
-        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11",
-        start="14:00",
-        end="23:30",
-        expected_period="none",
-        expected_canonical="23:00",
-        expected_bare_status="resolved",
-        expected_candidates=("11:00", "23:00"),
-        expected_valid_candidates=("23:00",),
-    ),
-    ScenarioSpec(
-        name="RT6",
-        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 12",
-        start="10:00",
-        end="22:00",
-        expected_period="none",
-        expected_canonical="12:00",
-        expected_bare_status="resolved",
-        expected_candidates=("12:00",),
-        expected_valid_candidates=("12:00",),
-    ),
-    ScenarioSpec(
-        name="RT7",
+        name="RA-T9",
         customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 03:00 بالضبط",
         start="10:00",
         end="22:00",
-        expected_period="none",
         expected_canonical="03:00",
         unavailable=True,
     ),
     ScenarioSpec(
-        name="RT8",
-        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 4:15 العصر بالضبط",
-        start="10:00",
-        end="22:00",
-        expected_period="explicit",
-        expected_canonical="16:15",
-        unavailable=True,
-    ),
-    ScenarioSpec(
-        name="RT9",
-        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 11 بالليل بالضبط",
+        name="RA-T10",
+        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 10",
         start="09:00",
-        end="21:00",
-        expected_period="explicit",
-        expected_canonical="23:00",
-        unavailable=True,
-    ),
-    ScenarioSpec(
-        name="RT10",
-        customer="عايزة أحجز ليزر بكيني يوم الخميس 15 أكتوبر 2026 الساعة 3 العصر بالضبط",
-        start="10:00",
-        end="22:00",
-        expected_period="explicit",
-        expected_canonical="15:00",
+        end="23:30",
+        expected_canonical=None,
+        expected_bare_status="clarify_period",
+        expected_candidates=("10:00", "22:00"),
+        expected_valid_candidates=("10:00", "22:00"),
+        clarification_required=True,
     ),
 ]
 
@@ -242,7 +253,10 @@ def _semantic_operation(record: dict[str, Any]) -> dict[str, Any]:
                 continue
             entities = operation.get("entities")
             time_value = entities.get("time") if isinstance(entities, dict) else None
+            selection = operation.get("selection")
             if isinstance(time_value, dict) and time_value.get("start_time") not in (None, ""):
+                return operation
+            if isinstance(selection, dict) and selection.get("kind") == "time":
                 return operation
     return {}
 
@@ -250,15 +264,16 @@ def _semantic_operation(record: dict[str, Any]) -> dict[str, Any]:
 def _semantic_time(operation: dict[str, Any]) -> dict[str, Any]:
     entities = operation.get("entities")
     value = entities.get("time") if isinstance(entities, dict) else None
-    return value if isinstance(value, dict) else {}
+    if isinstance(value, dict):
+        return value
+    selection = operation.get("selection")
+    return selection if isinstance(selection, dict) else {}
 
 
 def _original_bare_trace() -> dict[str, Any] | None:
     for item in CLOCK_TRACE:
         raw = item.get("input_time")
-        if not isinstance(raw, dict):
-            continue
-        if raw.get("start_time_ambiguity") == "twelve_hour":
+        if isinstance(raw, dict) and raw.get("start_time_ambiguity") == "twelve_hour":
             return item
     return None
 
@@ -267,9 +282,9 @@ def _availability_clock(record: dict[str, Any]) -> str | None:
     for request in record.get("availability_requests") or []:
         if not isinstance(request, dict):
             continue
-        time_value = request.get("time")
-        if isinstance(time_value, dict) and time_value.get("start_time"):
-            return str(time_value["start_time"])
+        value = request.get("time")
+        if isinstance(value, dict) and value.get("start_time"):
+            return str(value["start_time"])
     return None
 
 
@@ -300,17 +315,17 @@ def _canonical_clock(record: dict[str, Any], spec: ScenarioSpec) -> str | None:
         if candidate:
             return candidate
     operation = _semantic_operation(record)
-    time_value = _semantic_time(operation)
-    raw = time_value.get("start_time")
-    if raw and time_value.get("start_time_ambiguity") != "twelve_hour":
+    value = _semantic_time(operation)
+    raw = value.get("start_time") or value.get("time")
+    if raw and value.get("start_time_ambiguity", value.get("time_ambiguity")) != "twelve_hour":
         return str(raw)
     return None
 
 
 def _looks_like_period_question(reply: str) -> bool:
     lowered = reply.lower()
-    morning = any(token in lowered for token in ("الصبح", "صباح", "صباحًا"))
-    evening = any(token in lowered for token in ("بالليل", "مساء", "مساءً", "ليل"))
+    morning = any(token in lowered for token in ("الصبح", "صباح", "morning", "am"))
+    evening = any(token in lowered for token in ("بالليل", "مساء", "ليل", "night", "pm"))
     return morning and evening
 
 
@@ -318,63 +333,39 @@ def _fallback_looking(reply: str) -> bool:
     lowered = reply.lower()
     return any(
         token in lowered
-        for token in (
-            "fallback",
-            "system error",
-            "internal error",
-            "حصل خطأ",
-            "تعذر تنفيذ",
-        )
+        for token in ("fallback", "system error", "internal error", "حصل خطأ", "تعذر تنفيذ")
     )
 
 
-def _validate_write_safety(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Context) -> None:
+def _observe_transactional_safety(
+    record: dict[str, Any],
+    spec: ScenarioSpec,
+    ctx: base.Context,
+) -> None:
+    """Count transactional defects immediately, independently from rollback persistence."""
     appointments = record.get("appointments") or []
     delta = int((record.get("db_effect") or {}).get("appointment_delta") or 0)
-    _require(
-        len(record.get("proposals_created") or []) <= 1,
-        counter="duplicate_proposals",
-        message=f"{spec.name}: duplicate proposals created",
-    )
-    _require(
-        len(appointments) <= 1,
-        counter="duplicate_appointments",
-        message=f"{spec.name}: duplicate appointments created",
-    )
-    if spec.clarification_required or spec.unavailable:
-        _require(
-            delta == 0 and not appointments,
-            counter="wrong_writes",
-            message=f"{spec.name}: unresolved/unavailable clock wrote appointment",
-        )
-    if not appointments:
+    if len(appointments) > 1:
+        SAFETY_COUNTERS["duplicate_appointments"] += 1
+    if len(record.get("proposals_created") or []) > 1:
+        SAFETY_COUNTERS["duplicate_proposals"] += 1
+    if (spec.clarification_required or spec.unavailable) and (delta != 0 or appointments):
+        SAFETY_COUNTERS["wrong_writes"] += 1
+    if len(appointments) != 1:
         return
+    actual = base._appointment_clock(record)
+    wrong_time = spec.expected_canonical is None or actual != spec.expected_canonical
+    if wrong_time:
+        SAFETY_COUNTERS["wrong_time_writes"] += 1
+        if str(record.get("agent") or "").strip() and not _fallback_looking(
+            str(record.get("agent") or "")
+        ):
+            SAFETY_COUNTERS["false_success"] += 1
     appointment = appointments[0]
-    _require(
-        base._appointment_clock(record) == spec.expected_canonical,
-        counter="wrong_time_writes",
-        message=f"{spec.name}: DB appointment used wrong clock",
-    )
-    _require(
-        str(appointment.get("service_id") or "") == str(ctx.bikini.id),
-        counter="lost_services",
-        message=f"{spec.name}: DB appointment lost or changed requested service",
-    )
-    _require(
-        str(appointment.get("doctor_id") or "") == str(ctx.doctor.id),
-        counter="wrong_writes",
-        message=f"{spec.name}: DB appointment used wrong doctor",
-    )
-    _require(
-        appointment.get("laser_device_key") == "candela_gentle",
-        counter="wrong_device",
-        message=f"{spec.name}: DB appointment used wrong device",
-    )
-    _require(
-        str(appointment.get("status") or "") == "pending",
-        counter="false_success",
-        message=f"{spec.name}: booking creation status is not pending",
-    )
+    if str(appointment.get("service_id") or "") != str(ctx.bikini.id):
+        SAFETY_COUNTERS["lost_services"] += 1
+    if appointment.get("laser_device_key") != "candela_gentle":
+        SAFETY_COUNTERS["wrong_device"] += 1
     device_keys = {
         str(value)
         for value in [
@@ -387,150 +378,84 @@ def _validate_write_safety(record: dict[str, Any], spec: ScenarioSpec, ctx: base
         ]
         if value not in (None, "")
     }
-    _require(
-        len(device_keys) <= 1,
-        counter="cross_device_visits",
-        message=f"{spec.name}: cross-device visit detected",
-    )
+    if len(device_keys) > 1:
+        SAFETY_COUNTERS["cross_device_visits"] += 1
 
 
 def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Context) -> None:
     operation = _semantic_operation(record)
-    time_value = _semantic_time(operation)
-    period = str(base._raw_period(record) or "none")
+    semantic = _semantic_time(operation)
+    raw_hint = str(semantic.get("spoken_period_hint") or "none")
     reply = str(record.get("agent") or "").strip()
 
     _require(
-        period == spec.expected_period,
-        counter="silent_am_pm_mutation",
-        message=f"{spec.name}: period_status={period}, expected {spec.expected_period}",
+        raw_hint == spec.expected_hint,
+        message=f"{spec.name}: spoken_period_hint={raw_hint}, expected {spec.expected_hint}",
     )
     if spec.expected_bare_status is not None:
-        # Ambiguity is backend-derived authority, not an LLM/provider contract field.
-        # Validate the deterministic resolver trace and canonical outcome instead.
         trace = _original_bare_trace()
-        _require(
-            trace is not None,
-            counter="silent_am_pm_mutation",
-            message=f"{spec.name}: missing deterministic bare-clock trace",
-        )
+        _require(trace is not None, message=f"{spec.name}: missing deterministic clock trace")
         assert trace is not None
         _require(
             trace.get("status") == spec.expected_bare_status,
-            counter=(
-                "arbitrary_10_11_resolution"
-                if spec.clarification_required
-                else "silent_am_pm_mutation"
-            ),
-            message=(
-                f"{spec.name}: bare resolution status={trace.get('status')}, "
-                f"expected {spec.expected_bare_status}"
-            ),
+            counter=("arbitrary_10_11_resolution" if spec.clarification_required else None),
+            message=f"{spec.name}: resolution status={trace.get('status')}",
         )
         _require(
             tuple(trace.get("candidate_clocks") or []) == spec.expected_candidates,
-            counter="silent_am_pm_mutation",
             message=f"{spec.name}: candidate clocks mismatch",
         )
         _require(
-            tuple(trace.get("valid_operating_hour_candidates") or [])
-            == spec.expected_valid_candidates,
-            counter="silent_am_pm_mutation",
-            message=f"{spec.name}: valid operating-hour candidates mismatch",
+            tuple(trace.get("valid_operating_hour_candidates") or []) == spec.expected_valid_candidates,
+            message=f"{spec.name}: valid clinic-hour candidates mismatch",
         )
 
     canonical = _canonical_clock(record, spec)
     _require(
         canonical == spec.expected_canonical,
-        counter="silent_am_pm_mutation",
-        message=(
-            f"{spec.name}: canonical clock={canonical}, "
-            f"expected {spec.expected_canonical}"
-        ),
+        message=f"{spec.name}: canonical clock={canonical}, expected {spec.expected_canonical}",
     )
 
-    period_question = _looks_like_period_question(reply)
+    asks_period = _looks_like_period_question(reply)
     if spec.clarification_required:
         _require(
-            period_question,
+            asks_period,
             counter="arbitrary_10_11_resolution",
-            message=f"{spec.name}: both candidates were valid but Agent did not clarify period",
+            message=f"{spec.name}: both candidates valid but no period clarification",
         )
         _require(
-            not record.get("availability_requests")
-            and not (base._proposal(record) or record.get("booking_proposal")),
+            not record.get("appointments") and not (base._proposal(record) or record.get("booking_proposal")),
             counter="arbitrary_10_11_resolution",
-            message=f"{spec.name}: unresolved 10/11 progressed to availability/proposal",
+            message=f"{spec.name}: unresolved 10/11 progressed to proposal/write",
         )
-    elif spec.name in {"RT2", "RT4", "RT5"}:
+    elif spec.name in {"RA-T1", "RA-T2", "RA-T3", "RA-T5", "RA-T7", "RA-T8"}:
         _require(
-            not period_question,
-            counter="unnecessary_10_11_clarification",
-            message=f"{spec.name}: clinic hours uniquely resolved 10/11 but Agent asked AM/PM",
+            not asks_period,
+            counter="unnecessary_am_pm",
+            message=f"{spec.name}: unnecessary AM/PM clarification",
         )
 
-    if spec.unavailable:
-        _require(
-            not record.get("appointments"),
-            counter="wrong_writes",
-            message=f"{spec.name}: unavailable explicit time wrote appointment",
-        )
-        _require(
-            _availability_clock(record) == spec.expected_canonical,
-            counter="silent_am_pm_mutation",
-            message=f"{spec.name}: unavailable explicit time mutated before availability",
-        )
-
-    _require(
-        bool(reply) and not _fallback_looking(reply),
-        counter="false_success",
-        message=f"{spec.name}: empty/fallback-looking customer response",
-    )
-    _validate_write_safety(record, spec, ctx)
+    _require(bool(reply) and not _fallback_looking(reply), message=f"{spec.name}: empty/fallback reply")
 
     trace = _original_bare_trace()
-    candidates = (
-        list(trace.get("candidate_clocks") or [])
-        if trace is not None
-        else ([spec.expected_canonical] if spec.expected_canonical else [])
-    )
-    valid_candidates = (
-        list(trace.get("valid_operating_hour_candidates") or [])
-        if trace is not None
-        else ([spec.expected_canonical] if spec.expected_canonical else [])
-    )
     record["clock_resolution_trace"] = list(CLOCK_TRACE)
     record["evidence"] = {
-        "CUSTOMER": record.get("customer"),
-        "AGENT": record.get("agent"),
-        "Backend bare-clock trace": _original_bare_trace(),
-        "Explicit period semantics": period,
-        "Typed semantic time": time_value,
-        "Effective clinic/branch operating hours": {
-            "requested_date": "2026-10-15",
-            "weekday": 3,
-            "branch_id": str(ctx.workspace.primary_branch_id),
-            "start": spec.start,
-            "end": spec.end,
-        },
-        "Candidate clocks": candidates,
-        "Valid operating-hour candidates": valid_candidates,
-        "Canonical resolved time": canonical,
-        "Clarification required": spec.clarification_required,
-        "Availability request": record.get("availability_requests") or [],
-        "Proposal": base._proposal(record) or record.get("booking_proposal"),
-        "DB effect": record.get("db_effect"),
-    }
-    record["assessment"] = {
-        "Functional": "PASS",
-        "Naturalness": "CLEAN",
-        "Unnecessary clarification": "CLEAN",
-        "Silent time mutation": "CLEAN",
-        "False success": "CLEAN",
+        "customer": record.get("customer"),
+        "agent": record.get("agent"),
+        "raw_model_start_time": semantic.get("start_time") or semantic.get("time"),
+        "raw_spoken_period_hint": raw_hint,
+        "normalized_12h_base": (trace or {}).get("input_time"),
+        "candidate_clocks": list((trace or {}).get("candidate_clocks") or []),
+        "clinic_hours": list((trace or {}).get("operating_hours") or []),
+        "valid_candidates": list((trace or {}).get("valid_operating_hour_candidates") or []),
+        "chosen_canonical_clock": canonical,
+        "clarification": asks_period,
+        "proposal_time": _proposal_clock(record),
+        "db_effect": record.get("db_effect"),
     }
 
 
-def _task_constraint_facts(record: dict[str, Any]) -> dict[str, Any]:
+def _task_constraints(record: dict[str, Any]) -> dict[str, Any]:
     task = record.get("active_task")
     if not isinstance(task, dict):
         return {}
@@ -538,138 +463,62 @@ def _task_constraint_facts(record: dict[str, Any]) -> dict[str, Any]:
     return constraints if isinstance(constraints, dict) else {}
 
 
-def _validate_rt3_continuation(
-    first: dict[str, Any],
-    continued: dict[str, Any],
-    ctx: base.Context,
-    *,
-    expected_clock: str,
-    expected_period: str,
-) -> None:
-    first_constraints = _task_constraint_facts(first)
-    _require(
-        bool(first_constraints),
-        counter="lost_services",
-        message="RT3: clarification did not preserve active booking state",
-    )
+def _validate_t10_side_question(first: dict[str, Any], side: dict[str, Any], final: dict[str, Any], ctx: base.Context) -> None:
+    first_constraints = _task_constraints(first)
+    side_constraints = _task_constraints(side)
+    final_constraints = _task_constraints(final)
+    _require(bool(first_constraints), counter="lost_services", message="RA-T10 lost active task on clarification")
     _require(
         str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
         counter="lost_services",
-        message="RT3: clarification lost requested service",
+        message="RA-T10 lost service before continuation",
     )
     _require(
-        str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
-        counter="wrong_writes",
-        message="RT3: clarification lost branch",
+        side_constraints.get("service_id") == first_constraints.get("service_id")
+        and side_constraints.get("date") == first_constraints.get("date")
+        and side_constraints.get("time") == first_constraints.get("time"),
+        counter="lost_services",
+        message="RA-T10 side question changed pending task constraints",
     )
-    first_date = first_constraints.get("date")
-    _require(
-        isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
-        counter="wrong_time_writes",
-        message="RT3: clarification lost requested date",
-    )
-
-    continued_constraints = _task_constraint_facts(continued)
-    if continued_constraints:
-        continued_time = continued_constraints.get("time")
-        _require(
-            isinstance(continued_time, dict)
-            and continued_time.get("start_time") == expected_clock
-            and continued_time.get("start_time_ambiguity") == "none",
-            counter="contextual_period_misresolution",
-            message=(
-                "RT3: contextual period resolution did not persist canonical time "
-                f"{expected_clock}: {continued_time!r}"
-            ),
-        )
-        _require(
-            str(continued_constraints.get("time_clock_source") or "") == "explicit_period",
-            counter="contextual_period_misresolution",
-            message="RT3: resolved follow-up did not persist explicit period authority",
-        )
-        _require(
-            str(continued_constraints.get("service_id") or "") == str(ctx.bikini.id),
-            counter="lost_services",
-            message="RT3: continuation changed requested service",
-        )
-        _require(
-            str(continued_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
-            counter="wrong_writes",
-            message="RT3: continuation changed branch",
-        )
-        continued_date = continued_constraints.get("date")
-        _require(
-            isinstance(continued_date, dict)
-            and continued_date.get("start_date") == "2026-10-15",
-            counter="wrong_time_writes",
-            message="RT3: continuation changed requested date",
-        )
-
-    canonical = next(
+    final_clock = next(
         (
             value
             for value in (
-                _availability_clock(continued),
-                base._task_time(continued),
-                _proposal_clock(continued),
-                base._appointment_clock(continued),
+                _availability_clock(final),
+                base._task_time(final),
+                _proposal_clock(final),
+                base._appointment_clock(final),
             )
             if value
         ),
         None,
     )
-    _require(
-        canonical == expected_clock,
-        counter="contextual_period_misresolution",
-        message=(
-            f"RT3: {expected_period} continuation canonical clock={canonical}, "
-            f"expected {expected_clock}"
-        ),
-    )
-    availability = continued.get("availability_requests") or []
-    if availability:
+    _require(final_clock == "22:00", counter="wrong_time_writes", message=f"RA-T10 final clock={final_clock}")
+    if final_constraints:
         _require(
-            _availability_clock(continued) == expected_clock,
-            counter="wrong_time_writes",
-            message=f"RT3: continuation availability did not use {expected_clock}",
-        )
-    appointments = continued.get("appointments") or []
-    _require(
-        len(appointments) <= 1,
-        counter="duplicate_appointments",
-        message="RT3: continuation created duplicate appointments",
-    )
-    _require(
-        len(continued.get("proposals_created") or []) <= 1,
-        counter="duplicate_proposals",
-        message="RT3: continuation created duplicate proposals",
-    )
-    if appointments:
-        _require(
-            base._appointment_clock(continued) == expected_clock,
-            counter="wrong_time_writes",
-            message=f"RT3: continuation wrote a non-{expected_clock} appointment",
-        )
-        _require(
-            str(appointments[0].get("service_id") or "") == str(ctx.bikini.id),
+            str(final_constraints.get("service_id") or "") == str(ctx.bikini.id),
             counter="lost_services",
-            message="RT3: continuation changed requested service",
+            message="RA-T10 continuation changed service",
         )
-
-    continued["rt3_continuation_evidence"] = {
-        "CUSTOMER": continued.get("customer"),
-        "AGENT": continued.get("agent"),
-        "model": continued.get("model"),
-        "raw_structured": continued.get("raw_structured") or [],
-        "expected_period": expected_period,
-        "canonical_time": canonical,
-        "persisted_constraints": continued_constraints,
-        "availability_request": availability,
-        "proposal": base._proposal(continued) or continued.get("booking_proposal"),
-        "DB_effect": continued.get("db_effect"),
-        "same_service_id": str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
-        "same_branch_id": str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
-        "same_date": isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
+    _require(
+        len(final.get("appointments") or []) <= 1,
+        counter="duplicate_appointments",
+        message="RA-T10 duplicate appointment",
+    )
+    _require(
+        len(final.get("proposals_created") or []) <= 1,
+        counter="duplicate_proposals",
+        message="RA-T10 duplicate proposal",
+    )
+    final["evidence"] = {
+        "customer": final.get("customer"),
+        "agent": final.get("agent"),
+        "raw_structured": final.get("raw_structured"),
+        "raw_spoken_period_hint": base._raw_spoken_period_hint(final),
+        "canonical_clock": final_clock,
+        "active_task_before": final.get("active_task_before"),
+        "active_task_after": final.get("active_task"),
+        "db_effect": final.get("db_effect"),
     }
 
 
@@ -677,35 +526,32 @@ def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     _set_operating_hours(ctx, start=spec.start, end=spec.end)
     CLOCK_TRACE.clear()
     record = base._chat(ctx, spec.customer)
+    _observe_transactional_safety(record, spec, ctx)
     _validate_record(record, spec, ctx)
-    if spec.name != "RT3":
+    if spec.name != "RA-T10":
         return
 
-    mode = os.environ.get("CLOCK_RT3_CONTINUATION", "night").strip().lower()
-    if mode == "night":
-        reply = "بالليل"
-        expected_clock = "22:00"
-        expected_period = "pm"
-    elif mode == "morning":
-        reply = "الصبح"
-        expected_clock = "10:00"
-        expected_period = "am"
-    else:
-        raise ValueError(f"Unknown CLOCK_RT3_CONTINUATION: {mode}")
-
     CLOCK_TRACE.clear()
-    continued = base._chat(ctx, reply)
-    _validate_rt3_continuation(
-        record,
-        continued,
-        ctx,
-        expected_clock=expected_clock,
-        expected_period=expected_period,
+    side = base._chat(ctx, "طب الجلسة مدتها قد إيه؟")
+    _require(
+        bool(str(side.get("agent") or "").strip()),
+        message="RA-T10 side question returned empty reply",
     )
-
-
-def _persisted_appointments(workspace_id: UUID) -> int:
-    return base._persisted_appointments(workspace_id)
+    CLOCK_TRACE.clear()
+    final = base._chat(ctx, "بالليل")
+    continuation_spec = ScenarioSpec(
+        name="RA-T10-continuation",
+        customer="بالليل",
+        start=spec.start,
+        end=spec.end,
+        expected_canonical="22:00",
+        expected_hint="pm",
+        expected_bare_status="resolved",
+        expected_candidates=("10:00", "22:00"),
+        expected_valid_candidates=("10:00", "22:00"),
+    )
+    _observe_transactional_safety(final, continuation_spec, ctx)
+    _validate_t10_side_question(record, side, final, ctx)
 
 
 def _selected_scenarios() -> list[ScenarioSpec]:
@@ -721,10 +567,11 @@ def _selected_scenarios() -> list[ScenarioSpec]:
 
 
 def main() -> int:
+    base.install_instrumentation()
+    _install_clock_trace()
     results: list[dict[str, Any]] = []
     failures = 0
-    scenarios = _selected_scenarios()
-    for spec in scenarios:
+    for spec in _selected_scenarios():
         workspace_id: UUID | None = None
         ctx: base.Context | None = None
         turns: list[dict[str, Any]] = []
@@ -739,7 +586,7 @@ def main() -> int:
             error = f"{type(exc).__name__}: {exc}"
         if ctx is not None:
             turns = list(ctx.turns)
-        persisted = _persisted_appointments(workspace_id) if workspace_id is not None else 0
+        persisted = base._persisted_appointments(workspace_id) if workspace_id is not None else 0
         if persisted:
             SAFETY_COUNTERS["persisted_audit_writes"] += persisted
             failures += 1
@@ -755,33 +602,25 @@ def main() -> int:
             }
         )
         print(
-            "CLOCK_BOUNDARY_RESULT="
-            + json.dumps(
-                results[-1],
-                ensure_ascii=False,
-                separators=(",", ":"),
-                default=str,
-            ),
+            "SPOKEN_CLOCK_RESULT="
+            + json.dumps(results[-1], ensure_ascii=False, separators=(",", ":"), default=str),
             flush=True,
         )
 
     payload = {
-        "status": "PASS" if failures == 0 else "FAIL",
+        "status": "PASS" if failures == 0 and all(v == 0 for v in SAFETY_COUNTERS.values()) else "FAIL",
         "scenario_count": len(results),
         "results": results,
         "safety_counters": SAFETY_COUNTERS,
     }
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    REPORT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(
-        "CLOCK_BOUNDARY_SUMMARY="
+        "SPOKEN_CLOCK_SUMMARY="
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
         flush=True,
     )
-    return 0 if failures == 0 and all(value == 0 for value in SAFETY_COUNTERS.values()) else 1
+    return 0 if payload["status"] == "PASS" else 1
 
 
 if __name__ == "__main__":

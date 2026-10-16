@@ -773,3 +773,185 @@ def test_ra6_confirmation_creates_one_bikini_appointment_plus_underarm_on_same_d
     ]
     assert result["main_service_id"] == BIKINI
     assert result["additional_service_ids"] == [UNDERARM]
+
+
+def test_integrated_grouped_spoken_clock_addition_confirms_one_shared_device_visit(monkeypatch) -> None:
+    from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
+    from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
+    from app.agents.v2.turn_normalization import normalize_semantic_invariants
+
+    catalog = _catalog()
+    catalog["branches"][0]["working_hours"] = [
+        {"weekday": weekday, "start": "10:00", "end": "22:00"}
+        for weekday in range(7)
+    ]
+    context = build_semantic_context(catalog)
+    refs = {
+        str(target.canonical_id): ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "service"
+    }
+    initial = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[UNDERARM], refs[BIKINI]],
+                        candidate_mode="set",
+                    ),
+                    branch=EntityReference(ref="B1"),
+                    date=DateConstraint(mode="exact", start_date="2026-10-15"),
+                    time=TimeConstraint(
+                        mode="exact",
+                        start_time="03:00",
+                        spoken_period_hint="am",
+                    ),
+                ),
+            )
+        ]
+    )
+    time_safe = _normalize_time_semantics_v2(
+        initial,
+        latest_customer_text="عايزة ليزر إبط وبكيني مع بعض الخميس الساعة 3 الصبح",
+    )
+    resolved = resolve_turn_times_by_clinic_hours(
+        normalize_semantic_invariants(time_safe),
+        context,
+    )
+    resolved_time = resolved.operations[0].entities.time
+    assert resolved_time is not None
+    assert resolved_time.start_time == "15:00"
+
+    collapsed, initial_sets = collapse_booking_service_sets(
+        resolved,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=None,
+    )
+    assert collapsed.operations
+    assert initial_sets == {0: [UNDERARM, BIKINI]}
+
+    old_proposal = _proposal(services=[UNDERARM, BIKINI]).model_copy(
+        update={
+            "start_at": datetime(2026, 10, 15, 12, 0, tzinfo=UTC),
+            "end_at": datetime(2026, 10, 15, 12, 45, tzinfo=UTC),
+        }
+    )
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id=BIKINI,
+            branch_id=BRANCH_ID,
+            doctor_id=DOCTOR_ID,
+            date=DateConstraint(mode="exact", start_date="2026-10-15"),
+            time=resolved_time,
+        ),
+        requested_service_ids=[UNDERARM, BIKINI],
+        proposal=old_proposal,
+    )
+    addition = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        ref=refs[FULL_ARMS],
+                        candidate_mode="ambiguous",
+                    )
+                ),
+            )
+        ]
+    )
+    _normalized, service_sets = collapse_booking_service_sets(
+        addition,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {0: [UNDERARM, BIKINI, FULL_ARMS]}
+    expanded_state = apply_booking_requested_services_change(
+        state,
+        service_ids=service_sets[0],
+    )
+    assert expanded_state.requested_service_ids == [UNDERARM, BIKINI, FULL_ARMS]
+    assert expanded_state.constraints.time is not None
+    assert expanded_state.constraints.time.start_time == "15:00"
+    assert expanded_state.proposal is None
+
+    start_at = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
+    proposal = _proposal(services=expanded_state.requested_service_ids).model_copy(
+        update={
+            "start_at": start_at,
+            "end_at": start_at + timedelta(minutes=75),
+            "device_key": "candela",
+            "additional_service_device_keys": {
+                UNDERARM: "candela",
+                BIKINI: "candela",
+            },
+        }
+    )
+    appointment = SimpleNamespace(
+        id=UUID("88888888-8888-8888-8888-888888888888"),
+        service_id=UUID(FULL_ARMS),
+        status="pending",
+        duration_minutes=75,
+        start_at=start_at,
+        laser_device_key="candela",
+    )
+    created: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_additional_services",
+        lambda *_args, **_kwargs: [
+            AdditionalServiceResolution(service_id=UUID(UNDERARM), device_key="candela"),
+            AdditionalServiceResolution(service_id=UUID(BIKINI), device_key="candela"),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.resolve_booking_package",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            package_id=None,
+            package_used=False,
+            package_name=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking._main_appointment_device_key",
+        lambda *_args, **_kwargs: "candela",
+    )
+
+    def fake_create(*_args, **kwargs):
+        created.append(("appointment", kwargs.get("requested_start_at")))
+        return appointment
+
+    def fake_add(*_args, **kwargs):
+        created.append((f"additional:{kwargs['service_id']}", kwargs.get("laser_device_key")))
+        return SimpleNamespace(id=UUID(int=len(created)), service_id=kwargs["service_id"])
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.create_appointment_operation",
+        fake_create,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_v2.multi_service_booking.add_additional_service",
+        fake_add,
+    )
+    result = execute_booking_proposal(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        patient=SimpleNamespace(id=UUID(PATIENT_ID), status="active"),
+        proposal=proposal,
+        idempotency_key="integrated-grouped-spoken-clock",
+    )
+
+    assert created[0] == ("appointment", start_at)
+    assert len([item for item in created if item[0] == "appointment"]) == 1
+    assert {item[1] for item in created[1:]} == {"candela"}
+    assert result["main_service_id"] == FULL_ARMS
+    assert set(result["additional_service_ids"]) == {UNDERARM, BIKINI}

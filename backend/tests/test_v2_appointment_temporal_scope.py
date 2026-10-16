@@ -43,7 +43,7 @@ AFTER_FIVE = {
     "end_time": None,
     "start_time_ambiguity": "none",
     "end_time_ambiguity": "none",
-    "period_status": "none",
+    "spoken_period_hint": "none",
 }
 BEFORE_FIVE = {
     "mode": "before",
@@ -51,7 +51,7 @@ BEFORE_FIVE = {
     "end_time": None,
     "start_time_ambiguity": "none",
     "end_time_ambiguity": "none",
-    "period_status": "none",
+    "spoken_period_hint": "none",
 }
 
 
@@ -59,8 +59,8 @@ def _catalog() -> dict[str, object]:
     return {
         "services": [{"id": SERVICE_ID, "name": "PRP"}],
         "doctors": [
-            {"id": DOCTOR_AHMED, "name": "دكتور أحمد", "service_ids": [SERVICE_ID]},
-            {"id": DOCTOR_MARIAM, "name": "دكتورة مريم", "service_ids": [SERVICE_ID]},
+            {"id": DOCTOR_AHMED, "name": "Ø¯ÙƒØªÙˆØ± Ø£Ø­Ù…Ø¯", "service_ids": [SERVICE_ID]},
+            {"id": DOCTOR_MARIAM, "name": "Ø¯ÙƒØªÙˆØ±Ø© Ù…Ø±ÙŠÙ…", "service_ids": [SERVICE_ID]},
         ],
         "branches": [{"id": str(BRANCH_ID), "name": "Linka Clinic"}],
         "appointments": [],
@@ -139,7 +139,7 @@ def _appointment(appointment_id: str, local_date: str) -> AppointmentRecord:
         branch_id=str(BRANCH_ID),
         branch_name="Linka Clinic",
         doctor_id=DOCTOR_AHMED,
-        doctor_name="دكتور أحمد",
+        doctor_name="Ø¯ÙƒØªÙˆØ± Ø£Ø­Ù…Ø¯",
         start_at=start,
         end_at=start + timedelta(minutes=30),
         timezone="Africa/Cairo",

@@ -298,20 +298,23 @@ def resolve_bare_clock_constraint(
     hour_12, candidate_minutes = _bare_clock_candidates(constraint.start_time)
     candidate_clocks = tuple(_clock(candidate) for candidate in candidate_minutes)
 
-    # Product semantic default: a bare 12 means noon. Clinic hours may make it
-    # unavailable later, but must never reinterpret it as midnight.
+    # Keep the existing 12 special-case isolated from generic 1-11 policy.
+    # Bare/noon stays 12:xx; an explicit midnight semantic hint preserves 00:xx.
     if hour_12 == 12:
+        minute = _minutes(constraint.start_time) % 60
+        chosen = minute if constraint.spoken_period_hint == "midnight" else 12 * 60 + minute
+        chosen_clock = _clock(chosen)
         resolved = constraint.model_copy(
             update={
-                "start_time": candidate_clocks[0],
+                "start_time": chosen_clock,
                 "start_time_ambiguity": "none",
             }
         )
         return BareClockResolution(
             status="resolved",
             constraint=resolved,
-            candidate_clocks=candidate_clocks,
-            valid_operating_hour_candidates=candidate_clocks,
+            candidate_clocks=(chosen_clock,),
+            valid_operating_hour_candidates=(chosen_clock,),
             branch_id=branch_id,
             requested_date=(
                 date_constraint.start_date
@@ -408,6 +411,20 @@ def resolve_bare_clock_constraint(
             requested_date=requested_date,
         )
     if len(valid_minutes) == 2:
+        if constraint.spoken_period_hint in {"am", "pm"}:
+            chosen = candidate_minutes[0] if constraint.spoken_period_hint == "am" else candidate_minutes[1]
+            resolved = constraint.model_copy(
+                update={"start_time": _clock(chosen), "start_time_ambiguity": "none"}
+            )
+            return BareClockResolution(
+                status="resolved",
+                constraint=resolved,
+                candidate_clocks=candidate_clocks,
+                valid_operating_hour_candidates=valid_clocks,
+                operating_hours=operating_hours,
+                branch_id=resolved_branch,
+                requested_date=requested_date,
+            )
         return BareClockResolution(
             status="clarify_period",
             constraint=constraint,
@@ -435,7 +452,7 @@ def resolve_time_constraint_by_clinic_hours(
     context: SemanticContext,
     branch_id: str | None = None,
 ) -> TimeConstraint | None:
-    """Canonicalize unresolved bare clocks; exact semantic clocks are already authoritative."""
+    """Canonicalize unresolved spoken clocks from clinic-hours authority."""
     if constraint is None:
         return None
 
@@ -534,7 +551,7 @@ def _resolve_selection(
             mode="exact",
             start_time=selection.time,
             start_time_ambiguity=selection.time_ambiguity,
-            period_status=selection.period_status,
+            spoken_period_hint=selection.spoken_period_hint,
         ),
         date_constraint=date_constraint,
         context=context,
