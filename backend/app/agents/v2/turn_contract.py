@@ -149,9 +149,9 @@ class TimeConstraint(StrictContractModel):
         description=(
             "Exact substring from the latest customer message that explicitly carries the clock-period "
             "meaning for start_time, such as the customer's own morning/afternoon/evening/noon/midnight "
-            "wording. Use null when no period meaning was explicitly stated. Copy only the period-bearing "
-            "text, never the clock digits or a generic clock introducer. Python verifies this evidence and "
-            "owns AM/PM defaulting and canonicalization."
+            "wording. Use null when no period meaning was explicitly stated. The spoken clock amount itself "
+            "(hour, minute, or fractional-minute wording) is never period evidence; copy only the minimal "
+            "period-bearing span. Python verifies this evidence and owns AM/PM defaulting and canonicalization."
         ),
     )
     period_status: SkipJsonSchema[PeriodStatus] = "none"
@@ -192,9 +192,10 @@ class Selection(StrictContractModel):
         exclude=True,
         description=(
             "Exact substring from the latest customer message that explicitly carries the clock-period "
-            "meaning for this time selection. Use null when no period meaning was explicitly stated. "
-            "Copy only the period-bearing text, never clock digits or a generic clock introducer. Python "
-            "verifies this evidence and owns AM/PM defaulting and canonicalization."
+            "meaning for this time selection. Use null when no period meaning was explicitly stated. The "
+            "spoken clock amount itself (hour, minute, or fractional-minute wording) is never period evidence; "
+            "copy only the minimal period-bearing span. Python verifies this evidence and owns AM/PM "
+            "defaulting and canonicalization."
         ),
     )
     period_status: SkipJsonSchema[PeriodStatus] = "none"
