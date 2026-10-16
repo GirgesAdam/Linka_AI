@@ -1280,10 +1280,11 @@ def _deterministic_availability_reference_reply(
                 "مفيش اختيار في الاتجاه ده ضمن المواعيد اللي عرضتهالك. اختار واحد من المواعيد الظاهرة.",
                 "deterministic:availability-reference-clarification",
             )
-        return (
-            "مش قادر أربط الإشارة دي باختيار مؤكد من المواعيد اللي عرضتهالك. قولي أنهي اختيار تقصد.",
-            "deterministic:availability-reference-clarification",
-        )
+        if outcome.response_goal == "availability_reference":
+            return (
+                "مش قادر أربط الإشارة دي باختيار مؤكد من المواعيد اللي عرضتهالك. قولي أنهي اختيار تقصد.",
+                "deterministic:availability-reference-clarification",
+            )
     return None
 
 
