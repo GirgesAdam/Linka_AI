@@ -7,6 +7,7 @@ from datetime import datetime, time
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
@@ -432,6 +433,9 @@ def turn_record(
         "availability_reference_context": availability_reference_context,
         "reply": turn.reply,
         "responder_model": turn.responder_model,
+        "reference_action": turn.reference_action,
+        "selected_option_ref": turn.selected_option_ref,
+        "full_interpreter_called": turn.full_interpreter_called,
     }
 
 
@@ -650,61 +654,6 @@ def validate_g5(records, ids):
     assert len(proposal.get("additional_service_ids") or []) == 1
     assert str(proposal.get("start_at") or "").startswith("2026-10-17T15:00:00")
     assert final["pending_write"] is None
-
-
-
-def validate_g6_visit_time_selection(records, ids):
-    expected = {ids["underarm"], ids["bikini"]}
-    assert len(records) == 3
-    for record in records:
-        assert set(_task_ids(record)) == expected
-        assert record["pending_write"] is None
-
-    presented = records[0].get("availability_reference_context")
-    assert isinstance(presented, dict)
-    assert set(presented.get("requested_service_ids") or []) == expected
-    presented_options = presented.get("availability_reference_options")
-    assert isinstance(presented_options, list) and presented_options
-    assert {
-        str(item.get("service_id"))
-        for item in presented_options
-        if isinstance(item, dict) and item.get("service_id")
-    } == expected
-
-    after_side = records[1].get("availability_reference_context")
-    assert isinstance(after_side, dict)
-    assert set(after_side.get("requested_service_ids") or []) == expected
-
-    final = records[2]
-    final_plan = final.get("plan")
-    assert isinstance(final_plan, dict)
-    steps = final_plan.get("steps")
-    assert isinstance(steps, list) and len(steps) == 2
-    assert all(
-        isinstance(step, dict) and step.get("clarification_field") != "service"
-        for step in steps
-    )
-    final_task = final.get("active_task")
-    assert isinstance(final_task, dict)
-    authorization = final_task.get("write_authorization")
-    assert isinstance(authorization, dict) and authorization.get("authorized") is False
-    grouped = final_task.get("grouped")
-    assert isinstance(grouped, dict)
-    components = grouped.get("components")
-    assert isinstance(components, list) and len(components) == 2
-    assert {str(item.get("service_id")) for item in components if isinstance(item, dict)} == expected
-    device_keys = {
-        str(item.get("device_key"))
-        for item in components
-        if isinstance(item, dict) and item.get("device_key")
-    }
-    doctor_ids = {
-        str(item.get("doctor_id"))
-        for item in components
-        if isinstance(item, dict) and item.get("doctor_id")
-    }
-    assert len(device_keys) == 1
-    assert len(doctor_ids) == 1
 
 
 
