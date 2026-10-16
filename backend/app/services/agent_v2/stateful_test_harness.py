@@ -82,6 +82,7 @@ class V2StatefulHarnessResult:
     reference_action: str | None = None
     selected_option_ref: str | None = None
     reference_exact_time: str | None = None
+    reference_selection_scope: str | None = None
     full_interpreter_called: bool = True
     reference_structured_output_error: bool = False
 
@@ -403,6 +404,11 @@ def run_v2_stateful_fixture_turn(
         if reference_interpretation is not None
         else None
     )
+    reference_selection_scope = (
+        reference_interpretation.decision.selection_scope
+        if reference_interpretation is not None
+        else None
+    )
     reference_structured_output_error = (
         reference_interpretation.structured_output_error
         if reference_interpretation is not None
@@ -494,6 +500,7 @@ def run_v2_stateful_fixture_turn(
             reference_action=reference_action,
             selected_option_ref=selected_option_ref,
             reference_exact_time=reference_exact_time,
+            reference_selection_scope=reference_selection_scope,
             full_interpreter_called=full_interpreter_called,
             reference_structured_output_error=reference_structured_output_error,
         )
@@ -602,6 +609,7 @@ def run_v2_stateful_fixture_turn(
         reference_action=reference_action,
         selected_option_ref=selected_option_ref,
         reference_exact_time=reference_exact_time,
+        reference_selection_scope=reference_selection_scope,
         full_interpreter_called=full_interpreter_called,
         reference_structured_output_error=reference_structured_output_error,
     )

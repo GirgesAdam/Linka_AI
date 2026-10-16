@@ -609,6 +609,7 @@ def test_stateful_harness_exposes_reference_decision_diagnostics(monkeypatch) ->
             action="select_presented_option",
             option_ref="opt_1",
             exact_time="20:00",
+            selection_scope="doctor",
         ),
         structured_output_error=True,
     )
@@ -653,6 +654,7 @@ def test_stateful_harness_exposes_reference_decision_diagnostics(monkeypatch) ->
     assert result.reference_action == "select_presented_option"
     assert result.selected_option_ref == "opt_1"
     assert result.reference_exact_time == "20:00"
+    assert result.reference_selection_scope == "doctor"
     assert result.full_interpreter_called is True
     assert result.reference_structured_output_error is True
 
