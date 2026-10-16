@@ -123,7 +123,12 @@ from app.services.agent_v2.state_persistence import (
     load_active_task,
     save_active_task,
 )
-from app.services.agent_v2.state_rules import attach_booking_proposal
+from app.services.agent_v2.state_rules import (
+    apply_booking_branch_change,
+    apply_booking_device_change,
+    apply_booking_doctor_change,
+    attach_booking_proposal,
+)
 from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     expand_multi_service_operations,
@@ -738,7 +743,8 @@ def _grouped_visit_reference_understanding(
     *,
     decision: object | None,
     availability_context: dict[str, Any] | None,
-) -> TiaTurnUnderstanding | None:
+    catalog: dict[str, Any],
+) -> tuple[TiaTurnUnderstanding, BookingTaskState] | None:
     if not isinstance(task, BookingTaskState) or len(task.requested_service_ids) < 2:
         return None
     if decision is None or getattr(decision, "action", None) not in {
@@ -760,7 +766,97 @@ def _grouped_visit_reference_understanding(
     )
     if date_constraint is None:
         return None
-    return TiaTurnUnderstanding(
+
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not isinstance(raw_options, list):
+        return None
+    requested = list(task.requested_service_ids)
+    requested_set = set(requested)
+    selected_ref = (
+        str(getattr(decision, "option_ref", None) or "")
+        if getattr(decision, "action", None) == "select_presented_option"
+        else ""
+    )
+    verified_slots: list[dict[str, object]] = []
+    for option in raw_options:
+        if not isinstance(option, dict):
+            continue
+        option_ref = str(option.get("option_ref") or "")
+        if not option_ref or (selected_ref and option_ref != selected_ref):
+            continue
+        resolution = resolve_verified_availability_reference(
+            Selection(kind="ref", ref=option_ref),
+            availability_context,
+            explicit_user_time=exact_time,
+        )
+        if resolution.get("status") != "resolved":
+            continue
+        resolved_option = resolution.get("option")
+        slot = resolved_option.get("slot") if isinstance(resolved_option, dict) else None
+        if not isinstance(slot, dict):
+            continue
+        slot_time = str(slot.get("start_time_24h") or "").strip()[:5]
+        start_local = str(slot.get("start_local") or slot.get("start_at") or "")
+        if slot_time != exact_time or len(start_local) < 10:
+            continue
+        if date_constraint.start_date and start_local[:10] != date_constraint.start_date:
+            continue
+        service_id = str(slot.get("service_id") or "")
+        if service_id not in requested_set:
+            return None
+        verified_slots.append(slot)
+    if not verified_slots:
+        return None
+
+    branch_ids = {
+        str(slot.get("branch_id"))
+        for slot in verified_slots
+        if slot.get("branch_id") not in (None, "")
+    }
+    doctor_ids = {
+        str(slot.get("doctor_id"))
+        for slot in verified_slots
+        if slot.get("doctor_id") not in (None, "")
+    }
+    device_keys = {
+        str(slot.get("laser_device_key") or slot.get("device_key"))
+        for slot in verified_slots
+        if (slot.get("laser_device_key") or slot.get("device_key")) not in (None, "")
+    }
+    if len(branch_ids) > 1 or len(doctor_ids) != 1:
+        return None
+    branch_id = next(iter(branch_ids)) if branch_ids else task.constraints.branch_id
+    doctor_id = next(iter(doctor_ids))
+    if doctor_id not in common_doctor_ids(catalog, requested, branch_id=branch_id):
+        return None
+
+    laser_ids = laser_service_ids(catalog, requested)
+    device_key: str | None = None
+    if laser_ids:
+        if len(device_keys) != 1:
+            return None
+        device_key = next(iter(device_keys))
+        if device_key not in common_laser_device_keys(catalog, requested):
+            return None
+    elif device_keys:
+        return None
+
+    resource_task = task
+    if branch_id is not None:
+        resource_task = apply_booking_branch_change(resource_task, branch_id=branch_id)
+    resource_task = apply_booking_doctor_change(resource_task, doctor_id=doctor_id)
+    if device_key is not None:
+        resource_task = apply_booking_device_change(resource_task, device_key=device_key)
+        resource_task = resource_task.model_copy(
+            update={
+                "service_device_keys": {
+                    **resource_task.service_device_keys,
+                    **{service_id: device_key for service_id in laser_ids},
+                }
+            }
+        )
+
+    understanding = TiaTurnUnderstanding(
         operations=[
             TurnOperation(
                 type="book",
@@ -779,6 +875,7 @@ def _grouped_visit_reference_understanding(
             )
         ]
     )
+    return understanding, resource_task
 
 
 def _terminal_no_reply_allowed(
@@ -2325,13 +2422,14 @@ def orchestrate_v2_turn(
         and exact_reference_time is not None
         else None
     )
-    grouped_reference_understanding = _grouped_visit_reference_understanding(
+    grouped_reference = _grouped_visit_reference_understanding(
         initial_task,
         decision=decision,
         availability_context=availability_reference_context,
+        catalog=canonical_catalog,
     )
-    if grouped_reference_understanding is not None:
-        understanding = grouped_reference_understanding
+    if grouped_reference is not None:
+        understanding, initial_task = grouped_reference
         full_interpreter_called = False
     elif (
         decision is not None

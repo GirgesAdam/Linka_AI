@@ -325,6 +325,7 @@ def run_v2_stateful_fixture_turn(
         "",
     )
     grouped_reference_understanding = None
+    grouped_reference_task = None
     if (
         latest_customer_text
         and isinstance(availability_reference_context, dict)
@@ -336,11 +337,14 @@ def run_v2_stateful_fixture_turn(
             latest_customer_text=latest_customer_text,
             availability_context=availability_reference_context,
         )
-        grouped_reference_understanding = _grouped_visit_reference_understanding(
+        grouped_reference = _grouped_visit_reference_understanding(
             active_task,
             decision=reference_interpretation.decision,
             availability_context=availability_reference_context,
+            catalog=fixture.catalog,
         )
+        if grouped_reference is not None:
+            grouped_reference_understanding, grouped_reference_task = grouped_reference
 
     contextual_period_resolution = resolve_pending_bare_clock_period(
         active_task,
@@ -366,6 +370,7 @@ def run_v2_stateful_fixture_turn(
         )
     elif grouped_reference_understanding is not None:
         understanding = grouped_reference_understanding
+        active_task = grouped_reference_task
     else:
         understanding = interpret_customer_turn_v2(
             history=history,

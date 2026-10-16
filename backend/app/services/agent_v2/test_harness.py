@@ -49,6 +49,7 @@ DEFAULT_CATALOG: dict[str, object] = {
                     "device_key": "candela_gentle",
                     "device_name": "Candela Gentle",
                     "price_minor": 50_000,
+                    "duration_minutes": 15,
                     "currency": "EGP",
                     "configured": True,
                 },
@@ -56,6 +57,7 @@ DEFAULT_CATALOG: dict[str, object] = {
                     "device_key": "prime_lase",
                     "device_name": "Prime Lase",
                     "price_minor": 60_000,
+                    "duration_minutes": 15,
                     "currency": "EGP",
                     "configured": True,
                 },
@@ -77,6 +79,7 @@ DEFAULT_CATALOG: dict[str, object] = {
                     "device_key": "candela_gentle",
                     "device_name": "Candela Gentle",
                     "price_minor": 70_000,
+                    "duration_minutes": 20,
                     "currency": "EGP",
                     "configured": True,
                 }

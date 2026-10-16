@@ -969,6 +969,8 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
                         "service_id": "service-b",
                         "branch_id": "branch-1",
                         "doctor_id": "doctor-1",
+                        "device_key": "device-1",
+                        "laser_device_key": "device-1",
                         "start_local": "2026-09-12T20:00:00+03:00",
                         "start_time_24h": "20:00",
                     },
@@ -980,8 +982,38 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
     persisted = PersistedActiveTask(active_task=task, flow_id=uuid4(), flow_version=4)
     catalog = {
         "services": [
-            {"id": "service-a", "name": "Service A", "duration_minutes": 15},
-            {"id": "service-b", "name": "Service B", "duration_minutes": 20},
+            {
+                "id": "service-a",
+                "name": "Service A",
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "duration_minutes": 15,
+                "laser_devices": [
+                    {
+                        "device_key": "device-1",
+                        "device_name": "Device 1",
+                        "price_minor": 50_000,
+                        "duration_minutes": 15,
+                        "configured": True,
+                    }
+                ],
+            },
+            {
+                "id": "service-b",
+                "name": "Service B",
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "duration_minutes": 20,
+                "laser_devices": [
+                    {
+                        "device_key": "device-1",
+                        "device_name": "Device 1",
+                        "price_minor": 70_000,
+                        "duration_minutes": 20,
+                        "configured": True,
+                    }
+                ],
+            },
         ],
         "doctors": [
             {
@@ -1011,6 +1043,7 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
                     "service_id": "service-a",
                     "branch_id": "branch-1",
                     "doctor_id": "doctor-1",
+                    "laser_device_key": "device-1",
                     "start_local": "2026-09-12T20:00:00+03:00",
                     "start_time_24h": "20:00",
                 },
@@ -1026,6 +1059,7 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
                     "service_id": "service-b",
                     "branch_id": "branch-1",
                     "doctor_id": "doctor-1",
+                    "laser_device_key": "device-1",
                     "start_local": "2026-09-12T20:00:00+03:00",
                     "start_time_24h": "20:00",
                 },
@@ -1085,20 +1119,95 @@ def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
 
     assert captured
     preflight_plan = captured[0]
-    assert len(preflight_plan.steps) == 2
-    assert {step.facts.get("service_id") for step in preflight_plan.steps} == {
-        "service-a",
-        "service-b",
-    }
-    assert all(step.write_intent is None for step in preflight_plan.steps)
-    assert all(step.clarification_field != "service" for step in preflight_plan.steps)
+    assert len(preflight_plan.steps) == 1
+    step = preflight_plan.steps[0]
+    assert step.facts["requested_service_ids"] == ["service-a", "service-b"]
+    assert step.facts["doctor_id"] == "doctor-1"
+    assert step.facts["device_key"] == "device-1"
+    assert step.write_intent is None
+    assert step.clarification_field != "service"
+    assert step.response_goal != "answer_price"
+    assert any(read.kind == "availability" for read in step.reads)
     assert result.pending_write is None
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.requested_service_ids == ["service-a", "service-b"]
-    assert result.active_task.grouped is not None
-    assert {component.service_id for component in result.active_task.grouped.components} == {
-        "service-a",
-        "service-b",
+    assert result.active_task.constraints.doctor_id == "doctor-1"
+    assert result.active_task.constraints.device_key == "device-1"
+    assert result.active_task.constraints.date is not None
+    assert result.active_task.constraints.date.start_date == "2026-09-12"
+    assert result.active_task.constraints.time is not None
+    assert result.active_task.constraints.time.start_time == "20:00"
+    assert result.active_task.proposal is None
+    assert result.active_task.service_device_keys == {
+        "service-a": "device-1",
+        "service-b": "device-1",
     }
     assert result.active_task.write_authorization.authorized is False
     assert saved and saved[-1].requested_service_ids == ["service-a", "service-b"]
+
+
+
+def test_h3b_grouped_reference_rejects_resource_not_common_to_service_set() -> None:
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-b", branch_id="branch-1"),
+        requested_service_ids=["service-a", "service-b"],
+    )
+    catalog = {
+        "services": [
+            {
+                "id": "service-a",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {"device_key": "device-1", "price_minor": 1, "duration_minutes": 15}
+                ],
+            },
+            {
+                "id": "service-b",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {"device_key": "device-2", "price_minor": 1, "duration_minutes": 20}
+                ],
+            },
+        ],
+        "doctors": [
+            {
+                "id": "doctor-1",
+                "service_ids": ["service-a", "service-b"],
+                "branch_ids": ["branch-1"],
+            }
+        ],
+    }
+    reference_context = {
+        "requested_service_ids": ["service-a", "service-b"],
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "start_time_24h": "20:00",
+                "slot": {
+                    "service_id": "service-b",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "laser_device_key": "device-1",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                    "start_time_24h": "20:00",
+                },
+            }
+        ],
+    }
+
+    result = runtime._grouped_visit_reference_understanding(
+        task,
+        decision=ReferenceDecision(action="clarify", option_ref=None, exact_time="20:00"),
+        availability_context=reference_context,
+        catalog=catalog,
+    )
+
+    assert result is None
+    assert task.constraints.device_key is None
+    assert task.write_authorization.authorized is False
