@@ -4,14 +4,20 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
+from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.models.service import Service
 from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
-from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
+from app.services.agent_v2.compound_visit_preflight import (
+    _availability_for_day,
+    preflight_compound_visit_plan,
+)
 from app.services.agent_v2.orchestrator import _prepare_cross_category_compound_proposal
 from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
 from app.services.agent_v2.read_executor import ReadExecutionContext
-from app.services.booking import BookingCompatibilityError
+from app.services.booking import BookingCompatibilityError, BookingRuleError
 
 SERVICE_A = "11111111-1111-1111-1111-111111111111"
 SERVICE_B = "22222222-2222-2222-2222-222222222222"
@@ -264,6 +270,43 @@ def _joint_adapter() -> _Adapter:
             ),
         }
     )
+
+
+def test_independent_availability_preserves_absent_doctor_filter() -> None:
+    adapter = _Adapter({(SERVICE_A, DAY): _result(SERVICE_A, [])})
+    step = _booking(0, SERVICE_A, DOCTOR_A).model_copy(update={"write_intent": None})
+    read = step.reads[0]
+    parameters = dict(read.parameters)
+    parameters.pop("doctor_id", None)
+    step = step.model_copy(update={"reads": [read.model_copy(update={"parameters": parameters})]})
+
+    result = _availability_for_day(
+        [step],
+        booking_date=DAY,
+        context=_context(adapter),
+        allow_independent_doctors=True,
+    )
+
+    assert result is not None
+    assert adapter.requests[0].doctor_id is None
+
+
+def test_availability_preserves_explicit_doctor_filter() -> None:
+    adapter = _Adapter({(SERVICE_A, DAY): _result(SERVICE_A, [])})
+
+    result = _availability_for_day(
+        [_booking(0, SERVICE_A, DOCTOR_A)],
+        booking_date=DAY,
+        context=_context(adapter),
+    )
+
+    assert result is not None
+    assert adapter.requests[0].doctor_id == DOCTOR_A
+
+
+def test_tia_database_identifier_validation_stays_strict() -> None:
+    with pytest.raises(BookingRuleError, match="doctor_id is not a valid identifier"):
+        TiaDatabaseClinicAdapter._native_uuid("garbage", "doctor_id")
 
 
 def test_compound_incompatible_doctor_fails_closed_without_exception() -> None:
