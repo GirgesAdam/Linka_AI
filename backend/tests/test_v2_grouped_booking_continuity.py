@@ -426,6 +426,172 @@ def test_ra_g7_restored_laser_devices_reach_booking_planner_path() -> None:
     )
 
 
+
+def _ra_g7_ref(context, kind: str, canonical_id: str) -> str:
+    return next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == kind and target.canonical_id == canonical_id
+    )
+
+
+def _ra_g7_multi_operation_turn(
+    context,
+    *,
+    laser_device: str | None = None,
+) -> TiaTurnUnderstanding:
+    laser_device_entity = (
+        EntityReference(ref=_ra_g7_ref(context, "device", laser_device))
+        if laser_device is not None
+        else None
+    )
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref=_ra_g7_ref(context, "service", "bikini")),
+                    doctor=EntityReference(ref=_ra_g7_ref(context, "doctor", "laser-doc")),
+                    branch=EntityReference(ref=_ra_g7_ref(context, "branch", "branch-1")),
+                    device=laser_device_entity,
+                    date=DATE,
+                    time=TIME_A,
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                continues_previous=True,
+                grouped_booking_action="preserve_group",
+            ),
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref=_ra_g7_ref(context, "service", "dermatology")),
+                    doctor=EntityReference(ref=_ra_g7_ref(context, "doctor", "derm-doc")),
+                    branch=EntityReference(ref=_ra_g7_ref(context, "branch", "branch-1")),
+                    date=DATE,
+                    time=TIME_A,
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                continues_previous=True,
+                grouped_booking_action="preserve_group",
+            ),
+        ]
+    )
+
+
+def _ra_g7_multi_operation_service_sets() -> dict[int, list[str]]:
+    return {0: ["underarm", "bikini"], 1: ["dermatology"]}
+
+
+def test_ra_g7_multi_operation_restore_projects_common_visit_device() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        }
+    )
+    restored, groups = restore_grouped_booking_understanding(
+        _ra_g7_multi_operation_turn(context),
+        active_task=state,
+        context=context,
+        booking_service_sets=_ra_g7_multi_operation_service_sets(),
+    )
+
+    assert len(restored.operations) == 2
+    assert groups == {}
+    assert [
+        context.resolve(operation.entities.service.ref, expected_kind="service")
+        for operation in restored.operations
+    ] == ["bikini", "dermatology"]
+    assert _restored_device_ids(restored, context=context) == [
+        "candela_gentle",
+        None,
+    ]
+
+
+def test_ra_g7_multi_operation_restore_unblocks_laser_planner_availability() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        }
+    )
+    restored, _groups = restore_grouped_booking_understanding(
+        _ra_g7_multi_operation_turn(context),
+        active_task=state,
+        context=context,
+        booking_service_sets=_ra_g7_multi_operation_service_sets(),
+    )
+
+    planned = plan_turn(
+        restored,
+        PlannerContext(semantic_context=context, active_task=state, now=NOW),
+    )
+    steps = {str(step.facts.get("service_id")): step for step in planned.steps}
+    laser = steps["bikini"]
+    dermatology = steps["dermatology"]
+    assert any(request.kind == "availability" for request in laser.reads)
+    assert not (len(laser.reads) == 1 and laser.reads[0].kind == "service_catalog")
+    assert any(request.kind == "availability" for request in dermatology.reads)
+
+
+def test_multi_operation_restore_fails_closed_on_conflicting_durable_devices() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        underarm_device="existing_device",
+        bikini_device="candela_gentle",
+    )
+    restored, groups = restore_grouped_booking_understanding(
+        _ra_g7_multi_operation_turn(context),
+        active_task=state,
+        context=context,
+        booking_service_sets=_ra_g7_multi_operation_service_sets(),
+    )
+
+    assert groups == {}
+    assert _restored_device_ids(restored, context=context) == [None, None]
+
+
+def test_multi_operation_restore_preserves_explicit_operation_device() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        }
+    )
+    restored, groups = restore_grouped_booking_understanding(
+        _ra_g7_multi_operation_turn(context, laser_device="existing_device"),
+        active_task=state,
+        context=context,
+        booking_service_sets=_ra_g7_multi_operation_service_sets(),
+    )
+
+    assert groups == {}
+    assert _restored_device_ids(restored, context=context) == [
+        "existing_device",
+        None,
+    ]
+
+
+def test_multi_operation_restore_fails_closed_when_visit_member_device_is_missing() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={"underarm": "candela_gentle"}
+    )
+    restored, groups = restore_grouped_booking_understanding(
+        _ra_g7_multi_operation_turn(context),
+        active_task=state,
+        context=context,
+        booking_service_sets=_ra_g7_multi_operation_service_sets(),
+    )
+
+    assert groups == {}
+    assert _restored_device_ids(restored, context=context) == [None, None]
+
 def test_missing_date_clarification_retains_group_component_identity() -> None:
     first_source = _operation("svc-a")
     second_source = _operation("svc-c")
