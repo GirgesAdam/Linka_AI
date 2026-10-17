@@ -126,7 +126,8 @@ def validate_g6_visit_time_selection(records, ids):
     assert isinstance(constraints, dict)
     assert str(constraints.get("doctor_id") or "") == str(ids["doctor"])
     assert str(constraints.get("device_key") or "") == required_device_key
-    assert str(constraints.get("date", {}).get("value") or "") == "2026-10-17"
+    assert constraints.get("date", {}).get("mode") == "exact"
+    assert str(constraints.get("date", {}).get("start_date") or "") == "2026-10-17"
     assert str(constraints.get("time", {}).get("value") or "") == "20:00"
     service_device_keys = {
         str(value)

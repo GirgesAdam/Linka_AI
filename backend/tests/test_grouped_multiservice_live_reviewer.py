@@ -46,7 +46,7 @@ def _valid_payload() -> dict[str, object]:
                 "doctor_id": doctor,
                 "branch_id": branch,
                 "device_key": "candela_gentle",
-                "date": {"mode": "exact", "value": "2026-10-17"},
+                "date": {"mode": "exact", "start_date": "2026-10-17", "end_date": None},
                 "time": {"mode": "exact", "value": "20:00"},
             },
             "service_device_keys": {
@@ -109,6 +109,19 @@ def test_ra_g6_reviewer_accepts_concrete_slot_with_fresh_exact_selection() -> No
     payload = _valid_payload()
     validate_g6_visit_time_selection(payload["records"], payload["ids"])
 
+
+def test_ra_g6_reviewer_rejects_wrong_exact_date() -> None:
+    payload = _valid_payload()
+    payload["records"][-1]["active_task"]["constraints"]["date"]["start_date"] = "2026-10-18"
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_non_exact_date_mode() -> None:
+    payload = _valid_payload()
+    payload["records"][-1]["active_task"]["constraints"]["date"]["mode"] = "range"
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
 
 def test_ra_g6_reviewer_accepts_window_with_fresh_exact_selection() -> None:
     payload = _valid_payload()
