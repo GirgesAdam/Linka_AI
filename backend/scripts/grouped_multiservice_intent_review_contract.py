@@ -128,7 +128,8 @@ def validate_g6_visit_time_selection(records, ids):
     assert str(constraints.get("device_key") or "") == required_device_key
     assert constraints.get("date", {}).get("mode") == "exact"
     assert str(constraints.get("date", {}).get("start_date") or "") == "2026-10-17"
-    assert str(constraints.get("time", {}).get("value") or "") == "20:00"
+    assert constraints.get("time", {}).get("mode") == "exact"
+    assert str(constraints.get("time", {}).get("start_time") or "") == "20:00"
     service_device_keys = {
         str(value)
         for value in (final_task.get("service_device_keys") or {}).values()
