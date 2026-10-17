@@ -161,6 +161,57 @@ def test_ra_g6_reviewer_accepts_concrete_slot_with_fresh_exact_selection() -> No
     validate_g6_visit_time_selection(payload["records"], payload["ids"])
 
 
+def _as_unpresented_new_search(payload: dict[str, object]) -> None:
+    first = payload["records"][0]
+    option = first["availability_reference_context"]["availability_reference_options"][0]
+    option["start_local"] = "2026-10-17T10:00:00+03:00"
+    final = payload["records"][-1]
+    final["reference_action"] = "new_search"
+    final["selected_option_ref"] = None
+    final["full_interpreter_called"] = True
+    final["active_task"]["derived"]["selected_slot_ref"] = None
+    facts = final["outcomes"][0]["facts"]
+    facts.pop("verified_booking_slot_selection", None)
+    facts.pop("verified_availability_reference", None)
+    facts.pop("verified_selection_time", None)
+
+
+def test_ra_g6_reviewer_accepts_unpresented_exact_time_new_search_with_valid_proposal() -> None:
+    payload = _valid_payload()
+    _as_unpresented_new_search(payload)
+
+    validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_new_search_when_target_time_was_presented() -> None:
+    payload = _valid_payload()
+    final = payload["records"][-1]
+    final["reference_action"] = "new_search"
+    final["selected_option_ref"] = None
+    final["full_interpreter_called"] = True
+
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_selection_of_unpresented_exact_time() -> None:
+    payload = _valid_payload()
+    option = payload["records"][0]["availability_reference_context"]["availability_reference_options"][0]
+    option["start_local"] = "2026-10-17T10:00:00+03:00"
+
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_new_search_without_final_proposal() -> None:
+    payload = _valid_payload()
+    _as_unpresented_new_search(payload)
+    payload["records"][-1]["proposal"] = None
+
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
 def test_ra_g6_reviewer_rejects_wrong_exact_date() -> None:
     payload = _valid_payload()
     payload["records"][-1]["active_task"]["constraints"]["date"]["start_date"] = "2026-10-18"

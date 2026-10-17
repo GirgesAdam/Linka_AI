@@ -64,6 +64,44 @@ def _fresh_slots_matching_proposal(
     return matches
 
 
+def _clock_minutes(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    raw = str(value)
+    if "T" in raw:
+        try:
+            raw = datetime.fromisoformat(raw).astimezone(CAIRO).strftime("%H:%M")
+        except ValueError:
+            return None
+    try:
+        hour_raw, minute_raw = raw.split(":", 1)
+        hour = int(hour_raw)
+        minute = int(minute_raw[:2])
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour * 60 + minute
+
+
+def _presented_option_covers_clock(
+    option: dict[str, object],
+    target_clock: str,
+) -> bool:
+    target = _clock_minutes(target_clock)
+    if target is None:
+        return False
+    start = _clock_minutes(
+        option.get("start_time_24h") or option.get("start_local") or option.get("slot")
+    )
+    if start is None:
+        return False
+    if option.get("concrete") is True:
+        return start == target
+    end = _clock_minutes(option.get("end_time_24h") or option.get("end_local"))
+    return end is not None and start <= target <= end
+
+
 def validate_g6_visit_time_selection(records, ids):
     expected = {str(ids["underarm"]), str(ids["bikini"])}
     required_device_key = "candela_gentle"
@@ -88,16 +126,28 @@ def validate_g6_visit_time_selection(records, ids):
     assert set(after_side.get("requested_service_ids") or []) == expected
 
     final = records[2]
-    assert final.get("reference_action") == "select_presented_option"
+    reference_action = str(final.get("reference_action") or "")
     selected_ref = str(final.get("selected_option_ref") or "")
-    assert selected_ref
-    assert final.get("full_interpreter_called") is False
-    selected_options = [
-        item
+    target_clock = "20:00"
+    presented_covers_target = any(
+        isinstance(item, dict) and _presented_option_covers_clock(item, target_clock)
         for item in presented_options
-        if isinstance(item, dict) and str(item.get("option_ref") or "") == selected_ref
-    ]
-    assert len(selected_options) == 1
+    )
+    if reference_action == "select_presented_option":
+        assert selected_ref
+        assert final.get("full_interpreter_called") is False
+        selected_options = [
+            item
+            for item in presented_options
+            if isinstance(item, dict) and str(item.get("option_ref") or "") == selected_ref
+        ]
+        assert len(selected_options) == 1
+        assert _presented_option_covers_clock(selected_options[0], target_clock)
+    elif reference_action == "new_search":
+        assert not presented_covers_target
+        assert not selected_ref
+    else:
+        raise AssertionError(f"RA-G6 unexpected reference action: {reference_action!r}")
 
     proposal_outcomes = [
         outcome
@@ -108,12 +158,13 @@ def validate_g6_visit_time_selection(records, ids):
     selection_facts = proposal_outcomes[-1].get("facts")
     assert isinstance(selection_facts, dict)
     assert selection_facts.get("exact_time_requested") is True
-    assert selection_facts.get("verified_booking_slot_selection") is True
-    assert selection_facts.get("verified_availability_reference") is True
-    verified_time = selection_facts.get("verified_selection_time")
-    assert isinstance(verified_time, dict)
-    assert verified_time.get("mode") == "exact"
-    assert str(verified_time.get("start_time") or "") == "20:00"
+    if reference_action == "select_presented_option":
+        assert selection_facts.get("verified_booking_slot_selection") is True
+        assert selection_facts.get("verified_availability_reference") is True
+        verified_time = selection_facts.get("verified_selection_time")
+        assert isinstance(verified_time, dict)
+        assert verified_time.get("mode") == "exact"
+        assert str(verified_time.get("start_time") or "") == target_clock
 
     final_task = final.get("active_task")
     assert isinstance(final_task, dict)
@@ -121,7 +172,8 @@ def validate_g6_visit_time_selection(records, ids):
     assert set(final_task.get("requested_service_ids") or []) == expected
     derived = final_task.get("derived")
     assert isinstance(derived, dict)
-    assert str(derived.get("selected_slot_ref") or "") == selected_ref
+    if reference_action == "select_presented_option":
+        assert str(derived.get("selected_slot_ref") or "") == selected_ref
     constraints = final_task.get("constraints")
     assert isinstance(constraints, dict)
     assert str(constraints.get("doctor_id") or "") == str(ids["doctor"])
