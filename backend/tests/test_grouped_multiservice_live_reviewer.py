@@ -10,7 +10,7 @@ from scripts.grouped_multiservice_intent_review_contract import (
     _fresh_slots_matching_proposal,
     validate_g6_visit_time_selection,
 )
-from scripts.run_grouped_multiservice_intent_live_review import turn_record
+from scripts.run_grouped_multiservice_intent_live_review import turn_record, validate_g5
 
 
 def _valid_payload() -> dict[str, object]:
@@ -295,3 +295,68 @@ def test_ra_g6_reviewer_rejects_false_success_reply() -> None:
     payload["records"][-1]["reply"] = "\u062a\u0645 \u0627\u0644\u062d\u062c\u0632 \u0628\u0646\u062c\u0627\u062d"
     with pytest.raises(AssertionError):
         validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def _g5_payload(*, final_time: str = "18:00", final_start_at: str = "2026-10-17T15:00:00+00:00"):
+    ids = {"underarm": "svc-underarm", "bikini": "svc-bikini", "doctor": "doc-maryam"}
+    expected = [ids["underarm"], ids["bikini"]]
+
+    def task(time_value: str):
+        return {
+            "status": "awaiting_confirmation",
+            "requested_service_ids": expected,
+            "constraints": {"time": {"mode": "exact", "start_time": time_value}},
+            "write_authorization": {"authorized": True},
+        }
+
+    def proposal(start_at: str):
+        return {
+            "service_ids": expected,
+            "main_service_id": ids["underarm"],
+            "additional_service_ids": [ids["bikini"]],
+            "doctor_id": ids["doctor"],
+            "device_key": "candela_gentle",
+            "start_at": start_at,
+        }
+
+    records = [
+        {"requested_service_ids": expected, "active_task": {"requested_service_ids": expected}, "pending_write": None},
+        {
+            "requested_service_ids": expected,
+            "active_task": task("18:00"),
+            "proposal": proposal("2026-10-17T15:00:00+00:00"),
+            "pending_write": None,
+            "outcomes": [{"facts": {"booking_commercial_basis_step": True}}],
+            "reply": "السعر الإجمالي 1000 جنيه. الموعد المقترح قبل التأكيد.",
+        },
+        {
+            "requested_service_ids": expected,
+            "active_task": task(final_time),
+            "proposal": proposal(final_start_at),
+            "pending_write": None,
+            "reply": "الموعد المقترح جاهز قبل التأكيد النهائي.",
+        },
+    ]
+    return records, ids
+
+
+def test_ra_g5_reviewer_accepts_proposal_only_progression_after_commercial_verification() -> None:
+    records, ids = _g5_payload()
+    validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_accepts_corrected_time_with_fresh_proposal() -> None:
+    records, ids = _g5_payload(
+        final_time="19:00",
+        final_start_at="2026-10-17T16:00:00+00:00",
+    )
+    validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_stale_proposal_after_time_correction() -> None:
+    records, ids = _g5_payload(
+        final_time="19:00",
+        final_start_at="2026-10-17T15:00:00+00:00",
+    )
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
