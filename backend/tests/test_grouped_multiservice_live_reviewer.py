@@ -83,7 +83,13 @@ def _valid_payload() -> dict[str, object]:
         "outcomes": [
             {
                 "response_goal": "booking_proposal",
-                "facts": {"availability": {"available_option_count": 1}},
+                "facts": {
+                    "exact_time_requested": True,
+                    "verified_booking_slot_selection": True,
+                    "verified_availability_reference": True,
+                    "verified_selection_time": {"mode": "exact", "start_time": "20:00"},
+                    "availability": {"available_option_count": 1},
+                },
             }
         ],
         "reply": (
@@ -99,9 +105,46 @@ def _valid_payload() -> dict[str, object]:
     }
 
 
-def test_ra_g6_reviewer_accepts_unified_booking_proposal_contract() -> None:
+def test_ra_g6_reviewer_accepts_concrete_slot_with_fresh_exact_selection() -> None:
     payload = _valid_payload()
     validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_accepts_window_with_fresh_exact_selection() -> None:
+    payload = _valid_payload()
+    option = payload["records"][0]["availability_reference_context"]["availability_reference_options"][0]
+    option["concrete"] = False
+    option["canonical_slot_count"] = 25
+    option["start_local"] = "2026-10-17T10:00:00+03:00"
+    option["end_local"] = "2026-10-17T22:00:00+03:00"
+    validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_window_without_exact_selection() -> None:
+    payload = _valid_payload()
+    option = payload["records"][0]["availability_reference_context"]["availability_reference_options"][0]
+    option["concrete"] = False
+    option["canonical_slot_count"] = 25
+    facts = payload["records"][-1]["outcomes"][0]["facts"]
+    facts["exact_time_requested"] = False
+    facts.pop("verified_selection_time")
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_missing_fresh_verification() -> None:
+    payload = _valid_payload()
+    payload["records"][-1]["traces"] = []
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
+
+
+def test_ra_g6_reviewer_rejects_proposal_time_mismatch() -> None:
+    payload = _valid_payload()
+    payload["records"][-1]["proposal"]["start_at"] = "2026-10-17T21:00:00+03:00"
+    payload["records"][-1]["proposal"]["end_at"] = "2026-10-17T21:30:00+03:00"
+    with pytest.raises(AssertionError):
+        validate_g6_visit_time_selection(payload["records"], payload["ids"])
 
 
 def test_ra_g6_reviewer_rejects_service_loss() -> None:

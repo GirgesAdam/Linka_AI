@@ -98,8 +98,22 @@ def validate_g6_visit_time_selection(records, ids):
         if isinstance(item, dict) and str(item.get("option_ref") or "") == selected_ref
     ]
     assert len(selected_options) == 1
-    assert selected_options[0].get("concrete") is True
-    assert int(selected_options[0].get("canonical_slot_count") or 0) == 1
+
+    proposal_outcomes = [
+        outcome
+        for outcome in final.get("outcomes") or []
+        if isinstance(outcome, dict) and outcome.get("response_goal") == "booking_proposal"
+    ]
+    assert proposal_outcomes
+    selection_facts = proposal_outcomes[-1].get("facts")
+    assert isinstance(selection_facts, dict)
+    assert selection_facts.get("exact_time_requested") is True
+    assert selection_facts.get("verified_booking_slot_selection") is True
+    assert selection_facts.get("verified_availability_reference") is True
+    verified_time = selection_facts.get("verified_selection_time")
+    assert isinstance(verified_time, dict)
+    assert verified_time.get("mode") == "exact"
+    assert str(verified_time.get("start_time") or "") == "20:00"
 
     final_task = final.get("active_task")
     assert isinstance(final_task, dict)
