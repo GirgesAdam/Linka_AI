@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, time
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -335,6 +336,8 @@ def dump(value):
         return None
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
+    if is_dataclass(value):
+        return asdict(value)
     return str(value)
 
 

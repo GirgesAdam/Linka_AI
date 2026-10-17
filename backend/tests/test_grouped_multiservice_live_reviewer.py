@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
 
 import pytest
 
-from scripts.grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
+from app.services.agent_v2.orchestrator import V2RuntimeStepTrace
+from scripts.grouped_multiservice_intent_review_contract import (
+    _fresh_slots_matching_proposal,
+    validate_g6_visit_time_selection,
+)
+from scripts.run_grouped_multiservice_intent_live_review import turn_record
 
 
 def _valid_payload() -> dict[str, object]:
@@ -103,6 +109,51 @@ def _valid_payload() -> dict[str, object]:
         "ids": {"underarm": underarm, "bikini": bikini, "doctor": doctor},
         "records": [copy.deepcopy(base_record), copy.deepcopy(base_record), final],
     }
+
+
+def test_grouped_live_review_preserves_trace_for_fresh_slot_matching() -> None:
+    start = "2026-10-17T20:00:00+03:00"
+    trace = V2RuntimeStepTrace(
+        operation_index=0,
+        operation_type="availability",
+        disposition_before="read",
+        disposition_after="read",
+        read_kinds=("availability",),
+        availability_slots=(
+            {
+                "branch_id": "branch-main",
+                "doctor_id": "doc-maryam",
+                "laser_device_key": "candela_gentle",
+                "start_at": start,
+            },
+        ),
+    )
+    turn = SimpleNamespace(
+        understanding=None,
+        active_task=None,
+        plan=None,
+        traces=(trace,),
+        outcomes=(),
+        pending_write=None,
+        reply=None,
+        responder_model=None,
+        reference_action=None,
+        selected_option_ref=None,
+        full_interpreter_called=False,
+    )
+    record = turn_record(turn, customer="test", raw=[], stages=[], active_task_before=None)
+    proposal = {
+        "branch_id": "branch-main",
+        "doctor_id": "doc-maryam",
+        "device_key": "candela_gentle",
+        "start_at": start,
+    }
+
+    assert isinstance(record["traces"][0], dict)
+    assert record["traces"][0]["availability_slots"][0]["start_at"] == start
+    matches = _fresh_slots_matching_proposal(record, proposal)
+    assert len(matches) == 1
+    assert matches[0]["start_at"] == start
 
 
 def test_ra_g6_reviewer_accepts_concrete_slot_with_fresh_exact_selection() -> None:
