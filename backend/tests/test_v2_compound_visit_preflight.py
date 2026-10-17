@@ -6,6 +6,14 @@ from uuid import UUID
 
 import pytest
 
+from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
 from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.models.service import Service
@@ -14,13 +22,33 @@ from app.services.agent_v2.compound_visit_preflight import (
     _availability_for_day,
     preflight_compound_visit_plan,
 )
+from app.services.agent_v2.grouped_booking_continuity import restore_grouped_booking_understanding
 from app.services.agent_v2.orchestrator import _prepare_cross_category_compound_proposal
-from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.planner import (
+    PlannerContext,
+    PlanStep,
+    ReadRequest,
+    TurnPlan,
+    WriteIntent,
+    plan_turn,
+)
 from app.services.agent_v2.read_executor import ReadExecutionContext
+from app.services.agent_v2.state import (
+    BookingProposal,
+    BookingProposalVisit,
+    BookingTaskState,
+    CustomerConstraints,
+    WriteAuthorization,
+)
+from app.services.agent_v2.turn_normalization import (
+    recollapse_restored_booking_visit_groups,
+    tag_booking_service_sets,
+)
 from app.services.booking import BookingCompatibilityError, BookingRuleError
 
 SERVICE_A = "11111111-1111-1111-1111-111111111111"
 SERVICE_B = "22222222-2222-2222-2222-222222222222"
+SERVICE_C = "77777777-7777-7777-7777-777777777777"
 DOCTOR_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 DOCTOR_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 BRANCH = "33333333-3333-3333-3333-333333333333"
@@ -888,6 +916,231 @@ def test_mixed_category_preflight_builds_one_customer_proposal_with_two_persiste
     assert task.proposal.visits[0].device_key == "candela"
     assert task.proposal.visits[1].device_key is None
     assert task.proposal.visits[1].start_at >= task.proposal.visits[0].end_at
+    assert len(prepared.steps) == 1
+    assert prepared.steps[0].response_goal == "booking_proposal"
+    assert prepared.steps[0].write_intent is None
+
+
+def test_ra_g7_compound_proposal_continuation_restores_resources_and_rebuilds_proposal() -> None:
+    day = date(2026, 10, 17)
+    catalog = {
+        "services": [
+            {
+                "id": SERVICE_A,
+                "name": "Underarm",
+                "duration_minutes": 30,
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {
+                        "device_key": "candela",
+                        "device_name": "Candela",
+                        "configured": True,
+                        "duration_minutes": 30,
+                        "price_minor": 10_000,
+                    }
+                ],
+            },
+            {
+                "id": SERVICE_B,
+                "name": "Bikini",
+                "duration_minutes": 30,
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {
+                        "device_key": "candela",
+                        "device_name": "Candela",
+                        "configured": True,
+                        "duration_minutes": 30,
+                        "price_minor": 10_000,
+                    }
+                ],
+            },
+            {
+                "id": SERVICE_C,
+                "name": "Dermatology",
+                "duration_minutes": 30,
+                "operational_category": "dermatology",
+                "requires_laser_device": False,
+            },
+        ],
+        "doctors": [
+            {
+                "id": DOCTOR_A,
+                "name": "Laser Doctor",
+                "service_ids": [SERVICE_A, SERVICE_B],
+                "branch_ids": [BRANCH],
+            },
+            {
+                "id": DOCTOR_B,
+                "name": "Dermatology Doctor",
+                "service_ids": [SERVICE_C],
+                "branch_ids": [BRANCH],
+            },
+        ],
+        "branches": [{"id": BRANCH, "name": "Clinic"}],
+        "appointments": [],
+    }
+    semantic_context = build_semantic_context(catalog)
+    laser_start = datetime.fromisoformat("2026-10-17T18:00:00+03:00")
+    laser_end = datetime.fromisoformat("2026-10-17T18:30:00+03:00")
+    derm_end = datetime.fromisoformat("2026-10-17T19:00:00+03:00")
+    laser_visit = BookingProposalVisit(
+        service_ids=[SERVICE_A, SERVICE_B],
+        main_service_id=SERVICE_A,
+        additional_service_ids=[SERVICE_B],
+        branch_id=BRANCH,
+        doctor_id=DOCTOR_A,
+        start_at=laser_start,
+        end_at=laser_end,
+        device_key="candela",
+        additional_service_device_keys={SERVICE_B: "candela"},
+    )
+    derm_visit = BookingProposalVisit(
+        service_ids=[SERVICE_C],
+        main_service_id=SERVICE_C,
+        branch_id=BRANCH,
+        doctor_id=DOCTOR_B,
+        start_at=laser_end,
+        end_at=derm_end,
+    )
+    proposal = BookingProposal(
+        proposal_id="ra-g7-existing",
+        patient_id=str(PATIENT),
+        service_ids=[SERVICE_A, SERVICE_B, SERVICE_C],
+        main_service_id=SERVICE_A,
+        additional_service_ids=[SERVICE_B],
+        branch_id=BRANCH,
+        doctor_id=DOCTOR_A,
+        start_at=laser_start,
+        end_at=laser_end,
+        device_key="candela",
+        additional_service_device_keys={SERVICE_B: "candela"},
+        visits=[laser_visit, derm_visit],
+        created_at=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+        expires_at=datetime(2026, 10, 17, 12, 15, tzinfo=UTC),
+    )
+    state = BookingTaskState(
+        status="awaiting_confirmation",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id=SERVICE_B,
+            doctor_id=DOCTOR_A,
+            branch_id=BRANCH,
+            device_key="candela",
+            date=DateConstraint(mode="exact", start_date=day.isoformat()),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        requested_service_ids=[SERVICE_A, SERVICE_B, SERVICE_C],
+        service_device_keys={SERVICE_A: "candela", SERVICE_B: "candela"},
+        proposal=proposal,
+        grouped=None,
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date=day.isoformat()),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                continues_previous=True,
+                grouped_booking_action="preserve_group",
+            )
+        ]
+    )
+
+    restored, restored_groups = restore_grouped_booking_understanding(
+        turn,
+        active_task=state,
+        context=semantic_context,
+    )
+    recollapsed, service_sets, visit_groups = recollapse_restored_booking_visit_groups(
+        restored,
+        semantic_context=semantic_context,
+        catalog=catalog,
+        restored_visit_groups=restored_groups,
+    )
+    plan = plan_turn(
+        recollapsed,
+        PlannerContext(
+            semantic_context=semantic_context,
+            active_task=state,
+            now=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+        ),
+    )
+    plan = tag_booking_service_sets(plan, service_sets=service_sets)
+    normalized = normalize_compound_turn_plan(
+        plan,
+        catalog=catalog,
+        operation_visit_groups=visit_groups,
+    )
+    adapter = _Adapter(
+        {
+            (SERVICE_A, day): _result(
+                SERVICE_A,
+                [
+                    _slot(
+                        SERVICE_A,
+                        DOCTOR_A,
+                        "2026-10-17T15:00:00+00:00",
+                        "2026-10-17T15:30:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+            (SERVICE_C, day): _result(
+                SERVICE_C,
+                [
+                    _slot(
+                        SERVICE_C,
+                        DOCTOR_B,
+                        "2026-10-17T15:30:00+00:00",
+                        "2026-10-17T16:00:00+00:00",
+                    )
+                ],
+            ),
+        }
+    )
+    preflighted = preflight_compound_visit_plan(
+        normalized,
+        context=_context(adapter, catalog=catalog),
+        timezone_name="Africa/Cairo",
+        visit_group_id="ra-g7-continuation",
+    )
+
+    assert len(preflighted.steps) == 2
+    assert [step.facts["doctor_id"] for step in preflighted.steps] == [DOCTOR_A, DOCTOR_B]
+    assert preflighted.steps[0].facts["device_key"] == "candela"
+    assert preflighted.steps[1].facts.get("device_key") is None
+    assert [step.facts["time"]["start_time"] for step in preflighted.steps] == ["18:00", "18:30"]
+    assert all(step.facts.get("compound_visit_no_joint_window") is not True for step in preflighted.steps)
+
+    prepared, rebuilt = _prepare_cross_category_compound_proposal(
+        preflighted,
+        current_task=state,
+        workspace=SimpleNamespace(id=WORKSPACE),
+        patient=SimpleNamespace(id=PATIENT),
+        catalog=catalog,
+        now=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+        turn_id="ra-g7-continuation",
+    )
+
+    assert rebuilt is not None
+    assert rebuilt.status == "awaiting_confirmation"
+    assert rebuilt.requested_service_ids == [SERVICE_A, SERVICE_B, SERVICE_C]
+    assert rebuilt.grouped is None
+    assert rebuilt.proposal is not None
+    assert len(rebuilt.proposal.visits) == 2
+    assert rebuilt.proposal.visits[0].service_ids == [SERVICE_A, SERVICE_B]
+    assert rebuilt.proposal.visits[1].service_ids == [SERVICE_C]
+    assert rebuilt.proposal.visits[0].doctor_id == DOCTOR_A
+    assert rebuilt.proposal.visits[1].doctor_id == DOCTOR_B
+    assert rebuilt.proposal.visits[0].device_key == "candela"
+    assert rebuilt.proposal.visits[1].device_key is None
     assert len(prepared.steps) == 1
     assert prepared.steps[0].response_goal == "booking_proposal"
     assert prepared.steps[0].write_intent is None

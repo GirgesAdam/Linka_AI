@@ -36,6 +36,8 @@ from app.services.agent_v2.planner import (
     plan_turn,
 )
 from app.services.agent_v2.state import (
+    BookingProposal,
+    BookingProposalVisit,
     BookingTaskState,
     CustomerConstraints,
     GroupedBookingState,
@@ -294,6 +296,92 @@ def _ra_g7_restore_state(
     )
 
 
+def _ra_g7_compound_proposal_state(*, incomplete_visits: bool = False) -> BookingTaskState:
+    laser_start = datetime.fromisoformat("2026-10-17T18:00:00+03:00")
+    laser_end = datetime.fromisoformat("2026-10-17T18:30:00+03:00")
+    derm_end = datetime.fromisoformat("2026-10-17T19:00:00+03:00")
+    laser_visit = BookingProposalVisit(
+        service_ids=["underarm", "bikini"],
+        main_service_id="underarm",
+        additional_service_ids=["bikini"],
+        branch_id="branch-1",
+        doctor_id="laser-doc",
+        start_at=laser_start,
+        end_at=laser_end,
+        device_key="candela_gentle",
+        additional_service_device_keys={"bikini": "candela_gentle"},
+    )
+    derm_visit = BookingProposalVisit(
+        service_ids=["dermatology"],
+        main_service_id="dermatology",
+        branch_id="branch-1",
+        doctor_id="derm-doc",
+        start_at=laser_end,
+        end_at=derm_end,
+    )
+    proposal = BookingProposal(
+        proposal_id="proposal-ra-g7-category-split",
+        patient_id="patient-1",
+        service_ids=["underarm", "bikini", "dermatology"],
+        main_service_id="underarm",
+        additional_service_ids=["bikini"],
+        branch_id="branch-1",
+        doctor_id="laser-doc",
+        start_at=laser_start,
+        end_at=laser_end,
+        device_key="candela_gentle",
+        additional_service_device_keys={"bikini": "candela_gentle"},
+        visits=[laser_visit, derm_visit],
+        task_version=1,
+        proposal_version=1,
+        created_at=NOW,
+        expires_at=datetime(2026, 9, 27, 8, 15, tzinfo=UTC),
+    )
+    state = BookingTaskState(
+        status="awaiting_confirmation",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="bikini",
+            doctor_id="laser-doc",
+            branch_id="branch-1",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+            time_clock_source="literal_24h",
+        ),
+        requested_service_ids=["underarm", "bikini", "dermatology"],
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        },
+        proposal=proposal,
+        grouped=None,
+    )
+    if incomplete_visits:
+        malformed = proposal.model_copy(update={"visits": [laser_visit]})
+        return state.model_copy(update={"proposal": malformed})
+    return state
+
+
+def _ra_g7_compound_proposal_resume_turn() -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-17"),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                continues_previous=True,
+                fresh_task=False,
+                grouped_booking_action="preserve_group",
+            )
+        ]
+    )
+
+
 def _ra_g7_resume_turn() -> TiaTurnUnderstanding:
     return TiaTurnUnderstanding(
         operations=[
@@ -347,6 +435,70 @@ def test_ra_g7_grouped_restore_rehydrates_canonical_service_devices() -> None:
         "candela_gentle",
         None,
     ]
+
+
+def test_ra_g7_compound_proposal_restore_uses_per_visit_resource_authority() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_compound_proposal_state()
+
+    restored, groups = restore_grouped_booking_understanding(
+        _ra_g7_compound_proposal_resume_turn(),
+        active_task=state,
+        context=context,
+    )
+
+    assert len(restored.operations) == 3
+    assert set(groups) == {0, 1, 2}
+    assert [
+        context.resolve(operation.entities.service.ref, expected_kind="service")
+        for operation in restored.operations
+    ] == ["underarm", "bikini", "dermatology"]
+    assert [
+        context.resolve(operation.entities.doctor.ref, expected_kind="doctor")
+        for operation in restored.operations
+    ] == ["laser-doc", "laser-doc", "derm-doc"]
+    assert _restored_device_ids(restored, context=context) == [
+        "candela_gentle",
+        "candela_gentle",
+        None,
+    ]
+
+
+def test_ra_g7_compound_proposal_restore_keeps_shared_anchor_not_visit_sequence() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_compound_proposal_state()
+
+    restored, _groups = restore_grouped_booking_understanding(
+        _ra_g7_compound_proposal_resume_turn(),
+        active_task=state,
+        context=context,
+    )
+
+    assert [operation.entities.time.start_time for operation in restored.operations] == [
+        "18:00",
+        "18:00",
+        "18:00",
+    ]
+    assert all(operation.entities.date.start_date == "2026-10-17" for operation in restored.operations)
+    assert all(operation.entities.time.start_time != "18:30" for operation in restored.operations)
+
+
+def test_ra_g7_compound_proposal_restore_fails_closed_on_incomplete_visit_coverage() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_compound_proposal_state(incomplete_visits=True)
+    original = _ra_g7_compound_proposal_resume_turn()
+
+    restored, groups = restore_grouped_booking_understanding(
+        original,
+        active_task=state,
+        context=context,
+    )
+
+    assert restored == original
+    assert groups == {}
+    assert len(restored.operations) == 1
+    assert restored.operations[0].entities.doctor is None
+    assert restored.operations[0].entities.device is None
 
 
 def test_grouped_restore_preserves_existing_explicit_component_device() -> None:

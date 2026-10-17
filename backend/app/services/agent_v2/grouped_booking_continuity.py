@@ -330,6 +330,48 @@ def _merge_component(
     return CustomerConstraints.model_validate(payload)
 
 
+def _compound_proposal_components(
+    active_task: BookingTaskState,
+) -> list[CustomerConstraints] | None:
+    proposal = active_task.proposal
+    if proposal is None or len(proposal.visits) < 2:
+        return None
+
+    requested_service_ids = list(active_task.requested_service_ids)
+    represented_service_ids = [
+        service_id
+        for visit in proposal.visits
+        for service_id in visit.service_ids
+    ]
+    if (
+        len(represented_service_ids) != len(set(represented_service_ids))
+        or set(represented_service_ids) != set(requested_service_ids)
+    ):
+        return None
+
+    components: list[CustomerConstraints] = []
+    for visit in proposal.visits:
+        for service_id in visit.service_ids:
+            if service_id in active_task.service_device_keys:
+                device_key = active_task.service_device_keys[service_id]
+            elif service_id == visit.main_service_id:
+                device_key = visit.device_key
+            else:
+                device_key = visit.additional_service_device_keys.get(service_id)
+            components.append(
+                active_task.constraints.model_copy(
+                    update={
+                        "service_id": service_id,
+                        "doctor_id": visit.doctor_id,
+                        "branch_id": visit.branch_id,
+                        "device_key": device_key,
+                        "package_usage": visit.package_usage,
+                    }
+                )
+            )
+    return components
+
+
 def restore_grouped_booking_understanding(
     turn: TiaTurnUnderstanding,
     *,
@@ -352,6 +394,14 @@ def restore_grouped_booking_understanding(
             else component
             for component in active_task.grouped.components
         ]
+    elif (
+        active_task.status == "awaiting_confirmation"
+        and active_task.proposal is not None
+        and active_task.proposal.visits
+    ):
+        durable_components = _compound_proposal_components(active_task)
+        if durable_components is None:
+            return turn, {}
     elif len(active_task.requested_service_ids) > 1:
         durable_components = [
             active_task.constraints.model_copy(
