@@ -13,6 +13,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
+from app.agents.v2.turn_interpreter import _interpreter_system_prompt
 from app.services.agent_v2.grouped_booking_continuity import explicitly_narrow_grouped_booking_task
 from app.services.agent_v2.orchestrator import _prepare_booking_proposal
 from app.services.agent_v2.planner import PlanStep, WriteIntent
@@ -234,6 +235,53 @@ def test_sr3_continue_active_informational_shape_preserves_pure_addition() -> No
     )
     assert service_sets == {0: [A, B, C]}
 
+
+def test_sr3b_constraint_only_continuation_preserves_existing_set() -> None:
+    state = _state([A, B], main=B)
+    catalog = _catalog()
+    context = build_semantic_context(catalog)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="19:00")),
+            )
+        ]
+    )
+    _collapsed, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    assert service_sets == {}
+    assert state.requested_service_ids == [A, B]
+
+
+def test_grouped_addition_schema_requires_newly_added_service_identity() -> None:
+    schema = TurnOperation.model_json_schema()
+    description = str(schema["properties"]["grouped_booking_action"].get("description") or "").lower()
+    assert "pure service addition" in description
+    assert "newly added service" in description
+    assert "constraint-only" in description
+    assert "entities.service may remain omitted/null" in description
+
+
+def test_grouped_addition_prompt_separates_addition_from_constraint_only_edit() -> None:
+    prompt = _interpreter_system_prompt(
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+    ).lower()
+    assert "pure service addition" in prompt
+    assert "entities.service must" in prompt
+    assert "newly" in prompt
+    assert "added service or services" in prompt
+    assert "do not reconstruct/repeat the existing services" in prompt
+    assert "constraint-only change" in prompt
+    assert "remove_other_components" in prompt
 
 def test_sr4_replacement_with_multiple_retained_is_exact() -> None:
     narrowed, _ = _apply(_state([A, B, C], main=C), [A, C, D])
