@@ -408,6 +408,19 @@ def adapt_matching_active_task_step(
         # Do not reinterpret it through generic active-task progression before fresh verification.
         return step
 
+    if (
+        isinstance(active_task, BookingTaskState)
+        and active_task.proposal is not None
+        and active_task.status == "awaiting_confirmation"
+        and operation.type == "book"
+        and step.state_action == "none"
+        and step.response_goal == "booking_proposal"
+        and step.facts.get("compound_category_proposal") is True
+    ):
+        # A backend-built compound category proposal is already a completed workflow event.
+        # Do not reinterpret its synthetic responder step as a fresh customer correction.
+        return step
+
     grouped_step = step.facts.get("compound_visit_group") not in (None, "") or step.facts.get(
         "compound_write_group"
     ) not in (None, "")
