@@ -3384,8 +3384,16 @@ def orchestrate_v2_turn(
             outgoing_pending_choice = None
         current_task = transition.active_task
 
-        if (
+        continue_same_turn_booking = (
             advanced.facts.get("device_auto_resolved") is True
+            or (
+                advanced.facts.get("booking_commercial_basis_step") is True
+                and advanced.facts.get("booking_next_field") == "booking"
+                and advanced.facts.get("exact_time_requested") is True
+            )
+        )
+        if (
+            continue_same_turn_booking
             and isinstance(current_task, BookingTaskState)
             and step_group_key is None
         ):
