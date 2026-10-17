@@ -707,6 +707,75 @@ def test_booking_answer_price_goal_exposes_verified_service_price() -> None:
     assert outcome.facts["service_catalog"]["service"]["price"] == "2000.00 EGP"
 
 
+def test_booking_proposal_preserves_same_turn_verified_device_price() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر بكيني", ref="S2", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-2"})],
+        response_goal="booking_proposal",
+        facts={
+            "service_id": "service-2",
+            "device_key": "candela_gentle",
+            "booking_proposal_summary": {
+                "services": ["ليزر إبط", "ليزر بكيني"],
+                "start_local": "2026-10-17T18:00:00+03:00",
+                "doctor_name": "مريم أحمد",
+                "branch_name": "مدينة نصر",
+                "device_name": "Candela Gentle",
+            },
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-2",
+                        "name": "ليزر بكيني",
+                        "requires_laser_device": True,
+                        "laser_devices": [
+                            {
+                                "device_key": "candela_gentle",
+                                "device_name": "Candela Gentle",
+                                "price_minor": 70_000,
+                                "currency": "EGP",
+                            }
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+    selected = outcome.facts["service_catalog"]["service"]["selected_laser_device"]
+    contract = build_customer_response_contract([outcome])
+    truth = contract.units[0].commercial_truth
+
+    assert selected == {"device_name": "Candela Gentle", "price": "700.00 EGP"}
+    assert truth is not None
+    assert truth.kind == "service_device_price"
+    assert [(item.service_name, item.device_name, item.amount, item.currency) for item in truth.options] == [
+        ("ليزر بكيني", "Candela Gentle", "700.00", "EGP")
+    ]
+
+
 def test_selected_laser_device_price_uses_matching_verified_device() -> None:
     operation = TurnOperation(
         type="pricing",

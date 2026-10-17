@@ -760,12 +760,111 @@ def test_booking_proposal_is_rendered_deterministically_without_false_success(mo
     assert "إبط وبكيني" in reply
     assert "Candela Gentle" in reply
     assert "تأكدي" in reply
+    assert "جنيه" not in reply
+    assert "EGP" not in reply
     assert "تم تأكيد" not in reply
     assert "اتأكد" not in reply
     assert "مش قادر أربط الإشارة" not in reply
     assert "أنهي اختيار" not in reply
     assert model == "deterministic:mixed-typed-contract"
 
+
+
+def test_booking_proposal_includes_unique_verified_price_without_false_group_total(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("booking proposal must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["ليزر إبط", "ليزر بكيني"],
+                "start_local": "2026-10-17T18:00:00+03:00",
+                "doctor_name": "مريم أحمد",
+                "branch_name": "مدينة نصر",
+                "device_name": "Candela Gentle",
+            },
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر بكيني",
+                    "requires_laser_device": True,
+                    "selected_laser_device": {
+                        "device_name": "Candela Gentle",
+                        "price": "700.00 EGP",
+                    },
+                }
+            },
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="السبت الساعة 6 مناسب، وريني التفاصيل قبل التأكيد")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:mixed-typed-contract"
+    assert "ليزر إبط" in reply
+    assert "ليزر بكيني" in reply
+    assert "مريم أحمد" in reply
+    assert "Candela Gentle" in reply
+    assert "6 مساء" in reply
+    assert "700" in reply
+    assert "جنيه" in reply
+    assert "سعر ليزر بكيني" in reply
+    assert "إجمالي" not in reply
+    assert "تم الحجز" not in reply
+    assert "اتحجز" not in reply
+    assert "تأكدي" in reply
+
+
+def test_booking_proposal_does_not_choose_from_ambiguous_commercial_prices(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("booking proposal must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["ليزر إبط", "ليزر بكيني"],
+                "start_local": "2026-10-17T18:00:00+03:00",
+                "doctor_name": "مريم أحمد",
+                "branch_name": "مدينة نصر",
+            },
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر بكيني",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {"device_name": "Candela Gentle", "price": "700.00 EGP"},
+                        {"device_name": "Prime Lase", "price": "650.00 EGP"},
+                    ],
+                }
+            },
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="وريني تفاصيل الموعد قبل التأكيد")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:mixed-typed-contract"
+    assert "الموعد المقترح" in reply
+    assert "700" not in reply
+    assert "650" not in reply
+    assert "جنيه" not in reply
+    assert "EGP" not in reply
+    assert "إجمالي" not in reply
 
 
 def test_actual_availability_reference_still_owns_verified_option_reply(monkeypatch) -> None:

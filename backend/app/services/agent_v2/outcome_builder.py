@@ -240,6 +240,7 @@ def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> se
     details = set(operation.requested_service_details)
     if operation.type in {"pricing", "package_compare"} or step.response_goal in {
         "answer_price",
+        "booking_proposal",
         "package_comparison",
     }:
         details.add("price")

@@ -790,11 +790,14 @@ def _device_clarification_commercial_truth(
 
 
 def _commercial_truth(outcome: TurnOutcome) -> CommercialTruth | None:
-    if outcome.status == "answered" and outcome.response_goal == "answer_price":
-        return (
-            _service_commercial_truth(outcome.facts)
-            or _package_commercial_truth(outcome.facts)
-        )
+    if outcome.status == "answered":
+        if outcome.response_goal == "answer_price":
+            return (
+                _service_commercial_truth(outcome.facts)
+                or _package_commercial_truth(outcome.facts)
+            )
+        if outcome.response_goal == "booking_proposal":
+            return _service_commercial_truth(outcome.facts)
     return _device_clarification_commercial_truth(outcome)
 
 

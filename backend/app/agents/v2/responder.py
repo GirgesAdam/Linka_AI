@@ -873,6 +873,43 @@ def _commercial_projection(unit: CustomerResponseUnit) -> CustomerResponseUnit |
     return projected if is_pure_supported_price_device_contract(contract) else None
 
 
+def _booking_proposal_commercial_detail(
+    unit: CustomerResponseUnit,
+    *,
+    arabic: bool,
+) -> str | None:
+    truth = unit.commercial_truth
+    if (
+        truth is None
+        or truth.kind not in {"service_base_price", "service_device_price"}
+        or truth.complete_set
+        or len(truth.options) != 1
+    ):
+        return None
+    option = truth.options[0]
+    try:
+        amount = format(Decimal(option.amount), "f")
+        if "." in amount:
+            amount = amount.rstrip("0").rstrip(".")
+    except InvalidOperation:
+        amount = option.amount
+    currency = option.currency.upper()
+    if arabic and currency == "EGP":
+        currency = "جنيه"
+    price = " ".join(part for part in (amount, currency) if part)
+    if option.qualifier == "device":
+        if not option.device_name:
+            return None
+        if arabic:
+            return f"سعر {option.service_name} على {option.device_name} هو {price}"
+        return f"{option.service_name} on {option.device_name} is {price}"
+    if option.qualifier == "base":
+        if arabic:
+            return f"سعر {option.service_name} هو {price}"
+        return f"{option.service_name} is {price}"
+    return None
+
+
 def _deterministic_booking_proposal_reply(
     unit: CustomerResponseUnit,
     *,
@@ -904,6 +941,9 @@ def _deterministic_booking_proposal_reply(
         details.append(("في " if arabic else "at ") + branch_name)
     if device_name:
         details.append(("على جهاز " if arabic else "on ") + device_name)
+    commercial_detail = _booking_proposal_commercial_detail(unit, arabic=arabic)
+    if commercial_detail:
+        details.append(commercial_detail)
     if arabic:
         prefix = "الموعد المقترح: "
         suffix = " تحبي تأكدي الحجز ولا تعدّلي حاجة؟"
