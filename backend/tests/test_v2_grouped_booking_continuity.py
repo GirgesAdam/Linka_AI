@@ -133,8 +133,11 @@ def _step(
     time: TimeConstraint,
     *,
     with_write: bool = False,
+    requested_service_ids: list[str] | None = None,
 ) -> PlanStep:
     facts = _facts(service_id, time)
+    if requested_service_ids is not None:
+        facts["requested_service_ids"] = requested_service_ids
     return PlanStep(
         operation_index=index,
         operation_type="book",
@@ -244,6 +247,93 @@ def test_missing_date_clarification_retains_group_component_identity() -> None:
     ]
 
 
+def test_ra_g7_collapsed_step_preserves_complete_service_set_in_new_task() -> None:
+    plan = TurnPlan(
+        steps=[
+            _step(
+                0,
+                "svc-b",
+                TIME_A,
+                requested_service_ids=["svc-a", "svc-b", "svc-a"],
+            ),
+            _step(1, "svc-c", TIME_B),
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            _operation("svc-b", time=TIME_A),
+            _operation("svc-c", time=TIME_B),
+        ]
+    )
+
+    task = grouped_booking_task_from_plan(
+        plan,
+        understanding=understanding,
+        existing=None,
+        now=NOW,
+        turn_id="turn-ra-g7-service-set",
+    )
+
+    assert task is not None
+    assert task.grouped is not None
+    assert task.requested_service_ids == ["svc-a", "svc-b", "svc-c"]
+    assert [component.service_id for component in task.grouped.components] == [
+        "svc-a",
+        "svc-b",
+        "svc-c",
+    ]
+    laser_pair = task.grouped.components[:2]
+    assert all(component.doctor_id == "doc-1" for component in laser_pair)
+    assert all(component.date == DATE for component in laser_pair)
+    assert all(component.time == TIME_A for component in laser_pair)
+    assert all(component.device_key == "prime_lase" for component in laser_pair)
+
+
+def test_ra_g7_collapsed_step_continuation_preserves_complete_service_set() -> None:
+    plan = TurnPlan(
+        steps=[
+            _step(
+                0,
+                "svc-b",
+                TIME_A,
+                requested_service_ids=["svc-a", "svc-b"],
+            ),
+            _step(1, "svc-c", TIME_B),
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            _operation("svc-b", time=TIME_A),
+            _operation("svc-c", time=TIME_B),
+        ]
+    )
+    initial = grouped_booking_task_from_plan(
+        plan,
+        understanding=understanding,
+        existing=None,
+        now=NOW,
+        turn_id="turn-ra-g7-initial",
+    )
+    assert initial is not None
+
+    continued = grouped_booking_task_from_plan(
+        plan,
+        understanding=understanding,
+        existing=initial,
+        now=NOW,
+        turn_id="turn-ra-g7-continuation",
+    )
+
+    assert continued is not None
+    assert continued.requested_service_ids == ["svc-a", "svc-b", "svc-c"]
+    assert continued.grouped is not None
+    assert [component.service_id for component in continued.grouped.components] == [
+        "svc-a",
+        "svc-b",
+        "svc-c",
+    ]
+
+
 def test_grouped_plan_captures_durable_component_state() -> None:
     plan = TurnPlan(
         steps=[
@@ -269,6 +359,7 @@ def test_grouped_plan_captures_durable_component_state() -> None:
     assert task is not None
     assert task.grouped is not None
     assert [item.service_id for item in task.grouped.components] == ["svc-a", "svc-b"]
+    assert task.requested_service_ids == ["svc-a", "svc-b"]
     assert task.write_authorization.authorized is True
 
 

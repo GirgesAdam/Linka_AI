@@ -127,14 +127,36 @@ def grouped_booking_task_from_plan(
     if steps is None:
         return None
 
-    components = [
-        _constraints_from_step(
+    components: list[CustomerConstraints] = []
+    seen_service_ids: set[str] = set()
+    for step in steps:
+        constraints = _constraints_from_step(
             step,
             operation=understanding.operations[step.operation_index],
         )
-        for step in steps
-    ]
+        requested_raw = step.facts.get("requested_service_ids")
+        requested = (
+            list(dict.fromkeys(requested_raw))
+            if isinstance(requested_raw, list)
+            and all(isinstance(item, str) and item for item in requested_raw)
+            else []
+        )
+        service_ids = (
+            requested
+            if len(requested) > 1 and constraints.service_id in requested
+            else [constraints.service_id]
+        )
+        for service_id in service_ids:
+            if service_id is None or service_id in seen_service_ids:
+                continue
+            components.append(constraints.model_copy(update={"service_id": service_id}))
+            seen_service_ids.add(service_id)
     grouped = GroupedBookingState(components=components)
+    requested_service_ids = [
+        component.service_id
+        for component in components
+        if component.service_id is not None
+    ]
     if existing is not None:
         main_constraints = components[0]
         if existing.grouped is None and existing.constraints.service_id is not None:
@@ -188,6 +210,7 @@ def grouped_booking_task_from_plan(
             granted_at=now if authorized else None,
         ),
         constraints=components[0],
+        requested_service_ids=requested_service_ids,
         grouped=grouped,
     )
 
