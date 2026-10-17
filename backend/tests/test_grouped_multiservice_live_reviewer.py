@@ -307,6 +307,7 @@ def _g5_payload(*, final_time: str = "18:00", final_start_at: str = "2026-10-17T
             "requested_service_ids": expected,
             "constraints": {"time": {"mode": "exact", "start_time": time_value}},
             "write_authorization": {"authorized": True},
+            "derived": {"commercial_basis_presented_key": "svc-underarm|candela_gentle|standalone"},
         }
 
     def proposal(start_at: str):
@@ -326,7 +327,6 @@ def _g5_payload(*, final_time: str = "18:00", final_start_at: str = "2026-10-17T
             "active_task": task("18:00"),
             "proposal": proposal("2026-10-17T15:00:00+00:00"),
             "pending_write": None,
-            "outcomes": [{"facts": {"booking_commercial_basis_step": True}}],
             "reply": "السعر الإجمالي 1000 جنيه. الموعد المقترح قبل التأكيد.",
         },
         {
@@ -358,5 +358,29 @@ def test_ra_g5_reviewer_rejects_stale_proposal_after_time_correction() -> None:
         final_time="19:00",
         final_start_at="2026-10-17T15:00:00+00:00",
     )
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+def test_ra_g5_reviewer_rejects_missing_durable_commercial_evidence() -> None:
+    records, ids = _g5_payload()
+    records[1]["active_task"]["derived"]["commercial_basis_presented_key"] = None
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_transient_marker_without_durable_commercial_evidence() -> None:
+    records, ids = _g5_payload()
+    records[1]["active_task"]["derived"]["commercial_basis_presented_key"] = None
+    records[1]["outcomes"] = [{"facts": {"booking_commercial_basis_step": True}}]
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_time_only_correction_that_loses_commercial_authority() -> None:
+    records, ids = _g5_payload(
+        final_time="19:00",
+        final_start_at="2026-10-17T16:00:00+00:00",
+    )
+    records[2]["active_task"]["derived"]["commercial_basis_presented_key"] = None
     with pytest.raises(AssertionError):
         validate_g5(records, ids)

@@ -647,12 +647,10 @@ def validate_g5(records, ids):
     commercial_start = datetime.fromisoformat(str(commercial_proposal["start_at"]))
     assert commercial_start.astimezone(CAIRO).strftime("%H:%M") == "18:00"
     assert commercial.get("pending_write") is None
-    assert any(
-        isinstance(outcome, dict)
-        and isinstance(outcome.get("facts"), dict)
-        and outcome["facts"].get("booking_commercial_basis_step") is True
-        for outcome in commercial.get("outcomes") or []
-    )
+    derived = active_task.get("derived")
+    assert isinstance(derived, dict)
+    commercial_key = derived.get("commercial_basis_presented_key")
+    assert isinstance(commercial_key, str) and commercial_key
     commercial_reply = str(commercial.get("reply") or "")
     assert "جنيه" in commercial_reply or "EGP" in commercial_reply
     assert "تم الحجز" not in commercial_reply and "اتحجز" not in commercial_reply
@@ -662,6 +660,11 @@ def validate_g5(records, ids):
     final_task = final.get("active_task")
     assert isinstance(final_task, dict)
     assert final_task.get("status") == "awaiting_confirmation"
+    final_derived = final_task.get("derived")
+    assert isinstance(final_derived, dict)
+    final_commercial_key = final_derived.get("commercial_basis_presented_key")
+    assert isinstance(final_commercial_key, str) and final_commercial_key
+    assert final_commercial_key == commercial_key
     final_authorization = final_task.get("write_authorization")
     assert isinstance(final_authorization, dict)
     assert final_authorization.get("authorized") is True
