@@ -341,7 +341,17 @@ def restore_grouped_booking_understanding(
     if active_task is None:
         return turn, {}
     if active_task.grouped is not None:
-        durable_components = list(active_task.grouped.components)
+        durable_components = [
+            component.model_copy(
+                update={
+                    "device_key": active_task.service_device_keys[component.service_id]
+                }
+            )
+            if component.device_key is None
+            and component.service_id in active_task.service_device_keys
+            else component
+            for component in active_task.grouped.components
+        ]
     elif len(active_task.requested_service_ids) > 1:
         durable_components = [
             active_task.constraints.model_copy(

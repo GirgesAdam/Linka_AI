@@ -198,6 +198,234 @@ def _grouped_state() -> BookingTaskState:
     )
 
 
+def _ra_g7_restore_context():
+    return build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "underarm",
+                    "name": "Underarm Laser",
+                    "requires_laser_device": True,
+                    "operational_category": "laser",
+                    "laser_devices": [
+                        {"device_key": "candela_gentle", "device_name": "Candela Gentle"},
+                        {"device_key": "existing_device", "device_name": "Existing Device"},
+                    ],
+                },
+                {
+                    "id": "bikini",
+                    "name": "Bikini Laser",
+                    "requires_laser_device": True,
+                    "operational_category": "laser",
+                    "laser_devices": [
+                        {"device_key": "candela_gentle", "device_name": "Candela Gentle"},
+                        {"device_key": "existing_device", "device_name": "Existing Device"},
+                    ],
+                },
+                {
+                    "id": "dermatology",
+                    "name": "Dermatology",
+                    "requires_laser_device": False,
+                    "operational_category": "dermatology",
+                },
+            ],
+            "doctors": [
+                {
+                    "id": "laser-doc",
+                    "name": "Laser Doctor",
+                    "service_ids": ["underarm", "bikini"],
+                    "branch_ids": ["branch-1"],
+                },
+                {
+                    "id": "derm-doc",
+                    "name": "Dermatology Doctor",
+                    "service_ids": ["dermatology"],
+                    "branch_ids": ["branch-1"],
+                },
+            ],
+            "branches": [{"id": "branch-1", "name": "Clinic"}],
+            "appointments": [],
+        }
+    )
+
+
+def _ra_g7_restore_state(
+    *,
+    underarm_device: str | None = None,
+    bikini_device: str | None = None,
+    service_device_keys: dict[str, str] | None = None,
+) -> BookingTaskState:
+    components = [
+        CustomerConstraints(
+            service_id="underarm",
+            doctor_id="laser-doc",
+            branch_id="branch-1",
+            device_key=underarm_device,
+            date=DATE,
+            time=TIME_A,
+        ),
+        CustomerConstraints(
+            service_id="bikini",
+            doctor_id="laser-doc",
+            branch_id="branch-1",
+            device_key=bikini_device,
+            date=DATE,
+            time=TIME_A,
+        ),
+        CustomerConstraints(
+            service_id="dermatology",
+            doctor_id="derm-doc",
+            branch_id="branch-1",
+            date=DATE,
+            time=TIME_A,
+        ),
+    ]
+    return BookingTaskState(
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-ra-g7",
+            granted_at=NOW,
+        ),
+        constraints=components[0],
+        requested_service_ids=["underarm", "bikini", "dermatology"],
+        service_device_keys=dict(service_device_keys or {}),
+        grouped=GroupedBookingState(components=components),
+    )
+
+
+def _ra_g7_resume_turn() -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="continue_active",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                continues_previous=True,
+                grouped_booking_action="preserve_group",
+            )
+        ]
+    )
+
+
+def _restored_device_ids(
+    restored: TiaTurnUnderstanding,
+    *,
+    context,
+) -> list[str | None]:
+    devices: list[str | None] = []
+    for operation in restored.operations:
+        entity = operation.entities.device
+        devices.append(
+            context.resolve(entity.ref, expected_kind="device")
+            if entity is not None and entity.ref is not None
+            else None
+        )
+    return devices
+
+
+def test_ra_g7_grouped_restore_rehydrates_canonical_service_devices() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        }
+    )
+
+    restored, groups = restore_grouped_booking_understanding(
+        _ra_g7_resume_turn(),
+        active_task=state,
+        context=context,
+    )
+
+    assert len(restored.operations) == 3
+    assert set(groups) == {0, 1, 2}
+    assert _restored_device_ids(restored, context=context) == [
+        "candela_gentle",
+        "candela_gentle",
+        None,
+    ]
+
+
+def test_grouped_restore_preserves_existing_explicit_component_device() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        underarm_device="existing_device",
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        },
+    )
+
+    restored, _groups = restore_grouped_booking_understanding(
+        _ra_g7_resume_turn(),
+        active_task=state,
+        context=context,
+    )
+
+    assert _restored_device_ids(restored, context=context) == [
+        "existing_device",
+        "candela_gentle",
+        None,
+    ]
+
+
+def test_grouped_restore_missing_service_device_mapping_leaves_component_unchanged() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={"underarm": "candela_gentle"}
+    )
+
+    restored, _groups = restore_grouped_booking_understanding(
+        _ra_g7_resume_turn(),
+        active_task=state,
+        context=context,
+    )
+
+    assert _restored_device_ids(restored, context=context) == [
+        "candela_gentle",
+        None,
+        None,
+    ]
+
+
+def test_ra_g7_restored_laser_devices_reach_booking_planner_path() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state(
+        service_device_keys={
+            "underarm": "candela_gentle",
+            "bikini": "candela_gentle",
+        }
+    )
+    restored, _groups = restore_grouped_booking_understanding(
+        _ra_g7_resume_turn(),
+        active_task=state,
+        context=context,
+    )
+
+    planned = plan_turn(
+        restored,
+        PlannerContext(semantic_context=context, active_task=state, now=NOW),
+    )
+
+    laser_steps = [
+        step
+        for step in planned.steps
+        if step.facts.get("service_id") in {"underarm", "bikini"}
+    ]
+    assert len(laser_steps) == 2
+    assert all(
+        any(request.kind == "availability" for request in step.reads)
+        for step in laser_steps
+    )
+    assert all(
+        not (len(step.reads) == 1 and step.reads[0].kind == "service_catalog")
+        for step in laser_steps
+    )
+
+
 def test_missing_date_clarification_retains_group_component_identity() -> None:
     first_source = _operation("svc-a")
     second_source = _operation("svc-c")
