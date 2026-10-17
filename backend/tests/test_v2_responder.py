@@ -736,12 +736,14 @@ def test_booking_proposal_is_rendered_deterministically_without_false_success(mo
         status="answered",
         response_goal="booking_proposal",
         facts={
+            "verified_availability_reference": True,
             "booking_proposal_summary": {
                 "services": ["هيدرافيشل", "ليزر إزالة الشعر - إبط وبكيني"],
                 "start_local": "2026-10-13T11:00:00+03:00",
                 "doctor_name": "مريم حسن",
                 "branch_name": "التجمع الخامس",
-            }
+                "device_name": "Candela Gentle",
+            },
         },
     )
 
@@ -756,7 +758,85 @@ def test_booking_proposal_is_rendered_deterministically_without_false_success(mo
     assert "الموعد المقترح" in reply
     assert "هيدرافيشل" in reply
     assert "إبط وبكيني" in reply
+    assert "Candela Gentle" in reply
     assert "تأكدي" in reply
     assert "تم تأكيد" not in reply
     assert "اتأكد" not in reply
+    assert "مش قادر أربط الإشارة" not in reply
+    assert "أنهي اختيار" not in reply
     assert model == "deterministic:mixed-typed-contract"
+
+
+
+def test_actual_availability_reference_still_owns_verified_option_reply(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("verified availability reference must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="availability_reference",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_index": 1,
+            "availability_reference_option": {
+                "index": 1,
+                "start_time_24h": "20:00",
+                "doctor_name": "مريم أحمد",
+                "laser_device_name": "Candela Gentle",
+            },
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="الأول مناسب")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:verified-availability-reference"
+    assert "الاختيار 1" in reply
+    assert "20:00" in reply
+    assert "مريم أحمد" in reply
+    assert "Candela Gentle" in reply
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_fragment"),
+    [
+        ("needs_anchor", "تقصد أنهي ميعاد"),
+        ("semantic_clarification", "تقصد أنهي ميعاد"),
+        ("window_ambiguous", "فترة فيها أكتر من ميعاد"),
+        ("out_of_range", "مفيش اختيار في الاتجاه ده"),
+    ],
+)
+def test_verified_availability_reference_failure_reasons_still_clarify(
+    monkeypatch,
+    reason: str,
+    expected_fragment: str,
+) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("verified availability reference clarification must stay deterministic")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_reason": reason,
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="المعاد ده")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:availability-reference-clarification"
+    assert expected_fragment in reply

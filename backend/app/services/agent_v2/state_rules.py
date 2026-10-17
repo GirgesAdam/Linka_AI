@@ -262,7 +262,7 @@ def attach_booking_proposal(
     current = proposal.model_copy(update={"task_version": next_version})
     return state.model_copy(
         update={
-            "status": "ready",
+            "status": "awaiting_confirmation",
             "proposal": current,
             "option_snapshot": None,
             "version": next_version,
@@ -307,6 +307,7 @@ def record_booking_commercial_basis_presented(
     legacy_device = state.constraints.device_key
     return state.model_copy(
         update={
+            "status": "collecting",
             "derived": state.derived.model_copy(
                 update={
                     "commercial_basis_presented_key": commercial_key,
@@ -329,6 +330,7 @@ def record_booking_doctor_compatibility(
         return state
     return state.model_copy(
         update={
+            "status": "collecting",
             "derived": state.derived.model_copy(update={"doctor_compatible": compatible}),
             "version": state.version + 1,
             "proposal": None,
@@ -346,10 +348,110 @@ def record_booking_device_compatibility(
         return state
     return state.model_copy(
         update={
+            "status": "collecting",
             "derived": state.derived.model_copy(update={"device_compatible": compatible}),
             "version": state.version + 1,
             "proposal": None,
             "option_snapshot": None,
+        }
+    )
+
+
+def restore_booking_slot_snapshot(
+    state: BookingTaskState,
+    *,
+    snapshot: OptionSnapshot,
+) -> BookingTaskState:
+    """Restore a verified narrowed booking-slot snapshot without another version bump."""
+    return state.model_copy(
+        update={
+            "status": "awaiting_slot",
+            "proposal": None,
+            "option_snapshot": snapshot,
+            "derived": state.derived.model_copy(
+                update={
+                    "availability_snapshot_id": snapshot.snapshot_id,
+                    "selected_slot_ref": None,
+                }
+            ),
+        }
+    )
+
+def invalidate_booking_slot_selection(state: BookingTaskState) -> BookingTaskState:
+    """Clear stale booking-slot authority after fresh verification rejects a selection."""
+    if (
+        state.status == "collecting"
+        and state.option_snapshot is None
+        and state.proposal is None
+        and state.derived.availability_snapshot_id is None
+        and state.derived.selected_slot_ref is None
+    ):
+        return state
+    return state.model_copy(
+        update={
+            "status": "collecting",
+            "proposal": None,
+            "option_snapshot": None,
+            "derived": _booking_derived(state, clear_availability=True),
+            "version": state.version + 1,
+        }
+    )
+
+
+def apply_verified_booking_slot_selection(
+    state: BookingTaskState,
+    *,
+    selected_slot_ref: str,
+    main_service_id: str,
+    branch_id: str,
+    doctor_id: str,
+    device_key: str | None,
+    date: DateConstraint,
+    time: TimeConstraint,
+    service_device_keys: dict[str, str],
+) -> BookingTaskState:
+    """Materialize one freshly verified slot before attaching its proposal."""
+    constraints = state.constraints.model_copy(
+        update={
+            "service_id": main_service_id,
+            "branch_id": branch_id,
+            "doctor_id": doctor_id,
+            "device_key": device_key,
+            "date": date,
+            "time": time,
+        }
+    )
+    return state.model_copy(
+        update={
+            "status": "collecting",
+            "constraints": constraints,
+            "service_device_keys": dict(service_device_keys),
+            "proposal": None,
+            "option_snapshot": None,
+            "derived": state.derived.model_copy(
+                update={
+                    "availability_snapshot_id": None,
+                    "selected_slot_ref": selected_slot_ref,
+                }
+            ),
+            "version": state.version + 1,
+        }
+    )
+
+
+def record_booking_selected_slot(
+    state: BookingTaskState,
+    *,
+    selected_slot_ref: str,
+) -> BookingTaskState:
+    """Record verified booking-slot identity without advancing stage or version."""
+    if state.derived.selected_slot_ref == selected_slot_ref:
+        return state
+    return state.model_copy(
+        update={
+            "derived": state.derived.model_copy(
+                update={"selected_slot_ref": selected_slot_ref}
+            )
         }
     )
 
@@ -372,13 +474,24 @@ def attach_option_snapshot(
         expires_at=expires_at,
         options=choices,
     )
+    if isinstance(state, BookingTaskState):
+        status = "awaiting_slot" if snapshot.purpose == "booking_slot" else "collecting"
+    else:
+        status = "awaiting_choice"
     update: dict[str, object] = {
-        "status": "awaiting_choice",
+        "status": status,
         "option_snapshot": snapshot,
         "version": next_version,
     }
     if isinstance(state, BookingTaskState):
         update["proposal"] = None
+        if snapshot.purpose == "booking_slot":
+            update["derived"] = state.derived.model_copy(
+                update={
+                    "availability_snapshot_id": snapshot_id,
+                    "selected_slot_ref": None,
+                }
+            )
     return state.model_copy(update=update)
 
 

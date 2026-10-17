@@ -504,7 +504,12 @@ class TurnOperation(StrictContractModel):
         description=(
             "For an active grouped booking, use remove_other_components when any existing service is "
             "explicitly removed or replaced; entities.service must then contain the complete resulting "
-            "service set. Pure additions and constraint-only edits use preserve_group."
+            "service set. For a pure service addition, use preserve_group and entities.service MUST "
+            "identify only the newly added service or services; do not omit a newly named service merely "
+            "because the existing group already exists, and do not repeat existing services solely to "
+            "preserve them. For a constraint-only edit with no service addition or replacement, use "
+            "preserve_group and entities.service may remain omitted/null. Deterministic Python preserves "
+            "the existing durable group and merges only newly supplied services."
         ),
     )
     cleared_verified_read_fields: list[VerifiedReadClearField] = Field(

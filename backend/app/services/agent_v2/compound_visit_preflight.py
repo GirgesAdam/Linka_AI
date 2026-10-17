@@ -243,7 +243,7 @@ def _availability_for_day(
                     branch_id=str(branch_id),
                     service_id=str(service_id),
                     booking_date=booking_date,
-                    doctor_id=str(doctor_id),
+                    doctor_id=str(doctor_id) if doctor_id is not None else None,
                     now=context.now,
                     laser_device_key=(
                         str(params["device_key"]) if params.get("device_key") else None

@@ -107,16 +107,18 @@ def test_flow_type_mismatch_fails_closed() -> None:
         state_persistence._decode_flow_task(flow)
 
 
-def test_task_status_maps_to_existing_flow_statuses() -> None:
+def test_legacy_booking_statuses_normalize_before_flow_mapping() -> None:
     assert state_persistence._flow_status_for_task(_booking_task(status="collecting")) == (
         "collecting_requirements"
     )
     assert state_persistence._flow_status_for_task(_booking_task(status="awaiting_choice")) == (
         "awaiting_option_selection"
     )
-    assert state_persistence._flow_status_for_task(_booking_task(status="ready")) == "ready_to_execute"
+    assert state_persistence._flow_status_for_task(_booking_task(status="ready")) == (
+        "collecting_requirements"
+    )
     assert state_persistence._flow_status_for_task(_booking_task(status="executing")) == (
-        "ready_to_execute"
+        "collecting_requirements"
     )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -20,7 +21,7 @@ from app.agents.v2.semantic_state_view import (
     with_safe_read_context,
     with_safe_task_context,
 )
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import Selection, TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.services.agent_v2.active_task_progress import (
     adapt_matching_active_task_step,
@@ -33,7 +34,12 @@ from app.services.agent_v2.grouped_booking_continuity import (
     explicitly_narrow_grouped_booking_task,
     restore_grouped_booking_understanding,
 )
-from app.services.agent_v2.orchestrator import _grouped_visit_reference_understanding
+from app.services.agent_v2.orchestrator import (
+    _attach_verified_booking_proposal_to_task,
+    _grouped_visit_reference_understanding,
+    _prepare_booking_proposal,
+    _verified_booking_selection_plan,
+)
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -45,7 +51,7 @@ from app.services.agent_v2.planner import (
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle
 from app.services.agent_v2.reference_resolution import build_availability_reference_options
-from app.services.agent_v2.state import ActiveTaskState, BookingTaskState
+from app.services.agent_v2.state import ActiveTaskState, BookingProposal, BookingTaskState
 from app.services.agent_v2.state_executor import (
     apply_step_state,
     complete_state_after_action,
@@ -233,6 +239,26 @@ def _operation_for_step(
         raise RuntimeError("V2 plan referenced an operation outside the structured turn.") from exc
 
 
+def _fixture_additional_service_resolver(
+    proposal: BookingProposal,
+    *,
+    catalog: dict[str, Any],
+) -> list[object]:
+    services = {
+        str(row.get("id")): row
+        for row in (catalog.get("services") or [])
+        if isinstance(row, dict) and row.get("id") not in (None, "")
+    }
+    resolved: list[object] = []
+    for service_id in proposal.additional_service_ids:
+        row = services.get(str(service_id))
+        if row is None:
+            return []
+        device_key = proposal.device_key if row.get("requires_laser_device") is True else None
+        resolved.append(SimpleNamespace(service_id=service_id, device_key=device_key))
+    return resolved
+
+
 def _execute_step(
     *,
     step: PlanStep,
@@ -242,11 +268,32 @@ def _execute_step(
     fixture: V2FixtureEnvironment,
     current_task: ActiveTaskState | None,
     local_now: datetime,
+    timezone_name: str,
     turn_id: str,
     simulate_writes: bool,
 ) -> tuple[V2HarnessStepTrace, TurnOutcome, ActiveTaskState | None]:
     bundle = execute_fixture_reads(step, fixture) if step.reads else ReadExecutionBundle()
     advanced = _advance(step, bundle)
+    pending_proposal = None
+    if (
+        isinstance(current_task, BookingTaskState)
+        and advanced.facts.get("verified_booking_slot_selection") is True
+    ):
+        advanced, pending_proposal = _prepare_booking_proposal(
+            advanced,
+            reads=bundle,
+            current_task=current_task,
+            db=object(),
+            workspace=SimpleNamespace(id="fixture-workspace", timezone=timezone_name),
+            patient=SimpleNamespace(id="fixture-patient"),
+            catalog=fixture.catalog,
+            now=local_now,
+            turn_id=turn_id,
+            additional_service_resolver=lambda proposal: _fixture_additional_service_resolver(
+                proposal,
+                catalog=fixture.catalog,
+            ),
+        )
     transition = apply_step_state(
         current_task,
         step=advanced,
@@ -258,6 +305,14 @@ def _execute_step(
     )
     advanced = finalize_step_after_state_transition(advanced, transition)
     task_after_transition = transition.active_task
+    if pending_proposal is not None and isinstance(task_after_transition, BookingTaskState):
+        task_after_transition = _attach_verified_booking_proposal_to_task(
+            task_after_transition,
+            proposal=pending_proposal,
+            selected_option_ref=str(advanced.facts.get("selected_option_ref") or ""),
+            catalog=fixture.catalog,
+            timezone_name=timezone_name,
+        )
     simulated_write, action_result = _simulated_action(
         advanced,
         simulate_writes=simulate_writes,
@@ -335,6 +390,7 @@ def run_v2_stateful_fixture_turn(
     full_interpreter_called = False
     grouped_reference_understanding = None
     grouped_reference_task = None
+    reference_plan_override = None
     if (
         latest_customer_text
         and isinstance(availability_reference_context, dict)
@@ -346,11 +402,26 @@ def run_v2_stateful_fixture_turn(
             latest_customer_text=latest_customer_text,
             availability_context=availability_reference_context,
         )
-        grouped_reference = _grouped_visit_reference_understanding(
+        verified_selection = _verified_booking_selection_plan(
             active_task,
             decision=reference_interpretation.decision,
             availability_context=availability_reference_context,
             catalog=fixture.catalog,
+            selection_time=reference_interpretation.decision.exact_time,
+            now=local_now,
+        )
+        if verified_selection is not None:
+            reference_plan_override, availability_reference_context = verified_selection
+        grouped_reference = (
+            _grouped_visit_reference_understanding(
+                active_task,
+                decision=reference_interpretation.decision,
+                availability_context=availability_reference_context,
+                catalog=fixture.catalog,
+            )
+            if reference_plan_override is None
+            and reference_interpretation.decision.action == "clarify"
+            else None
         )
         if grouped_reference is not None:
             grouped_reference_understanding, grouped_reference_task = grouped_reference
@@ -372,6 +443,22 @@ def run_v2_stateful_fixture_turn(
                     type="continue_active",
                     entities=TurnEntities(),
                     execution_intent="execute",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+    elif reference_plan_override is not None:
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="book",
+                    entities=TurnEntities(),
+                    selection=Selection(
+                        kind="ref",
+                        ref=str(reference_interpretation.decision.option_ref),
+                    ),
+                    execution_intent="informational",
                     active_task_relationship="continue",
                     continues_previous=True,
                 )
@@ -460,7 +547,7 @@ def run_v2_stateful_fixture_turn(
         **restored_visit_groups,
     }
     planner_active_task: ActiveTaskState | None = narrowed_booking_task or active_task
-    plan = plan_turn(
+    plan = reference_plan_override or plan_turn(
         understanding,
         PlannerContext(
             semantic_context=semantic_context,
@@ -543,6 +630,7 @@ def run_v2_stateful_fixture_turn(
                     fixture=fixture,
                     current_task=current_task,
                     local_now=local_now,
+                    timezone_name=timezone_name,
                     turn_id=resolved_turn_id,
                     simulate_writes=simulate_writes,
                 )
@@ -560,6 +648,7 @@ def run_v2_stateful_fixture_turn(
                     fixture=fixture,
                     current_task=current_task,
                     local_now=local_now,
+                    timezone_name=timezone_name,
                     turn_id=resolved_turn_id,
                     simulate_writes=simulate_writes,
                 )
@@ -572,6 +661,7 @@ def run_v2_stateful_fixture_turn(
                 fixture=fixture,
                 current_task=current_task,
                 local_now=local_now,
+                timezone_name=timezone_name,
                 turn_id=resolved_turn_id,
                 simulate_writes=simulate_writes,
             )

@@ -127,14 +127,36 @@ def grouped_booking_task_from_plan(
     if steps is None:
         return None
 
-    components = [
-        _constraints_from_step(
+    components: list[CustomerConstraints] = []
+    seen_service_ids: set[str] = set()
+    for step in steps:
+        constraints = _constraints_from_step(
             step,
             operation=understanding.operations[step.operation_index],
         )
-        for step in steps
-    ]
+        requested_raw = step.facts.get("requested_service_ids")
+        requested = (
+            list(dict.fromkeys(requested_raw))
+            if isinstance(requested_raw, list)
+            and all(isinstance(item, str) and item for item in requested_raw)
+            else []
+        )
+        service_ids = (
+            requested
+            if len(requested) > 1 and constraints.service_id in requested
+            else [constraints.service_id]
+        )
+        for service_id in service_ids:
+            if service_id is None or service_id in seen_service_ids:
+                continue
+            components.append(constraints.model_copy(update={"service_id": service_id}))
+            seen_service_ids.add(service_id)
     grouped = GroupedBookingState(components=components)
+    requested_service_ids = [
+        component.service_id
+        for component in components
+        if component.service_id is not None
+    ]
     if existing is not None:
         main_constraints = components[0]
         if existing.grouped is None and existing.constraints.service_id is not None:
@@ -188,6 +210,7 @@ def grouped_booking_task_from_plan(
             granted_at=now if authorized else None,
         ),
         constraints=components[0],
+        requested_service_ids=requested_service_ids,
         grouped=grouped,
     )
 
@@ -318,7 +341,17 @@ def restore_grouped_booking_understanding(
     if active_task is None:
         return turn, {}
     if active_task.grouped is not None:
-        durable_components = list(active_task.grouped.components)
+        durable_components = [
+            component.model_copy(
+                update={
+                    "device_key": active_task.service_device_keys[component.service_id]
+                }
+            )
+            if component.device_key is None
+            and component.service_id in active_task.service_device_keys
+            else component
+            for component in active_task.grouped.components
+        ]
     elif len(active_task.requested_service_ids) > 1:
         durable_components = [
             active_task.constraints.model_copy(
@@ -338,6 +371,67 @@ def restore_grouped_booking_understanding(
         if operation.type in _BOOKING_OPERATION_TYPES
         and operation.execution_intent in {"execute", "informational"}
     ]
+    if len(executable) > 1:
+        durable_devices = {
+            component.service_id: component.device_key
+            for component in durable_components
+            if component.service_id is not None
+        }
+        operations = list(turn.operations)
+        changed = False
+        for operation_index, operation in executable:
+            if (
+                operation.grouped_booking_action != "preserve_group"
+                or operation.fresh_task
+                or operation.active_task_relationship == "replace"
+                or operation.entities.device is not None
+            ):
+                continue
+            params = resolved_operation_parameters(operation, context=context)
+            representative_service = params.get("service_id")
+            if not isinstance(representative_service, str) or not representative_service:
+                continue
+            represented_raw = (
+                booking_service_sets.get(operation_index)
+                if booking_service_sets is not None
+                else None
+            )
+            represented_services = (
+                list(dict.fromkeys(represented_raw))
+                if isinstance(represented_raw, list)
+                and represented_raw
+                and all(isinstance(item, str) and item for item in represented_raw)
+                and representative_service in represented_raw
+                else [representative_service]
+            )
+            represented_devices = [
+                durable_devices.get(service_id) for service_id in represented_services
+            ]
+            if any(device_key is None for device_key in represented_devices):
+                continue
+            common_devices = {str(device_key) for device_key in represented_devices}
+            if len(common_devices) != 1:
+                continue
+            device_key = next(iter(common_devices))
+            device_ref = _canonical_ref(
+                context,
+                kind="device",
+                canonical_id=device_key,
+            )
+            if device_ref is None:
+                continue
+            operations[operation_index] = operation.model_copy(
+                update={
+                    "entities": operation.entities.model_copy(
+                        update={"device": _entity_ref(device_ref)}
+                    )
+                }
+            )
+            changed = True
+        return (
+            turn.model_copy(update={"operations": operations}) if changed else turn,
+            {},
+        )
     if len(executable) != 1:
         return turn, {}
     source_index, operation = executable[0]

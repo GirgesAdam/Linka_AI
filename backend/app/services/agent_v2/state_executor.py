@@ -37,8 +37,11 @@ from app.services.agent_v2.state_rules import (
     apply_reschedule_service_change,
     apply_reschedule_time_change,
     attach_option_snapshot,
+    invalidate_booking_slot_selection,
     preserve_task_for_side_read,
     record_booking_commercial_basis_presented,
+    record_booking_selected_slot,
+    restore_booking_slot_snapshot,
 )
 
 _OPTION_TTL = timedelta(minutes=15)
@@ -537,6 +540,20 @@ def _availability_slots(reads: ReadExecutionBundle | None) -> list[dict[str, obj
     return []
 
 
+def _availability_alternative_slots(
+    reads: ReadExecutionBundle | None,
+) -> list[dict[str, object]]:
+    if reads is None:
+        return []
+    for result in reads.results:
+        if result.kind != "availability":
+            continue
+        rows = result.payload.get("nearest_alternative_slots")
+        if isinstance(rows, list):
+            return [dict(row) for row in rows if isinstance(row, dict)]
+    return []
+
+
 def _slot_payload(row: dict[str, object]) -> dict[str, object]:
     start_local = str(row.get("start_local") or "")
     start_time = str(row.get("start_time_24h") or "")[:5]
@@ -597,7 +614,13 @@ def _attach_availability_snapshot(
     turn_id: str,
 ) -> ActiveTaskState:
     slots = _availability_slots(reads)
-    if not slots or step.disposition == "write_ready":
+    if (
+        not slots
+        and step.facts.get("verified_booking_slot_selection") is True
+        and step.response_goal == "requested_time_unavailable"
+    ):
+        slots = _availability_alternative_slots(reads)
+    if not slots or step.disposition == "write_ready" or step.response_goal == "booking_proposal":
         return state
     if step.response_goal in {"answer_price", "package_information"} and len(slots) == 1:
         # Exact/unique availability verified alongside commercial truth does not
@@ -624,6 +647,8 @@ def _attach_availability_snapshot(
         created_at=now,
         expires_at=now + _OPTION_TTL,
     )
+    if isinstance(updated, BookingTaskState):
+        return updated
     return updated.model_copy(
         update={
             "derived": updated.derived.model_copy(
@@ -668,17 +693,9 @@ def _preserve_verified_window_snapshot(
             "options": choices,
         }
     )
-    return current.model_copy(
-        update={
-            "status": "awaiting_choice",
-            "option_snapshot": narrowed,
-            "derived": current.derived.model_copy(
-                update={
-                    "availability_snapshot_id": snapshot_id,
-                    "selected_slot_ref": None,
-                }
-            ),
-        }
+    return restore_booking_slot_snapshot(
+        current,
+        snapshot=narrowed,
     )
 
 def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTaskState:
@@ -693,6 +710,21 @@ def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTas
     ):
         return state
     selected_ref = step.facts.get("selected_option_ref")
+    if isinstance(state, BookingTaskState):
+        if selected_ref in (None, ""):
+            return state
+        if (
+            (
+                step.facts.get("verified_booking_slot_selection") is True
+                or step.facts.get("booking_proposal_required") is True
+            )
+            and step.response_goal != "booking_proposal"
+        ):
+            return state
+        return record_booking_selected_slot(
+            state,
+            selected_slot_ref=str(selected_ref),
+        )
     status = "ready" if step.disposition == "write_ready" else state.status
     derived = state.derived.model_copy(
         update={
@@ -833,6 +865,13 @@ def apply_step_state(
                 current,
                 commercial_key=commercial_key,
             )
+
+    if (
+        isinstance(current, BookingTaskState)
+        and step.facts.get("verified_booking_slot_selection") is True
+        and step.response_goal != "booking_proposal"
+    ):
+        current = invalidate_booking_slot_selection(current)
 
     current = _attach_availability_snapshot(
         current,

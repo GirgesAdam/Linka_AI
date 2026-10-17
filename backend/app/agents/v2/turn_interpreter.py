@@ -146,6 +146,15 @@ SEMANTIC PRINCIPLES
   requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
   the requested components to one canonical service ref. Do not decide which service is primary/main;
   Python chooses that deterministically from catalog duration.
+- For an active grouped booking, distinguish a pure service addition from a constraint-only edit. For a
+  pure addition, emit grouped_booking_action=preserve_group and entities.service MUST identify the newly
+  added service or services from supplied references. Do not omit a newly named service merely because
+  active_task already contains a group, and do not reconstruct/repeat the existing services solely to
+  preserve them; deterministic Python keeps the durable group and merges the newly supplied services.
+  For a constraint-only change such as date, time, doctor, branch, or device when the customer did not
+  add or replace a service, use grouped_booking_action=preserve_group and entities.service may remain
+  null/omitted. A service replacement/removal is not an addition: use remove_other_components and emit
+  the complete resulting service set under the existing replacement contract.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
   reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the

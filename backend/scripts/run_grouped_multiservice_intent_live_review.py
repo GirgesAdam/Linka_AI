@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, time
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+if __package__:
+    from .grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
+else:
+    from grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
@@ -331,6 +336,8 @@ def dump(value):
         return None
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
+    if is_dataclass(value):
+        return asdict(value)
     return str(value)
 
 
@@ -432,6 +439,9 @@ def turn_record(
         "availability_reference_context": availability_reference_context,
         "reply": turn.reply,
         "responder_model": turn.responder_model,
+        "reference_action": turn.reference_action,
+        "selected_option_ref": turn.selected_option_ref,
+        "full_interpreter_called": turn.full_interpreter_called,
     }
 
 
@@ -625,9 +635,18 @@ def validate_g5(records, ids):
 
     commercial = records[1]
     assert set(_task_ids(commercial)) == expected
-    assert commercial.get("proposal") is None
     active_task = commercial.get("active_task")
     assert isinstance(active_task, dict)
+    assert active_task.get("status") == "awaiting_confirmation"
+    commercial_proposal = commercial.get("proposal")
+    assert isinstance(commercial_proposal, dict)
+    assert set(commercial_proposal.get("service_ids") or []) == expected
+    assert len(commercial_proposal.get("additional_service_ids") or []) == 1
+    assert commercial_proposal.get("doctor_id") == ids["doctor"]
+    assert commercial_proposal.get("device_key") == "candela_gentle"
+    commercial_start = datetime.fromisoformat(str(commercial_proposal["start_at"]))
+    assert commercial_start.astimezone(CAIRO).strftime("%H:%M") == "18:00"
+    assert commercial.get("pending_write") is None
     assert any(
         isinstance(outcome, dict)
         and isinstance(outcome.get("facts"), dict)
@@ -636,77 +655,33 @@ def validate_g5(records, ids):
     )
     commercial_reply = str(commercial.get("reply") or "")
     assert "جنيه" in commercial_reply or "EGP" in commercial_reply
+    assert "تم الحجز" not in commercial_reply and "اتحجز" not in commercial_reply
 
     final = records[2]
     assert set(_task_ids(final)) == expected
     final_task = final.get("active_task")
     assert isinstance(final_task, dict)
+    assert final_task.get("status") == "awaiting_confirmation"
     final_authorization = final_task.get("write_authorization")
     assert isinstance(final_authorization, dict)
     assert final_authorization.get("authorized") is True
     proposal = final.get("proposal")
-    assert isinstance(proposal, dict), "RA-G5 must create a proposal before any clinic write"
+    assert isinstance(proposal, dict), "RA-G5 must remain proposal-only before any clinic write"
     assert set(proposal.get("service_ids") or []) == expected
     assert len(proposal.get("additional_service_ids") or []) == 1
-    assert str(proposal.get("start_at") or "").startswith("2026-10-17T15:00:00")
+    assert proposal.get("doctor_id") == ids["doctor"]
+    assert proposal.get("device_key") == "candela_gentle"
+    final_start = datetime.fromisoformat(str(proposal["start_at"]))
+    final_time = ((final_task.get("constraints") or {}).get("time") or {})
+    if final_time.get("mode") == "exact" and final_time.get("start_time"):
+        assert final_start.astimezone(CAIRO).strftime("%H:%M") == str(final_time["start_time"])
+        if str(final_time["start_time"]) != commercial_start.astimezone(CAIRO).strftime("%H:%M"):
+            assert final_start != commercial_start, "corrected exact time must invalidate the old proposal"
+    else:
+        assert final_start.astimezone(CAIRO).strftime("%H:%M") == "18:00"
     assert final["pending_write"] is None
-
-
-
-def validate_g6_visit_time_selection(records, ids):
-    expected = {ids["underarm"], ids["bikini"]}
-    assert len(records) == 3
-    for record in records:
-        assert set(_task_ids(record)) == expected
-        assert record["pending_write"] is None
-
-    presented = records[0].get("availability_reference_context")
-    assert isinstance(presented, dict)
-    assert set(presented.get("requested_service_ids") or []) == expected
-    presented_options = presented.get("availability_reference_options")
-    assert isinstance(presented_options, list) and presented_options
-    assert {
-        str(item.get("service_id"))
-        for item in presented_options
-        if isinstance(item, dict) and item.get("service_id")
-    } == expected
-
-    after_side = records[1].get("availability_reference_context")
-    assert isinstance(after_side, dict)
-    assert set(after_side.get("requested_service_ids") or []) == expected
-
-    final = records[2]
-    final_plan = final.get("plan")
-    assert isinstance(final_plan, dict)
-    steps = final_plan.get("steps")
-    assert isinstance(steps, list) and len(steps) == 2
-    assert all(
-        isinstance(step, dict) and step.get("clarification_field") != "service"
-        for step in steps
-    )
-    final_task = final.get("active_task")
-    assert isinstance(final_task, dict)
-    authorization = final_task.get("write_authorization")
-    assert isinstance(authorization, dict) and authorization.get("authorized") is False
-    grouped = final_task.get("grouped")
-    assert isinstance(grouped, dict)
-    components = grouped.get("components")
-    assert isinstance(components, list) and len(components) == 2
-    assert {str(item.get("service_id")) for item in components if isinstance(item, dict)} == expected
-    device_keys = {
-        str(item.get("device_key"))
-        for item in components
-        if isinstance(item, dict) and item.get("device_key")
-    }
-    doctor_ids = {
-        str(item.get("doctor_id"))
-        for item in components
-        if isinstance(item, dict) and item.get("doctor_id")
-    }
-    assert len(device_keys) == 1
-    assert len(doctor_ids) == 1
-
-
+    final_reply = str(final.get("reply") or "")
+    assert "تم الحجز" not in final_reply and "اتحجز" not in final_reply
 
 def validate_g7_category_split(records, ids):
     expected = {ids["underarm"], ids["bikini"], ids["dermatology"]}

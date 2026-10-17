@@ -381,6 +381,8 @@ def _availability_bundle(
 ) -> tuple[ReadResult, VerificationFacts]:
     rows = [dict(row) for row in env.slots]
     for row in rows:
+        if row.get("end_at") in (None, "") and row.get("end_local") not in (None, ""):
+            row["end_at"] = row["end_local"]
         branch_name = row.get("branch_name")
         if not isinstance(branch_name, str):
             continue
