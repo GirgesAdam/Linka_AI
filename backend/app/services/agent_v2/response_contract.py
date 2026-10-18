@@ -598,6 +598,61 @@ def _commercial_option(
 
 def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | None:
     visit_price = facts.get("visit_price")
+    if isinstance(visit_price, list):
+        rows = [row for row in visit_price if isinstance(row, dict)]
+        if not rows or len(rows) != len(visit_price):
+            return CommercialTruth(kind="price_unavailable", complete_set=True)
+        raw_names = rows[0].get("service_names")
+        service_names = (
+            [str(item).strip() for item in raw_names if str(item).strip()]
+            if isinstance(raw_names, list)
+            else []
+        )
+        service_name = " + ".join(service_names) or None
+        if not service_names or any(
+            not isinstance(row.get("service_names"), list)
+            or [str(item).strip() for item in row["service_names"] if str(item).strip()]
+            != service_names
+            for row in rows
+        ):
+            return CommercialTruth(
+                kind="price_unavailable",
+                service_name=service_name,
+                complete_set=True,
+            )
+
+        variants_by_device: dict[str | None, tuple[str, str]] = {}
+        variants: list[dict[str, object]] = []
+        for row in rows:
+            raw_variants = row.get("variants")
+            if not isinstance(raw_variants, list):
+                return CommercialTruth(
+                    kind="price_unavailable",
+                    service_name=service_name,
+                    complete_set=True,
+                )
+            for raw_variant in raw_variants:
+                if not isinstance(raw_variant, dict):
+                    continue
+                device_name = str(raw_variant.get("device_name") or "").strip() or None
+                total_price = str(raw_variant.get("total_price") or "").strip()
+                currency = str(raw_variant.get("currency") or "").strip()
+                if not total_price:
+                    continue
+                signature = (total_price, currency)
+                previous = variants_by_device.get(device_name)
+                if previous is not None:
+                    if previous != signature:
+                        return CommercialTruth(
+                            kind="price_unavailable",
+                            service_name=service_name,
+                            complete_set=True,
+                        )
+                    continue
+                variants_by_device[device_name] = signature
+                variants.append(raw_variant)
+        visit_price = {"service_names": service_names, "variants": variants}
+
     if isinstance(visit_price, dict):
         raw_names = visit_price.get("service_names")
         service_names = (

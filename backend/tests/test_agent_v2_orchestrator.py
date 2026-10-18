@@ -1207,6 +1207,7 @@ def _run_ra_g6_unpresented_exact_time_case(
     exact_time_requested: bool = True,
     continuation_available: bool = True,
     device_auto_resolved: bool = False,
+    stale_reference_selection: bool = False,
 ):
     task = BookingTaskState(
         status="awaiting_slot",
@@ -1319,8 +1320,8 @@ def _run_ra_g6_unpresented_exact_time_case(
         "interpret_availability_reference_turn",
         lambda **kwargs: ReferenceInterpretation(
             decision=ReferenceDecision(
-                action="new_search",
-                option_ref=None,
+                action=("select_presented_option" if stale_reference_selection else "new_search"),
+                option_ref="stale-option" if stale_reference_selection else None,
                 exact_time=None,
                 selection_scope="none",
             ),
@@ -1489,7 +1490,7 @@ def _run_ra_g6_unpresented_exact_time_case(
     args.update({
         "catalog": catalog,
         "history": [HumanMessage(content="الساعة 8 مساء مناسبة")],
-        "availability_reference_context": reference_context,
+        "availability_reference_context": None if stale_reference_selection else reference_context,
     })
     result = runtime.orchestrate_v2_turn(**args)
     return result, read_calls, saved
@@ -1534,6 +1535,20 @@ def test_ra_g6_unpresented_exact_time_fails_closed_when_fresh_continuation_is_un
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.proposal is None
     assert result.outcomes[-1].response_goal == "requested_time_unavailable"
+
+
+def test_stale_active_option_reference_falls_back_to_full_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, _read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        stale_reference_selection=True,
+    )
+
+    assert result.full_interpreter_called is True
+    assert result.plan.steps[0].disposition == "read"
+    assert result.active_task is not None
+    assert result.active_task.proposal is not None
 
 
 def test_ra_g6_non_exact_commercial_step_does_not_auto_continue(

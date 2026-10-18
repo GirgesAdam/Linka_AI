@@ -225,11 +225,15 @@ def test_q2_known_single_service_price_uses_active_canonical_service_without_cla
 
 def test_booking_proposal_includes_verified_complete_set_total_price() -> None:
     _, pricing_outcome = _visit_total_reply(same_total=False, device_key="candela")
+    visit_price = pricing_outcome.facts.get("visit_price")
+    assert isinstance(visit_price, dict)
     outcome = TurnOutcome(
         status="answered",
         response_goal="booking_proposal",
         facts={
             **pricing_outcome.facts,
+            # Duplicate read batches may carry the same complete-set total more than once.
+            "visit_price": [visit_price, visit_price],
             "booking_proposal_summary": {
                 "services": ["Underarm", "Full Arms"],
                 "start_local": "2026-10-17 18:00",

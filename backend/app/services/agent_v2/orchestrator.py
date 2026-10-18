@@ -2756,31 +2756,21 @@ def orchestrate_v2_turn(
             and window_narrowing_facts is None
         )
         if stale_active_selection:
-            understanding = TiaTurnUnderstanding(
-                operations=[
-                    TurnOperation(
-                        type="availability",
-                        entities=TurnEntities(),
-                        execution_intent="informational",
-                        continues_previous=True,
-                    )
-                ]
-            )
-            reference_plan_override = TurnPlan(
-                steps=[
-                    PlanStep(
-                        operation_index=0,
-                        operation_type="availability",
-                        disposition="clarify",
-                        response_goal="clarification",
-                        clarification_field="availability_reference",
-                        facts={
-                            "verified_availability_reference": True,
-                            "availability_reference_reason": "stale_task_option_snapshot",
-                        },
-                    )
-                ]
-            )
+            # A stale option reference is not enough to select a slot, but it should
+            # not suppress a fresh interpretation of a natural-language time correction.
+            # The normal planner still requires current canonical availability before a proposal.
+            try:
+                understanding = interpret_customer_turn_v2(
+                    history=history,
+                    semantic_context=semantic_context,
+                    timezone_name=timezone_name,
+                    local_now=local_now,
+                )
+            except StructuredOutputError as exc:
+                raise V2TurnInterpretationStructuredOutputError(
+                    "V2 turn semantic interpretation exhausted structured attempts."
+                ) from exc
+            full_interpreter_called = True
         elif window_narrowing_facts is not None:
             understanding = TiaTurnUnderstanding(
                 operations=[
@@ -2870,7 +2860,8 @@ def orchestrate_v2_turn(
                             )
                         ]
                     )
-        full_interpreter_called = False
+        if not stale_active_selection:
+            full_interpreter_called = False
     elif decision is not None and decision.action == "clarify":
         understanding = TiaTurnUnderstanding(
             operations=[
@@ -2984,6 +2975,7 @@ def orchestrate_v2_turn(
         active_task=initial_booking_task,
         context=semantic_context,
         booking_service_sets=booking_service_sets,
+        catalog=canonical_catalog,
     )
     if restored_visit_groups:
         understanding, restored_service_sets, restored_visit_groups = (

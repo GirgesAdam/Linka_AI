@@ -437,6 +437,52 @@ def test_ra_g7_grouped_restore_rehydrates_canonical_service_devices() -> None:
     ]
 
 
+def test_explicit_device_choice_updates_all_laser_components_only() -> None:
+    context = _ra_g7_restore_context()
+    state = _ra_g7_restore_state()
+    catalog = {
+        "services": [
+            {"id": "underarm", "requires_laser_device": True},
+            {"id": "bikini", "requires_laser_device": True},
+            {"id": "dermatology", "requires_laser_device": False},
+        ]
+    }
+    device_ref = next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "device" and target.canonical_id == "candela_gentle"
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            device=EntityReference(ref=device_ref, text="Candela Gentle")
+        ),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        continues_previous=True,
+        grouped_booking_action="preserve_group",
+    )
+
+    restored, groups = restore_grouped_booking_understanding(
+        TiaTurnUnderstanding(operations=[operation]),
+        active_task=state,
+        context=context,
+        catalog=catalog,
+    )
+
+    assert len(restored.operations) == 3
+    assert set(groups) == {0, 1, 2}
+    assert [
+        context.resolve(item.entities.service.ref, expected_kind="service")
+        for item in restored.operations
+    ] == ["underarm", "bikini", "dermatology"]
+    assert _restored_device_ids(restored, context=context) == [
+        "candela_gentle",
+        "candela_gentle",
+        None,
+    ]
+
+
 def test_ra_g7_compound_proposal_restore_uses_per_visit_resource_authority() -> None:
     context = _ra_g7_restore_context()
     state = _ra_g7_compound_proposal_state()

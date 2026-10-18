@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import (
@@ -318,6 +319,7 @@ def _merge_component(
     operation: TurnOperation,
     params: dict[str, object],
     apply_to_all: bool,
+    device_service_ids: set[str] | None = None,
 ) -> CustomerConstraints:
     updates: dict[str, object] = {}
     for key in ("doctor_id", "branch_id", "date"):
@@ -327,7 +329,10 @@ def _merge_component(
         updates["time"] = _grouped_state_time(
             params["time"], semantic=operation.entities.time
         )
-    if not apply_to_all and "device_key" in params:
+    if "device_key" in params and (
+        not apply_to_all
+        or component.service_id in (device_service_ids or set())
+    ):
         updates["device_key"] = params["device_key"]
     if operation.package_usage != "unspecified":
         updates["package_usage"] = operation.package_usage
@@ -388,6 +393,7 @@ def restore_grouped_booking_understanding(
     active_task: BookingTaskState | None,
     context: SemanticContext,
     booking_service_sets: dict[int, list[str]] | None = None,
+    catalog: dict[str, Any] | None = None,
 ) -> tuple[TiaTurnUnderstanding, dict[int, str]]:
     """Restore all durable components when a continuation mentions only one of them."""
     if active_task is None:
@@ -424,6 +430,21 @@ def restore_grouped_booking_understanding(
         ]
     else:
         return turn, {}
+
+    device_service_ids = (
+        set(
+            laser_service_ids(
+                catalog,
+                [
+                    component.service_id
+                    for component in durable_components
+                    if component.service_id is not None
+                ],
+            )
+        )
+        if catalog is not None
+        else set()
+    )
 
     executable = [
         (index, operation)
@@ -532,6 +553,7 @@ def restore_grouped_booking_understanding(
                 operation=operation,
                 params=params,
                 apply_to_all=apply_to_all,
+                device_service_ids=device_service_ids,
             )
         rebuilt_operation = _operation_for_component(
             operation,
