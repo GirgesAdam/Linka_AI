@@ -73,7 +73,7 @@ class AvailabilityComposerValidationError(RuntimeError):
         self.reason = reason
 
 
-_OPTIONAL_FACT_KEYS = frozenset({"service_name"})
+_OPTIONAL_FACT_KEYS = frozenset({"service_name", "service_names"})
 
 _ALLOWED_CLOSING_BY_STATE: dict[str, frozenset[str]] = {
     "options_available": frozenset({"ask_selection", "none"}),
@@ -169,7 +169,7 @@ def _contract_view(contract: CustomerResponseContract) -> list[dict[str, object]
                 "availability_state": truth.state if truth is not None else None,
                 "window_count": len(refs),
                 "has_optional_service_name": any(
-                    fact.key == "service_name" for fact in unit.facts
+                    fact.key in {"service_name", "service_names"} for fact in unit.facts
                 ),
             }
         )
@@ -239,7 +239,9 @@ def _materialize_availability_composer_draft(
                 style=presentation.style,
                 window_refs=_window_refs(index, unit),
                 optional_fact_keys=[
-                    key for key in ("service_name",) if key in _fact_map(unit)
+                    key
+                    for key in ("service_names", "service_name")
+                    if key in _fact_map(unit)
                 ],
                 presentation_mode=presentation.presentation_mode,
                 closing_action=_fallback_closing(truth.state),
@@ -516,8 +518,13 @@ def _paged_contract(
             continue
 
         windows = _window_values(unit)
-        service_fact = _fact_map(unit).get("service_name")
-        service_name = service_fact.value if service_fact is not None else None
+        facts = _fact_map(unit)
+        service_names_fact = facts.get("service_names")
+        if service_names_fact is not None and isinstance(service_names_fact.value, list):
+            service_name = " + ".join(str(value) for value in service_names_fact.value if value)
+        else:
+            service_fact = facts.get("service_name")
+            service_name = service_fact.value if service_fact is not None else None
         selected, keys, has_more = select_availability_window_page(
             windows,
             service_name=service_name,
@@ -776,7 +783,12 @@ def _optional_context(
     fragments: list[str] = []
     for key in keys:
         fact = facts[key]
-        if key == "service_name":
+        if key == "service_names" and isinstance(fact.value, list):
+            names = [" ".join(str(value).split()) for value in fact.value if str(value).strip()]
+            value = " + ".join(names)
+            if value:
+                fragments.append(f"لخدمة {value}" if arabic else f"for {value}")
+        elif key == "service_name":
             value = " ".join(str(fact.value).split())
             fragments.append(
                 f"لخدمة {value}" if arabic else f"for {value}"
@@ -1038,7 +1050,7 @@ def deterministic_availability_fallback(
             )
         optional = [
             key
-            for key in ("service_name",)
+            for key in ("service_names", "service_name")
             if key in _fact_map(unit)
         ]
         units.append(

@@ -1552,6 +1552,17 @@ def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Response
     return [_make_fact(goal=goal, key="doctors", value=_safe_value(rows), required=True, complete_set=True)]
 
 
+def _availability_service_names(facts: dict[str, object]) -> list[str]:
+    raw_names = facts.get("canonical_service_names")
+    if not isinstance(raw_names, list) or not raw_names:
+        visit_price = facts.get("visit_price")
+        raw_names = visit_price.get("service_names") if isinstance(visit_price, dict) else None
+    if not isinstance(raw_names, list):
+        return []
+    names = [str(value).strip() for value in raw_names if str(value).strip()]
+    return names if len(names) == len(raw_names) else []
+
+
 def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     availability = facts.get("availability")
     safe = _safe_value(availability) if isinstance(availability, dict) else {}
@@ -1571,12 +1582,19 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
                     complete_set=True,
                 )
             )
-        for key in (
-            "service_name",
-            "checked_dates",
-            "available_option_count",
-            "search_truncated",
-        ):
+        service_names = _availability_service_names(facts)
+        if service_names:
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="service_names",
+                    value=service_names,
+                    complete_set=True,
+                )
+            )
+        elif safe.get("service_name") not in (None, ""):
+            result.append(_make_fact(goal=goal, key="service_name", value=safe["service_name"]))
+        for key in ("checked_dates", "available_option_count", "search_truncated"):
             if safe.get(key) not in (None, "", [], {}):
                 result.append(_make_fact(goal=goal, key=key, value=safe[key]))
         date_constraint = facts.get("date")
@@ -1623,7 +1641,19 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
                 )
             )
 
-    for key in ("service_name", "checked_dates", "search_truncated"):
+    service_names = _availability_service_names(facts)
+    if service_names:
+        result.append(
+            _make_fact(
+                goal=goal,
+                key="service_names",
+                value=service_names,
+                complete_set=True,
+            )
+        )
+    elif safe.get("service_name") not in (None, ""):
+        result.append(_make_fact(goal=goal, key="service_name", value=safe["service_name"]))
+    for key in ("checked_dates", "search_truncated"):
         if safe.get(key) not in (None, "", [], {}):
             result.append(_make_fact(goal=goal, key=key, value=safe[key]))
     return result

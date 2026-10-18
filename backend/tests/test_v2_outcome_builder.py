@@ -1206,3 +1206,63 @@ def test_selected_laser_device_without_verified_price_does_not_fall_back_to_othe
     assert "laser_devices" not in service
     assert contract.units[0].commercial_truth is not None
     assert contract.units[0].commercial_truth.kind == "price_unavailable"
+
+
+def test_grouped_availability_projects_catalog_backed_canonical_service_names() -> None:
+    context = _semantic_context()
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S2", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        response_goal="present_availability",
+        facts={
+            "service_id": "service-2",
+            "requested_service_ids": ["service-1", "service-2"],
+            "multi_service_single_appointment": True,
+            "grouped_read_only_task": True,
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=True,
+                payload={
+                    "service_id": "service-2",
+                    "service_name": "ليزر بكيني",
+                    "checked_dates": ["2026-09-17"],
+                    "slots": [
+                        {
+                            "doctor_name": "مريم",
+                            "service_id": "service-2",
+                            "service_name": "ليزر بكيني",
+                            "start_local": "2026-09-17T19:00:00+03:00",
+                            "end_local": "2026-09-17T19:30:00+03:00",
+                        }
+                    ],
+                    "search_truncated": False,
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=context,
+        reads=reads,
+    )
+
+    assert outcome.facts["availability"]["service_name"] == "ليزر بكيني"
+    assert outcome.facts["canonical_service_names"] == ["ليزر إبط", "ليزر بكيني"]
+    assert "service_names" not in outcome.facts["availability"]
+    assert "requested_service_ids" not in outcome.facts

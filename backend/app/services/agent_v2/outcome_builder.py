@@ -113,6 +113,33 @@ def _visible_value(value: object) -> object:
     return value
 
 
+def _canonical_service_names(
+    raw_service_ids: object,
+    *,
+    semantic_context: SemanticContext,
+) -> list[str]:
+    if not isinstance(raw_service_ids, (list, tuple)) or not raw_service_ids:
+        return []
+    services = semantic_context.model_input.get("services")
+    if not isinstance(services, list):
+        return []
+
+    name_by_id: dict[str, str] = {}
+    for row in services:
+        if not isinstance(row, dict):
+            continue
+        ref = str(row.get("ref") or "").strip()
+        name = str(row.get("name") or "").strip()
+        canonical_id = semantic_context.resolve(ref, expected_kind="service") if ref else None
+        if canonical_id and name:
+            name_by_id[canonical_id] = name
+
+    requested_ids = [str(value) for value in raw_service_ids if value not in (None, "")]
+    if not requested_ids or any(service_id not in name_by_id for service_id in requested_ids):
+        return []
+    return [name_by_id[service_id] for service_id in requested_ids]
+
+
 def customer_visible_outcome(outcome: TurnOutcome) -> dict[str, object]:
     """Return the responder payload with choice refs/internal metadata removed."""
     return {
@@ -1252,6 +1279,21 @@ def build_step_outcome(
         requested_service_ids=step.facts.get("requested_service_ids"),
     )
     base_facts = {**_visible_dict(step.facts), **read_facts}
+    availability = base_facts.get("availability")
+    canonical_service_names = _canonical_service_names(
+        step.facts.get("requested_service_ids"),
+        semantic_context=semantic_context,
+    )
+    visit_price = base_facts.get("visit_price")
+    verified_visit_service_names = (
+        visit_price.get("service_names") if isinstance(visit_price, dict) else None
+    )
+    if (
+        isinstance(availability, dict)
+        and canonical_service_names
+        and verified_visit_service_names != canonical_service_names
+    ):
+        base_facts["canonical_service_names"] = canonical_service_names
     if step.operation_type == "service_info":
         base_facts["service_requested_details"] = sorted(requested_details)
     if step.operation_type == "clinic_info":

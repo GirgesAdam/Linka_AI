@@ -171,9 +171,11 @@ def _draft(
                 availability_ref="unit_availability",
                 style="warm",
                 window_refs=refs,
-                optional_fact_keys=["service_name"]
-                if any(fact.key == "service_name" for fact in unit.facts)
-                else [],
+                optional_fact_keys=[
+                    key
+                    for key in ("service_names", "service_name")
+                    if any(fact.key == key for fact in unit.facts)
+                ],
                 presentation_mode=mode,
                 closing_action=selected_closing,
                 transition="sentence" if index == 0 else "and",
@@ -979,3 +981,59 @@ def test_fallback_preserves_all_windows_and_no_gap_expansion() -> None:
     assert "5 مساءً" in text
     assert "7 مساءً" in text
     assert "بدايات حجز من 5 مساءً لـ7 مساءً" not in text
+
+
+def _with_canonical_availability_services(
+    outcome: TurnOutcome,
+    service_names: list[str],
+) -> TurnOutcome:
+    return TurnOutcome(
+        status=outcome.status,
+        response_goal=outcome.response_goal,
+        facts={
+            **outcome.facts,
+            "canonical_service_names": service_names,
+        },
+    )
+
+
+def test_group_without_combo_renders_full_canonical_identity_not_anchor_only() -> None:
+    outcome = _with_canonical_availability_services(
+        _present([_window("17:00")], service="Bikini"),
+        ["Underarm", "Bikini"],
+    )
+
+    text = _render([outcome])
+
+    assert "Underarm" in text
+    assert "Bikini" in text
+    assert "لخدمة Bikini" not in text
+
+
+def test_unavailable_grouped_request_keeps_full_canonical_identity() -> None:
+    outcome = _with_visit_total(
+        _exact_miss(
+            time="19:00",
+            alternatives=[_window("20:00")],
+            service="Bikini",
+        )
+    )
+
+    text = _render([outcome])
+
+    assert "Underarm" in text
+    assert "Bikini" in text
+    assert "لخدمة Bikini" not in text
+
+
+def test_real_combo_renders_single_canonical_combo_without_atomic_expansion() -> None:
+    outcome = _with_canonical_availability_services(
+        _present([_window("17:00")], service="Laser Duo"),
+        ["Laser Duo"],
+    )
+
+    text = _render([outcome])
+
+    assert "Laser Duo" in text
+    assert "Underarm" not in text
+    assert "Bikini" not in text
