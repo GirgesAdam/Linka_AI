@@ -1,0 +1,115 @@
+name: QA Diverse Customer Live Sample
+
+on:
+  push:
+    branches: [qa/customer-diverse-live-20261018-1820]
+    paths:
+      - .github/workflows/qa-customer-diverse-live.yml
+      - backend/tests/qa_customer_matrix/**
+      - backend/scripts/run_qa_diverse_backend_selection.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-diverse-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sample:
+    name: Twenty distinct customer conversations
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONPATH: .:scripts
+      PYTHONUNBUFFERED: "1"
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_qa_unused
+      SUPABASE_SECRET_KEY: sb_secret_qa_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      CORS_ORIGINS: ""
+      AGENT_V2_LIVE_ENABLED: "true"
+      RA_G_MODE: standalone
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Verify baseline and model credential
+        run: |
+          test -n "$OPENAI_API_KEY"
+          git merge-base --is-ancestor 0a2885809efe6dec7d6bc184abc158725228faba HEAD
+          git diff --exit-code 0a2885809efe6dec7d6bc184abc158725228faba HEAD -- app
+          python tests/qa_customer_matrix/validate_suite.py
+          ruff check tests/qa_customer_matrix scripts/run_qa_diverse_backend_selection.py
+      - name: Bootstrap compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Apply clean migrations
+        id: ready
+        run: python -m alembic upgrade head
+      - name: Twelve distinct FAQ and semantic conversations
+        run: |
+          mkdir -p artifacts/qa-diverse
+          python -m pytest tests/qa_customer_matrix/test_customer_live_matrix.py --qa-live --qa-evidence-dir artifacts/qa-diverse/fixtures --junitxml=artifacts/qa-diverse/fixtures.xml -q --tb=short
+      - name: Eight canonical backend conversations
+        if: ${{ always() && !cancelled() && steps.ready.outcome == 'success' }}
+        run: python scripts/run_qa_diverse_backend_selection.py
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-diverse-customer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/qa-diverse
+          if-no-files-found: warn
+          retention-days: 7

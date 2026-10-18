@@ -1,0 +1,655 @@
+{
+  "schema_version": 1,
+  "repository": "GirgesAdam/Linka_AI",
+  "pr": 262,
+  "baseline_sha": "0a2885809efe6dec7d6bc184abc158725228faba",
+  "origin_main_sha": "1f3667c96b5adfe1c4ad97bc5ef334c6dcb21793",
+  "pr_base_branch": "refactor/spoken-clock-contract-backend-authority-20261014",
+  "pr_base_sha": "229cf49f030e35b74638f3d69a581c7becdb79ca",
+  "design_date": "2026-10-18",
+  "coverage_note": "مجموعة أولية واسعة مبنية على العقود الحالية. ليست إثباتًا لحصر كل محادثات العملاء الممكنة.",
+  "status_note": "NOT_RUN يخص هذه السيناريوهات الجديدة فقط. نتائج الاختبارات الموجودة والتدقيق السابق محفوظة منفصلة.",
+  "execution_note": "LIVE_FIXTURE يستخدم الـHarness الرسمي بنموذج حقيقي وقراءات fixtures فقط. INTEGRATION يحتاج Backend وDB معزولين وتجهيز fixture موثق.",
+  "categories": {
+    "FAQ": {
+      "name": "معلومات العيادة والأسئلة الشائعة",
+      "source": "backend/app/services/agent_v2/read_executor.py:_read_clinic_info",
+      "invariant": "معلومات العيادة مصدرها Backend أو معرفة موثقة؛ ساعات العمل ليست توافر حجز."
+    },
+    "SVC": {
+      "name": "الخدمات والأطباء",
+      "source": "backend/app/agents/v2/turn_contract.py:TurnOperation; backend/app/services/agent_v2/read_executor.py:_read_doctors",
+      "invariant": "الكيانات والعلاقات مصدرها الكتالوج؛ الغموض لا يمنح صلاحية اختيار عشوائي."
+    },
+    "PRC": {
+      "name": "الأسعار والمقارنات",
+      "source": "backend/app/services/agent_v2/read_executor.py:_read_service_catalog_set; backend/app/services/agent_v2/response_contract.py",
+      "invariant": "كل مبلغ مرتبط بخدمة وجهاز وباقة وعملة محددة؛ لا خلط أو مضاعفة أو اختراع سعر."
+    },
+    "AVL": {
+      "name": "التوافر والاختيار",
+      "source": "backend/app/services/agent_v2/read_executor.py:_read_availability; backend/app/services/agent_v2/reference_resolution.py",
+      "invariant": "الخيارات مراجع لتوافر موثوق، وليست حجوزات أو تفويضًا بالكتابة."
+    },
+    "BKG": {
+      "name": "الحجز التدريجي والتأكيد",
+      "source": "backend/app/services/agent_v2/orchestrator.py:_prepare_booking_proposal; backend/app/services/agent_v2/state.py:BookingProposal",
+      "invariant": "كل كتابة تتطلب اقتراحًا حاليًا وتفويضًا صالحًا وتحقق Backend، والرد يطابق نتيجة التنفيذ."
+    },
+    "CTX": {
+      "name": "استمرارية المحادثة وتغيير الرأي",
+      "source": "backend/app/services/agent_v2/active_task_progress.py; backend/app/services/agent_v2/state_rules.py",
+      "invariant": "التعديل sparse patch: ما لم يغيره العميل يظل محفوظًا، والطلب الجديد لا يرث قيودًا متروكة."
+    },
+    "TIM": {
+      "name": "التواريخ والأوقات والحدود",
+      "source": "backend/app/agents/v2/time_resolution.py; backend/app/agents/v2/turn_interpreter.py",
+      "invariant": "التاريخ والوقت يعتمدان على now ثابت والمنطقة الزمنية والسياق وساعات العيادة وتوافر Backend."
+    },
+    "RES": {
+      "name": "توافق الطبيب والجهاز والموقع",
+      "source": "backend/app/services/agent_v2/multi_service_booking.py; backend/app/services/agent_v2/orchestrator.py:_auto_resolve_single_booking_device",
+      "invariant": "الاختيار الصريح له الأولوية، وتوافق كل الموارد شرط Backend لا استنتاج لغوي."
+    },
+    "GRP": {
+      "name": "الخدمات المتعددة والزيارة الواحدة",
+      "source": "backend/app/services/agent_v2/turn_normalization.py:collapse_booking_service_sets; backend/app/services/agent_v2/grouped_booking_continuity.py",
+      "invariant": "المجموعة المطلوبة وحدة دلالية كاملة؛ main/additional تسميات تخزين لا أولوية لخدمة على أخرى."
+    },
+    "LIF": {
+      "name": "قراءة المواعيد وتعديلها وإلغاؤها",
+      "source": "backend/app/services/agent_v2/read_executor.py:_read_appointments; backend/app/services/agent_v2/planner.py",
+      "invariant": "الـBackend يثبت هوية الموعد وحالته، وقيود البديل مستقلة عن هوية المصدر."
+    },
+    "PKG": {
+      "name": "الباقات ورصيد الجلسات",
+      "source": "backend/app/services/agent_v2/read_executor.py:_read_customer_packages; backend/app/services/agent_v2/planner.py",
+      "invariant": "الباقة عرض شراء أو ملكية فعلية، ولا استهلاك دون أهلية وتفويض ونتيجة Backend."
+    },
+    "PLS": {
+      "name": "النبضات والمدفوعات",
+      "source": "backend/app/agents/v2/turn_contract.py:requested_pulse_details; tools/agent_eval/run_batch_02.py",
+      "invariant": "أسعار العروض وأرصدة النبضات ليست دفتر مدفوعات، وملكية الأموال للاستقبال."
+    },
+    "HND": {
+      "name": "التحويل والدعم والأسئلة الطبية",
+      "source": "backend/app/services/agent_v2/planner.py:_safety_handoff",
+      "invariant": "التحويل طبي أو مالي أو بشري حسب العقد، ولا يمنح العميل صلاحية مالية أو علاجية."
+    },
+    "IDN": {
+      "name": "هوية العميل والخصوصية",
+      "source": "tools/agent_eval/run_batch_05.py; backend/app/agents/v2/semantic_context.py",
+      "invariant": "المريض الحالي هو نطاق القراءة والكتابة؛ نص الرسالة لا يمنح هوية أو صلاحية جديدة."
+    },
+    "ERR": {
+      "name": "التعافي والأخطاء والقيود التشغيلية",
+      "source": "backend/app/agents/v2/turn_interpreter.py; backend/app/services/agent_v2/orchestrator.py",
+      "invariant": "الفشل يُحتوى دون كتابة غير مصرح بها أو نجاح وهمي، والدليل المفقود ليس PASS."
+    },
+    "LNG": {
+      "name": "تنوع اللغة والصياغة",
+      "source": "backend/app/agents/v2/turn_interpreter.py:interpret_customer_turn_v2",
+      "invariant": "اختلاف الصياغة لا يغير النية أو القيود أو صلاحيات الكتابة."
+    }
+  },
+  "cases": [
+    {
+      "id": "FAQ-016",
+      "category": "معلومات العيادة والأسئلة الشائعة",
+      "title": "أسئلة عيادة متعددة",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "معلومات العيادة مصدرها Backend أو معرفة موثقة؛ ساعات العمل ليست توافر حجز.",
+      "turns": [
+        {
+          "customer": "اسمكم إيه ورقمكم ومواعيدكم؟",
+          "expected": "تغطية كل التفاصيل المطلوبة من نفس المصدر دون إضافة حقائق غير متاحة.",
+          "checks": {
+            "operations_any": [
+              "clinic_info"
+            ],
+            "clinic_details": [
+              "name",
+              "contact",
+              "working_hours"
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/read_executor.py:_read_clinic_info",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "SVC-002",
+      "category": "الخدمات والأطباء",
+      "title": "وصف خدمة",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "الكيانات والعلاقات مصدرها الكتالوج؛ الغموض لا يمنح صلاحية اختيار عشوائي.",
+      "turns": [
+        {
+          "customer": "الهيدرافيشل ده إيه؟",
+          "expected": "وصف الخدمة من الكتالوج دون وعد علاجي.",
+          "checks": {
+            "operations_any": [
+              "service_info"
+            ],
+            "service_details": [
+              "description"
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/agents/v2/turn_contract.py:TurnOperation; backend/app/services/agent_v2/read_executor.py:_read_doctors",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "SVC-006",
+      "category": "الخدمات والأطباء",
+      "title": "أطباء لخدمة",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "الكيانات والعلاقات مصدرها الكتالوج؛ الغموض لا يمنح صلاحية اختيار عشوائي.",
+      "turns": [
+        {
+          "customer": "مين الدكاترة اللي بيعملوا الهيدرافيشل؟",
+          "expected": "عرض الأطباء المتوافقين دون اختراع طبيب.",
+          "checks": {
+            "operations_any": [
+              "doctor_info"
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/agents/v2/turn_contract.py:TurnOperation; backend/app/services/agent_v2/read_executor.py:_read_doctors",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "PRC-003",
+      "category": "الأسعار والمقارنات",
+      "title": "جهازان بسعرين",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "كل مبلغ مرتبط بخدمة وجهاز وباقة وعملة محددة؛ لا خلط أو مضاعفة أو اختراع سعر.",
+      "turns": [
+        {
+          "customer": "الإبط سعره كام على كانديلا وبرايم ليز؟",
+          "expected": "عرض 500 و600 EGP مربوطين بالجهاز الصحيح في fixture.",
+          "checks": {
+            "operations_any": [
+              "pricing"
+            ],
+            "price_minor_contains_all": [
+              50000,
+              60000
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/read_executor.py:_read_service_catalog_set; backend/app/services/agent_v2/response_contract.py",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "PRC-005",
+      "category": "الأسعار والمقارنات",
+      "title": "سعر باقة ست جلسات",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "كل مبلغ مرتبط بخدمة وجهاز وباقة وعملة محددة؛ لا خلط أو مضاعفة أو اختراع سعر.",
+      "turns": [
+        {
+          "customer": "باكدج 6 جلسات إبط على كانديلا بكام؟",
+          "expected": "سعر عرض الست جلسات 2500 EGP في fixture، لا سعر جلسة واحدة.",
+          "checks": {
+            "operations_any": [
+              "pricing",
+              "package_info"
+            ],
+            "package_sessions": 6
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/read_executor.py:_read_service_catalog_set; backend/app/services/agent_v2/response_contract.py",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "CTX-006",
+      "category": "استمرارية المحادثة وتغيير الرأي",
+      "title": "مسح تفضيل الطبيب",
+      "priority": "P2",
+      "test_type": "multi_turn",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "التعديل sparse patch: ما لم يغيره العميل يظل محفوظًا، والطلب الجديد لا يرث قيودًا متروكة.",
+      "turns": [
+        {
+          "customer": "عايزة أحجز إبط بكرة مع مريم",
+          "expected": "تفضيل مريم محفوظ.",
+          "checks": {
+            "task_type": "booking"
+          }
+        },
+        {
+          "customer": "مش فارقة الدكتورة، أي دكتورة مناسبة",
+          "expected": "إزالة تفضيل مريم صراحةً دون إسقاط الخدمة والتاريخ.",
+          "checks": {
+            "task_service_ids": [
+              "svc-underarm"
+            ],
+            "doctor_is_none": true
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/active_task_progress.py; backend/app/services/agent_v2/state_rules.py",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "HND-001",
+      "category": "التحويل والدعم والأسئلة الطبية",
+      "title": "طلب شخص",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "التحويل طبي أو مالي أو بشري حسب العقد، ولا يمنح العميل صلاحية مالية أو علاجية.",
+      "turns": [
+        {
+          "customer": "عايز أكلم موظف من الاستقبال",
+          "expected": "human_support وتحويل customer_request دون إنشاء حجز.",
+          "checks": {
+            "operations_any": [
+              "human_support"
+            ],
+            "handoff_category": "customer_request"
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/planner.py:_safety_handoff",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "HND-004",
+      "category": "التحويل والدعم والأسئلة الطبية",
+      "title": "أعراض طارئة",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "التحويل طبي أو مالي أو بشري حسب العقد، ولا يمنح العميل صلاحية مالية أو علاجية.",
+      "turns": [
+        {
+          "customer": "بعد الجلسة عندي ضيق نفس ودوخة شديدة",
+          "expected": "urgent_medical وتحويل عاجل، دون استكمال مسار بيع أو حجز.",
+          "checks": {
+            "safety_signals": [
+              "urgent_medical"
+            ],
+            "handoff_category": "medical",
+            "handoff_priority": "urgent"
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/planner.py:_safety_handoff",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "IDN-001",
+      "category": "هوية العميل والخصوصية",
+      "title": "اسمي المسجل",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "المريض الحالي هو نطاق القراءة والكتابة؛ نص الرسالة لا يمنح هوية أو صلاحية جديدة.",
+      "turns": [
+        {
+          "customer": "اسمي مكتوب عندكم إيه؟",
+          "expected": "قراءة اسم المريض الحالي فقط من customer_profile.",
+          "checks": {
+            "operations_any": [
+              "customer_profile"
+            ],
+            "patient_details": [
+              "name"
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "tools/agent_eval/run_batch_05.py; backend/app/agents/v2/semantic_context.py",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "LNG-008",
+      "category": "تنوع اللغة والصياغة",
+      "title": "تبديل اللغة أثناء المهمة",
+      "priority": "P2",
+      "test_type": "language",
+      "language": "Arabic+English",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "اختلاف الصياغة لا يغير النية أو القيود أو صلاحيات الكتابة.",
+      "turns": [
+        {
+          "customer": "عايزة أحجز الإبط السبت على كانديلا",
+          "expected": "حفظ المهمة العربية.",
+          "checks": {
+            "task_type": "booking"
+          }
+        },
+        {
+          "customer": "after 7 pm please",
+          "expected": "تحديث الوقت فقط مع بقاء الخدمة والجهاز والتاريخ.",
+          "checks": {
+            "task_service_ids": [
+              "svc-underarm"
+            ],
+            "device": "candela_gentle"
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/agents/v2/turn_interpreter.py:interpret_customer_turn_v2",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "AVL-002",
+      "category": "التوافر والاختيار",
+      "title": "أقرب موعد",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "الخيارات مراجع لتوافر موثوق، وليست حجوزات أو تفويضًا بالكتابة.",
+      "turns": [
+        {
+          "customer": "أقرب ميعاد متاح للإبط على كانديلا إمتى؟",
+          "expected": "بحث next_available من Backend دون اختراع تاريخ.",
+          "checks": {
+            "operations_any": [
+              "availability"
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/read_executor.py:_read_availability; backend/app/services/agent_v2/reference_resolution.py",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    },
+    {
+      "id": "PKG-003",
+      "category": "الباقات ورصيد الجلسات",
+      "title": "مملوك وعروض معًا",
+      "priority": "P2",
+      "test_type": "functional",
+      "language": "Egyptian Arabic",
+      "execution_level": "LIVE_FIXTURE",
+      "fixture": "default",
+      "preconditions": [
+        "محادثة وبيانات اختبار مستقلة لكل حالة."
+      ],
+      "clock": "2026-09-11T10:00:00+03:00",
+      "timezone": "Africa/Cairo",
+      "invariant": "الباقة عرض شراء أو ملكية فعلية، ولا استهلاك دون أهلية وتفويض ونتيجة Backend.",
+      "turns": [
+        {
+          "customer": "عندي باكدج إيه وإيه العروض الجديدة؟",
+          "expected": "فصل الباقات المملوكة عن عروض البيع في الرد.",
+          "checks": {
+            "operations_any": [
+              "package_info"
+            ],
+            "package_details": [
+              "owned",
+              "offers"
+            ]
+          }
+        }
+      ],
+      "allowed_transactional_write_turns": [],
+      "required_evidence": [
+        "understanding",
+        "plan",
+        "state_before_after",
+        "reads",
+        "outcomes",
+        "reply",
+        "fixture_only_no_database_claim"
+      ],
+      "source": [
+        "backend/app/services/agent_v2/read_executor.py:_read_customer_packages; backend/app/services/agent_v2/planner.py",
+        "QA instructions: business invariants and defect reporting"
+      ],
+      "status": "NOT_RUN",
+      "defect_ids": []
+    }
+  ],
+  "source_corpus_count": 194,
+  "selection_note": "One representative per distinct capability. No repeated lexical variants or automatic reruns."
+}
