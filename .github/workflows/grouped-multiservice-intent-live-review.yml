@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/grouped-multiservice-intent-live-review.yml
       - backend/scripts/run_grouped_multiservice_intent_live_review.py
+      - backend/scripts/run_phase3_real_world_agent_audit.py
       - backend/app/services/agent_v2/**
       - backend/app/agents/v2/**
   workflow_dispatch:
@@ -16,7 +17,7 @@ jobs:
   standalone:
     name: RA-G standalone #241
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 75
     environment: staging
     services:
       postgres:
@@ -103,6 +104,20 @@ jobs:
           mkdir -p artifacts
           set -o pipefail
           python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-standalone.log
+      - name: Run Phase 3.3 real-world agent strength audit
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/run_phase3_real_world_agent_audit.py 2>&1 | tee artifacts/phase3-real-world-agent-audit.log
+      - name: Upload Phase 3.3 real-world audit diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-real-world-agent-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/phase3-real-world-agent-audit.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload RA-G standalone diagnostics
         if: always()
         uses: actions/upload-artifact@v4
