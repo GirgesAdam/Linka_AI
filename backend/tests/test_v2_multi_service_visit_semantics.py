@@ -3,9 +3,11 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
+    TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
+from app.agents.v2.turn_interpreter import isolate_fresh_task_context
 from app.services.agent_v2.compound_turn_policy import (
     compound_visit_group,
     compound_write_group,
@@ -88,6 +90,101 @@ def test_separate_book_operations_with_same_missing_anchor_form_one_visit_group(
         2: "semantic-multi-book:0",
     }
 
+
+def _fresh_nearest_book(service_ref: str, *, fresh_task: bool, time_mode: str = "nearest") -> TurnOperation:
+    return TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(ref=service_ref),
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+            time=TimeConstraint(
+                mode=time_mode,
+                start_time="18:00" if time_mode == "exact" else None,
+            ),
+        ),
+        execution_intent="execute",
+        fresh_task=fresh_task,
+        fresh_task_explicit_fields=["service", "date"] if fresh_task else [],
+        grouped_booking_action="preserve_group",
+    )
+
+
+def test_same_turn_compound_group_survives_fresh_task_implicit_nearest_asymmetry() -> None:
+    raw = TiaTurnUnderstanding(
+        operations=[
+            _fresh_nearest_book("S1", fresh_task=True),
+            _fresh_nearest_book("S2", fresh_task=False),
+        ]
+    )
+    isolated = isolate_fresh_task_context(raw)
+
+    assert isolated.operations[0].entities.time is None
+    assert isolated.operations[1].entities.time is not None
+    assert isolated.operations[1].entities.time.mode == "nearest"
+
+    expanded, groups = expand_multi_service_operations(isolated)
+
+    assert expanded.operations == isolated.operations
+    assert groups == {
+        0: "semantic-multi-book:0",
+        1: "semantic-multi-book:0",
+    }
+
+
+def test_same_turn_compound_group_preserves_existing_true_true_shape() -> None:
+    raw = TiaTurnUnderstanding(
+        operations=[
+            _fresh_nearest_book("S1", fresh_task=True),
+            _fresh_nearest_book("S2", fresh_task=True),
+        ]
+    )
+    isolated = isolate_fresh_task_context(raw)
+
+    assert all(operation.entities.time is None for operation in isolated.operations)
+    _, groups = expand_multi_service_operations(isolated)
+
+    assert groups == {
+        0: "semantic-multi-book:0",
+        1: "semantic-multi-book:0",
+    }
+
+
+def test_missing_and_nearest_without_fresh_isolation_evidence_do_not_merge() -> None:
+    date = DateConstraint(mode="exact", start_date="2026-10-17")
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _separate_book("S1", date=date),
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S2"),
+                    date=date,
+                    time=TimeConstraint(mode="nearest"),
+                ),
+                execution_intent="execute",
+                grouped_booking_action="preserve_group",
+            ),
+        ]
+    )
+
+    expanded, groups = expand_multi_service_operations(turn)
+
+    assert expanded is turn
+    assert groups == {}
+
+def test_fresh_task_asymmetry_does_not_merge_incompatible_explicit_time() -> None:
+    raw = TiaTurnUnderstanding(
+        operations=[
+            _fresh_nearest_book("S1", fresh_task=True),
+            _fresh_nearest_book("S2", fresh_task=False, time_mode="exact"),
+        ]
+    )
+    isolated = isolate_fresh_task_context(raw)
+
+    expanded, groups = expand_multi_service_operations(isolated)
+
+    assert expanded is isolated
+    assert groups == {}
 
 def test_separate_book_operations_with_distinct_dates_do_not_form_one_visit_group() -> None:
     turn = TiaTurnUnderstanding(

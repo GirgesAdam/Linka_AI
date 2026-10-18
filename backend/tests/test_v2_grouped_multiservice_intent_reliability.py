@@ -15,10 +15,19 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
-from app.services.agent_v2.active_task_progress import plan_active_task_progress
-from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
-from app.services.agent_v2.grouped_booking_continuity import restore_grouped_booking_understanding
+from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2, isolate_fresh_task_context
+from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
+    plan_active_task_progress,
+)
+from app.services.agent_v2.compound_turn_policy import (
+    compound_visit_group,
+    normalize_compound_turn_plan,
+)
+from app.services.agent_v2.grouped_booking_continuity import (
+    grouped_booking_task_from_plan,
+    restore_grouped_booking_understanding,
+)
 from app.services.agent_v2.multi_service_booking import (
     category_group_duration_minutes,
     common_doctor_ids,
@@ -1431,6 +1440,126 @@ def test_ra_h2_grouped_availability_task_prices_both_services_without_clarificat
     assert result.payload["variants"][0]["currency"] == "EGP"
     assert state.requested_service_ids == [A, B]
 
+
+
+def test_g7_fresh_task_asymmetry_preserves_full_cross_category_request_before_runtime_adaptation() -> None:
+    catalog = _catalog(common_devices=1)
+    catalog["services"].append(
+        {
+            "id": "svc-dermatology",
+            "name": "Dermatology Consultation",
+            "duration_minutes": 30,
+            "operational_category": "dermatology",
+            "requires_laser_device": False,
+            "price_minor": 100_000,
+            "currency": "EGP",
+        }
+    )
+    catalog["doctors"].append(
+        {
+            "id": "doc-dermatology",
+            "name": "Dermatology Doctor",
+            "service_ids": ["svc-dermatology"],
+        }
+    )
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    date = DateConstraint(mode="exact", start_date="2026-10-17")
+    raw = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B]],
+                        candidate_mode="set",
+                    ),
+                    date=date,
+                    time=TimeConstraint(mode="nearest"),
+                ),
+                fresh_task=True,
+                fresh_task_explicit_fields=["service", "date"],
+                grouped_booking_action="preserve_group",
+            ),
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                entities=TurnEntities(
+                    service=EntityReference(ref=refs["svc-dermatology"]),
+                    date=date,
+                    time=TimeConstraint(mode="nearest"),
+                ),
+                fresh_task=False,
+                grouped_booking_action="preserve_group",
+            ),
+        ]
+    )
+
+    isolated = isolate_fresh_task_context(raw)
+    assert isolated.operations[0].entities.time is None
+    assert isolated.operations[1].entities.time is not None
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        isolated,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=None,
+    )
+    assert service_sets == {0: [A, B]}
+    expanded, semantic_groups = expand_multi_service_operations(
+        collapsed,
+        semantic_context=context,
+        booking_service_sets=service_sets,
+    )
+    assert semantic_groups == {
+        0: "semantic-multi-book:0",
+        1: "semantic-multi-book:0",
+    }
+
+    plan = tag_booking_service_sets(
+        plan_turn(
+            expanded,
+            PlannerContext(semantic_context=context, active_task=None, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
+    plan = normalize_compound_turn_plan(
+        plan,
+        catalog=catalog,
+        operation_visit_groups=semantic_groups,
+    )
+    assert len(plan.steps) == 2
+    assert [compound_visit_group(step) for step in plan.steps] == [
+        "semantic-multi-book:0",
+        "semantic-multi-book:0",
+    ]
+
+    task = grouped_booking_task_from_plan(
+        plan,
+        understanding=expanded,
+        existing=None,
+        now=NOW,
+        turn_id="g7-fresh-task-asymmetry",
+    )
+    assert task is not None
+    assert task.requested_service_ids == [A, B, "svc-dermatology"]
+    assert task.grouped is not None
+    assert [component.service_id for component in task.grouped.components] == [
+        A,
+        B,
+        "svc-dermatology",
+    ]
+
+    adapted_second = adapt_matching_active_task_step(
+        plan.steps[1],
+        operation=expanded.operations[1],
+        active_task=task,
+        context=context,
+        now=NOW,
+    )
+    assert adapted_second.state_action == "none"
+    assert task.requested_service_ids == [A, B, "svc-dermatology"]
 
 def test_restored_mixed_category_continuation_sequences_category_visits_not_services() -> None:
     catalog = _catalog(common_devices=1)

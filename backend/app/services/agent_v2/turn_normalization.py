@@ -630,6 +630,41 @@ def _constraint_signature(operation: TurnOperation) -> tuple[object, ...]:
     return (date, time, branch_ref)
 
 
+def _fresh_isolation_nearest_time_asymmetry(operations: list[TurnOperation]) -> bool:
+    """Allow only the None/nearest skew caused by fresh-task isolation."""
+    present = [operation for operation in operations if operation.entities.time is not None]
+    missing = [operation for operation in operations if operation.entities.time is None]
+    if not present or not missing:
+        return False
+    if not all(
+        operation.fresh_task and "time" not in operation.fresh_task_explicit_fields
+        for operation in missing
+    ):
+        return False
+    if not any(not operation.fresh_task for operation in present):
+        return False
+
+    time_signatures = set()
+    for operation in present:
+        time = operation.entities.time
+        assert time is not None
+        if time.mode != "nearest" or time.start_time is not None or time.end_time is not None:
+            return False
+        time_signatures.add(repr(time.model_dump(mode="json")))
+    return len(time_signatures) == 1
+
+
+def _implicit_multi_book_constraints_match(operations: list[TurnOperation]) -> bool:
+    signatures = [_constraint_signature(operation) for operation in operations]
+    if len({repr(signature) for signature in signatures}) == 1:
+        return True
+
+    date_branch_signatures = {(repr(signature[0]), signature[2]) for signature in signatures}
+    if len(date_branch_signatures) != 1:
+        return False
+    return _fresh_isolation_nearest_time_asymmetry(operations)
+
+
 def _implicit_multi_book_visit_group(
     operations: list[TurnOperation],
 ) -> dict[int, str]:
@@ -648,11 +683,7 @@ def _implicit_multi_book_visit_group(
     service_refs = {operation.entities.service.ref for operation in operations}
     if len(service_refs) != len(operations):
         return {}
-    signatures = {
-        repr(_constraint_signature(operation))
-        for operation in operations
-    }
-    if len(signatures) != 1:
+    if not _implicit_multi_book_constraints_match(operations):
         return {}
     actions = {operation.grouped_booking_action for operation in operations}
     if len(actions) != 1 or next(iter(actions)) not in {
