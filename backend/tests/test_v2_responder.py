@@ -33,6 +33,42 @@ def _price_outcome() -> TurnOutcome:
     )
 
 
+def _grouped_visit_total_outcome() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "visit_total_price": True,
+            "listed_total_not_settlement": False,
+            "multi_service_single_appointment": True,
+            "booking_proposal_required": True,
+            "visit_price": {
+                "service_names": ["Laser Underarm", "Laser Bikini"],
+                "variants": [
+                    {
+                        "device_name": "Candela Gentle",
+                        "components": [
+                            {
+                                "service_name": "Laser Underarm",
+                                "price": "500.00 EGP",
+                                "currency": "EGP",
+                            },
+                            {
+                                "service_name": "Laser Bikini",
+                                "price": "700.00 EGP",
+                                "currency": "EGP",
+                            },
+                        ],
+                        "total_price": "1200.00 EGP",
+                        "currency": "EGP",
+                    }
+                ],
+                "device_required": True,
+                "device_resolved": True,
+            },
+        },
+    )
+
 def _doctor_outcome() -> TurnOutcome:
     return TurnOutcome(
         status="answered",
@@ -424,6 +460,30 @@ def test_doctor_and_price_compound_answer_preserves_typed_truth_without_model(
     assert text.count("د. سارة") == 1
     assert text.count("د. نور") == 1
 
+
+def test_mixed_doctor_and_grouped_visit_total_renders_verified_total_without_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("verified grouped total must stay deterministic in a mixed reply")
+        ),
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="Who is the doctor and what is the total price?")],
+        outcomes=[_doctor_outcome(), _grouped_visit_total_outcome()],
+    )
+
+    assert model == "deterministic:mixed-typed-contract"
+    assert "1200" in text
+    assert "\u062f. \u0645\u0631\u064a\u0645" in text
+    assert "not available" not in text.lower()
 
 def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())

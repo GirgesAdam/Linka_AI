@@ -1917,7 +1917,10 @@ def is_pure_supported_price_device_contract(
             continue
         if not truth.options:
             return False
-        if truth.kind in {
+        if truth.kind == "visit_service_total":
+            if len(truth.options) != 1 or truth.complete_set is not True:
+                return False
+        elif truth.kind in {
             "service_device_price_options",
             "device_price_clarification",
         }:
