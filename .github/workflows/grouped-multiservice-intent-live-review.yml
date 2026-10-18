@@ -105,6 +105,7 @@ jobs:
           set -o pipefail
           python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-standalone.log
       - name: Run Phase 3.3 real-world agent strength audit
+        if: ${{ always() && !cancelled() }}
         shell: bash
         run: |
           mkdir -p artifacts
