@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/grouped-multiservice-intent-live-review.yml
       - backend/scripts/run_grouped_multiservice_intent_live_review.py
+      - backend/scripts/run_phase3_main_baseline_audit.py
       - backend/app/services/agent_v2/**
       - backend/app/agents/v2/**
   workflow_dispatch:
@@ -16,7 +17,7 @@ jobs:
   standalone:
     name: RA-G standalone #241
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 75
     environment: staging
     services:
       postgres:
@@ -99,6 +100,31 @@ jobs:
         run: python scripts/run_grouped_multiservice_intent_live_review.py
       - name: Run full grouped multi-service review
         run: python scripts/run_grouped_multiservice_intent_live_review.py
+      - name: Capture real-world conversations on main baseline
+        if: ${{ always() && !cancelled() }}
+        env:
+          BASELINE_MAIN_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          AUDIT_BRANCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          {
+            echo "BASELINE_CHECKOUT_HEAD=$(git rev-parse HEAD)"
+            echo "MAIN_BASELINE_SHA=$BASELINE_MAIN_SHA"
+            echo "AUDIT_BRANCH_SHA=$AUDIT_BRANCH_SHA"
+            echo "AUDIT_ONLY_DIFF_FILES:"
+            git diff --name-only "$BASELINE_MAIN_SHA...$AUDIT_BRANCH_SHA" || echo "DIFF_FILE_LIST_UNAVAILABLE_FROM_SHALLOW_CHECKOUT"
+          } | tee artifacts/phase3-main-baseline-audit.log
+          python scripts/run_phase3_main_baseline_audit.py 2>&1 | tee -a artifacts/phase3-main-baseline-audit.log
+      - name: Upload main baseline real-world audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-main-baseline-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/phase3-main-baseline-audit.log
+          if-no-files-found: error
+          retention-days: 7
 
   batch1-compatibility:
     name: RA-G Batch-1 compatibility overlay
