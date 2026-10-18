@@ -581,13 +581,33 @@ class TurnOperation(StrictContractModel):
     @model_validator(mode="before")
     @classmethod
     def discard_irrelevant_active_task_explicit_fields(cls, value: object) -> object:
-        """Ignore non-authoritative task provenance emitted on non-task operations."""
+        """Discard provenance that cannot describe an applicable entity update."""
         if not isinstance(value, dict):
             return value
         explicit = value.get("active_task_explicit_fields")
-        if explicit and value.get("type") not in {"book", "reschedule"}:
+        if not isinstance(explicit, list) or not explicit:
+            return value
+        if value.get("type") not in {"book", "reschedule"}:
             return {**value, "active_task_explicit_fields": []}
-        return value
+
+        # A provenance marker without its semantic value cannot change state. Drop that
+        # orphan marker instead of failing the entire turn; never synthesize the missing entity.
+        entities = value.get("entities")
+        if isinstance(entities, dict):
+            date_entity = entities.get("date")
+            time_entity = entities.get("time")
+        else:
+            date_entity = getattr(entities, "date", None)
+            time_entity = getattr(entities, "time", None)
+        applicable = [
+            field
+            for field in explicit
+            if (field != "date" or date_entity is not None)
+            and (field != "time" or time_entity is not None)
+        ]
+        if applicable == explicit:
+            return value
+        return {**value, "active_task_explicit_fields": applicable}
 
     @model_validator(mode="after")
     def validate_active_task_explicit_fields(self) -> TurnOperation:

@@ -144,13 +144,21 @@ def test_active_reschedule_explicit_fields_are_latest_message_provenance() -> No
     )
     assert operation.active_task_explicit_fields == ["date", "time"]
 
-    with pytest.raises(ValidationError):
-        TurnOperation(
-            type="reschedule",
-            active_task_relationship="continue",
-            active_task_explicit_fields=["date"],
-            entities=TurnEntities(date=None),
-        )
+    orphan_date_marker = TurnOperation(
+        type="reschedule",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        entities=TurnEntities(date=None),
+    )
+    assert orphan_date_marker.active_task_explicit_fields == []
+
+    mixed_markers = TurnOperation(
+        type="book",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="18:00")),
+    )
+    assert mixed_markers.active_task_explicit_fields == ["time"]
 
     with pytest.raises(ValidationError):
         TurnOperation(
