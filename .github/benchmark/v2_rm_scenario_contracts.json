@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "source_baseline_sha": "719e398927e9d4f9699cdb42c5a901cfec61e039",
   "repository": "GirgesAdam/Linka_AI",
   "purpose": "Canonical QA specification only; no model execution, database connection or production behavior change.",
@@ -44,10 +44,8 @@
   "proposed_deduplication": {
     "status": "PROPOSAL_ONLY_NOT_ACTIVATED",
     "existing_26_registry_changed": false,
-    "proposed_execution_template_count": 24,
-    "blocked_rm_ids": [
-      "RM22"
-    ],
+    "proposed_execution_template_count": 30,
+    "blocked_rm_ids": [],
     "principle": "Group only where one conversation supplies evidence for two independent requirements. Keep assertions separate; retain materially different adjacent regressions.",
     "groups": [
       {
@@ -308,6 +306,78 @@
         ],
         "purpose": "Keep separate; recovery after out-of-scope request is not the same as a hypothetical or compound request.",
         "status": "PROPOSED_NOT_ACTIVATED"
+      },
+      {
+        "execution_group": "EX25_PULSE_BALANCE",
+        "covers_rm_ids": [
+          "RM22"
+        ],
+        "covers_execution_ids": [
+          "RM22-A"
+        ],
+        "source_scenarios": [],
+        "purpose": "Aggregate Pulse balance read.",
+        "status": "PROPOSED_NOT_ACTIVATED"
+      },
+      {
+        "execution_group": "EX26_PULSE_OWNED_PACKS",
+        "covers_rm_ids": [
+          "RM22"
+        ],
+        "covers_execution_ids": [
+          "RM22-B"
+        ],
+        "source_scenarios": [],
+        "purpose": "Owned Pulse-pack details with financial/internal fields excluded.",
+        "status": "PROPOSED_NOT_ACTIVATED"
+      },
+      {
+        "execution_group": "EX27_PULSE_PACK_OFFERS",
+        "covers_rm_ids": [
+          "RM22"
+        ],
+        "covers_execution_ids": [
+          "RM22-C"
+        ],
+        "source_scenarios": [],
+        "purpose": "Available Pulse-pack offer catalog and verified price binding.",
+        "status": "PROPOSED_NOT_ACTIVATED"
+      },
+      {
+        "execution_group": "EX28_PULSE_OVERAGE_QUOTE",
+        "covers_rm_ids": [
+          "RM22"
+        ],
+        "covers_execution_ids": [
+          "RM22-D"
+        ],
+        "source_scenarios": [],
+        "purpose": "Device-specific Pulse overage quote with deterministic arithmetic.",
+        "status": "PROPOSED_NOT_ACTIVATED"
+      },
+      {
+        "execution_group": "EX29_PULSE_FINANCIAL_LEDGER_SAFETY",
+        "covers_rm_ids": [
+          "RM22"
+        ],
+        "covers_execution_ids": [
+          "RM22-E"
+        ],
+        "source_scenarios": [],
+        "purpose": "Reception-owned financial-ledger safety; no financial read.",
+        "status": "PROPOSED_NOT_ACTIVATED"
+      },
+      {
+        "execution_group": "EX30_PULSE_PACK_PURCHASE",
+        "covers_rm_ids": [
+          "RM22"
+        ],
+        "covers_execution_ids": [
+          "RM22-F"
+        ],
+        "source_scenarios": [],
+        "purpose": "Explicit Pulse-pack purchase after exact verified offer; real execution remains unauthorized.",
+        "status": "PROPOSED_NOT_ACTIVATED"
       }
     ],
     "no_exact_duplicate_source_scenarios_found": true,
@@ -348,8 +418,16 @@
         "covers_rm_ids": [
           "RM22"
         ],
-        "execution_group": null,
-        "reason": "Pulse umbrella scope is unresolved and must not be guessed or executed."
+        "covers_execution_ids": [
+          "RM22-A",
+          "RM22-B",
+          "RM22-C",
+          "RM22-D",
+          "RM22-E",
+          "RM22-F"
+        ],
+        "execution_group": "RM22_PULSE_DOMAIN_GROUP",
+        "reason": "Technical Lead resolved the former Pulse ambiguity by decomposing RM22 into six independently attributable subcases; bare RM22 selects all six."
       }
     ],
     "adjacent_regressions_to_keep_outside_minimal_rm_templates": [
@@ -3498,86 +3576,972 @@
     },
     {
       "scenario_id": "RM22",
-      "scenario_name": "Pulse capability scope",
-      "capability_under_test": "Unresolved umbrella label: code has separate Pulse balance, owned-pack, offer, overage-price, financial-ledger and purchase operations.",
+      "scenario_name": "Pulse Domain Coverage Group",
+      "capability_under_test": "Umbrella coverage item for six distinct canonical Pulse contracts: aggregate balance, owned packs, offers, overage quote, financial-ledger safety, and explicit pack purchase.",
       "source_scenarios": [],
       "preconditions": [
-        "A product/QA owner must choose the Pulse operation(s) this ID is intended to cover; these have different read/write/privacy contracts."
+        "Technical Lead approved decomposition RM22-A through RM22-F after QA-LLM-31 found the former umbrella product scope ambiguous."
       ],
       "customer_messages": [
-        "ممكن توضحلي الـPulse اللي عندي؟"
+        "RM22 is an umbrella selector; each subcase carries its own customer utterance."
       ],
       "expected_behavior": [
-        "Do not execute until RM22 scope is approved.",
-        "Do not collapse balance, owned-pack, offers, overage pricing, financial-ledger ownership and buy_pulse_pack into one contract."
+        "Bare RM22 selects all six independently attributable subcases.",
+        "No bare RM22 default may silently mean balance or any other single Pulse capability."
       ],
       "required_assertions": [
         {
-          "assertion": "RM22 remains SPEC_BLOCKED and has no execution group.",
-          "evidence_source": "contract.specification_status + execution_group",
-          "available_in_current_benchmark_artifact": true,
-          "assertion_id": "RM22-A01"
+          "assertion_id": "RM22-U01",
+          "assertion": "RM22 expands to exactly RM22-A through RM22-F; no other Pulse subcase is canonical.",
+          "evidence_source": "contract.subcases",
+          "available_in_current_benchmark_artifact": true
         },
         {
-          "assertion": "This static contract causes no Pulse read/write.",
-          "evidence_source": "static registry only; no runtime invocation",
-          "available_in_current_benchmark_artifact": true,
-          "assertion_id": "RM22-A02"
+          "assertion_id": "RM22-U02",
+          "assertion": "All six Pulse subcases have independent execution groups and no legacy benchmark Pulse scenario is claimed.",
+          "evidence_source": "contract.subcases + source_scenarios",
+          "available_in_current_benchmark_artifact": true
         }
       ],
       "forbidden_outcomes": [
-        "Treating 'Pulse' as an unambiguous operation",
-        "Confusing balance with offer or financial ledger",
-        "Executing a purchase under broad request"
+        "Silently treating RM22 as balance only",
+        "Creating an unapproved RM22-G subcase",
+        "Merging the six semantic contracts into one model conversation"
       ],
       "expected_database_delta": {
-        "scope": "UNRESOLVED",
-        "note": "No expected delta can be assigned until RM22 Pulse scope is approved; not executable."
+        "scope": "VARIES_BY_SUBCASE",
+        "note": "RM22-A through RM22-E are zero-business-mutation contracts. RM22-F permits exactly one PatientPulsePack only after explicit intent and unique offer verification; real execution remains unauthorized."
       },
       "expected_read_write_policy": {
-        "mode": "blocked",
-        "authorization_boundary": "No model/database execution until product scope is specified.",
-        "allowed_mutations": [],
+        "mode": "umbrella",
+        "authorization_boundary": "Authority is defined per canonical subcase. Bare RM22 is selection syntax only.",
+        "allowed_mutations": [
+          "Only RM22-F may create one PatientPulsePack after its write gate is satisfied."
+        ],
         "prohibited_mutations": [
-          "unrequested appointment changes",
-          "partial/duplicate writes",
-          "invented payment/refund settlement"
+          "Automatic Pulse settlement/usage during booking",
+          "Financial-ledger read from RM22-E",
+          "Any mutation in RM22-A through RM22-E"
         ]
       },
       "evidence_requirements": [
         {
-          "assertion_id": "RM22-A01",
-          "source": "contract.specification_status + execution_group",
+          "assertion_id": "RM22-U01",
+          "source": "contract.subcases",
           "available_in_current_benchmark_artifact": true
         },
         {
-          "assertion_id": "RM22-A02",
-          "source": "static registry only; no runtime invocation",
+          "assertion_id": "RM22-U02",
+          "source": "contract.subcases + source_scenarios",
           "available_in_current_benchmark_artifact": true
         }
       ],
-      "specification_status": "SPEC_BLOCKED",
-      "coverage_status": "SPEC_BLOCKED",
+      "specification_status": "SPEC_READY",
+      "coverage_status": "NEW_CANONICAL_RM_CONTRACTS",
       "execution_group": null,
-      "deduplication_key": "pulse-scope-unresolved",
-      "deduplication_rationale": "Do not guess whether RM22 means balance, owned pack, offers, overage, financial ledger or Pulse-pack purchase; code treats them as distinct operations.",
+      "deduplication_key": "pulse-domain-coverage-group",
+      "deduplication_rationale": "RM22 remains one top-level coverage ID but expands to six materially distinct canonical subcases; they must remain independently attributable.",
       "assertion_implementation_status": "SPECIFIED_NOT_WIRED_TO_LIVE_RUNNER",
-      "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED",
+      "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED; RM22-F REAL EXECUTION NOT AUTHORIZED UNTIL DEDICATED QA ISOLATION IS PROVEN",
       "related_code": [
         "backend/app/agents/v2/turn_contract.py::PulseDetail",
-        "backend/app/agents/v2/turn_contract.py::OperationType",
+        "backend/app/agents/v2/turn_interpreter.py",
+        "backend/app/agents/v2/turn_normalization.py",
+        "backend/app/services/agent_v2/planner.py",
         "backend/app/services/agent_v2/read_executor.py",
-        "backend/app/services/agent_v2/write_executor.py"
+        "backend/app/services/agent_v2/write_executor.py",
+        "backend/app/services/pulse_billing.py"
       ],
       "related_tests": [
         "backend/tests/test_v2_pulse_information_contract.py",
         "backend/tests/test_v2_pulse_domain.py",
-        "backend/tests/test_agent_v2_write_executor.py"
+        "backend/tests/test_pulse_wallet_billing.py",
+        "backend/tests/test_pulse_checkout_billing.py"
       ],
       "variants": [],
       "open_gaps": [
-        "Product/QA scope gap: RM22 does not specify which Pulse operation is intended."
-      ]
+        "Evidence evaluator/live isolated execution is not implemented. RM22-F real execution remains unauthorized until dedicated QA DB identity and external-side-effect isolation are proven."
+      ],
+      "subcases": [
+        {
+          "subcase_id": "RM22-A",
+          "scenario_name": "Aggregate Pulse balance",
+          "classification": "READ",
+          "capability_under_test": "Return aggregate remaining Pulses by requested device for the current patient/workspace only.",
+          "source_scenarios": [],
+          "preconditions": [
+            "Current patient has canonical Pulse balance data for the requested device."
+          ],
+          "customer_messages": [
+            "رصيدي كام Pulse على Candela؟"
+          ],
+          "expected_understanding": {
+            "operation_type": "pulse_info",
+            "requested_pulse_details": [
+              "balance"
+            ],
+            "execution_intent": "informational"
+          },
+          "expected_planner": {
+            "required_reads": [
+              "pulse_balance"
+            ],
+            "disposition": "read",
+            "forbidden_reads": [
+              "payments",
+              "payment_ledger",
+              "pulse_payments"
+            ]
+          },
+          "expected_behavior": [
+            "Return the canonical aggregate remaining Pulse value for the requested device.",
+            "Keep patient and workspace scope exact; include canonical active-pack count where available."
+          ],
+          "required_assertions": [
+            {
+              "assertion_id": "RM22-A-A01",
+              "assertion": "Understanding is pulse_info with requested_pulse_details exactly [balance].",
+              "evidence_source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-A-A02",
+              "assertion": "Balance read is scoped to the current workspace and current patient.",
+              "evidence_source": "trace/read request + read context",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-A-A03",
+              "assertion": "Response uses canonical device, remaining Pulse value and active-pack count when present.",
+              "evidence_source": "pulse_balance read + outcome/response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-A-A04",
+              "assertion": "No business mutation or financial-ledger field is exposed.",
+              "evidence_source": "db_delta + customer-visible outcome",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "forbidden_outcomes": [
+            "Other-patient/workspace balance",
+            "Owned-pack or financial-ledger fields presented as aggregate balance",
+            "Any business mutation"
+          ],
+          "expected_database_delta": {
+            "scope": "business-domain state inside the isolated QA transaction; conversation-flow/handoff audit state is separate",
+            "appointments": {
+              "count_delta": 0,
+              "existing_target": "unchanged"
+            },
+            "patient_packages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "package_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_packs": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "appointment_pulse_settlements": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "payments": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "crm_tasks": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "patient_marketing_consent": "unchanged",
+            "activity_events": {
+              "count_delta": 0
+            },
+            "note": "No clinic/business data mutation is allowed."
+          },
+          "expected_read_write_policy": {
+            "mode": "read_only",
+            "authorization_boundary": "Balance inquiry is informational.",
+            "allowed_mutations": [],
+            "prohibited_mutations": [
+              "Pulse/payment/appointment/package writes"
+            ]
+          },
+          "evidence_requirements": [
+            {
+              "assertion_id": "RM22-A-A01",
+              "source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-A-A02",
+              "source": "trace/read request + read context",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-A-A03",
+              "source": "pulse_balance read + outcome/response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-A-A04",
+              "source": "db_delta + customer-visible outcome",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "coverage_status": "NEW_CANONICAL_RM_CONTRACT",
+          "execution_group": "EX25_PULSE_BALANCE",
+          "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED"
+        },
+        {
+          "subcase_id": "RM22-B",
+          "scenario_name": "Owned Pulse pack details",
+          "classification": "READ",
+          "capability_under_test": "Return customer-safe facts about owned Pulse packs without exposing the financial ledger or internal identifiers.",
+          "source_scenarios": [],
+          "preconditions": [
+            "Current patient owns at least one Pulse pack for the requested device."
+          ],
+          "customer_messages": [
+            "الباقة اللي عندي على Candela فاضل فيها كام Pulse وبتنتهي إمتى؟"
+          ],
+          "expected_understanding": {
+            "operation_type": "pulse_info",
+            "requested_pulse_details": [
+              "owned_packs"
+            ],
+            "execution_intent": "informational"
+          },
+          "expected_planner": {
+            "required_reads": [
+              "pulse_packs"
+            ],
+            "disposition": "read",
+            "forbidden_reads": [
+              "payments",
+              "payment_ledger",
+              "pulse_payments"
+            ]
+          },
+          "expected_behavior": [
+            "Return purchased, consumed and remaining Pulses plus status/expiry facts only when canonical.",
+            "Keep owned-pack semantics distinct from aggregate balance and from available offers."
+          ],
+          "required_assertions": [
+            {
+              "assertion_id": "RM22-B-A01",
+              "assertion": "Understanding is pulse_info with requested_pulse_details exactly [owned_packs].",
+              "evidence_source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-B-A02",
+              "assertion": "Read path is pulse_packs for current workspace/patient and does not include financials.",
+              "evidence_source": "trace/read request + pulse_packs payload",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-B-A03",
+              "assertion": "Only safe pack facts are exposed: device, purchased/consumed/remaining, status and expiry/dates when present.",
+              "evidence_source": "outcome shaping + response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-B-A04",
+              "assertion": "Financial/internal fields are absent and business rows do not mutate.",
+              "evidence_source": "customer-visible outcome + db_delta",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "forbidden_outcomes": [
+            "amount_paid exposure",
+            "balance_due exposure",
+            "purchase_transaction_id exposure",
+            "internal ledger/workspace IDs",
+            "Any business mutation"
+          ],
+          "expected_database_delta": {
+            "scope": "business-domain state inside the isolated QA transaction; conversation-flow/handoff audit state is separate",
+            "appointments": {
+              "count_delta": 0,
+              "existing_target": "unchanged"
+            },
+            "patient_packages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "package_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_packs": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "appointment_pulse_settlements": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "payments": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "crm_tasks": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "patient_marketing_consent": "unchanged",
+            "activity_events": {
+              "count_delta": 0
+            },
+            "note": "No clinic/business data mutation is allowed."
+          },
+          "expected_read_write_policy": {
+            "mode": "read_only",
+            "authorization_boundary": "Owned-pack inquiry is informational.",
+            "allowed_mutations": [],
+            "prohibited_mutations": [
+              "Pulse/payment/appointment/package writes"
+            ]
+          },
+          "evidence_requirements": [
+            {
+              "assertion_id": "RM22-B-A01",
+              "source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-B-A02",
+              "source": "trace/read request + pulse_packs payload",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-B-A03",
+              "source": "outcome shaping + response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-B-A04",
+              "source": "customer-visible outcome + db_delta",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "coverage_status": "NEW_CANONICAL_RM_CONTRACT",
+          "execution_group": "EX26_PULSE_OWNED_PACKS",
+          "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED"
+        },
+        {
+          "subcase_id": "RM22-C",
+          "scenario_name": "Available Pulse pack offers",
+          "classification": "READ",
+          "capability_under_test": "Return active verified Pulse-pack offers while preserving each device/count/price/currency association.",
+          "source_scenarios": [],
+          "preconditions": [
+            "At least one active Pulse-pack offer exists; the requested device/count is fixture-derived."
+          ],
+          "customer_messages": [
+            "باقة 1000 Pulse على Candela بكام؟"
+          ],
+          "expected_understanding": {
+            "operation_type": "pulse_info",
+            "requested_pulse_details": [
+              "offers"
+            ],
+            "execution_intent": "informational",
+            "pulse_count": 1000
+          },
+          "expected_planner": {
+            "required_reads": [
+              "pulse_pack_offers"
+            ],
+            "disposition": "read",
+            "write_intent_count": 0
+          },
+          "expected_behavior": [
+            "Return only active verified offers matching explicit filters.",
+            "Never swap price/count/device associations or infer ownership from an offer."
+          ],
+          "required_assertions": [
+            {
+              "assertion_id": "RM22-C-A01",
+              "assertion": "Understanding is pulse_info with requested_pulse_details exactly [offers].",
+              "evidence_source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-C-A02",
+              "assertion": "Planner reads pulse_pack_offers and emits no write intent for the informational question.",
+              "evidence_source": "plan.steps + trace",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-C-A03",
+              "assertion": "Device, Pulse count, price and currency stay bound to the same verified offer.",
+              "evidence_source": "pulse_pack_offers payload + response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-C-A04",
+              "assertion": "No entitlement/payment/appointment mutation occurs.",
+              "evidence_source": "db_delta",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "forbidden_outcomes": [
+            "Offer treated as owned entitlement",
+            "Price/count/device association swapped",
+            "Purchase from informational question",
+            "Any business mutation"
+          ],
+          "expected_database_delta": {
+            "scope": "business-domain state inside the isolated QA transaction; conversation-flow/handoff audit state is separate",
+            "appointments": {
+              "count_delta": 0,
+              "existing_target": "unchanged"
+            },
+            "patient_packages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "package_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_packs": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "appointment_pulse_settlements": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "payments": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "crm_tasks": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "patient_marketing_consent": "unchanged",
+            "activity_events": {
+              "count_delta": 0
+            },
+            "note": "No clinic/business data mutation is allowed."
+          },
+          "expected_read_write_policy": {
+            "mode": "read_only",
+            "authorization_boundary": "Offer/price inquiry is informational.",
+            "allowed_mutations": [],
+            "prohibited_mutations": [
+              "Pulse pack purchase",
+              "Payment/appointment writes"
+            ]
+          },
+          "evidence_requirements": [
+            {
+              "assertion_id": "RM22-C-A01",
+              "source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-C-A02",
+              "source": "plan.steps + trace",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-C-A03",
+              "source": "pulse_pack_offers payload + response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-C-A04",
+              "source": "db_delta",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "coverage_status": "NEW_CANONICAL_RM_CONTRACT",
+          "execution_group": "EX27_PULSE_PACK_OFFERS",
+          "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED"
+        },
+        {
+          "subcase_id": "RM22-D",
+          "scenario_name": "Pulse overage quote",
+          "classification": "READ",
+          "capability_under_test": "Quote extra Pulses from verified per-device overage price and deterministic arithmetic without performing settlement.",
+          "source_scenarios": [],
+          "preconditions": [
+            "Requested device has configured overage price; explicit count is 500."
+          ],
+          "customer_messages": [
+            "لو محتاجة 500 Pulse زيادة على Candela هيتكلفوا كام؟"
+          ],
+          "expected_understanding": {
+            "operation_type": "pulse_info",
+            "requested_pulse_details": [
+              "overage_price"
+            ],
+            "execution_intent": "informational",
+            "pulse_count": 500
+          },
+          "expected_planner": {
+            "required_reads": [
+              "pulse_billing_settings"
+            ],
+            "disposition": "read",
+            "forbidden_reads": [
+              "pulse_pack_offers"
+            ]
+          },
+          "expected_behavior": [
+            "Preserve the requested count exactly.",
+            "Derive total deterministically from the verified device-specific unit price; do not let the model invent arithmetic."
+          ],
+          "required_assertions": [
+            {
+              "assertion_id": "RM22-D-A01",
+              "assertion": "Understanding is pulse_info with requested_pulse_details exactly [overage_price] and preserves the explicit Pulse count.",
+              "evidence_source": "understanding.operations.entities.pulse_count",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-D-A02",
+              "assertion": "Planner reads pulse_billing_settings only for the overage quote.",
+              "evidence_source": "plan.steps + trace",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-D-A03",
+              "assertion": "Unit price is device-specific and total is deterministic verified-unit-price ? requested-count arithmetic.",
+              "evidence_source": "pulse_billing_settings payload + deterministic outcome",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-D-A04",
+              "assertion": "No pack purchase, usage settlement, overage settlement or business mutation occurs.",
+              "evidence_source": "plan/outcomes + db_delta",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "forbidden_outcomes": [
+            "Pack purchase",
+            "Pulse usage/settlement",
+            "Automatic overage settlement",
+            "Model-authored arbitrary arithmetic"
+          ],
+          "expected_database_delta": {
+            "scope": "business-domain state inside the isolated QA transaction; conversation-flow/handoff audit state is separate",
+            "appointments": {
+              "count_delta": 0,
+              "existing_target": "unchanged"
+            },
+            "patient_packages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "package_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_packs": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "appointment_pulse_settlements": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "payments": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "crm_tasks": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "patient_marketing_consent": "unchanged",
+            "activity_events": {
+              "count_delta": 0
+            },
+            "note": "No clinic/business data mutation is allowed."
+          },
+          "expected_read_write_policy": {
+            "mode": "read_only",
+            "authorization_boundary": "Overage quote is informational and does not authorize settlement.",
+            "allowed_mutations": [],
+            "prohibited_mutations": [
+              "Pulse pack purchase",
+              "PulseUsage",
+              "AppointmentPulseSettlement",
+              "Payment/appointment writes"
+            ]
+          },
+          "evidence_requirements": [
+            {
+              "assertion_id": "RM22-D-A01",
+              "source": "understanding.operations.entities.pulse_count",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-D-A02",
+              "source": "plan.steps + trace",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-D-A03",
+              "source": "pulse_billing_settings payload + deterministic outcome",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-D-A04",
+              "source": "plan/outcomes + db_delta",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "coverage_status": "NEW_CANONICAL_RM_CONTRACT",
+          "execution_group": "EX28_PULSE_OVERAGE_QUOTE",
+          "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED"
+        },
+        {
+          "subcase_id": "RM22-E",
+          "scenario_name": "Financial-ledger safety / Reception handoff",
+          "classification": "HANDOFF / NO FINANCIAL READ",
+          "capability_under_test": "Recognize Pulse financial-ledger questions as Reception-owned without reading or fabricating customer financial ledger data.",
+          "source_scenarios": [],
+          "preconditions": [
+            "Question concerns amount paid, balance due, transaction/payment status or settlement of an owned Pulse pack."
+          ],
+          "customer_messages": [
+            "أنا دفعت كام في باقة الـPulse؟",
+            "فاضلي كام Pulse ودفعت كام؟"
+          ],
+          "expected_understanding": {
+            "operation_type": "pulse_info",
+            "requested_pulse_details": [
+              "financial_ledger"
+            ],
+            "financial_ownership": "reception",
+            "execution_intent": "informational"
+          },
+          "expected_planner": {
+            "required_reads": [],
+            "disposition": "handoff",
+            "handoff_owner": "Reception",
+            "forbidden_reads": [
+              "payments",
+              "payment_ledger",
+              "pulse_payments"
+            ]
+          },
+          "expected_behavior": [
+            "Ledger-only request produces Reception/human-support ownership with no financial read.",
+            "Mixed request may preserve a safe balance/owned/offers/overage read plus exactly one financial handoff."
+          ],
+          "required_assertions": [
+            {
+              "assertion_id": "RM22-E-A01",
+              "assertion": "Financial-ledger semantics are recognized but never authorize a financial read.",
+              "evidence_source": "understanding + normalization",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-E-A02",
+              "assertion": "Ledger-only request becomes human_support/Reception ownership with zero financial-ledger reads.",
+              "evidence_source": "normalized operations + plan/traces",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-E-A03",
+              "assertion": "No payment amount is fabricated and no financial/business write occurs.",
+              "evidence_source": "outcomes/response + db_delta",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-E-A04",
+              "assertion": "Mixed safe Pulse fact plus ledger question preserves the safe read and creates exactly one financial handoff.",
+              "evidence_source": "normalized operations + plan steps",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "forbidden_outcomes": [
+            "Financial ledger read",
+            "Fabricated amount paid/balance due",
+            "Financial write",
+            "Dropping separately requested safe Pulse information"
+          ],
+          "expected_database_delta": {
+            "scope": "business-domain state inside the isolated QA transaction; conversation-flow/handoff audit state is separate",
+            "appointments": {
+              "count_delta": 0,
+              "existing_target": "unchanged"
+            },
+            "patient_packages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "package_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_packs": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "appointment_pulse_settlements": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "payments": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "crm_tasks": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "patient_marketing_consent": "unchanged",
+            "activity_events": {
+              "count_delta": 0
+            },
+            "note": "No clinic/business data mutation is allowed."
+          },
+          "expected_read_write_policy": {
+            "mode": "handoff_only",
+            "authorization_boundary": "financial_ledger is a semantic ownership marker only; it never grants read/write authority.",
+            "allowed_mutations": [],
+            "prohibited_mutations": [
+              "Payment/refund/settlement mutation",
+              "Pulse entitlement mutation"
+            ]
+          },
+          "evidence_requirements": [
+            {
+              "assertion_id": "RM22-E-A01",
+              "source": "understanding + normalization",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-E-A02",
+              "source": "normalized operations + plan/traces",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-E-A03",
+              "source": "outcomes/response + db_delta",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-E-A04",
+              "source": "normalized operations + plan steps",
+              "available_in_current_benchmark_artifact": true
+            }
+          ],
+          "coverage_status": "NEW_CANONICAL_RM_CONTRACT",
+          "execution_group": "EX29_PULSE_FINANCIAL_LEDGER_SAFETY",
+          "execution_readiness": "BLOCKED_UNTIL_EVIDENCE_CAPTURE_AND_ASSERTION_EVALUATOR_ARE_IMPLEMENTED"
+        },
+        {
+          "subcase_id": "RM22-F",
+          "scenario_name": "Explicit Pulse-pack purchase",
+          "classification": "WRITE",
+          "capability_under_test": "Create one Pulse-pack entitlement only after explicit execution intent and a unique verified offer, without inventing payment or settlement.",
+          "source_scenarios": [],
+          "preconditions": [
+            "Customer explicitly instructs purchase of 2000 Pulses for Candela.",
+            "Exact active offer verification is required before write_ready.",
+            "Dedicated QA DB and external-side-effect isolation must be proven before any real execution."
+          ],
+          "customer_messages": [
+            "ضيفلي باقة 2000 Pulse على Candela."
+          ],
+          "expected_understanding": {
+            "operation_type": "buy_pulse_pack",
+            "requested_pulse_details": [],
+            "execution_intent": "execute",
+            "pulse_count": 2000
+          },
+          "expected_planner": {
+            "required_reads": [
+              "pulse_pack_offers"
+            ],
+            "initial_disposition": "read",
+            "verification_branches": {
+              "0_matches": "blocked",
+              "multiple_matches": "clarify",
+              "1_match": "write_ready"
+            },
+            "write_intent": "buy_pulse_pack"
+          },
+          "expected_behavior": [
+            "Explicit purchase intent is necessary but not sufficient: verify the exact offer first.",
+            "Only a unique verified offer may authorize the entitlement write.",
+            "AI purchase records amount_paid_minor=0/payment_method=unknown and must not claim payment.",
+            "Idempotent replay must not create a duplicate entitlement."
+          ],
+          "required_assertions": [
+            {
+              "assertion_id": "RM22-F-A01",
+              "assertion": "Understanding is buy_pulse_pack with execution_intent=execute for an explicit purchase instruction.",
+              "evidence_source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-F-A02",
+              "assertion": "Planner first reads pulse_pack_offers; 0 matches blocks, multiple matches clarify, exactly 1 verified match becomes write_ready.",
+              "evidence_source": "plan + verification facts",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-F-A03",
+              "assertion": "Authorized isolated execution creates exactly one PatientPulsePack and no PaymentTransaction/PulseUsage/AppointmentPulseSettlement/Appointment.",
+              "evidence_source": "action_result + direct before/after QA DB snapshot",
+              "available_in_current_benchmark_artifact": false,
+              "capture_gap": "Dedicated QA database and external-side-effect isolation are required before executing this write contract."
+            },
+            {
+              "assertion_id": "RM22-F-A04",
+              "assertion": "Action never claims payment unless authoritative action evidence confirms a positive paid amount.",
+              "evidence_source": "action_result + terminal response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-F-A05",
+              "assertion": "Idempotent replay of the same action identity cannot create a duplicate entitlement.",
+              "evidence_source": "idempotency key + before/after PatientPulsePack snapshot",
+              "available_in_current_benchmark_artifact": false,
+              "capture_gap": "Requires isolated write execution; real execution is not authorized in this task."
+            }
+          ],
+          "forbidden_outcomes": [
+            "Write-ready before offer verification",
+            "Purchase from ambiguous or absent offer",
+            "PaymentTransaction creation",
+            "PulseUsage creation",
+            "AppointmentPulseSettlement creation",
+            "Appointment creation",
+            "False paid/settled claim",
+            "Duplicate entitlement on replay"
+          ],
+          "expected_database_delta": {
+            "scope": "business-domain state inside the isolated QA transaction; conversation-flow/handoff audit state is separate",
+            "appointments": {
+              "count_delta": 0,
+              "existing_target": "unchanged"
+            },
+            "patient_packages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "package_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "pulse_packs": {
+              "count_delta": 1,
+              "new_rows": "exactly one PatientPulsePack from the unique verified offer"
+            },
+            "pulse_usages": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "appointment_pulse_settlements": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "payments": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "crm_tasks": {
+              "count_delta": 0,
+              "existing_rows": "unchanged"
+            },
+            "patient_marketing_consent": "unchanged",
+            "activity_events": {
+              "count_delta": 0
+            },
+            "note": "Only one PatientPulsePack entitlement may be created; AI purchase records zero payment and does not create usage/settlement/appointment rows."
+          },
+          "expected_read_write_policy": {
+            "mode": "write_after_explicit_authorization",
+            "authorization_boundary": "Explicit execute intent + exactly one canonical verified offer; real execution separately gated by QA isolation.",
+            "allowed_mutations": [
+              "one PatientPulsePack entitlement from the unique verified offer"
+            ],
+            "prohibited_mutations": [
+              "PaymentTransaction",
+              "PulseUsage",
+              "AppointmentPulseSettlement",
+              "Appointment",
+              "duplicate PatientPulsePack"
+            ]
+          },
+          "evidence_requirements": [
+            {
+              "assertion_id": "RM22-F-A01",
+              "source": "understanding.operations",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-F-A02",
+              "source": "plan + verification facts",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-F-A03",
+              "source": "action_result + direct before/after QA DB snapshot",
+              "available_in_current_benchmark_artifact": false,
+              "capture_gap": "Dedicated QA database and external-side-effect isolation are required before executing this write contract."
+            },
+            {
+              "assertion_id": "RM22-F-A04",
+              "source": "action_result + terminal response contract",
+              "available_in_current_benchmark_artifact": true
+            },
+            {
+              "assertion_id": "RM22-F-A05",
+              "source": "idempotency key + before/after PatientPulsePack snapshot",
+              "available_in_current_benchmark_artifact": false,
+              "capture_gap": "Requires isolated write execution; real execution is not authorized in this task."
+            }
+          ],
+          "coverage_status": "NEW_CANONICAL_RM_CONTRACT",
+          "execution_group": "EX30_PULSE_PACK_PURCHASE",
+          "execution_readiness": "SPEC_READY_REAL_EXECUTION_NOT_AUTHORIZED_UNTIL_DEDICATED_QA_DB_AND_EXTERNAL_SIDE_EFFECT_ISOLATION_PROVEN",
+          "real_execution_authorized": false
+        }
+      ],
+      "product_resolution": {
+        "investigation_result": "PRODUCT_SPEC_AMBIGUOUS",
+        "technical_lead_resolution": "Decompose RM22 into RM22-A through RM22-F under one top-level Pulse Domain Coverage Group.",
+        "current_specification_status": "SPEC_READY",
+        "production_change_recommendation": "NONE"
+      }
     },
     {
       "scenario_id": "RM23",
@@ -4549,6 +5513,26 @@
       "open_gaps": [
         "Existing scenario has no assertion for non-fabrication or successful in-scope recovery."
       ]
+    }
+  ],
+  "cross_cutting_invariants": [
+    {
+      "invariant_id": "PULSE_BOOKING_NO_AUTO_SETTLEMENT",
+      "reusable": true,
+      "applies_to": "Normal Agent booking scenarios unless a future approved Agent contract explicitly changes Pulse settlement ownership.",
+      "assertion": "Agent booking semantics must never automatically settle, consume, or charge Pulse during appointment booking.",
+      "forbidden_unexpected_deltas": {
+        "pulse_usages": "> 0",
+        "appointment_pulse_settlements": "> 0",
+        "automatic_overage_settlement": "> 0"
+      },
+      "evidence_sources": [
+        "booking plan/write outcome",
+        "before/after PulseUsage count",
+        "before/after AppointmentPulseSettlement count",
+        "overage settlement/charge evidence"
+      ],
+      "execution_template_created": false
     }
   ]
 }

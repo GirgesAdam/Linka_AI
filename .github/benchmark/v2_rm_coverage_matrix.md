@@ -1,4 +1,4 @@
-# QA-LLM-30 — RM01–RM29 Coverage Matrix
+# QA-LLM-31A - RM01-RM29 Coverage Matrix
 
 Source baseline: 719e398927e9d4f9699cdb42c5a901cfec61e039
 
@@ -6,8 +6,10 @@ Source baseline: 719e398927e9d4f9699cdb42c5a901cfec61e039
 
 - Specification-only change: no real model execution or database access.
 - The existing 26 benchmark scenarios record evidence but have no semantic assertion evaluator; runtime exception-free is not PASS.
-- Proposed deduplication has 24 execution templates and is not activated; the existing 26-scenario registry is unchanged.
-- RM22 is SPEC_BLOCKED because Pulse may mean several distinct read/write operations.
+- Proposed deduplication now has 30 execution templates: the prior 24 plus six independently attributable RM22 Pulse subcases; it remains not activated and the existing 26-scenario registry is unchanged.
+- RM22 investigation result was PRODUCT_SPEC_AMBIGUOUS. Technical Lead resolved it by decomposing RM22 into RM22-A through RM22-F. Current RM22 specification status is SPEC_READY.
+
+- Top-level coverage IDs = 29; SPEC_READY = 29; SPEC_BLOCKED = 0; RM22 subcases = 6.
 
 ## RM01–RM29 coverage
 
@@ -34,7 +36,7 @@ Source baseline: 719e398927e9d4f9699cdb42c5a901cfec61e039
 | RM19 | Customer visit history | — | NEW_SCENARIO_REQUIRED | EX17_PROFILE_AND_HISTORY_READ | SPEC_READY | No current benchmark scenario reads history. |
 | RM20 | Session-package balance and remaining sessions | no_show_semantics | EXISTING_PROBE_PARTIAL | EX18_PACKAGE_BALANCE_REFUND_QUOTE | SPEC_READY | existing_package_booking is a booking write, not a pure balance read; no_show_semantics is closer but not asserted. |
 | RM21 | Session-package offer and purchase | package_purchase, session_vs_package_ambiguity | EXISTING_PROBE_PARTIAL | EX19_SESSION_PACKAGE_PURCHASE | SPEC_READY | Current benchmark records new package rows but does not assert action_result/payment transaction count. |
-| RM22 | Pulse capability scope | — | SPEC_BLOCKED | — | SPEC_BLOCKED | Product/QA scope gap: RM22 does not specify which Pulse operation is intended. |
+| RM22 | Pulse Domain Coverage Group | none (legacy Pulse scenarios = 0) | NEW_CANONICAL_RM_CONTRACTS | EX25-EX30 via RM22-A through RM22-F | SPEC_READY | Evidence evaluator/live isolation still pending; RM22-F real execution is not authorized. |
 | RM23 | Session-package refund quote | — | NEW_SCENARIO_REQUIRED | EX18_PACKAGE_BALANCE_REFUND_QUOTE | SPEC_READY | No benchmark scenario covers refund quote; current state snapshot does not count refund/payment rows. |
 | RM24 | Schedule an AI follow-up | — | NEW_SCENARIO_REQUIRED | EX20_FOLLOW_UP_SCHEDULING | SPEC_READY | Current benchmark does not capture CRM task rows or assert due_at/source/dedupe fields. |
 | RM25 | Marketing opt-out | — | NEW_SCENARIO_REQUIRED | EX21_MARKETING_OPTOUT | SPEC_READY | Current benchmark state snapshot does not include consent fields or activity events. |
@@ -73,6 +75,46 @@ Templates are proposals only. Branch variants may require separate fixture runs 
 | EX22_URGENT_MEDICAL_HANDOFF | RM27 | new scenario | No benchmark scenario exists; deterministic planner/responder tests define handoff behavior. |
 | EX23_COMPLAINT_DISPUTE_PRIVACY_HANDOFF | RM28 | new scenario | One template group with three isolated variants; expected priorities remain separate. |
 | EX24_OUT_OF_SCOPE_RECOVERY | RM29 | out_of_scope_recovery | Keep separate; recovery after out-of-scope request is not the same as a hypothetical or compound request. |
+| EX25_PULSE_BALANCE | RM22-A | new canonical RM contract | Aggregate current-patient/device Pulse balance read. |
+| EX26_PULSE_OWNED_PACKS | RM22-B | new canonical RM contract | Owned Pulse-pack safe details; no financial/internal fields. |
+| EX27_PULSE_PACK_OFFERS | RM22-C | new canonical RM contract | Active Pulse-pack offers with device/count/price/currency binding. |
+| EX28_PULSE_OVERAGE_QUOTE | RM22-D | new canonical RM contract | Device overage quote with deterministic verified-price arithmetic. |
+| EX29_PULSE_FINANCIAL_LEDGER_SAFETY | RM22-E | new canonical RM contract | Reception-owned ledger concern; no financial read or fabricated amount. |
+| EX30_PULSE_PACK_PURCHASE | RM22-F | new canonical RM contract | Explicit verified Pulse-pack entitlement write; real execution remains unauthorized. |
+
+## RM22 Pulse Product Resolution
+
+Investigation result:
+
+```text
+PRODUCT_SPEC_AMBIGUOUS
+```
+
+Technical Lead Product resolution:
+
+```text
+RM22 = Pulse Domain Coverage Group
+RM22-A through RM22-F are six required subcases
+```
+
+Current specification status:
+
+```text
+SPEC_READY
+```
+
+Legacy benchmark Pulse scenarios: **none**. All six are new canonical RM-specific contracts; bare `RM22` is an umbrella selector for all six and must never silently mean balance only.
+
+| Subcase | Contract | Read/write classification | Canonical planning path | Real execution |
+|---|---|---|---|---|
+| RM22-A | Aggregate Pulse balance | READ | `pulse_info[balance] -> pulse_balance` | specification only |
+| RM22-B | Owned Pulse pack details | READ | `pulse_info[owned_packs] -> pulse_packs` | specification only |
+| RM22-C | Available Pulse pack offers | READ | `pulse_info[offers] -> pulse_pack_offers` | specification only |
+| RM22-D | Pulse overage quote | READ | `pulse_info[overage_price] -> pulse_billing_settings` | specification only |
+| RM22-E | Financial-ledger safety / Reception handoff | HANDOFF / NO FINANCIAL READ | `financial_ledger -> human_support/Reception` | specification only |
+| RM22-F | Explicit Pulse-pack purchase | WRITE | `buy_pulse_pack -> pulse_pack_offers verification -> 0 blocked / many clarify / 1 write_ready` | **NOT AUTHORIZED** until isolated QA DB + external-side-effect isolation are proven |
+
+Cross-cutting invariant (no seventh RM22 execution): normal Agent booking must never automatically settle, consume, or charge Pulse. Unexpected `PulseUsage > 0`, `AppointmentPulseSettlement > 0`, or automatic overage settlement during normal booking is forbidden unless a future approved Agent contract changes ownership.
 
 ## Audit of all 26 existing benchmark scenarios
 
@@ -113,5 +155,5 @@ Every source is accounted for. scenario_level_semantic_assertions_present=false 
 2. Capture/query visit_group_id for grouped appointments and target appointment fields before/after cancellation/rescheduling.
 3. Capture/query CRM task fields, Pulse pack/payment/refund rows, marketing-consent fields and activity events.
 4. Keep fixture prices, doctors, services, dates, devices and unavailable times data-driven.
-5. Resolve RM22 scope before adding an execution group.
+5. Keep RM22-F real execution blocked until dedicated QA database identity and external-side-effect isolation are proven.
 6. Keep live fail-closed. Do not change Grouped Live Review assertions or Production Logic.
