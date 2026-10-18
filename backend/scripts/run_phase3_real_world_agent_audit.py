@@ -104,6 +104,41 @@ def _assert_zero_write(records: list[dict[str, object]]) -> None:
         assert record.get("pending_write") is None, f"turn {index}: premature pending_write"
 
 
+def _normalized_customer_reply(record: dict[str, object]) -> str:
+    reply = str(record.get("reply") or "")
+    return reply.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).replace("أ", "ا").replace("إ", "ا")
+
+
+def _assert_grouped_laser_reply_mentions_both_services(
+    record: dict[str, object],
+    *,
+    scenario: str,
+) -> None:
+    reply = _normalized_customer_reply(record)
+    assert "ابط" in reply and "بكيني" in reply, (
+        f"{scenario} customer reply omitted one of the requested grouped laser services"
+    )
+
+
+def _assert_reply_mentions_visit_start_times(
+    record: dict[str, object],
+    *,
+    expected_times: tuple[str, ...],
+    scenario: str,
+) -> None:
+    reply = _normalized_customer_reply(record)
+    for value in expected_times:
+        hour, minute = value.split(":")
+        hour24 = int(hour)
+        hour12 = hour24 % 12 or 12
+        candidates = [value, f"{hour12}:{minute}"]
+        if minute == "00":
+            candidates.append(f"{hour12} مساء" if hour24 >= 12 else f"{hour12} صباح")
+        assert any(candidate in reply for candidate in candidates), (
+            f"{scenario} customer reply omitted visit start time {value}"
+        )
+
+
 def _assert_known_services(records: list[dict[str, object]], ids: dict[str, str]) -> None:
     known = {ids["underarm"], ids["bikini"], ids["arms"], ids["dermatology"]}
     for index, record in enumerate(records, start=1):
@@ -207,12 +242,14 @@ def _validate_rw1(records: list[dict[str, object]], ids: dict[str, str]) -> None
     assert rag._collapsed_service_set(record) == expected, "RW-1 services not kept as one grouped visit"
     assert _constraints(record).get("device_key") == "candela_gentle", "RW-1 lost explicit Candela choice"
     assert _has_availability_slots(record), "RW-1 did not ground availability in canonical slots"
+    _assert_grouped_laser_reply_mentions_both_services(record, scenario="RW-1")
     _assert_zero_write(records)
 
 
 def _validate_rw2(records: list[dict[str, object]], ids: dict[str, str]) -> None:
     assert len(records) == 3
     assert _services(records[0]) == {ids["underarm"], ids["bikini"]}, "RW-2 turn 1 service set mismatch"
+    _assert_grouped_laser_reply_mentions_both_services(records[0], scenario="RW-2 turn 1")
     assert _services(records[1]) == {ids["underarm"], ids["bikini"], ids["arms"]}, "RW-2 addition failed"
     assert _services(records[2]) == {ids["underarm"], ids["arms"]}, "RW-2 removal failed"
     assert ids["bikini"] not in _services(records[2]), "RW-2 resurrected removed Bikini"
@@ -227,6 +264,9 @@ def _validate_rw3(records: list[dict[str, object]], ids: dict[str, str]) -> None
         doctor_id=ids["doctor"],
     )
     assert records[1].get("reply"), "RW-3 side question produced no reply"
+    assert "1200" in _normalized_customer_reply(records[1]), (
+        "RW-3 side price question omitted the verified grouped total of 1200 EGP"
+    )
     assert _services(records[1]) == expected, "RW-3 side question changed services"
     second = _proposal(records[1])
     assert second is not None and _proposal_signature(second) == _proposal_signature(first), (
@@ -287,6 +327,9 @@ def _assert_compound(
 def _validate_rw6(records: list[dict[str, object]], ids: dict[str, str]) -> None:
     assert len(records) == 3
     _assert_compound(records[1], ids, laser_time="18:00", derm_time="18:30")
+    _assert_reply_mentions_visit_start_times(
+        records[1], expected_times=("18:00", "18:30"), scenario="RW-6"
+    )
     before = _proposal(records[1])
     after = _proposal(records[2])
     assert before is not None and after is not None
@@ -298,7 +341,13 @@ def _validate_rw6(records: list[dict[str, object]], ids: dict[str, str]) -> None
 def _validate_rw7(records: list[dict[str, object]], ids: dict[str, str]) -> None:
     assert len(records) == 3
     _assert_compound(records[1], ids, laser_time="18:00", derm_time="18:30")
+    _assert_reply_mentions_visit_start_times(
+        records[1], expected_times=("18:00", "18:30"), scenario="RW-7 turn 2"
+    )
     _assert_compound(records[2], ids, laser_time="19:00", derm_time="19:30")
+    _assert_reply_mentions_visit_start_times(
+        records[2], expected_times=("19:00", "19:30"), scenario="RW-7 turn 3"
+    )
     time_constraint = _constraints(records[2]).get("time")
     if isinstance(time_constraint, dict) and time_constraint.get("mode") == "exact":
         assert time_constraint.get("start_time") == "19:00", (
@@ -311,6 +360,7 @@ def _validate_rw8(records: list[dict[str, object]], ids: dict[str, str]) -> None
     assert len(records) == 2
     expected = {ids["underarm"], ids["bikini"]}
     assert _services(records[0]) == expected, "RW-8 turn 1 service set mismatch"
+    _assert_grouped_laser_reply_mentions_both_services(records[0], scenario="RW-8 turn 1")
     first = _proposal(records[0])
     if first is not None:
         first_start = _local_start(first)
