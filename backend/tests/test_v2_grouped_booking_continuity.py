@@ -481,6 +481,11 @@ def test_explicit_device_choice_updates_all_laser_components_only() -> None:
         "candela_gentle",
         None,
     ]
+    assert [item.entities.device.text if item.entities.device else None for item in restored.operations] == [
+        "Candela Gentle",
+        "Candela Gentle",
+        None,
+    ]
 
 
 def test_ra_g7_compound_proposal_restore_uses_per_visit_resource_authority() -> None:

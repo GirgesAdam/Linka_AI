@@ -242,11 +242,11 @@ def _canonical_ref(
     return matches[0] if len(matches) == 1 else None
 
 
-def _entity_ref(ref: str | None) -> EntityReference | None:
+def _entity_ref(ref: str | None, *, text: str | None = None) -> EntityReference | None:
     if ref is None:
         return None
     return EntityReference(
-        text=None,
+        text=text,
         ref=ref,
         candidate_refs=[],
         candidate_mode="ambiguous",
@@ -288,12 +288,51 @@ def _operation_for_component(
     if component.device_key is not None and device_ref is None:
         return None
 
+    # Canonical grouped reconstruction must not erase explicit identity provenance.
+    # Preserve text only when the customer's named reference resolves to this component;
+    # inherited identities remain textless and cannot overwrite active-task state.
+    service_text = (
+        template.entities.service.text
+        if template.entities.service is not None
+        and template.entities.service.ref is not None
+        and template.entities.service.text
+        and context.resolve(template.entities.service.ref, expected_kind="service")
+        == component.service_id
+        else None
+    )
+    doctor_text = (
+        template.entities.doctor.text
+        if template.entities.doctor is not None
+        and template.entities.doctor.ref is not None
+        and template.entities.doctor.text
+        and context.resolve(template.entities.doctor.ref, expected_kind="doctor")
+        == component.doctor_id
+        else None
+    )
+    branch_text = (
+        template.entities.branch.text
+        if template.entities.branch is not None
+        and template.entities.branch.ref is not None
+        and template.entities.branch.text
+        and context.resolve(template.entities.branch.ref, expected_kind="branch")
+        == component.branch_id
+        else None
+    )
+    device_text = (
+        template.entities.device.text
+        if template.entities.device is not None
+        and template.entities.device.ref is not None
+        and template.entities.device.text
+        and context.resolve(template.entities.device.ref, expected_kind="device")
+        == component.device_key
+        else None
+    )
     entities = template.entities.model_copy(
         update={
-            "service": _entity_ref(service_ref),
-            "doctor": _entity_ref(doctor_ref),
-            "branch": _entity_ref(branch_ref),
-            "device": _entity_ref(device_ref),
+            "service": _entity_ref(service_ref, text=service_text),
+            "doctor": _entity_ref(doctor_ref, text=doctor_text),
+            "branch": _entity_ref(branch_ref, text=branch_text),
+            "device": _entity_ref(device_ref, text=device_text),
             "appointment": None,
             "package": None,
             "date": component.date,
