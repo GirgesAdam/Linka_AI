@@ -223,6 +223,31 @@ def test_q2_known_single_service_price_uses_active_canonical_service_without_cla
     assert step.facts["device_key"] == "candela"
 
 
+def test_booking_proposal_includes_verified_complete_set_total_price() -> None:
+    _, pricing_outcome = _visit_total_reply(same_total=False, device_key="candela")
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            **pricing_outcome.facts,
+            "booking_proposal_summary": {
+                "services": ["Underarm", "Full Arms"],
+                "start_local": "2026-10-17 18:00",
+                "doctor_name": "Mariam",
+                "branch_name": "Main Branch",
+                "device_name": "Candela",
+            },
+        },
+    )
+    unit = build_customer_response_contract([outcome]).units[0]
+
+    text = _deterministic_booking_proposal_reply(unit, arabic=True)
+
+    assert text is not None
+    assert "1300" in text
+    assert "EGP" in text
+
+
 def test_q3_multi_service_total_uses_active_canonical_set_and_deterministic_aggregate() -> None:
     step = _plan_for_active(
         _active_task(["svc-underarm", "svc-arms"], device_key="candela")

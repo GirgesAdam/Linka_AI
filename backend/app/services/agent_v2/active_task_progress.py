@@ -1273,11 +1273,27 @@ def _booking_progress(
     availability_params = dict(params)
     if not main_requires_device:
         availability_params.pop("device_key", None)
+    proposal_reads = []
+    if len(state.requested_service_ids) > 1 and state.constraints.package_usage != "use_existing":
+        proposal_reads.append(
+            ReadRequest(
+                kind="service_catalog_set",
+                parameters={
+                    "service_ids": list(state.requested_service_ids),
+                    **(
+                        {"device_key": state.constraints.device_key}
+                        if state.constraints.device_key is not None
+                        else {}
+                    ),
+                },
+            )
+        )
+    proposal_reads.append(ReadRequest(kind="availability", parameters=availability_params))
     return PlanStep(
         operation_index=operation_index,
         operation_type="book",
         disposition="read",
-        reads=[ReadRequest(kind="availability", parameters=availability_params)],
+        reads=proposal_reads,
         write_intent=WriteIntent(
             kind="booking",
             authorized=state.write_authorization.authorized,

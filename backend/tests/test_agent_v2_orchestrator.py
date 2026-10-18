@@ -1432,20 +1432,25 @@ def _run_ra_g6_unpresented_exact_time_case(
                 if catalog_kind == "service_catalog_set"
                 else {"services": []}
             )
+            available_slots = [slot] if len(read_calls) == 1 or continuation_available else []
             return ReadExecutionBundle(
                 results=[
                     ReadResult(kind=catalog_kind, ok=True, payload=catalog_payload),
-                    ReadResult(kind="availability", ok=True, payload={"slots": [slot]}),
+                    ReadResult(kind="availability", ok=True, payload={"slots": available_slots}),
                 ],
                 verification=VerificationFacts(
-                    exact_slot_match_count=1,
-                    verified_parameters={
-                        "service_id": "service-a",
-                        "branch_id": "branch-1",
-                        "doctor_id": "doctor-1",
-                        "device_key": "device-1",
-                        "start_at": "2026-09-12T20:00:00+03:00",
-                    },
+                    exact_slot_match_count=len(available_slots),
+                    verified_parameters=(
+                        {
+                            "service_id": "service-a",
+                            "branch_id": "branch-1",
+                            "doctor_id": "doctor-1",
+                            "device_key": "device-1",
+                            "start_at": "2026-09-12T20:00:00+03:00",
+                        }
+                        if available_slots
+                        else {}
+                    ),
                 ),
             )
         continuation_slots = [slot] if continuation_available else []
@@ -1497,7 +1502,10 @@ def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
     assert result.reference_action == "new_search"
     assert result.selected_option_ref is None
     assert result.full_interpreter_called is True
-    assert read_calls == [["service_catalog_set", "availability"], ["availability"]]
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
     assert result.pending_write is None
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.requested_service_ids == ["service-a", "service-b"]
@@ -1518,7 +1526,10 @@ def test_ra_g6_unpresented_exact_time_fails_closed_when_fresh_continuation_is_un
         monkeypatch,
         continuation_available=False,
     )
-    assert read_calls == [["service_catalog_set", "availability"], ["availability"]]
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
     assert result.pending_write is None
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.proposal is None
@@ -1546,7 +1557,10 @@ def test_device_auto_resolved_same_turn_continuation_still_runs(
         exact_time_requested=False,
         device_auto_resolved=True,
     )
-    assert read_calls == [["service_catalog", "availability"], ["availability"]]
+    assert read_calls == [
+        ["service_catalog", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
     assert result.pending_write is None
     assert isinstance(result.active_task, BookingTaskState)
 

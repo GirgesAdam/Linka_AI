@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Literal
@@ -815,6 +816,56 @@ def _build_responder_messages(
     ]
 
 
+def _visit_total_is_visible(text: str, unit: CustomerResponseUnit) -> bool:
+    truth = unit.commercial_truth
+    if truth is None or truth.kind != "visit_service_total" or not truth.options:
+        return False
+
+    visible_prices: set[Decimal] = set()
+    currency_pattern = r"(?:EGP|\u062c\u0646\u064a\u0647(?:\u0627\u062a)?)"
+    amount_pattern = r"(?P<amount>\d[\d,]*(?:\.\d+)?)\s*" + currency_pattern
+    for match in re.finditer(amount_pattern, text, flags=re.IGNORECASE):
+        try:
+            visible_prices.add(Decimal(match.group("amount").replace(",", "")))
+        except InvalidOperation:
+            continue
+
+    expected_prices: set[Decimal] = set()
+    for option in truth.options:
+        try:
+            expected_prices.add(Decimal(option.amount))
+        except InvalidOperation:
+            return False
+    return bool(expected_prices) and expected_prices.issubset(visible_prices)
+
+
+def _append_missing_verified_visit_totals(
+    text: str,
+    *,
+    history: list[BaseMessage],
+    contract: CustomerResponseContract,
+) -> str:
+    """Keep verified grouped-visit totals visible alongside availability windows."""
+    missing = [
+        unit.model_copy(update={"response_goal": "answer_price", "status": "answered"})
+        for unit in contract.units
+        if unit.commercial_truth is not None
+        and unit.commercial_truth.kind == "visit_service_total"
+        and unit.commercial_truth.complete_set is True
+        and unit.commercial_truth.options
+        and not _visit_total_is_visible(text, unit)
+    ]
+    if not missing:
+        return text
+
+    price_contract = CustomerResponseContract(units=tuple(missing))
+    price_text = deterministic_price_device_fallback(
+        price_contract,
+        arabic=_latest_customer_is_arabic(history),
+    )
+    return f"{text.rstrip()}\n{price_text}".strip() if text.strip() else price_text
+
+
 def _compose_pure_supported_contract_reply(
     *,
     history: list[BaseMessage],
@@ -827,13 +878,21 @@ def _compose_pure_supported_contract_reply(
     if is_pure_supported_terminal_contract(contract):
         return compose_terminal_contract_reply(history=history, contract=contract)
     if is_pure_supported_availability_contract(contract):
-        return compose_availability_contract_reply(
+        text, source = compose_availability_contract_reply(
             history=history,
             contract=contract,
             shown_window_keys=availability_shown_window_keys,
             continuation=availability_continuation,
             reference_date=local_now.date(),
         )
+        enriched = _append_missing_verified_visit_totals(
+            text,
+            history=history,
+            contract=contract,
+        )
+        if enriched != text:
+            return enriched, f"{source}+deterministic:visit-total"
+        return text, source
     if is_pure_supported_appointment_contract(contract):
         return compose_appointment_info_contract_reply(history=history, contract=contract)
     if is_pure_supported_service_contract(contract):
@@ -879,9 +938,26 @@ def _booking_proposal_commercial_detail(
     arabic: bool,
 ) -> str | None:
     truth = unit.commercial_truth
+    if truth is None:
+        return None
+    if truth.kind == "visit_service_total" and truth.complete_set and len(truth.options) == 1:
+        option = truth.options[0]
+        try:
+            amount = format(Decimal(option.amount), "f")
+            if "." in amount:
+                amount = amount.rstrip("0").rstrip(".")
+        except InvalidOperation:
+            amount = option.amount
+        currency = option.currency.upper()
+        if arabic:
+            service_label = truth.service_name or "\u0627\u0644\u0645\u062c\u0645\u0648\u0639\u0629"
+            return (
+                f"\u0625\u062c\u0645\u0627\u0644\u064a \u0633\u0639\u0631 \u0627\u0644\u062e\u062f\u0645\u0627\u062a "
+                f"{service_label} \u0647\u0648 {amount} {currency}"
+            )
+        return f"Total price for {truth.service_name or 'the requested services'} is {amount} {currency}"
     if (
-        truth is None
-        or truth.kind not in {"service_base_price", "service_device_price"}
+        truth.kind not in {"service_base_price", "service_device_price"}
         or truth.complete_set
         or len(truth.options) != 1
     ):
