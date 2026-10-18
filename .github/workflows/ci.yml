@@ -54,6 +54,13 @@ jobs:
           ruff check tools/agent_eval
           python -m compileall -q tools/agent_eval
           pytest -q tools/agent_eval/tests
+      - name: Validate selected Agent QA tooling
+        working-directory: .
+        env:
+          PYTHONPATH: backend:.
+        run: |
+          python -m compileall -q .github/benchmark
+          python -m unittest discover -s .github/benchmark -p 'test_v2_*.py' -q
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
@@ -76,6 +83,14 @@ jobs:
           SQL
       - name: Apply migrations on clean PostgreSQL
         run: python -m alembic upgrade head
+      - name: Prove selected Agent QA DB identity and rollback isolation
+        working-directory: .
+        env:
+          PYTHONPATH: backend:.
+        run: |
+          python .github/benchmark/v2_selected_agent_db_safety_probe.py \
+            --database-url "$DATABASE_URL" \
+            --expected-database-name ci_db
       - name: Run backend tests
         run: python -m pytest -q
   frontend:

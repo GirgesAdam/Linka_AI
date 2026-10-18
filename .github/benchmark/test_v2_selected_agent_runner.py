@@ -16,6 +16,25 @@ SPEC.loader.exec_module(runner)
 RM22_SUBCASES = [f"RM22-{letter}" for letter in "ABCDEF"]
 
 
+def full_live_env(*, database_name: str = "linka_qa_test", side_effects: str = "true") -> dict[str, str]:
+    url = f"postgresql://qa_user:placeholder@qa-db.example.invalid/{database_name}"
+    return {
+        "LINKA_QA_LIVE_APPROVED": "true",
+        "LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED": side_effects,
+        "OPENAI_API_KEY": "test-only-placeholder",
+        "AGENT_V2_LIVE_ENABLED": "true",
+        "ENVIRONMENT": "qa",
+        "LINKA_QA_DATABASE_URL": url,
+        "DATABASE_URL": url,
+        "MIGRATION_DATABASE_URL": url,
+        "LINKA_QA_EXPECTED_DATABASE_NAME": database_name,
+        "LINKA_QA_EXPECTED_DATABASE_HOST": "qa-db.example.invalid",
+        "LINKA_QA_RUNTIME_MARKER": "selected-agent-test-marker",
+        "LINKA_QA_EXPECTED_WORKSPACE_ID": "00000000-0000-0000-0000-000000000022",
+        "LINKA_QA_EXPECTED_WORKSPACE_SLUG": "qa-agent-v2",
+    }
+
+
 class ScenarioSelectionTests(unittest.TestCase):
     def test_registry_has_exactly_rm01_through_rm29(self):
         self.assertEqual(tuple(runner.SCENARIOS), runner.ALLOWED_IDS)
@@ -134,40 +153,34 @@ class ScenarioSelectionTests(unittest.TestCase):
                 self.assertEqual(report["real_model_executions"], 0)
                 self.assertEqual(report["database_connections"], 0)
                 self.assertEqual(report["database_writes"], 0)
-                self.assertEqual(report["overall_status"], "NOT_RUN")
-                self.assertEqual(report["results"][0]["status"], "NOT_RUN")
+                self.assertEqual(report["overall_status"], "LIVE_REFUSED")
+                self.assertEqual(report["results"][0]["status"], "LIVE_REFUSED")
+                self.assertEqual(report["results"][0]["execution_status"], "LIVE_REFUSED")
                 self.assertIn("LIVE_REFUSED", stderr.getvalue())
         finally:
             for name, value in saved.items():
                 if value is not None:
                     os.environ[name] = value
 
-    def test_live_mode_stays_disabled_even_when_static_env_checks_pass(self):
-        values = {
-            "LINKA_QA_LIVE_APPROVED": "true",
-            "LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED": "true",
-            "OPENAI_API_KEY": "test-only-placeholder",
-            "LINKA_QA_DATABASE_URL": "postgresql://qa_user:placeholder@qa-db.example.invalid/linka_qa_test",
-            "LINKA_QA_EXPECTED_DATABASE_NAME": "linka_qa_test",
-            "LINKA_QA_EXPECTED_DATABASE_HOST": "qa-db.example.invalid",
-        }
+    def test_live_mode_refuses_unsupported_contracts_even_when_static_env_checks_pass(self):
+        values = full_live_env()
         saved = {name: os.environ.get(name) for name in values}
         os.environ.update(values)
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                report_path = Path(tmp) / "live-still-disabled.json"
+                report_path = Path(tmp) / "live-still-refused.json"
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                     exit_code = runner.main(["--scenario-ids", "RM22", "--max-scenarios", "1", "--mode", "live", "--live-approved", "--report", str(report_path)])
                 report = json.loads(report_path.read_text(encoding="utf-8"))
                 self.assertEqual(exit_code, 3)
-                self.assertIn("isolation have not been proven", stderr.getvalue())
+                self.assertIn("RM22-A", stderr.getvalue())
                 self.assertEqual(report["selected_ids"], RM22_SUBCASES)
                 self.assertEqual(report["real_model_executions"], 0)
                 self.assertEqual(report["database_connections"], 0)
                 self.assertEqual(report["database_writes"], 0)
-                self.assertEqual(report["overall_status"], "NOT_RUN")
+                self.assertEqual(report["overall_status"], "LIVE_REFUSED")
         finally:
             for name, value in saved.items():
                 if value is None:
@@ -188,14 +201,7 @@ class ScenarioSelectionTests(unittest.TestCase):
                     os.environ[name] = value
 
     def test_live_environment_rejects_non_qa_database_name(self):
-        names = {
-            "LINKA_QA_LIVE_APPROVED": "true",
-            "LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED": "true",
-            "OPENAI_API_KEY": "test-only-placeholder",
-            "LINKA_QA_DATABASE_URL": "postgresql://user:placeholder@db.test.internal/production",
-            "LINKA_QA_EXPECTED_DATABASE_NAME": "production",
-            "LINKA_QA_EXPECTED_DATABASE_HOST": "db.test.internal",
-        }
+        names = full_live_env(database_name="production")
         saved = {name: os.environ.get(name) for name in names}
         os.environ.update(names)
         try:

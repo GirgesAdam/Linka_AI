@@ -6,12 +6,17 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
+BENCHMARK_DIR = ROOT / ".github" / "benchmark"
+if str(BENCHMARK_DIR) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_DIR))
+import v2_selected_agent_execution as execution
+
 REPORT_DEFAULT = Path("artifacts/rm-selected-agent-run.json")
 ALLOWED_IDS = tuple(f"RM{i:02d}" for i in range(1, 30))
 
@@ -104,18 +109,30 @@ def current_sha() -> str | None:
 
 
 def validate_live_environment() -> tuple[bool, str]:
-    """Fail closed before model invocation unless the dedicated QA environment is proven."""
+    """Validate declarations only; runtime DB identity is proven separately before model use."""
     if os.getenv("LINKA_QA_LIVE_APPROVED", "").lower() != "true":
         return False, "Live execution requires LINKA_QA_LIVE_APPROVED=true."
     if os.getenv("LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED", "").lower() != "true":
         return False, "External side effects have not been explicitly disabled."
     if not os.getenv("OPENAI_API_KEY", "").strip():
         return False, "OPENAI_API_KEY is missing."
+    if os.getenv("AGENT_V2_LIVE_ENABLED", "").lower() != "true":
+        return False, "AGENT_V2_LIVE_ENABLED=true is required for the V2-only runner."
+    environment = os.getenv("ENVIRONMENT", "").strip().lower()
+    if environment not in {"qa", "test", "sandbox"}:
+        return False, "ENVIRONMENT must explicitly identify qa/test/sandbox."
     database_url = os.getenv("LINKA_QA_DATABASE_URL", "").strip()
     expected_name = os.getenv("LINKA_QA_EXPECTED_DATABASE_NAME", "").strip()
     expected_host = os.getenv("LINKA_QA_EXPECTED_DATABASE_HOST", "").strip().lower()
-    if not database_url or not expected_name or not expected_host:
-        return False, "Dedicated QA database URL and expected host/name are required."
+    runtime_marker = os.getenv("LINKA_QA_RUNTIME_MARKER", "").strip()
+    workspace_id = os.getenv("LINKA_QA_EXPECTED_WORKSPACE_ID", "").strip()
+    workspace_slug = os.getenv("LINKA_QA_EXPECTED_WORKSPACE_SLUG", "").strip()
+    if not all((database_url, expected_name, expected_host, runtime_marker, workspace_id, workspace_slug)):
+        return False, "Dedicated QA DB host/name/marker and exact workspace ID/slug are required."
+    if os.getenv("DATABASE_URL", "").strip() != database_url:
+        return False, "DATABASE_URL must be exactly the approved LINKA_QA_DATABASE_URL."
+    if os.getenv("MIGRATION_DATABASE_URL", "").strip() != database_url:
+        return False, "MIGRATION_DATABASE_URL must be exactly the approved LINKA_QA_DATABASE_URL."
     try:
         parsed = urlsplit(database_url)
         actual_host = (parsed.hostname or "").lower()
@@ -132,7 +149,7 @@ def validate_live_environment() -> tuple[bool, str]:
         return False, "Refusing a production-like or default database name."
     if "ycuxjlkhnubztgqmhtom" in actual_host:
         return False, "Refusing the known shared Supabase project host."
-    return True, "Environment declarations passed static checks; runtime database identity must still be verified."
+    return True, "Static QA declarations passed; runtime DB marker/workspace/integration proof is still required."
 
 
 def make_report(
@@ -153,6 +170,7 @@ def make_report(
             detail = " Contract is specification-ready, but real execution is not authorized; remains NOT_RUN."
         else:
             detail = " Contract assertions are specified but not wired to the live runner; remains NOT_RUN."
+        readiness = execution.execution_readiness(CONTRACT_DOCUMENT, execution_id)
         results.append({
             "scenario_id": execution_id,
             "coverage_id": parent_id,
@@ -165,6 +183,8 @@ def make_report(
             "assertion_implementation_status": parent["assertion_implementation_status"],
             "git_sha": sha,
             "status": "NOT_RUN",
+            "execution_status": "NOT_RUN",
+            "live_readiness": readiness,
             "expected": None,
             "actual": None,
             "evidence": {},
@@ -175,7 +195,7 @@ def make_report(
         })
     return {
         "schema_version": 2,
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": datetime.now(UTC).isoformat(),
         "git_sha": sha,
         "mode": mode,
         "selector_count_requested": len(requested_ids or selected),
@@ -195,7 +215,8 @@ def _write_report(report: dict[str, Any], report_arg: str) -> Path:
     if not report_path.is_absolute():
         report_path = ROOT / report_path
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    safe_report = execution.redact_artifact(report)
+    report_path.write_text(json.dumps(safe_report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report_path
 
 
@@ -225,21 +246,119 @@ def main(argv: list[str] | None = None) -> int:
             approved, detail = validate_live_environment()
             if not approved:
                 refusal = detail
-            else:
-                # The existing benchmark's transactional execution and external side-effect
-                # guarantees have not yet been proven for all RM contracts/subcases. Never call
-                # a model until an isolated executor and its rollback/side-effect tests exist.
-                refusal = "dedicated DB runtime identity and external-side-effect isolation have not been proven by this runner. " + detail
+        readiness = [execution.execution_readiness(CONTRACT_DOCUMENT, execution_id) for execution_id in selected]
+        unsafe = [item for item in readiness if not item["safe_to_execute"]]
+        if refusal is None and unsafe:
+            refusal = "; ".join(f"{item['execution_id']}: {item['reason']}" for item in unsafe)
         if refusal:
             report = make_report(
                 selected, mode, sha,
                 "Live execution refused before model or database access: " + refusal,
                 requested_ids=requested,
             )
+            report["overall_status"] = "LIVE_REFUSED"
+            for row in report["results"]:
+                row["status"] = "LIVE_REFUSED"
+                row["execution_status"] = "LIVE_REFUSED"
             report_path = _write_report(report, args.report)
             print("LIVE_REFUSED: " + refusal, file=sys.stderr)
             print("REPORT=" + str(report_path))
             return 3
+
+        engine = None
+        database_connections = 0
+        try:
+            side_effect_evidence = execution.verify_external_effect_isolation()
+            engine, db_identity = execution.verify_runtime_database_identity(
+                os.environ["LINKA_QA_DATABASE_URL"],
+                expected_database_name=os.environ["LINKA_QA_EXPECTED_DATABASE_NAME"],
+                expected_marker=os.environ["LINKA_QA_RUNTIME_MARKER"],
+                expected_workspace_id=os.environ["LINKA_QA_EXPECTED_WORKSPACE_ID"],
+                expected_workspace_slug=os.environ["LINKA_QA_EXPECTED_WORKSPACE_SLUG"],
+            )
+            database_connections = 1
+            rollback_evidence = execution.verify_outer_transaction_rollback(engine)
+            environment_evidence = {
+                "database_identity": db_identity,
+                "rollback": rollback_evidence,
+                "external_effect_isolation": side_effect_evidence,
+            }
+        except execution.LiveSafetyError as exc:
+            report = make_report(
+                selected, mode, sha,
+                "Live execution refused before model invocation: " + str(exc),
+                requested_ids=requested,
+            )
+            report["overall_status"] = "LIVE_REFUSED"
+            report["database_connections"] = database_connections
+            for row in report["results"]:
+                row["status"] = "LIVE_REFUSED"
+                row["execution_status"] = "LIVE_REFUSED"
+            report_path = _write_report(report, args.report)
+            print("LIVE_REFUSED: " + str(exc), file=sys.stderr)
+            print("REPORT=" + str(report_path))
+            return 3
+        except Exception as exc:  # noqa: BLE001 - environment boundary
+            report = make_report(
+                selected, mode, sha,
+                "Live environment check failed before model invocation: " + f"{type(exc).__name__}: {exc}",
+                requested_ids=requested,
+            )
+            report["overall_status"] = "ENVIRONMENT_ERROR"
+            report["database_connections"] = database_connections
+            for row in report["results"]:
+                row["status"] = "ENVIRONMENT_ERROR"
+                row["execution_status"] = "ENVIRONMENT_ERROR"
+            report_path = _write_report(report, args.report)
+            print("ENVIRONMENT_ERROR: runtime QA environment verification failed.", file=sys.stderr)
+            print("REPORT=" + str(report_path))
+            return 4
+
+        try:
+            evidence_rows = []
+            for execution_id in selected:
+                row = execution.execute_with_backend(
+                    document=CONTRACT_DOCUMENT,
+                    execution_id=execution_id,
+                    git_sha=sha,
+                    backend=lambda selected_id, source: execution.execute_real_agent_probe(
+                        engine, selected_id, source
+                    ),
+                    environment_evidence=environment_evidence,
+                    enforce_live_readiness=True,
+                )
+                evidence_rows.append(row)
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+        statuses = {row["execution_status"] for row in evidence_rows}
+        overall = "RUNTIME_ERROR" if "RUNTIME_ERROR" in statuses else "COMPLETED"
+        report = {
+            "schema_version": 3,
+            "started_at": datetime.now(UTC).isoformat(),
+            "git_sha": sha,
+            "mode": "live",
+            "requested_ids": requested,
+            "selected_ids": selected,
+            "overall_status": overall,
+            "real_model_executions": sum(int((row.get("token_usage") or {}).get("call_count") or 0) for row in evidence_rows),
+            "database_connections": database_connections,
+            "database_writes": sum(
+                max(0, int(value))
+                for row in evidence_rows
+                for key, value in (row.get("db_delta") or {}).items()
+                if key not in {"activity_events", "handoff_requests", "patient_marketing_consent"}
+                and isinstance(value, (int, float))
+            ),
+            "results": evidence_rows,
+        }
+        report_path = _write_report(report, args.report)
+        print(json.dumps({
+            "mode": "live", "selected_ids": selected, "overall_status": overall,
+            "report": str(report_path), "real_model_executions": report["real_model_executions"]
+        }, ensure_ascii=False))
+        return 5 if overall == "RUNTIME_ERROR" else 0
 
     report = make_report(selected, mode, sha, reason, requested_ids=requested)
     report_path = _write_report(report, args.report)

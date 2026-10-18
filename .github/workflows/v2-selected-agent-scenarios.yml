@@ -71,7 +71,7 @@ jobs:
           echo "Live mode requires confirm_live=true. No model or database was accessed."
           exit 1
   live-request:
-    name: Live run request (fail-closed until isolation is verified)
+    name: Live run request (approved read-only subset only)
     if: ${{ inputs.mode == 'live' && inputs.confirm_live == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -83,19 +83,39 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Refuse unsafe or unverified live execution
+      - name: Install backend runtime dependencies
+        run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
+      - name: Run gated selected Agent execution
         env:
           SCENARIO_IDS: ${{ inputs.scenario_ids }}
           MAX_SCENARIOS: ${{ inputs.max_scenarios }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           LINKA_QA_DATABASE_URL: ${{ secrets.LINKA_QA_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.LINKA_QA_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.LINKA_QA_DATABASE_URL }}
           LINKA_QA_EXPECTED_DATABASE_NAME: ${{ vars.LINKA_QA_EXPECTED_DATABASE_NAME }}
           LINKA_QA_EXPECTED_DATABASE_HOST: ${{ vars.LINKA_QA_EXPECTED_DATABASE_HOST }}
+          LINKA_QA_RUNTIME_MARKER: ${{ vars.LINKA_QA_RUNTIME_MARKER }}
+          LINKA_QA_EXPECTED_WORKSPACE_ID: ${{ vars.LINKA_QA_EXPECTED_WORKSPACE_ID }}
+          LINKA_QA_EXPECTED_WORKSPACE_SLUG: ${{ vars.LINKA_QA_EXPECTED_WORKSPACE_SLUG }}
           LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED: ${{ vars.LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED }}
           LINKA_QA_LIVE_APPROVED: 'true'
+          AGENT_V2_LIVE_ENABLED: 'true'
+          ENVIRONMENT: qa
+          SUPABASE_URL: https://qa-unused.supabase.co
+          SUPABASE_PUBLISHABLE_KEY: sb_publishable_selected_agent_unused
+          SUPABASE_SECRET_KEY: sb_secret_selected_agent_unused
+          PYTHONPATH: backend:.:.github/benchmark
         shell: bash
         run: |
           python .github/benchmark/v2_selected_agent_runner.py \
             --scenario-ids "$SCENARIO_IDS" \
             --max-scenarios "$MAX_SCENARIOS" \
             --mode live --live-approved
+      - name: Upload raw selected Agent evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rm-selected-agent-live-${{ github.run_id }}
+          path: artifacts/rm-selected-agent-run.json
+          if-no-files-found: warn
