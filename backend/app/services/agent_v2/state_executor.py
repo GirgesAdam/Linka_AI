@@ -831,7 +831,16 @@ def apply_step_state(
     if reads is not None and isinstance(current, BookingTaskState):
         if step.response_goal == "answer_price":
             commercial_read_verified = any(
-                result.kind == "service_catalog" and result.ok for result in reads.results
+                result.ok
+                and (
+                    result.kind == "service_catalog"
+                    or (
+                        result.kind == "service_catalog_set"
+                        and isinstance(result.payload.get("variants"), list)
+                        and bool(result.payload["variants"])
+                    )
+                )
+                for result in reads.results
             )
         elif step.response_goal == "package_information":
             package_result = next(
