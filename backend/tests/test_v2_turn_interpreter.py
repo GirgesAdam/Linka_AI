@@ -150,6 +150,7 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     assert "review its details before" in system_prompt
     assert "until that exact proposal is" in system_prompt
     assert "one trip, one" in system_prompt
+    assert "a short reply selecting a time" in system_prompt
     assert isinstance(messages[1], SystemMessage)
     assert isinstance(messages[2], HumanMessage)
     assert isinstance(messages[3], AIMessage)

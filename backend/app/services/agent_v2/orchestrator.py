@@ -1473,7 +1473,31 @@ def _auto_resolve_single_booking_device(
         return step
     candidates: list[dict[str, object]] = []
     for result in reads.results:
-        if result.kind != "service_catalog" or not result.ok:
+        if not result.ok:
+            continue
+        if result.kind == "service_catalog_set":
+            variants = result.payload.get("variants")
+            compatible = step.facts.get("compatible_visit_device_keys")
+            if (
+                result.payload.get("device_required") is True
+                and isinstance(variants, list)
+                and len(variants) == 1
+                and isinstance(compatible, list)
+                and len(compatible) == 1
+                and isinstance(variants[0], dict)
+            ):
+                # The set read intentionally exposes a complete-visit price variant,
+                # not per-service device rows. Its canonical compatible-device fact
+                # supplies the key for the sole fully priced variant.
+                candidates.append(
+                    {
+                        "device_key": compatible[0],
+                        "device_name": variants[0].get("device_name"),
+                        "price_minor": variants[0].get("total_price_minor"),
+                    }
+                )
+            continue
+        if result.kind != "service_catalog":
             continue
         service = result.payload.get("service")
         if not isinstance(service, dict):

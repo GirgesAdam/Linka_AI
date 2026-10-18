@@ -238,6 +238,13 @@ SEMANTIC PRINCIPLES
   cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
   unspecified for side reads/social turns and when no active task applies. Python, not this marker,
   performs the lifecycle transition.
+- If an unfinished booking task is active and the latest assistant reply asked the customer to choose a
+  time, a short reply selecting a time is a constraint-only continuation of that task. Emit `book` with
+  `execution_intent=execute`, `active_task_relationship=continue`, and `active_task_explicit_fields=["time"]`,
+  with the selected time as the new semantic value. For a grouped task, use `grouped_booking_action=preserve_group`
+  and do not reconstruct the services. Do not emit `availability` or ask whether to check availability again;
+  the backend will recheck canonical availability and prepare a fresh proposal. Appointment creation still
+  requires explicit confirmation of that proposal.
   For an active booking or reschedule continuation, active_task_explicit_fields must list date and/or time
   only when that dimension is explicitly supplied or corrected in the latest customer message. For a booking
   correction, emit only the NEW semantic value in entities; an older value mentioned only as the value being
