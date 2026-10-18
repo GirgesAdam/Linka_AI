@@ -1044,6 +1044,31 @@ def _commercial_basis_key(state: BookingTaskState) -> str | None:
     return f"{service_id}|{device}|{path}"
 
 
+def _booking_device_price_read(
+    state: BookingTaskState,
+    *,
+    laser_service_ids: list[str],
+    common_device_keys: list[str],
+) -> ReadRequest:
+    if len(state.requested_service_ids) > 1:
+        return ReadRequest(
+            kind="service_catalog_set",
+            parameters={"service_ids": list(state.requested_service_ids)},
+        )
+    service_id = laser_service_ids[0]
+    return ReadRequest(
+        kind="service_catalog",
+        parameters={
+            "service_id": service_id,
+            **(
+                {"device_keys": list(common_device_keys)}
+                if len(laser_service_ids) > 1
+                else {}
+            ),
+        },
+    )
+
+
 def _booking_progress(
     state: BookingTaskState,
     *,
@@ -1102,20 +1127,16 @@ def _booking_progress(
         and state.constraints.device_key is not None
         and state.constraints.device_key not in common_device_keys
     ):
-        device_anchor_service_id = laser_service_ids[0]
+        device_price_read = _booking_device_price_read(
+            state,
+            laser_service_ids=laser_service_ids,
+            common_device_keys=common_device_keys,
+        )
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
             disposition="read",
-            reads=[
-                ReadRequest(
-                    kind="service_catalog",
-                    parameters={
-                        "service_id": device_anchor_service_id,
-                        "device_keys": list(common_device_keys),
-                    },
-                )
-            ],
+            reads=[device_price_read],
             state_action="update_active",
             response_goal="answer_price",
             facts={
@@ -1125,28 +1146,20 @@ def _booking_progress(
                 "multi_service_device_invalid": True,
                 "booking_device_price_step": True,
                 "compatible_visit_device_keys": list(common_device_keys),
-                "device_anchor_service_id": device_anchor_service_id,
+                "device_anchor_service_id": laser_service_ids[0],
             },
         )
     if requires_device and state.constraints.device_key is None:
-        device_anchor_service_id = laser_service_ids[0]
+        device_price_read = _booking_device_price_read(
+            state,
+            laser_service_ids=laser_service_ids,
+            common_device_keys=common_device_keys,
+        )
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
             disposition="read",
-            reads=[
-                ReadRequest(
-                    kind="service_catalog",
-                    parameters={
-                        "service_id": device_anchor_service_id,
-                        **(
-                            {"device_keys": list(common_device_keys)}
-                            if len(laser_service_ids) > 1
-                            else {}
-                        ),
-                    },
-                )
-            ],
+            reads=[device_price_read],
             state_action="update_active",
             response_goal="answer_price",
             facts={
@@ -1154,7 +1167,7 @@ def _booking_progress(
                 "service_requires_laser_device": True,
                 "booking_device_price_step": True,
                 "compatible_visit_device_keys": list(common_device_keys),
-                "device_anchor_service_id": device_anchor_service_id,
+                "device_anchor_service_id": laser_service_ids[0],
             },
         )
     if state.constraints.date is not None:
@@ -1190,18 +1203,31 @@ def _booking_progress(
     ):
         commercial_presented = True
     if not commercial_presented:
-        commercial_read = ReadRequest(
-            kind=(
-                "customer_packages"
-                if state.constraints.package_usage == "use_existing"
-                else "service_catalog"
-            ),
-            parameters={
-                key: params[key]
-                for key in ("service_id", "device_key")
-                if key in params and (key != "device_key" or main_requires_device)
-            },
-        )
+        if state.constraints.package_usage != "use_existing" and len(state.requested_service_ids) > 1:
+            commercial_read = ReadRequest(
+                kind="service_catalog_set",
+                parameters={
+                    "service_ids": list(state.requested_service_ids),
+                    **(
+                        {"device_key": state.constraints.device_key}
+                        if state.constraints.device_key is not None
+                        else {}
+                    ),
+                },
+            )
+        else:
+            commercial_read = ReadRequest(
+                kind=(
+                    "customer_packages"
+                    if state.constraints.package_usage == "use_existing"
+                    else "service_catalog"
+                ),
+                parameters={
+                    key: params[key]
+                    for key in ("service_id", "device_key")
+                    if key in params and (key != "device_key" or main_requires_device)
+                },
+            )
         reads = [commercial_read]
         if state.constraints.date is not None:
             availability_params = dict(params)

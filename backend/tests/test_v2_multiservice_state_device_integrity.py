@@ -186,8 +186,8 @@ def test_d4_multiple_common_devices_require_existing_device_choice_step() -> Non
     assert step.facts["compatible_visit_device_keys"] == [CANDELA, DEKA]
     assert step.facts.get("device_key") is None
     assert len(step.reads) == 1
-    assert step.reads[0].kind == "service_catalog"
-    assert step.reads[0].parameters["device_keys"] == [CANDELA, DEKA]
+    assert step.reads[0].kind == "service_catalog_set"
+    assert step.reads[0].parameters["service_ids"] == [UNDERARM, FULL_ARMS]
 
 
 def test_d5_zero_common_device_fails_closed_before_availability_or_write() -> None:

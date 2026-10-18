@@ -793,6 +793,54 @@ def test_missing_date_clarification_retains_group_component_identity() -> None:
     ]
 
 
+def test_read_only_cross_category_preflight_keeps_all_services_in_durable_task() -> None:
+    steps = []
+    for index, service_id, time in (
+        (0, "svc-b", TIME_A),
+        (1, "svc-c", TIME_B),
+    ):
+        base = _step(index, service_id, time)
+        facts = {
+            **base.facts,
+            "compound_visit_independent_category_resources": True,
+        }
+        steps.append(
+            base.model_copy(
+                update={
+                    "disposition": "read",
+                    "state_action": "none",
+                    "write_intent": None,
+                    "response_goal": "present_availability",
+                    "facts": facts,
+                }
+            )
+        )
+    plan = TurnPlan(steps=steps)
+    understanding = TiaTurnUnderstanding(
+        operations=[_operation("svc-b", time=TIME_A), _operation("svc-c", time=TIME_B)]
+    )
+
+    task = grouped_booking_task_from_plan(
+        plan,
+        understanding=understanding,
+        existing=None,
+        now=NOW,
+        turn_id="turn-read-only-compound-visits",
+    )
+
+    assert task is not None
+    assert task.grouped is not None
+    assert task.requested_service_ids == ["svc-b", "svc-c"]
+    assert [component.service_id for component in task.grouped.components] == [
+        "svc-b",
+        "svc-c",
+    ]
+    assert task.grouped.components[0].time == TIME_A
+    assert task.grouped.components[1].time == TIME_B
+    assert task.write_authorization.authorized is True
+    assert task.proposal is None
+
+
 def test_ra_g7_collapsed_step_preserves_complete_service_set_in_new_task() -> None:
     plan = TurnPlan(
         steps=[

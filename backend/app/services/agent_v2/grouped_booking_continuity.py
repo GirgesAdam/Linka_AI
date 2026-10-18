@@ -86,7 +86,17 @@ def _grouped_booking_steps(plan: TurnPlan) -> list[PlanStep] | None:
     for step in plan.steps:
         if step.operation_type not in _BOOKING_OPERATION_TYPES:
             continue
-        if step.facts.get("compound_visit_independent_category_resources") is True:
+        if (
+            step.facts.get("compound_visit_independent_category_resources") is True
+            and (
+                step.write_intent is not None
+                or step.response_goal != "present_availability"
+            )
+        ):
+            # A read-only preflight result still needs durable component state so a later
+            # customer-selected start time can rebuild the complete cross-category proposal.
+            # Once the full proposal is write-ready, _prepare_cross_category_compound_proposal
+            # owns the state transition instead of treating visits as one same-category group.
             continue
         group = compound_visit_group(step)
         if group is None or step.facts.get("service_id") in (None, ""):
@@ -122,7 +132,7 @@ def grouped_booking_task_from_plan(
     now: datetime,
     turn_id: str,
 ) -> BookingTaskState | None:
-    """Capture one same-visit component set as durable booking state."""
+    """Capture one grouped booking journey as durable component state."""
     steps = _grouped_booking_steps(plan)
     if steps is None:
         return None

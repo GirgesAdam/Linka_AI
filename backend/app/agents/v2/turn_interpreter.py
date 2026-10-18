@@ -131,10 +131,17 @@ SEMANTIC PRINCIPLES
   Set continuation_condition=if_previous_no_availability only when the operation is
   explicitly conditional on the immediately previous verified availability having no options; use
   continuation_condition=always for ordinary continuations and unconditional nearest requests.
-- execution_intent describes whether the customer authorizes an action now. Use execute only when
-  the customer is actually asking Linka to perform the action now. Questions, comparisons,
-  hypotheticals, "should I" choices, and requests to inspect consequences/options are informational,
-  even if they mention booking, cancellation, rescheduling, or purchasing.
+- Separate booking-workflow intent from final appointment-write authorization. `book` means the
+  customer wants to start or continue arranging a new appointment; `execution_intent=execute` means
+  start that workflow now. When the customer wants a visit and asks to review its details before
+  confirming, still use `book` with `execution_intent=execute`: the backend verifies availability and
+  presents a server-owned proposal, but must not create an Appointment until that exact proposal is
+  explicitly confirmed. Use `availability` with `execution_intent=informational` only when the customer
+  wants to inspect possible times without starting a booking task, or explicitly says not to start
+  booking now. A hypothetical about whether booking would be possible, without intent to arrange the
+  visit, remains informational. For non-book actions, questions, comparisons, hypotheticals, "should I"
+  choices, and requests to inspect consequences/options remain informational; mentions alone do not
+  authorize cancellation, rescheduling, purchasing, or other mutations.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.
@@ -146,6 +153,12 @@ SEMANTIC PRINCIPLES
   requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
   the requested components to one canonical service ref. Do not decide which service is primary/main;
   Python chooses that deterministically from catalog duration.
+- When the customer wants services from different operational categories arranged in one trip, one
+  after another, preserve each category as a separate book operation in the customer's requested order.
+  Copy the shared date and any explicit starting-time constraint to every related operation. This is one
+  compound booking workflow, not a set of unrelated availability questions. If no starting time is given,
+  the backend may present read-only availability and retain the complete grouped task while the customer
+  chooses a start time; do not create an Appointment before explicit proposal confirmation.
 - For an active grouped booking, distinguish a pure service addition from a constraint-only edit. For a
   pure addition, emit grouped_booking_action=preserve_group and entities.service MUST identify the newly
   added service or services from supplied references. Do not omit a newly named service merely because

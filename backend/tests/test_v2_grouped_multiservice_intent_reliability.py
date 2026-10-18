@@ -16,6 +16,7 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from app.agents.v2.turn_interpreter import _normalize_time_semantics_v2
+from app.services.agent_v2.active_task_progress import plan_active_task_progress
 from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
 from app.services.agent_v2.grouped_booking_continuity import restore_grouped_booking_understanding
 from app.services.agent_v2.multi_service_booking import (
@@ -23,9 +24,14 @@ from app.services.agent_v2.multi_service_booking import (
     common_doctor_ids,
     common_laser_device_keys,
 )
-from app.services.agent_v2.planner import PlannerContext, PlanStep, plan_turn
+from app.services.agent_v2.planner import PlannerContext, PlanStep, ReadRequest, TurnPlan, plan_turn
 from app.services.agent_v2.read_executor import ReadExecutionContext, _read_service_catalog_set
-from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
+from app.services.agent_v2.state import (
+    BookingTaskState,
+    CustomerConstraints,
+    DerivedBookingState,
+    WriteAuthorization,
+)
 from app.services.agent_v2.state_executor import apply_step_state
 from app.services.agent_v2.state_rules import apply_booking_requested_services_change
 from app.services.agent_v2.turn_normalization import (
@@ -1303,6 +1309,73 @@ def test_ra_h2_live_shaped_two_turn_availability_persists_grouped_task_then_pric
     assert step.reads[0].kind == "service_catalog_set"
     assert step.reads[0].parameters["service_ids"] == [A, B]
     assert all(trace.simulated_write is None for trace in second.traces)
+
+
+def test_grouped_device_pricing_uses_complete_service_set_before_and_after_choice() -> None:
+    catalog = _catalog(common_devices=2)
+    for service in catalog["services"]:
+        service["currency"] = "EGP"
+    plan = TurnPlan(
+        steps=[
+            PlanStep(
+                operation_index=0,
+                operation_type="book",
+                disposition="read",
+                reads=[ReadRequest(kind="service_catalog", parameters={"service_id": B})],
+                state_action="start_booking",
+                response_goal="answer_price",
+                facts={
+                    "service_id": B,
+                    "service_requires_laser_device": True,
+                    "booking_device_price_step": True,
+                },
+            )
+        ]
+    )
+
+    tagged = tag_booking_service_sets(
+        plan,
+        service_sets={0: [A, B]},
+        catalog=catalog,
+    )
+    first_step = tagged.steps[0]
+    assert first_step.reads[0].kind == "service_catalog_set"
+    assert first_step.reads[0].parameters == {"service_ids": [A, B]}
+    assert first_step.facts["compatible_visit_device_keys"] == ["v1", "v2"]
+    assert first_step.facts["visit_total_price"] is True
+
+    first_result = _read_service_catalog_set(
+        first_step.reads[0],
+        ReadExecutionContext(
+            db=SimpleNamespace(),
+            workspace=SimpleNamespace(),
+            patient=SimpleNamespace(),
+            now=NOW,
+            catalog=catalog,
+            adapter=None,
+        ),
+    )
+    assert {item["device_name"] for item in first_result.payload["variants"]} == {"v1", "v2"}
+    assert {item["total_price_minor"] for item in first_result.payload["variants"]} == {100_000}
+
+    context = build_semantic_context(catalog)
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(
+            operation="booking", authorized=True, source_turn_id="device-price-test", granted_at=NOW
+        ),
+        constraints=CustomerConstraints(
+            service_id=A,
+            device_key="v1",
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        requested_service_ids=[A, B],
+        derived=DerivedBookingState(),
+    )
+    continuation = plan_active_task_progress(state, operation_index=0, context=context)
+    assert continuation.response_goal == "answer_price"
+    assert continuation.reads[0].kind == "service_catalog_set"
+    assert continuation.reads[0].parameters == {"service_ids": [A, B], "device_key": "v1"}
 
 
 def test_ra_h2_grouped_availability_task_prices_both_services_without_clarification() -> None:

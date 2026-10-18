@@ -555,7 +555,9 @@ def run_v2_stateful_fixture_turn(
             now=local_now,
         ),
     )
-    plan = tag_booking_service_sets(plan, service_sets=booking_service_sets)
+    plan = tag_booking_service_sets(
+        plan, service_sets=booking_service_sets, catalog=fixture.catalog
+    )
     plan = normalize_compound_turn_plan(
         plan,
         catalog=fixture.catalog,

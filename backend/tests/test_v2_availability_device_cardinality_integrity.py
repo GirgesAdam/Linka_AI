@@ -390,7 +390,8 @@ def test_d6_multi_service_intersection_two_requires_one_visit_level_choice() -> 
     step = plan_active_task_progress(state, operation_index=0, context=build_semantic_context(catalog))
     assert step.facts["compatible_visit_device_keys"] == [CANDELA, DEKA]
     assert len(step.reads) == 1
-    assert step.reads[0].kind == "service_catalog"
+    assert step.reads[0].kind == "service_catalog_set"
+    assert step.reads[0].parameters["service_ids"] == [UNDERARM, FULL_ARMS]
 
 
 def test_d7_selected_device_survives_side_reads_without_reasking_device() -> None:

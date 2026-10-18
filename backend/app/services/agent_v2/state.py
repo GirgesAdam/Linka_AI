@@ -263,7 +263,7 @@ class BookingProposal(StrictStateModel):
 
 
 class GroupedBookingState(StrictStateModel):
-    """Durable component set for one pending same-visit booking."""
+    """Durable component set for one pending grouped booking journey."""
 
     components: list[CustomerConstraints] = Field(default_factory=list)
 

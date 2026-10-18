@@ -3,6 +3,8 @@ from __future__ import annotations
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
 from app.services.agent_v2.multi_service_booking import (
+    common_laser_device_keys,
+    laser_service_ids,
     partition_service_ids_by_operational_category,
     select_main_service_id,
     service_operational_category,
@@ -473,6 +475,7 @@ def tag_booking_service_sets(
     plan: TurnPlan,
     *,
     service_sets: dict[int, list[str]],
+    catalog: dict[str, object] | None = None,
 ) -> TurnPlan:
     if not service_sets:
         return plan
@@ -498,7 +501,45 @@ def tag_booking_service_sets(
                     }
                 }
             )
+        reads = step.reads
+        disposition = step.disposition
+        response_goal = step.response_goal
+        clarification_field = step.clarification_field
         state_action = step.state_action
+        if (
+            catalog is not None
+            and len(requested) > 1
+            and facts.get("booking_device_price_step") is True
+            and facts.get("service_requires_laser_device") is True
+            and any(request.kind == "service_catalog" for request in reads)
+        ):
+            laser_ids = laser_service_ids(catalog, requested)
+            if len(laser_ids) > 1:
+                compatible_devices = common_laser_device_keys(catalog, requested)
+                facts["compatible_visit_device_keys"] = list(compatible_devices)
+                if compatible_devices:
+                    # Use the existing complete-set price read instead of showing a
+                    # device choice based only on the arbitrarily selected main service.
+                    reads = [
+                        request.model_copy(
+                            update={
+                                "kind": "service_catalog_set",
+                                "parameters": {"service_ids": list(requested)},
+                            }
+                        )
+                        if request.kind == "service_catalog"
+                        else request
+                        for request in reads
+                    ]
+                    facts["visit_total_price"] = True
+                else:
+                    disposition = "clarify"
+                    reads = []
+                    write_intent = None
+                    response_goal = "clarification"
+                    clarification_field = "device"
+                    facts["multi_service_no_common_device"] = True
+
         if (
             step.operation_type in {"availability", "book"}
             and len(requested) > 1
@@ -513,6 +554,10 @@ def tag_booking_service_sets(
             step.model_copy(
                 update={
                     "facts": facts,
+                    "reads": reads,
+                    "disposition": disposition,
+                    "response_goal": response_goal,
+                    "clarification_field": clarification_field,
                     "write_intent": write_intent,
                     "state_action": state_action,
                 }

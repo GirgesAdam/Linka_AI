@@ -2992,7 +2992,9 @@ def orchestrate_v2_turn(
             availability_reference_context=availability_reference_context,
         ),
     )
-    plan = tag_booking_service_sets(plan, service_sets=booking_service_sets)
+    plan = tag_booking_service_sets(
+        plan, service_sets=booking_service_sets, catalog=canonical_catalog
+    )
     plan = normalize_compound_turn_plan(
         plan,
         catalog=canonical_catalog,
