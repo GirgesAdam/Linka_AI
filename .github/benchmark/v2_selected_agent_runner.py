@@ -15,41 +15,13 @@ ROOT = Path(__file__).resolve().parents[2]
 REPORT_DEFAULT = Path("artifacts/rm-selected-agent-run.json")
 ALLOWED_IDS = tuple(f"RM{i:02d}" for i in range(1, 30))
 
-# Existing benchmark scenario names are reused only where the current code provides
-# a relevant setup. A mapping is not an assertion that the existing case fully
-# covers the RM contract; every live result remains INCONCLUSIVE until expectations
-# are specified and checked independently.
-SCENARIOS: dict[str, dict[str, str | None]] = {
-    "RM01": {"name": "Service price and duration", "topic": "price_duration", "source_scenario": None},
-    "RM02": {"name": "Clinic information and payment", "topic": "clinic_payment", "source_scenario": None},
-    "RM03": {"name": "Doctor discovery and comparison", "topic": "doctor_discovery_comparison", "source_scenario": None},
-    "RM04": {"name": "Nearest available appointment", "topic": "nearest_availability", "source_scenario": "nearest_available"},
-    "RM05": {"name": "Date and time interpretation", "topic": "date_time", "source_scenario": None},
-    "RM06": {"name": "Conditional availability fallback", "topic": "conditional_fallback", "source_scenario": "conditional_fallback"},
-    "RM07": {"name": "Clinic-context spoken hour", "topic": "spoken_hour", "source_scenario": None},
-    "RM08": {"name": "Stale choice validation", "topic": "stale_choice", "source_scenario": None},
-    "RM09": {"name": "Booking and confirmation", "topic": "booking_confirmation", "source_scenario": "single_session_booking"},
-    "RM10": {"name": "Two services in one visit", "topic": "grouped_services", "source_scenario": "two_services_same_visit"},
-    "RM11": {"name": "Service replacement", "topic": "service_replacement", "source_scenario": "change_service_mid_conversation"},
-    "RM12": {"name": "Add and remove service", "topic": "service_set_changes", "source_scenario": None},
-    "RM13": {"name": "Change appointment time", "topic": "time_change", "source_scenario": "change_time_during_booking"},
-    "RM14": {"name": "Device and doctor compatibility", "topic": "resource_compatibility", "source_scenario": "laser_device_consistency"},
-    "RM15": {"name": "Read existing appointments", "topic": "appointment_read", "source_scenario": None},
-    "RM16": {"name": "Ambiguous cancellation", "topic": "ambiguous_cancellation", "source_scenario": None},
-    "RM17": {"name": "Reschedule to unavailable time", "topic": "reschedule_unavailable", "source_scenario": None},
-    "RM18": {"name": "Patient profile", "topic": "patient_profile", "source_scenario": None},
-    "RM19": {"name": "Previous history", "topic": "previous_history", "source_scenario": None},
-    "RM20": {"name": "Package balance", "topic": "package_balance", "source_scenario": None},
-    "RM21": {"name": "Purchase package", "topic": "package_purchase", "source_scenario": "package_purchase"},
-    "RM22": {"name": "Pulse", "topic": "pulse", "source_scenario": None},
-    "RM23": {"name": "Refund offers", "topic": "refund_offers", "source_scenario": None},
-    "RM24": {"name": "Follow-up", "topic": "follow_up", "source_scenario": None},
-    "RM25": {"name": "Marketing opt-out", "topic": "marketing_opt_out", "source_scenario": None},
-    "RM26": {"name": "Side question during booking", "topic": "side_question", "source_scenario": None},
-    "RM27": {"name": "Urgent medical situation", "topic": "medical_safety", "source_scenario": None},
-    "RM28": {"name": "Complaint, dispute and privacy", "topic": "complaint_privacy", "source_scenario": None},
-    "RM29": {"name": "Unclear or out-of-scope conversation", "topic": "out_of_scope", "source_scenario": "out_of_scope_recovery"},
+CONTRACTS_PATH = ROOT / ".github" / "benchmark" / "v2_rm_scenario_contracts.json"
+CONTRACT_DOCUMENT = json.loads(CONTRACTS_PATH.read_text(encoding="utf-8"))
+SCENARIOS: dict[str, dict[str, Any]] = {
+    item["scenario_id"]: item for item in CONTRACT_DOCUMENT["contracts"]
 }
+if tuple(SCENARIOS) != ALLOWED_IDS:
+    raise RuntimeError("Canonical RM contract registry must define RM01-RM29 exactly once.")
 
 
 class SelectionError(ValueError):
@@ -120,19 +92,27 @@ def make_report(selected: list[str], mode: str, sha: str | None, reason: str) ->
     results = []
     for scenario_id in selected:
         item = SCENARIOS[scenario_id]
-        source = item["source_scenario"]
+        status = item["specification_status"]
+        if status == "SPEC_BLOCKED":
+            detail = " Contract is SPEC_BLOCKED and is not an executable test."
+        else:
+            detail = " Contract assertions are specified but not wired to the live runner; remains NOT_RUN."
         results.append({
             "scenario_id": scenario_id,
-            "name": item["name"],
-            "topic": item["topic"],
-            "source_scenario": source,
+            "name": item["scenario_name"],
+            "topic": item["capability_under_test"],
+            "source_scenarios": item["source_scenarios"],
+            "execution_group": item["execution_group"],
+            "specification_status": status,
+            "assertion_implementation_status": item["assertion_implementation_status"],
             "git_sha": sha,
             "status": "NOT_RUN",
             "expected": None,
             "actual": None,
             "evidence": {},
-            "coverage_status": "candidate_mapping_only" if source else "scenario_definition_missing",
-            "reason": reason + (" Existing scenario is only a candidate mapping; RM-specific expected assertions are not defined." if source else " No equivalent existing scenario definition is available; remains NOT_RUN."),
+            "coverage_status": item["coverage_status"],
+            "required_assertion_count": len(item["required_assertions"]),
+            "reason": reason + detail,
         })
     return {
         "schema_version": 1,

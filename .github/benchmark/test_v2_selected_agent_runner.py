@@ -1,5 +1,9 @@
+import contextlib
 import importlib.util
+import io
+import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -41,8 +45,68 @@ class ScenarioSelectionTests(unittest.TestCase):
         self.assertEqual(report["real_model_executions"], 0)
         self.assertEqual(report["database_writes"], 0)
         self.assertTrue(all(row["status"] == "NOT_RUN" for row in report["results"]))
-        self.assertEqual(report["results"][0]["coverage_status"], "scenario_definition_missing")
-        self.assertEqual(report["results"][1]["coverage_status"], "scenario_definition_missing")
+        self.assertEqual(report["results"][0]["coverage_status"], "EXISTING_PROBE_PARTIAL")
+        self.assertEqual(report["results"][1]["coverage_status"], "NEW_SCENARIO_REQUIRED")
+        self.assertEqual(report["results"][0]["specification_status"], "SPEC_READY")
+        self.assertEqual(report["results"][1]["specification_status"], "SPEC_READY")
+        self.assertEqual(report["results"][0]["required_assertion_count"], 3)
+        blocked = runner.make_report(["RM22"], "validate_only", "abc123", "validation only")
+        self.assertEqual(blocked["results"][0]["specification_status"], "SPEC_BLOCKED")
+        self.assertIsNone(blocked["results"][0]["execution_group"])
+        self.assertEqual(blocked["results"][0]["status"], "NOT_RUN")
+
+    def test_live_mode_refuses_before_model_or_database_access(self):
+        names = ["LINKA_QA_LIVE_APPROVED", "LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED", "OPENAI_API_KEY", "LINKA_QA_DATABASE_URL", "LINKA_QA_EXPECTED_DATABASE_NAME", "LINKA_QA_EXPECTED_DATABASE_HOST"]
+        saved = {name: os.environ.pop(name, None) for name in names}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                report_path = Path(tmp) / "live-refused.json"
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    exit_code = runner.main(["--scenario-ids", "RM01", "--max-scenarios", "1", "--mode", "live", "--live-approved", "--report", str(report_path)])
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                self.assertEqual(exit_code, 3)
+                self.assertEqual(report["real_model_executions"], 0)
+                self.assertEqual(report["database_writes"], 0)
+                self.assertEqual(report["overall_status"], "NOT_RUN")
+                self.assertEqual(report["results"][0]["status"], "NOT_RUN")
+                self.assertIn("LIVE_REFUSED", stderr.getvalue())
+        finally:
+            for name, value in saved.items():
+                if value is not None:
+                    os.environ[name] = value
+
+    def test_live_mode_stays_disabled_even_when_static_env_checks_pass(self):
+        values = {
+            "LINKA_QA_LIVE_APPROVED": "true",
+            "LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED": "true",
+            "OPENAI_API_KEY": "test-only-placeholder",
+            "LINKA_QA_DATABASE_URL": "postgresql://qa_user:placeholder@qa-db.example.invalid/linka_qa_test",
+            "LINKA_QA_EXPECTED_DATABASE_NAME": "linka_qa_test",
+            "LINKA_QA_EXPECTED_DATABASE_HOST": "qa-db.example.invalid",
+        }
+        saved = {name: os.environ.get(name) for name in values}
+        os.environ.update(values)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                report_path = Path(tmp) / "live-still-disabled.json"
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    exit_code = runner.main(["--scenario-ids", "RM01", "--max-scenarios", "1", "--mode", "live", "--live-approved", "--report", str(report_path)])
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                self.assertEqual(exit_code, 3)
+                self.assertIn("isolation have not been proven", stderr.getvalue())
+                self.assertEqual(report["real_model_executions"], 0)
+                self.assertEqual(report["database_writes"], 0)
+                self.assertEqual(report["overall_status"], "NOT_RUN")
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
     def test_live_environment_fails_closed_without_explicit_approval(self):
         names = ["LINKA_QA_LIVE_APPROVED", "LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED", "OPENAI_API_KEY", "LINKA_QA_DATABASE_URL", "LINKA_QA_EXPECTED_DATABASE_NAME", "LINKA_QA_EXPECTED_DATABASE_HOST"]
