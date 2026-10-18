@@ -20,11 +20,11 @@ ALLOWED_IDS = tuple(f"RM{i:02d}" for i in range(1, 30))
 # covers the RM contract; every live result remains INCONCLUSIVE until expectations
 # are specified and checked independently.
 SCENARIOS: dict[str, dict[str, str | None]] = {
-    "RM01": {"name": "Service price and duration", "topic": "price_duration", "source_scenario": "simple_price"},
+    "RM01": {"name": "Service price and duration", "topic": "price_duration", "source_scenario": None},
     "RM02": {"name": "Clinic information and payment", "topic": "clinic_payment", "source_scenario": None},
-    "RM03": {"name": "Doctor discovery and comparison", "topic": "doctor_discovery_comparison", "source_scenario": "doctor_comparison"},
+    "RM03": {"name": "Doctor discovery and comparison", "topic": "doctor_discovery_comparison", "source_scenario": None},
     "RM04": {"name": "Nearest available appointment", "topic": "nearest_availability", "source_scenario": "nearest_available"},
-    "RM05": {"name": "Date and time interpretation", "topic": "date_time", "source_scenario": "exact_time_availability"},
+    "RM05": {"name": "Date and time interpretation", "topic": "date_time", "source_scenario": None},
     "RM06": {"name": "Conditional availability fallback", "topic": "conditional_fallback", "source_scenario": "conditional_fallback"},
     "RM07": {"name": "Clinic-context spoken hour", "topic": "spoken_hour", "source_scenario": None},
     "RM08": {"name": "Stale choice validation", "topic": "stale_choice", "source_scenario": None},

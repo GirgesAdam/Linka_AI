@@ -41,7 +41,7 @@ class ScenarioSelectionTests(unittest.TestCase):
         self.assertEqual(report["real_model_executions"], 0)
         self.assertEqual(report["database_writes"], 0)
         self.assertTrue(all(row["status"] == "NOT_RUN" for row in report["results"]))
-        self.assertEqual(report["results"][0]["coverage_status"], "candidate_mapping_only")
+        self.assertEqual(report["results"][0]["coverage_status"], "scenario_definition_missing")
         self.assertEqual(report["results"][1]["coverage_status"], "scenario_definition_missing")
 
     def test_live_environment_fails_closed_without_explicit_approval(self):
