@@ -9,15 +9,10 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY = "GirgesAdam/Linka_AI"
-
 QA_HARNESS_PR = 264
 QA_HARNESS_BRANCH = "qa/llm-29-selective-runner-20261018"
 QA_HARNESS_SHA = "dbbfdff3df4bfe51866097870f9663bf58a28ca5"
-
-AGENT_PR = 262
-AGENT_BRANCH = "refactor/booking-state-machine-simplification-20261016"
-AGENT_SHA = "0a2885809efe6dec7d6bc184abc158725228faba"
-
+APPROVED_AGENT_SHA_VARIABLE = "LINKA_QA_APPROVED_AGENT_SHA"
 AUTHORIZED_SCENARIOS = ("RM04", "RM06", "RM20", "RM29")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -26,11 +21,11 @@ class DispatchRejected(ValueError):
     """A dispatch request or its provenance failed a fail-closed guard."""
 
 
-def _require_sha(value: str, label: str, expected: str) -> None:
+def _require_sha(value: str, label: str, expected: str | None = None) -> None:
     if not isinstance(value, str) or not SHA_RE.fullmatch(value):
         raise DispatchRejected(f"{label} must be a full 40-character lowercase commit SHA.")
-    if value != expected:
-        raise DispatchRejected(f"{label} is not an approved pinned SHA.")
+    if expected is not None and value != expected:
+        raise DispatchRejected(f"{label} is not the approved SHA.")
 
 
 def parse_scenario_ids(raw: str) -> list[str]:
@@ -45,7 +40,7 @@ def parse_scenario_ids(raw: str) -> list[str]:
     unauthorized = [item for item in selected if item not in AUTHORIZED_SCENARIOS]
     if unauthorized:
         raise DispatchRejected(
-            "Scenario ID(s) are not authorized for QA-REAL-02: " + ", ".join(unauthorized)
+            "Scenario ID(s) are not authorized for QA-REAL-03: " + ", ".join(unauthorized)
         )
     if len(selected) > len(AUTHORIZED_SCENARIOS):
         raise DispatchRejected("The selected batch exceeds the four-scenario authorization.")
@@ -58,6 +53,7 @@ def validate_inputs(
     mode: str,
     qa_harness_sha: str,
     agent_under_test_sha: str,
+    approved_agent_sha: str,
     scenario_ids: str,
     confirm_live: bool,
 ) -> list[str]:
@@ -71,7 +67,8 @@ def validate_inputs(
         raise DispatchRejected("confirm_live is only valid with mode=live.")
 
     _require_sha(qa_harness_sha, "QA harness SHA", QA_HARNESS_SHA)
-    _require_sha(agent_under_test_sha, "Agent-under-test SHA", AGENT_SHA)
+    _require_sha(approved_agent_sha, "Repository-approved Agent SHA")
+    _require_sha(agent_under_test_sha, "Agent-under-test SHA", approved_agent_sha)
     return parse_scenario_ids(scenario_ids)
 
 
@@ -88,20 +85,20 @@ def _pr_number(pr: dict[str, Any], label: str, expected: int) -> None:
         raise DispatchRejected(f"{label} PR head must belong to {REPOSITORY}.")
 
 
-def _validate_head(
-    pr: dict[str, Any],
-    *,
-    label: str,
-    expected_number: int,
-    expected_branch: str,
-    expected_sha: str,
-) -> None:
-    _pr_number(pr, label, expected_number)
+def _validate_qa_head(pr: dict[str, Any], *, expected_sha: str) -> None:
+    _pr_number(pr, "QA harness", QA_HARNESS_PR)
     head = pr["head"]
-    if head.get("ref") != expected_branch:
-        raise DispatchRejected(f"{label} PR branch does not match the approved branch.")
+    if head.get("ref") != QA_HARNESS_BRANCH:
+        raise DispatchRejected("QA harness PR branch does not match the approved branch.")
     if head.get("sha") != expected_sha:
-        raise DispatchRejected(f"{label} PR head is stale or does not match the approved SHA.")
+        raise DispatchRejected("QA harness PR head is stale or does not match the approved SHA.")
+    base = pr.get("base")
+    if not isinstance(base, dict) or base.get("ref") != "main":
+        raise DispatchRejected("QA harness PR must target main.")
+    state = pr.get("state")
+    merged = pr.get("merged") is True
+    if not (state == "open" or (state == "closed" and merged)):
+        raise DispatchRejected("QA harness PR must be open or already merged.")
 
 
 def _flatten_reviews(value: Any) -> list[dict[str, Any]]:
@@ -152,65 +149,71 @@ def _has_current_human_approval(
     )
 
 
-def validate_pr_metadata(
+def validate_qa_pr_metadata(
     *,
     mode: str,
     qa_harness_sha: str,
-    agent_under_test_sha: str,
     qa_pr: dict[str, Any],
-    agent_pr: dict[str, Any],
     qa_reviews: Any,
-    agent_reviews: Any,
 ) -> None:
-    _validate_head(
-        qa_pr,
-        label="QA harness",
-        expected_number=QA_HARNESS_PR,
-        expected_branch=QA_HARNESS_BRANCH,
-        expected_sha=qa_harness_sha,
-    )
-    base = qa_pr.get("base")
-    if not isinstance(base, dict) or base.get("ref") != "main":
-        raise DispatchRejected("QA harness PR must target main.")
-    qa_state = qa_pr.get("state")
-    qa_merged = qa_pr.get("merged") is True
-    if not (qa_state == "open" or (qa_state == "closed" and qa_merged)):
-        raise DispatchRejected("QA harness PR must be open or already merged.")
-
-    _validate_head(
-        agent_pr,
-        label="Agent-under-test",
-        expected_number=AGENT_PR,
-        expected_branch=AGENT_BRANCH,
-        expected_sha=agent_under_test_sha,
-    )
-    if agent_pr.get("state") != "open":
-        raise DispatchRejected("Agent-under-test PR must remain open; closed PRs are rejected.")
-
+    _require_sha(qa_harness_sha, "QA harness SHA", QA_HARNESS_SHA)
+    _validate_qa_head(qa_pr, expected_sha=qa_harness_sha)
     if mode == "live":
-        if qa_pr.get("draft") is True or agent_pr.get("draft") is True:
-            raise DispatchRejected("Live mode requires both target PRs to be out of Draft.")
-        qa_author = str((qa_pr.get("user") or {}).get("login") or "")
-        agent_author = str((agent_pr.get("user") or {}).get("login") or "")
+        if qa_pr.get("draft") is True:
+            raise DispatchRejected("Live mode requires the QA harness PR to be out of Draft.")
+        author = str((qa_pr.get("user") or {}).get("login") or "")
         if not _has_current_human_approval(
-            qa_reviews, author_login=qa_author, expected_sha=qa_harness_sha
+            qa_reviews, author_login=author, expected_sha=qa_harness_sha
         ):
             raise DispatchRejected(
                 "QA harness PR has no current human approval for its exact head SHA."
             )
-        if not _has_current_human_approval(
-            agent_reviews, author_login=agent_author, expected_sha=agent_under_test_sha
-        ):
-            raise DispatchRejected(
-                "Agent-under-test PR has no current human approval for its exact head SHA."
-            )
+
+
+def verify_agent_main_history(
+    *,
+    repo_path: str,
+    agent_sha: str,
+    approved_agent_sha: str,
+    main_ref: str = "origin/main",
+) -> str:
+    _require_sha(approved_agent_sha, "Repository-approved Agent SHA")
+    _require_sha(agent_sha, "Agent-under-test SHA", approved_agent_sha)
+    main_result = subprocess.run(
+        ["git", "-C", repo_path, "rev-parse", "--verify", f"{main_ref}^{{commit}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    main_sha = main_result.stdout.strip()
+    _require_sha(main_sha, "Verified main SHA")
+    ancestry = subprocess.run(
+        ["git", "-C", repo_path, "merge-base", "--is-ancestor", agent_sha, main_ref],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if ancestry.returncode != 0:
+        raise DispatchRejected(
+            f"Agent SHA {agent_sha} is not in the verified history of {main_ref}."
+        )
+    return main_sha
 
 
 def verify_checkout_heads(
-    *, qa_path: str, agent_path: str, qa_sha: str, agent_sha: str, require_clean: bool = False
+    *,
+    qa_path: str,
+    agent_path: str,
+    qa_sha: str,
+    agent_sha: str,
+    approved_agent_sha: str,
+    require_clean: bool = False,
 ) -> None:
     _require_sha(qa_sha, "QA harness SHA", QA_HARNESS_SHA)
-    _require_sha(agent_sha, "Agent-under-test SHA", AGENT_SHA)
+    _require_sha(approved_agent_sha, "Repository-approved Agent SHA")
+    _require_sha(agent_sha, "Agent-under-test SHA", approved_agent_sha)
     for label, path, expected in (
         ("QA harness", qa_path, qa_sha),
         ("Agent-under-test", agent_path, agent_sha),
@@ -246,13 +249,16 @@ def annotate_report(
     report_path: str,
     qa_harness_sha: str,
     agent_under_test_sha: str,
+    approved_agent_sha: str,
     workflow_sha: str,
+    main_sha: str,
     scenario_ids: str,
 ) -> None:
     _require_sha(qa_harness_sha, "QA harness SHA", QA_HARNESS_SHA)
-    _require_sha(agent_under_test_sha, "Agent-under-test SHA", AGENT_SHA)
-    if not isinstance(workflow_sha, str) or not SHA_RE.fullmatch(workflow_sha):
-        raise DispatchRejected("Workflow SHA must be a full 40-character lowercase commit SHA.")
+    _require_sha(approved_agent_sha, "Repository-approved Agent SHA")
+    _require_sha(agent_under_test_sha, "Agent-under-test SHA", approved_agent_sha)
+    _require_sha(workflow_sha, "Workflow SHA")
+    _require_sha(main_sha, "Verified main SHA")
     selected = parse_scenario_ids(scenario_ids)
     path = Path(report_path)
     report = json.loads(path.read_text(encoding="utf-8"))
@@ -261,10 +267,11 @@ def annotate_report(
 
     metadata = {
         "dispatch_workflow_sha": workflow_sha,
+        "verified_main_sha": main_sha,
         "qa_harness_pr": QA_HARNESS_PR,
         "qa_harness_sha": qa_harness_sha,
-        "agent_under_test_pr": AGENT_PR,
         "agent_under_test_sha": agent_under_test_sha,
+        "agent_sha_approval_source": APPROVED_AGENT_SHA_VARIABLE,
         "selected_scenario_ids": selected,
         "runner_git_sha_means": "agent_under_test_sha",
     }
@@ -295,31 +302,38 @@ def main(argv: list[str] | None = None) -> int:
     inputs.add_argument("--mode", required=True)
     inputs.add_argument("--qa-harness-sha", required=True)
     inputs.add_argument("--agent-under-test-sha", required=True)
+    inputs.add_argument("--approved-agent-sha", required=True)
     inputs.add_argument("--scenario-ids", required=True)
     inputs.add_argument("--confirm-live", choices=("true", "false"), required=True)
     inputs.add_argument("--github-output")
 
-    prs = subparsers.add_parser("validate-prs")
-    prs.add_argument("--mode", required=True)
-    prs.add_argument("--qa-harness-sha", required=True)
-    prs.add_argument("--agent-under-test-sha", required=True)
-    prs.add_argument("--qa-pr", required=True)
-    prs.add_argument("--agent-pr", required=True)
-    prs.add_argument("--qa-reviews", required=True)
-    prs.add_argument("--agent-reviews", required=True)
+    history = subparsers.add_parser("verify-main-history")
+    history.add_argument("--repo-path", required=True)
+    history.add_argument("--agent-under-test-sha", required=True)
+    history.add_argument("--approved-agent-sha", required=True)
+    history.add_argument("--main-ref", default="origin/main")
+
+    qa_pr = subparsers.add_parser("validate-qa-pr")
+    qa_pr.add_argument("--mode", required=True)
+    qa_pr.add_argument("--qa-harness-sha", required=True)
+    qa_pr.add_argument("--qa-pr", required=True)
+    qa_pr.add_argument("--qa-reviews", required=True)
 
     checkout = subparsers.add_parser("verify-checkouts")
     checkout.add_argument("--qa-path", required=True)
     checkout.add_argument("--agent-path", required=True)
     checkout.add_argument("--qa-harness-sha", required=True)
     checkout.add_argument("--agent-under-test-sha", required=True)
+    checkout.add_argument("--approved-agent-sha", required=True)
     checkout.add_argument("--require-clean", action="store_true")
 
     annotate = subparsers.add_parser("annotate-report")
     annotate.add_argument("--report", required=True)
     annotate.add_argument("--qa-harness-sha", required=True)
     annotate.add_argument("--agent-under-test-sha", required=True)
+    annotate.add_argument("--approved-agent-sha", required=True)
     annotate.add_argument("--workflow-sha", required=True)
+    annotate.add_argument("--main-sha", required=True)
     annotate.add_argument("--scenario-ids", required=True)
 
     args = parser.parse_args(argv)
@@ -330,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.mode,
                 qa_harness_sha=args.qa_harness_sha,
                 agent_under_test_sha=args.agent_under_test_sha,
+                approved_agent_sha=args.approved_agent_sha,
                 scenario_ids=args.scenario_ids,
                 confirm_live=args.confirm_live == "true",
             )
@@ -338,23 +353,29 @@ def main(argv: list[str] | None = None) -> int:
                 with Path(args.github_output).open("a", encoding="utf-8") as output:
                     output.write(f"selected_scenario_ids={joined}\n")
             print(json.dumps({"result": "PASS", "selected_scenario_ids": selected}))
-        elif args.command == "validate-prs":
-            validate_pr_metadata(
+        elif args.command == "verify-main-history":
+            main_sha = verify_agent_main_history(
+                repo_path=args.repo_path,
+                agent_sha=args.agent_under_test_sha,
+                approved_agent_sha=args.approved_agent_sha,
+                main_ref=args.main_ref,
+            )
+            print(json.dumps({"result": "PASS", "agent_under_test_sha": args.agent_under_test_sha, "verified_main_sha": main_sha}))
+        elif args.command == "validate-qa-pr":
+            validate_qa_pr_metadata(
                 mode=args.mode,
                 qa_harness_sha=args.qa_harness_sha,
-                agent_under_test_sha=args.agent_under_test_sha,
                 qa_pr=_load_json(args.qa_pr),
-                agent_pr=_load_json(args.agent_pr),
                 qa_reviews=_load_json(args.qa_reviews),
-                agent_reviews=_load_json(args.agent_reviews),
             )
-            print("PR_VALIDATION=PASS")
+            print("QA_PR_VALIDATION=PASS")
         elif args.command == "verify-checkouts":
             verify_checkout_heads(
                 qa_path=args.qa_path,
                 agent_path=args.agent_path,
                 qa_sha=args.qa_harness_sha,
                 agent_sha=args.agent_under_test_sha,
+                approved_agent_sha=args.approved_agent_sha,
                 require_clean=args.require_clean,
             )
             print("CHECKOUT_SHA_VALIDATION=PASS")
@@ -363,7 +384,9 @@ def main(argv: list[str] | None = None) -> int:
                 report_path=args.report,
                 qa_harness_sha=args.qa_harness_sha,
                 agent_under_test_sha=args.agent_under_test_sha,
+                approved_agent_sha=args.approved_agent_sha,
                 workflow_sha=args.workflow_sha,
+                main_sha=args.main_sha,
                 scenario_ids=args.scenario_ids,
             )
             print("REPORT_SHA_ANNOTATION=PASS")
