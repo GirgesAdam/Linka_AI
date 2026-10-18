@@ -460,6 +460,11 @@ def _read_facts(
                 )
         return {
             "visit_price": {
+                "service_ids": [
+                    str(item)
+                    for item in result.payload.get("service_ids", [])
+                    if str(item).strip()
+                ],
                 "service_names": [
                     str(item)
                     for item in result.payload.get("service_names", [])
@@ -1175,6 +1180,50 @@ def build_handoff_outcome(plan: TurnPlan) -> TurnOutcome:
     )
 
 
+def _scope_visit_price_facts(
+    read_facts: dict[str, object],
+    *,
+    requested_service_ids: object,
+) -> None:
+    """Keep pricing evidence scoped to the exact service set requested by this step."""
+    raw = read_facts.get("visit_price")
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    identified = [
+        row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("service_ids"), list)
+    ]
+    requested = (
+        {str(item) for item in requested_service_ids if str(item).strip()}
+        if isinstance(requested_service_ids, list)
+        else set()
+    )
+    if requested and identified:
+        rows = [
+            row
+            for row in identified
+            if {str(item) for item in row["service_ids"] if str(item).strip()} == requested
+        ]
+        if not rows:
+            read_facts.pop("visit_price", None)
+            return
+
+    resolved_device_rows = [
+        row for row in rows if isinstance(row, dict) and row.get("device_resolved") is True
+    ]
+    if resolved_device_rows:
+        rows = resolved_device_rows
+
+    sanitized = [
+        {key: value for key, value in row.items() if key != "service_ids"}
+        if isinstance(row, dict)
+        else row
+        for row in rows
+    ]
+    if sanitized:
+        read_facts["visit_price"] = sanitized[0] if len(sanitized) == 1 else sanitized
+
+
 def build_step_outcome(
     step: PlanStep,
     *,
@@ -1197,6 +1246,10 @@ def build_step_outcome(
         reads,
         requested_service_details=requested_details,
         selected_device_key=selected_device_key,
+    )
+    _scope_visit_price_facts(
+        read_facts,
+        requested_service_ids=step.facts.get("requested_service_ids"),
     )
     base_facts = {**_visible_dict(step.facts), **read_facts}
     if step.operation_type == "service_info":

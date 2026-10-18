@@ -83,6 +83,12 @@ SEMANTIC PRINCIPLES
   candidate_refs, and candidate_mode=ambiguous. If the customer intentionally refers to several
   entities as a group to inspect or compare, use candidate_refs with candidate_mode=set. Never invent
   a reference.
+- Preserve identity provenance in each EntityReference: when the latest customer message explicitly
+  names a concrete service, doctor, branch, device, package, or appointment, set that entity's `text`
+  to the customer-grounded name alongside its supplied `ref`, even if the reference resolves the name.
+  Leave `text` null when the entity is present only as inherited/contextual information from an active
+  task, verified read, assistant prose, or older dialogue. Python uses this distinction to accept an
+  explicit customer choice without allowing context-only references to overwrite task state.
 - A direct comparison between two or more supplied doctors, devices, services, packages, or other
   entities is a set comparison, not an identity ambiguity. Keep the comparison informational and use
   candidate_mode=set for the compared entity set. For an availability comparison with no explicit

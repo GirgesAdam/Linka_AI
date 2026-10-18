@@ -94,7 +94,14 @@ class StrictContractModel(BaseModel):
 class EntityReference(StrictContractModel):
     """Semantic catalog reference selected by the model, never a database identifier."""
 
-    text: str | None = None
+    text: str | None = Field(
+        default=None,
+        description=(
+            "Customer-grounded entity name from the latest message. Preserve the explicit name "
+            "alongside ref when the customer names/selects the entity in this turn. Leave null "
+            "when the reference is only inherited from task/read context or older dialogue."
+        ),
+    )
     ref: str | None = None
     candidate_refs: list[str] = Field(default_factory=list)
     candidate_mode: EntityCandidateMode = "ambiguous"

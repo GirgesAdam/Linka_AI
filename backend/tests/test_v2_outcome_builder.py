@@ -663,6 +663,116 @@ def test_normal_service_pricing_is_derived_from_verified_read(
     assert service["price"] == expected
 
 
+def test_complete_set_price_evidence_is_scoped_to_the_planned_service_set() -> None:
+    operation = TurnOperation(type="book", entities=TurnEntities(), package_usage="unspecified")
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="service_catalog_set",
+                parameters={"service_ids": ["service-1", "service-2"]},
+            )
+        ],
+        response_goal="answer_price",
+        facts={"requested_service_ids": ["service-1", "service-2"]},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "service_ids": ["service-1", "service-2"],
+                    "service_names": ["Underarm", "Bikini"],
+                    "variants": [
+                        {
+                            "device_name": "Candela Gentle",
+                            "total_price_minor": 120_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 50_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 70_000, "currency": "EGP"},
+                            ],
+                        },
+                        {
+                            "device_name": "Prime Lase",
+                            "total_price_minor": 110_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 45_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 65_000, "currency": "EGP"},
+                            ],
+                        },
+                    ],
+                    "device_required": True,
+                    "device_resolved": False,
+                },
+            ),
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "service_ids": ["service-1", "service-2"],
+                    "service_names": ["Underarm", "Bikini"],
+                    "variants": [
+                        {
+                            "device_name": "Candela Gentle",
+                            "total_price_minor": 120_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 50_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 70_000, "currency": "EGP"},
+                            ],
+                        }
+                    ],
+                    "device_required": True,
+                    "device_resolved": True,
+                },
+            ),
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "service_ids": ["service-1", "service-2", "service-3"],
+                    "service_names": ["Underarm", "Bikini", "Dermatology"],
+                    "variants": [
+                        {
+                            "device_name": "Candela Gentle",
+                            "total_price_minor": 220_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 50_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 70_000, "currency": "EGP"},
+                                {"service_name": "Dermatology", "price_minor": 100_000, "currency": "EGP"},
+                            ],
+                        }
+                    ],
+                    "device_required": True,
+                    "device_resolved": False,
+                },
+            ),
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+
+    visit_price = outcome.facts["visit_price"]
+    assert isinstance(visit_price, dict)
+    assert visit_price["service_names"] == ["Underarm", "Bikini"]
+    assert visit_price["variants"][0]["total_price"] == "1200.00 EGP"
+    assert visit_price["variants"][0]["device_name"] == "Candela Gentle"
+    assert visit_price["device_resolved"] is True
+    assert len(visit_price["variants"]) == 1
+    assert "service_ids" not in visit_price
+
+
 def test_booking_answer_price_goal_exposes_verified_service_price() -> None:
     operation = TurnOperation(
         type="book",

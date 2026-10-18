@@ -708,6 +708,7 @@ def _read_service_catalog_set(
         kind=request.kind,
         ok=True,
         payload={
+            "service_ids": list(service_ids),
             "service_names": [str(service.get("name") or "") for service in services],
             "variants": variants,
             "device_required": bool(laser_services),

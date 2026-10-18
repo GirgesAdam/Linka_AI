@@ -1355,6 +1355,7 @@ def test_grouped_device_pricing_uses_complete_service_set_before_and_after_choic
             adapter=None,
         ),
     )
+    assert first_result.payload["service_ids"] == [A, B]
     assert {item["device_name"] for item in first_result.payload["variants"]} == {"v1", "v2"}
     assert {item["total_price_minor"] for item in first_result.payload["variants"]} == {100_000}
 
