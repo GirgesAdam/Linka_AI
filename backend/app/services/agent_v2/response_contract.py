@@ -798,6 +798,12 @@ def _commercial_truth(outcome: TurnOutcome) -> CommercialTruth | None:
             )
         if outcome.response_goal == "booking_proposal":
             return _service_commercial_truth(outcome.facts)
+        if outcome.response_goal == "present_availability" and isinstance(
+            outcome.facts.get("visit_price"), dict
+        ):
+            # Grouped booking reads may return availability and a complete visit total together.
+            # Keep that backend-owned commercial truth attached to the availability response.
+            return _service_commercial_truth(outcome.facts)
     return _device_clarification_commercial_truth(outcome)
 
 

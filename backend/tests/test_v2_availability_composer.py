@@ -71,6 +71,28 @@ def _present(
     )
 
 
+def _with_visit_total(outcome: TurnOutcome) -> TurnOutcome:
+    return TurnOutcome(
+        status=outcome.status,
+        response_goal=outcome.response_goal,
+        facts={
+            **outcome.facts,
+            "visit_price": {
+                "service_names": ["Underarm", "Bikini"],
+                "variants": [
+                    {
+                        "device_name": "Candela Gentle",
+                        "total_price": "1200.00 EGP",
+                        "currency": "EGP",
+                    }
+                ],
+                "device_required": True,
+                "device_resolved": True,
+            },
+        },
+    )
+
+
 def _exact_miss(
     *,
     time: str = "19:00",
@@ -798,6 +820,71 @@ def test_invalid_model_draft_falls_back_without_legacy_guard(
     assert all("إيه المتاح؟" not in line for line in log_lines)
     for banned in ("نطاق البحث", "النطاق اللي اتفحص", "تعذر", "validation", "fallback", "contract"):
         assert banned not in text
+
+
+def test_grouped_availability_appends_missing_verified_visit_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "compose_availability_contract_reply",
+        lambda **_kwargs: (
+            "I found a time with Dr Mariam at 17:00 on Candela Gentle.",
+            "availability-contract:test",
+        ),
+    )
+    outcome = _with_visit_total(
+        _present(
+            [_window("17:00", doctor="Dr Mariam", device="Candela Gentle")],
+            service="Underarm + Bikini",
+        )
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="Please book both services and show me the nearest time before confirming.")],
+        outcomes=[outcome],
+    )
+
+    assert source == "availability-contract:test+deterministic:visit-total"
+    assert "17:00" in text
+    assert "1200 EGP" in text
+    assert "Underarm + Bikini" in text
+
+
+@pytest.mark.parametrize("currency", ["EGP", "\u062c\u0646\u064a\u0647"])
+def test_grouped_availability_does_not_repeat_a_visible_verified_visit_total(
+    monkeypatch: pytest.MonkeyPatch,
+    currency: str,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "compose_availability_contract_reply",
+        lambda **_kwargs: (
+            f"The total for Underarm + Bikini on Candela Gentle is 1,200 {currency}. "
+            "I found a time with Dr Mariam at 17:00.",
+            "availability-contract:test",
+        ),
+    )
+    outcome = _with_visit_total(
+        _present(
+            [_window("17:00", doctor="Dr Mariam", device="Candela Gentle")],
+            service="Underarm + Bikini",
+        )
+    )
+
+    text, source = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="Please book both services and show me the nearest time before confirming.")],
+        outcomes=[outcome],
+    )
+
+    assert source == "availability-contract:test"
+    assert text.count(f"1,200 {currency}") == 1
 
 
 def test_valid_availability_path_never_calls_legacy_responder_or_guard(
