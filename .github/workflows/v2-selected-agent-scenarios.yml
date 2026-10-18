@@ -1,0 +1,101 @@
+name: Agent V2 Selected Scenario Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario_ids:
+        description: Comma-separated RM01-RM29 IDs (example RM01 or RM01,RM04)
+        required: true
+        type: string
+        default: RM01
+      max_scenarios:
+        description: Hard maximum number of selected scenarios for this run
+        required: true
+        type: number
+        default: 1
+      mode:
+        description: Validate only by default; live execution is separately gated and currently fail-closed
+        required: true
+        type: choice
+        options:
+          - validate_only
+          - live
+        default: validate_only
+      confirm_live:
+        description: Explicitly request a live run after separate approval
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-selection:
+    name: Validate selected RM scenarios (no model, no DB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact workflow SHA
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate IDs and produce NOT_RUN report
+        env:
+          SCENARIO_IDS: ${{ inputs.scenario_ids }}
+          MAX_SCENARIOS: ${{ inputs.max_scenarios }}
+        shell: bash
+        run: |
+          python .github/benchmark/v2_selected_agent_runner.py \
+            --scenario-ids "$SCENARIO_IDS" \
+            --max-scenarios "$MAX_SCENARIOS" \
+            --mode validate_only \
+            --report artifacts/rm-selected-agent-run.json
+      - name: Upload selection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rm-selected-agent-selection-${{ github.run_id }}
+          path: artifacts/rm-selected-agent-run.json
+          if-no-files-found: error
+
+  live-confirmation-required:
+    name: Reject live mode without explicit confirmation
+    if: ${{ inputs.mode == 'live' && inputs.confirm_live != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require explicit live confirmation
+        run: |
+          echo "Live mode requires confirm_live=true. No model or database was accessed."
+          exit 1
+  live-request:
+    name: Live run request (fail-closed until isolation is verified)
+    if: ${{ inputs.mode == 'live' && inputs.confirm_live == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: agent-qa
+    steps:
+      - name: Checkout exact workflow SHA
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refuse unsafe or unverified live execution
+        env:
+          SCENARIO_IDS: ${{ inputs.scenario_ids }}
+          MAX_SCENARIOS: ${{ inputs.max_scenarios }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LINKA_QA_DATABASE_URL: ${{ secrets.LINKA_QA_DATABASE_URL }}
+          LINKA_QA_EXPECTED_DATABASE_NAME: ${{ vars.LINKA_QA_EXPECTED_DATABASE_NAME }}
+          LINKA_QA_EXPECTED_DATABASE_HOST: ${{ vars.LINKA_QA_EXPECTED_DATABASE_HOST }}
+          LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED: ${{ vars.LINKA_QA_EXTERNAL_SIDE_EFFECTS_DISABLED }}
+          LINKA_QA_LIVE_APPROVED: 'true'
+        shell: bash
+        run: |
+          python .github/benchmark/v2_selected_agent_runner.py \
+            --scenario-ids "$SCENARIO_IDS" \
+            --max-scenarios "$MAX_SCENARIOS" \
+            --mode live --live-approved
