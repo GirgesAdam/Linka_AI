@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
 
+import scripts.run_grouped_multiservice_intent_live_review as live_review
+from app.agents.structured_output import StructuredOutputError
 from app.services.agent_v2.orchestrator import V2RuntimeStepTrace
 from scripts.grouped_multiservice_intent_review_contract import (
     _fresh_slots_matching_proposal,
@@ -109,6 +112,61 @@ def _valid_payload() -> dict[str, object]:
         "ids": {"underarm": underarm, "bikini": bikini, "doctor": doctor},
         "records": [copy.deepcopy(base_record), copy.deepcopy(base_record), final],
     }
+
+
+def test_grouped_capture_adds_safe_structured_rejection_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "SECRET_ENTITY_TEXT_SHOULD_NOT_LEAK"
+    error = StructuredOutputError(
+        "LLM provider returned structured data that failed local validation.",
+        validation_category="local_structured_validation",
+        validation_issues=({"location": "response_disposition", "type": "literal_error"},),
+        rejected_payload={
+            "operations": [
+                {
+                    "type": "doctor_info",
+                    "execution_intent": "informational",
+                    "entities": {"doctor": {"text": sentinel, "ref": "SECRET_ID"}},
+                },
+                {
+                    "type": "pricing",
+                    "execution_intent": "informational",
+                    "entities": {},
+                },
+            ],
+            "response_disposition": "invalid-secret-value",
+        },
+    )
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(live_review, "_original_invoke", fail)
+    live_review.RAW.clear()
+    with pytest.raises(StructuredOutputError):
+        live_review.capture_invoke(model=SimpleNamespace(model_name="primary-test"))
+
+    assert len(live_review.RAW) == 1
+    record = live_review.RAW[0]
+    assert record["status"] == "error"
+    assert record["model"] == "primary-test"
+    assert record["error_type"] == "StructuredOutputError"
+    assert record["validation_category"] == "local_structured_validation"
+    assert record["validation_issues"] == [
+        {"location": "response_disposition", "type": "literal_error"}
+    ]
+    assert record["rejected_semantic_shape"] == {
+        "operation_count": 2,
+        "operations": [
+            {"type": "doctor_info", "execution_intent": "informational"},
+            {"type": "pricing", "execution_intent": "informational"},
+        ],
+    }
+    serialized = json.dumps(record, sort_keys=True)
+    assert sentinel not in serialized
+    assert "SECRET_ID" not in serialized
+    assert error.rejected_payload_for_diagnostics is None
 
 
 def test_grouped_live_review_preserves_trace_for_fresh_slot_matching() -> None:

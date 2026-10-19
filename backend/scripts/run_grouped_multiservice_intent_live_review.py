@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 import app.agents.v2.turn_interpreter as turn_interpreter
 import app.services.agent_v2.orchestrator as orchestrator_module
+from app.agents.structured_output import StructuredOutputError
 from app.core.config import settings
 from app.models.appointment import Appointment
 from app.models.booking_settings import BookingSettings
@@ -351,14 +352,15 @@ def capture_invoke(*args, **kwargs):
     try:
         value = _original_invoke(*args, **kwargs)
     except Exception as exc:
-        RAW.append(
-            {
-                "status": "error",
-                "model": str(model_name),
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            }
-        )
+        record: dict[str, object] = {
+            "status": "error",
+            "model": str(model_name),
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        if isinstance(exc, StructuredOutputError):
+            record.update(turn_interpreter.safe_turn_interpreter_rejection_diagnostics(exc))
+        RAW.append(record)
         raise
     RAW.append({"status": "ok", "model": str(model_name), "structured": dump(value)})
     return value

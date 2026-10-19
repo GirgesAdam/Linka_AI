@@ -13,8 +13,90 @@ from app.agents.llm_runtime import invoke_model
 T = TypeVar("T", bound=BaseModel)
 
 
+_MAX_VALIDATION_ISSUES = 8
+_MAX_VALIDATION_LOCATION_SEGMENTS = 8
+_MAX_VALIDATION_LOCATION_LENGTH = 160
+_MAX_VALIDATION_TYPE_LENGTH = 80
+
+
 class StructuredOutputError(RuntimeError):
-    pass
+    """Structured-output rejection with bounded backend-only diagnostics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        validation_category: str | None = None,
+        validation_issues: tuple[dict[str, str], ...] = (),
+        rejected_payload: object | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.validation_category = validation_category
+        self.validation_issues = tuple(dict(issue) for issue in validation_issues)
+        self._rejected_payload = rejected_payload
+        self.rejected_semantic_shape: dict[str, object] | str | None = None
+
+    @property
+    def rejected_payload_for_diagnostics(self) -> object | None:
+        """Short-lived parsed payload for caller-owned safe summarization only."""
+        return self._rejected_payload
+
+    def attach_rejected_semantic_shape(self, shape: dict[str, object] | str) -> None:
+        self.rejected_semantic_shape = shape
+
+    def clear_rejected_payload(self) -> None:
+        self._rejected_payload = None
+
+    def safe_diagnostics(self) -> dict[str, object]:
+        diagnostics: dict[str, object] = {}
+        if self.validation_category is not None:
+            diagnostics["validation_category"] = self.validation_category
+        if self.validation_issues:
+            diagnostics["validation_issues"] = [dict(issue) for issue in self.validation_issues]
+        return diagnostics
+
+
+def _safe_validation_location(location: object) -> str:
+    if not isinstance(location, (tuple, list)):
+        return "$"
+    segments: list[str] = []
+    for segment in location[:_MAX_VALIDATION_LOCATION_SEGMENTS]:
+        if isinstance(segment, int):
+            segments.append(str(segment))
+            continue
+        if not isinstance(segment, str):
+            continue
+        if not segment or len(segment) > 64:
+            continue
+        if not all(character.isalnum() or character == "_" for character in segment):
+            continue
+        segments.append(segment)
+    rendered = ".".join(segments) or "$"
+    return rendered[:_MAX_VALIDATION_LOCATION_LENGTH]
+
+
+def _safe_validation_type(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        return "validation_error"
+    if len(value) > _MAX_VALIDATION_TYPE_LENGTH:
+        return "validation_error"
+    if not all(character.isalnum() or character == "_" for character in value):
+        return "validation_error"
+    return value
+
+
+def _safe_validation_issues(exc: ValidationError) -> tuple[dict[str, str], ...]:
+    issues: list[dict[str, str]] = []
+    for item in exc.errors(include_url=False, include_context=False, include_input=False):
+        issues.append(
+            {
+                "location": _safe_validation_location(item.get("loc")),
+                "type": _safe_validation_type(item.get("type")),
+            }
+        )
+        if len(issues) >= _MAX_VALIDATION_ISSUES:
+            break
+    return tuple(issues)
 
 
 class StructuredOutputSchemaCompatibilityError(RuntimeError):
@@ -195,7 +277,20 @@ def invoke_typed_structured_output(
         if isinstance(result, schema):
             return result
         return schema.model_validate(result)
-    except (ValidationError, TypeError, ValueError) as exc:
+    except ValidationError as exc:
+        parsed_payload = result if isinstance(result, dict) else None
+        category = "local_structured_validation" if parsed_payload is not None else "payload_extraction"
         raise StructuredOutputError(
-            "LLM provider returned structured data that failed local validation."
+            "LLM provider returned structured data that failed local validation.",
+            validation_category=category,
+            validation_issues=_safe_validation_issues(exc),
+            rejected_payload=parsed_payload,
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        parsed_payload = result if isinstance(result, dict) else None
+        category = "local_structured_validation" if parsed_payload is not None else "payload_extraction"
+        raise StructuredOutputError(
+            "LLM provider returned structured data that failed local validation.",
+            validation_category=category,
+            rejected_payload=parsed_payload,
         ) from exc

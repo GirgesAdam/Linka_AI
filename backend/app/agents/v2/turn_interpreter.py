@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, time
+from typing import get_args
 from zoneinfo import ZoneInfo
 
 from langchain_core.exceptions import OutputParserException
@@ -21,6 +22,9 @@ from app.agents.v2.turn_contract import (
     AppointmentSelector,
     DateConstraint,
     EntityReference,
+    ExecutionIntent,
+    OperationType,
+    ResponseDisposition,
     Selection,
     TiaTurnUnderstanding,
     TimeAmbiguity,
@@ -33,6 +37,63 @@ from app.agents.v2.turn_normalization import (
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+_MAX_REJECTED_SEMANTIC_OPERATIONS = 6
+_SAFE_OPERATION_TYPES = frozenset(get_args(OperationType))
+_SAFE_EXECUTION_INTENTS = frozenset(get_args(ExecutionIntent))
+_SAFE_RESPONSE_DISPOSITIONS = frozenset(get_args(ResponseDisposition))
+
+
+def _safe_rejected_turn_semantic_shape(payload: object) -> dict[str, object] | str:
+    """Summarize only schema-controlled turn fields from a rejected parsed payload."""
+    if not isinstance(payload, dict):
+        return "not_observable"
+    raw_operations = payload.get("operations")
+    if not isinstance(raw_operations, list):
+        return "not_observable"
+
+    shape: dict[str, object] = {"operation_count": len(raw_operations)}
+    operations: list[dict[str, str]] = []
+    for raw_operation in raw_operations[:_MAX_REJECTED_SEMANTIC_OPERATIONS]:
+        if not isinstance(raw_operation, dict):
+            continue
+        operation: dict[str, str] = {}
+        operation_type = raw_operation.get("type")
+        if isinstance(operation_type, str) and operation_type in _SAFE_OPERATION_TYPES:
+            operation["type"] = operation_type
+        execution_intent = raw_operation.get("execution_intent")
+        if isinstance(execution_intent, str) and execution_intent in _SAFE_EXECUTION_INTENTS:
+            operation["execution_intent"] = execution_intent
+        if operation:
+            operations.append(operation)
+    if operations:
+        shape["operations"] = operations
+    if len(raw_operations) > _MAX_REJECTED_SEMANTIC_OPERATIONS:
+        shape["operations_truncated"] = True
+
+    response_disposition = payload.get("response_disposition")
+    if (
+        isinstance(response_disposition, str)
+        and response_disposition in _SAFE_RESPONSE_DISPOSITIONS
+    ):
+        shape["response_disposition"] = response_disposition
+    return shape
+
+
+def safe_turn_interpreter_rejection_diagnostics(
+    error: StructuredOutputError,
+) -> dict[str, object]:
+    """Return bounded diagnostics and discard any short-lived rejected payload reference."""
+    shape = error.rejected_semantic_shape
+    if shape is None:
+        shape = _safe_rejected_turn_semantic_shape(error.rejected_payload_for_diagnostics)
+        error.attach_rejected_semantic_shape(shape)
+    error.clear_rejected_payload()
+    return {
+        **error.safe_diagnostics(),
+        "rejected_semantic_shape": shape,
+    }
 
 
 def _message_text(message: BaseMessage, *, limit: int = 1200) -> str:
@@ -1615,10 +1676,16 @@ def interpret_customer_turn_v2(
                     typed,
                     latest_customer_text=latest_customer_text,
                 )
+            except StructuredOutputError as exc:
+                safe_turn_interpreter_rejection_diagnostics(exc)
+                raise
             except OutputParserException as exc:
-                raise StructuredOutputError(
-                    "LLM provider returned structured data that could not be parsed."
-                ) from exc
+                error = StructuredOutputError(
+                    "LLM provider returned structured data that could not be parsed.",
+                    validation_category="payload_extraction",
+                )
+                safe_turn_interpreter_rejection_diagnostics(error)
+                raise error from exc
 
         try:
             return call_once()
