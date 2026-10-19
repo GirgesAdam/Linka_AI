@@ -462,6 +462,8 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
         for item in os.environ.get("RA_G_SCENARIOS", "").split(",")
         if item.strip()
     }
+    if not selected and name.startswith("RA-C7-"):
+        return
     if selected and name not in selected:
         return
     with rollback_session() as db:

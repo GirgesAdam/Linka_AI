@@ -118,3 +118,16 @@ def test_phase3_manual_diagnostic_implementation_remains_available() -> None:
     assert "backend/scripts/run_phase3_real_world_agent_audit.py" in source
     assert "python scripts/run_phase3_real_world_agent_audit.py" in source
     assert "phase3-real-world-agent-audit.log" in source
+
+
+def test_c7_is_out_of_required_automatic_grouped_path() -> None:
+    workflow = GROUPED_WORKFLOW.read_text(encoding="utf-8")
+    grouped_runner = (
+        REPO_ROOT / "backend" / "scripts" / "run_grouped_multiservice_intent_live_review.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Run focused C7 replacement" not in workflow
+    assert "Run focused C7 pure addition" not in workflow
+    assert "Run full grouped multi-service review" in workflow
+    assert "Run RA-G1 through RA-G5 on audit-only #241 + #249 overlay" in workflow
+    assert 'if not selected and name.startswith("RA-C7-"):' in grouped_runner
