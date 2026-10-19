@@ -1464,6 +1464,43 @@ def _normalize_spoken_period_hint(
         return "midnight" if hint == "midnight" else "none"
     return "none"
 
+def _validate_spoken_clock_authority(
+    turn: TiaTurnUnderstanding,
+    *,
+    latest_customer_text: str,
+) -> TiaTurnUnderstanding:
+    """Reject incomplete non-literal 10/11 PM semantics before they gain state authority."""
+    structural_literal = extract_single_explicit_hhmm(latest_customer_text)
+    literal_clock = structural_literal if _count_time_targets(turn) == 1 else None
+    if literal_clock is not None:
+        return turn
+
+    def validate_clock(value: str | None, hint: str) -> None:
+        if value is None or hint in {"am", "pm"}:
+            return
+        try:
+            parsed = time.fromisoformat(value)
+        except ValueError:
+            return
+        if parsed.hour not in {22, 23}:
+            return
+        neutral = _normalize_spoken_clock_base(value)
+        if neutral is None or _derive_spoken_clock_ambiguity(neutral, literal_clock=None) != "twelve_hour":
+            return
+        raise StructuredOutputError(
+            "Non-literal spoken 10/11 PM semantics require explicit period authority."
+        )
+
+    for operation in turn.operations:
+        constraint = operation.entities.time
+        if constraint is not None:
+            validate_clock(constraint.start_time, constraint.spoken_period_hint)
+        selection = operation.selection
+        if selection is not None and selection.kind == "time":
+            validate_clock(selection.time, selection.spoken_period_hint)
+    return turn
+
+
 def _normalize_time_semantics_v2(
     turn: TiaTurnUnderstanding,
     *,
@@ -1551,6 +1588,8 @@ def interpret_customer_turn_v2(
 ) -> TiaTurnUnderstanding:
     """One semantic LLM call; Python owns final spoken-clock authority."""
 
+    latest_index = _latest_customer_index(history)
+    latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
     messages = _build_interpreter_messages(
         history=history,
         semantic_context=semantic_context,
@@ -1567,10 +1606,14 @@ def interpret_customer_turn_v2(
     ) -> TiaTurnUnderstanding:
         def call_once() -> TiaTurnUnderstanding:
             try:
-                return invoke_typed_structured_output(
+                typed = invoke_typed_structured_output(
                     model=model,
                     schema=TiaTurnUnderstanding,
                     messages=request_messages,
+                )
+                return _validate_spoken_clock_authority(
+                    typed,
+                    latest_customer_text=latest_customer_text,
                 )
             except OutputParserException as exc:
                 raise StructuredOutputError(
@@ -1648,8 +1691,6 @@ def interpret_customer_turn_v2(
             model_name=fallback_invocation.model_name,
             used_fallback=True,
         )
-    latest_index = _latest_customer_index(history)
-    latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
     time_safe = _normalize_time_semantics_v2(
         invocation.value,
         latest_customer_text=latest_customer_text,
