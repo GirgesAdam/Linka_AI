@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 
 import scripts.run_grouped_multiservice_intent_live_review as live_review
 from app.agents.structured_output import StructuredOutputError
@@ -167,6 +168,33 @@ def test_grouped_capture_adds_safe_structured_rejection_diagnostics(
     assert sentinel not in serialized
     assert "SECRET_ID" not in serialized
     assert error.rejected_payload_for_diagnostics is None
+
+
+def test_grouped_capture_redacts_unextractable_parser_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "SECRET_RAW_MODEL_OUTPUT_SHOULD_NOT_LEAK"
+    error = OutputParserException(sentinel, llm_output=sentinel)
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(live_review, "_original_invoke", fail)
+    live_review.RAW.clear()
+    with pytest.raises(OutputParserException):
+        live_review.capture_invoke(model=SimpleNamespace(model_name="primary-test"))
+
+    assert len(live_review.RAW) == 1
+    record = live_review.RAW[0]
+    assert record == {
+        "status": "error",
+        "model": "primary-test",
+        "error_type": "OutputParserException",
+        "error": "LLM provider returned structured data that could not be parsed.",
+        "validation_category": "payload_extraction",
+        "rejected_semantic_shape": "not_observable",
+    }
+    assert sentinel not in json.dumps(record, sort_keys=True)
 
 
 def test_grouped_live_review_preserves_trace_for_fresh_slot_matching() -> None:

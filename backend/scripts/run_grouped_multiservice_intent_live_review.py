@@ -12,6 +12,7 @@ if __package__:
     from .grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
 else:
     from grouped_multiservice_intent_review_contract import validate_g6_visit_time_selection
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
@@ -360,6 +361,14 @@ def capture_invoke(*args, **kwargs):
         }
         if isinstance(exc, StructuredOutputError):
             record.update(turn_interpreter.safe_turn_interpreter_rejection_diagnostics(exc))
+        elif isinstance(exc, OutputParserException):
+            record.update(
+                {
+                    "error": "LLM provider returned structured data that could not be parsed.",
+                    "validation_category": "payload_extraction",
+                    "rejected_semantic_shape": "not_observable",
+                }
+            )
         RAW.append(record)
         raise
     RAW.append({"status": "ok", "model": str(model_name), "structured": dump(value)})
