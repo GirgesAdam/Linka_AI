@@ -301,10 +301,16 @@ def resolve_bare_clock_constraint(
     # Product semantic default: a bare 12 means noon. Clinic hours may make it
     # unavailable later, but must never reinterpret it as midnight.
     if hour_12 == 12:
+        canonical = (
+            f"00:{_minutes(constraint.start_time) % 60:02d}"
+            if constraint.spoken_period_hint == "midnight"
+            else candidate_clocks[0]
+        )
         resolved = constraint.model_copy(
             update={
-                "start_time": candidate_clocks[0],
+                "start_time": canonical,
                 "start_time_ambiguity": "none",
+                "spoken_period_hint": "none",
             }
         )
         return BareClockResolution(
@@ -312,6 +318,35 @@ def resolve_bare_clock_constraint(
             constraint=resolved,
             candidate_clocks=candidate_clocks,
             valid_operating_hour_candidates=candidate_clocks,
+            branch_id=branch_id,
+            requested_date=(
+                date_constraint.start_date
+                if date_constraint is not None and date_constraint.mode == "exact"
+                else None
+            ),
+        )
+
+    # Explicit customer period authority resolves the spoken 12-hour clock before
+    # clinic context. Operating hours may later make the canonical request
+    # unavailable, but they must never reinterpret an explicit AM/PM as the
+    # opposite period.
+    if constraint.spoken_period_hint in {"am", "pm"}:
+        chosen = (
+            candidate_minutes[0]
+            if constraint.spoken_period_hint == "am"
+            else candidate_minutes[1]
+        )
+        resolved = constraint.model_copy(
+            update={
+                "start_time": _clock(chosen),
+                "start_time_ambiguity": "none",
+                "spoken_period_hint": "none",
+            }
+        )
+        return BareClockResolution(
+            status="resolved",
+            constraint=resolved,
+            candidate_clocks=candidate_clocks,
             branch_id=branch_id,
             requested_date=(
                 date_constraint.start_date
@@ -381,7 +416,11 @@ def resolve_bare_clock_constraint(
                 requested_date=requested_date,
             )
         resolved = constraint.model_copy(
-            update={"start_time": _clock(chosen), "start_time_ambiguity": "none"}
+            update={
+                "start_time": _clock(chosen),
+                "start_time_ambiguity": "none",
+                "spoken_period_hint": "none",
+            }
         )
         return BareClockResolution(
             status="resolved",
@@ -396,7 +435,11 @@ def resolve_bare_clock_constraint(
     # 10 and 11 are the only genuinely ambiguous bare product clocks.
     if len(valid_minutes) == 1:
         resolved = constraint.model_copy(
-            update={"start_time": _clock(valid_minutes[0]), "start_time_ambiguity": "none"}
+            update={
+                "start_time": _clock(valid_minutes[0]),
+                "start_time_ambiguity": "none",
+                "spoken_period_hint": "none",
+            }
         )
         return BareClockResolution(
             status="resolved",
@@ -534,7 +577,7 @@ def _resolve_selection(
             mode="exact",
             start_time=selection.time,
             start_time_ambiguity=selection.time_ambiguity,
-            period_status=selection.period_status,
+            spoken_period_hint=selection.spoken_period_hint,
         ),
         date_constraint=date_constraint,
         context=context,
@@ -546,6 +589,7 @@ def _resolve_selection(
         update={
             "time": resolution.constraint.start_time,
             "time_ambiguity": resolution.constraint.start_time_ambiguity,
+            "spoken_period_hint": resolution.constraint.spoken_period_hint,
         }
     )
 

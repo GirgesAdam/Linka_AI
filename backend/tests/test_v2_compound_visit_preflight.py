@@ -4,16 +4,51 @@ from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
+from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
+from app.integrations.clinic.tia_database import TiaDatabaseClinicAdapter
 from app.models.service import Service
 from app.services.agent_v2.compound_turn_policy import normalize_compound_turn_plan
-from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
-from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.compound_visit_preflight import (
+    _availability_for_day,
+    preflight_compound_visit_plan,
+)
+from app.services.agent_v2.grouped_booking_continuity import restore_grouped_booking_understanding
+from app.services.agent_v2.orchestrator import _prepare_cross_category_compound_proposal
+from app.services.agent_v2.planner import (
+    PlannerContext,
+    PlanStep,
+    ReadRequest,
+    TurnPlan,
+    WriteIntent,
+    plan_turn,
+)
 from app.services.agent_v2.read_executor import ReadExecutionContext
-from app.services.booking import BookingCompatibilityError
+from app.services.agent_v2.state import (
+    BookingProposal,
+    BookingProposalVisit,
+    BookingTaskState,
+    CustomerConstraints,
+    WriteAuthorization,
+)
+from app.services.agent_v2.turn_normalization import (
+    recollapse_restored_booking_visit_groups,
+    tag_booking_service_sets,
+)
+from app.services.booking import BookingCompatibilityError, BookingRuleError
 
 SERVICE_A = "11111111-1111-1111-1111-111111111111"
 SERVICE_B = "22222222-2222-2222-2222-222222222222"
+SERVICE_C = "77777777-7777-7777-7777-777777777777"
 DOCTOR_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 DOCTOR_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 BRANCH = "33333333-3333-3333-3333-333333333333"
@@ -63,6 +98,8 @@ def _slot(
     doctor_id: str,
     start_utc: str,
     end_utc: str,
+    *,
+    device_key: str | None = None,
 ) -> AvailabilitySlot:
     return AvailabilitySlot(
         branch_id=BRANCH,
@@ -75,6 +112,8 @@ def _slot(
         end_at=datetime.fromisoformat(end_utc),
         duration_minutes=30,
         price_minor=10000,
+        laser_device_key=device_key,
+        laser_device_name=device_key,
         currency="EGP",
     )
 
@@ -103,6 +142,28 @@ class _Adapter:
         return self.results.get(
             (request.service_id, request.booking_date),
             _result(request.service_id, []),
+        )
+
+
+
+class _DoctorFilteringAdapter(_Adapter):
+    def get_availability(self, request):
+        result = super().get_availability(request)
+        slots = tuple(
+            slot
+            for slot in result.slots
+            if request.doctor_id is None or slot.doctor_id == request.doctor_id
+        )
+        return AvailabilityResult(
+            timezone=result.timezone,
+            branch_id=result.branch_id,
+            branch_name=result.branch_name,
+            service_id=result.service_id,
+            service_name=result.service_name,
+            service_duration_minutes=result.service_duration_minutes,
+            service_price_minor=result.service_price_minor,
+            service_currency=result.service_currency,
+            slots=slots,
         )
 
 
@@ -169,6 +230,50 @@ def _normalized(
     )
 
 
+
+def _with_doctor_candidates(plan: TurnPlan, doctor_ids: list[str]) -> TurnPlan:
+    steps: list[PlanStep] = []
+    for step in plan.steps:
+        reads = []
+        for request in step.reads:
+            params = dict(request.parameters)
+            params.pop("doctor_id", None)
+            params["doctor_ids"] = list(doctor_ids)
+            reads.append(request.model_copy(update={"parameters": params}))
+        write_intent = step.write_intent
+        if write_intent is not None:
+            params = dict(write_intent.parameters)
+            params.pop("doctor_id", None)
+            params["doctor_ids"] = list(doctor_ids)
+            write_intent = write_intent.model_copy(update={"parameters": params})
+        facts = dict(step.facts)
+        facts.pop("doctor_id", None)
+        facts["doctor_ids"] = list(doctor_ids)
+        steps.append(
+            step.model_copy(
+                update={"reads": reads, "write_intent": write_intent, "facts": facts}
+            )
+        )
+    return plan.model_copy(update={"steps": steps})
+
+
+
+def _read_only(plan: TurnPlan) -> TurnPlan:
+    return plan.model_copy(
+        update={
+            "steps": [
+                step.model_copy(
+                    update={
+                        "disposition": "read",
+                        "write_intent": None,
+                    }
+                )
+                for step in plan.steps
+            ]
+        }
+    )
+
+
 def _time(step: PlanStep) -> str:
     source = step.write_intent.parameters if step.write_intent is not None else step.reads[0].parameters
     raw = source["time"]
@@ -193,6 +298,43 @@ def _joint_adapter() -> _Adapter:
             ),
         }
     )
+
+
+def test_independent_availability_preserves_absent_doctor_filter() -> None:
+    adapter = _Adapter({(SERVICE_A, DAY): _result(SERVICE_A, [])})
+    step = _booking(0, SERVICE_A, DOCTOR_A).model_copy(update={"write_intent": None})
+    read = step.reads[0]
+    parameters = dict(read.parameters)
+    parameters.pop("doctor_id", None)
+    step = step.model_copy(update={"reads": [read.model_copy(update={"parameters": parameters})]})
+
+    result = _availability_for_day(
+        [step],
+        booking_date=DAY,
+        context=_context(adapter),
+        allow_independent_doctors=True,
+    )
+
+    assert result is not None
+    assert adapter.requests[0].doctor_id is None
+
+
+def test_availability_preserves_explicit_doctor_filter() -> None:
+    adapter = _Adapter({(SERVICE_A, DAY): _result(SERVICE_A, [])})
+
+    result = _availability_for_day(
+        [_booking(0, SERVICE_A, DOCTOR_A)],
+        booking_date=DAY,
+        context=_context(adapter),
+    )
+
+    assert result is not None
+    assert adapter.requests[0].doctor_id == DOCTOR_A
+
+
+def test_tia_database_identifier_validation_stays_strict() -> None:
+    with pytest.raises(BookingRuleError, match="doctor_id is not a valid identifier"):
+        TiaDatabaseClinicAdapter._native_uuid("garbage", "doctor_id")
 
 
 def test_compound_incompatible_doctor_fails_closed_without_exception() -> None:
@@ -481,3 +623,524 @@ def test_grouped_missing_laser_device_requests_device_clarification() -> None:
     assert planned.steps[1].facts["compound_visit_missing_device"] is True
     assert "compound_visit_no_joint_window" not in planned.steps[1].facts
     assert adapter.requests == []
+
+
+
+def test_h3_r4_exact_visit_anchor_with_two_doctors_asks_doctor_not_service() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00"),
+                    _slot(SERVICE_A, DOCTOR_B, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00"),
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00"),
+                    _slot(SERVICE_B, DOCTOR_B, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00"),
+                ],
+            ),
+        }
+    )
+    plan = _with_doctor_candidates(_normalized(same_doctor=True), [DOCTOR_A, DOCTOR_B])
+
+    planned = preflight_compound_visit_plan(
+        plan,
+        context=_context(
+            adapter,
+            catalog={
+                "doctors": [
+                    {"id": DOCTOR_A, "service_ids": [SERVICE_A, SERVICE_B]},
+                    {"id": DOCTOR_B, "service_ids": [SERVICE_A, SERVICE_B]},
+                ]
+            },
+        ),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert [step.clarification_field for step in planned.steps] == ["doctor", "doctor"]
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert all(step.facts["compound_visit_ambiguous_doctors"] is True for step in planned.steps)
+
+
+def test_h3_r5_exact_visit_anchor_with_two_devices_asks_device_not_service() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00", device_key="candela"),
+                    _slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00", device_key="prime"),
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00", device_key="candela"),
+                    _slot(SERVICE_B, DOCTOR_A, "2026-09-20T09:30:00+00:00", "2026-09-20T10:00:00+00:00", device_key="prime"),
+                ],
+            ),
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert [step.clarification_field for step in planned.steps] == ["device", "device"]
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert all(step.facts["compound_visit_ambiguous_devices"] is True for step in planned.steps)
+
+
+def test_h3_r6_exact_visit_anchor_with_no_joint_chain_never_partially_writes() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [_slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00")],
+            ),
+            (SERVICE_B, DAY): _result(SERVICE_B, []),
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        _normalized(same_doctor=True),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert all(step.facts["compound_visit_no_joint_window"] is True for step in planned.steps)
+
+
+
+def test_h3_r2_unique_joint_candidate_binds_visit_resources_without_write() -> None:
+    adapter = _DoctorFilteringAdapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(
+                        SERVICE_A,
+                        DOCTOR_A,
+                        "2026-09-20T09:00:00+00:00",
+                        "2026-09-20T09:30:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(
+                        SERVICE_B,
+                        DOCTOR_A,
+                        "2026-09-20T09:30:00+00:00",
+                        "2026-09-20T10:00:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+        }
+    )
+
+    planned = preflight_compound_visit_plan(
+        _read_only(_normalized(same_doctor=True)),
+        context=_context(adapter),
+        timezone_name="Africa/Cairo",
+    )
+
+    assert all(step.write_intent is None for step in planned.steps)
+    assert all(step.clarification_field != "service" for step in planned.steps)
+    assert [_time(step) for step in planned.steps] == ["12:00", "12:30"]
+    assert {step.facts.get("doctor_id") for step in planned.steps} == {DOCTOR_A}
+    assert {step.facts.get("device_key") for step in planned.steps} == {"candela"}
+    assert all(step.facts["compound_visit_preflight_resolved"] is True for step in planned.steps)
+
+
+def test_mixed_category_anchor_uses_independent_resources_and_non_overlapping_slots() -> None:
+    adapter = _Adapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [
+                    _slot(
+                        SERVICE_A,
+                        DOCTOR_A,
+                        "2026-09-20T09:00:00+00:00",
+                        "2026-09-20T09:30:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [
+                    _slot(
+                        SERVICE_B,
+                        DOCTOR_B,
+                        "2026-09-20T09:30:00+00:00",
+                        "2026-09-20T10:15:00+00:00",
+                    )
+                ],
+            ),
+        }
+    )
+    catalog = {
+        "services": [
+            {"id": SERVICE_A, "duration_minutes": 30, "operational_category": "laser"},
+            {"id": SERVICE_B, "duration_minutes": 45, "operational_category": "dermatology"},
+        ],
+        "doctors": [
+            {"id": DOCTOR_A, "service_ids": [SERVICE_A], "branch_ids": [BRANCH]},
+            {"id": DOCTOR_B, "service_ids": [SERVICE_B], "branch_ids": [BRANCH]},
+        ],
+    }
+    normalized = normalize_compound_turn_plan(
+        TurnPlan(
+            steps=[
+                _booking(0, SERVICE_A, DOCTOR_A),
+                _booking(1, SERVICE_B, DOCTOR_B),
+            ]
+        ),
+        catalog=catalog,
+    )
+
+    planned = preflight_compound_visit_plan(
+        normalized,
+        context=_context(adapter, catalog=catalog),
+        timezone_name="Africa/Cairo",
+        visit_group_id="mixed-category-request",
+    )
+
+    assert [_time(step) for step in planned.steps] == ["12:00", "12:30"]
+    assert [step.facts["doctor_id"] for step in planned.steps] == [DOCTOR_A, DOCTOR_B]
+    assert planned.steps[0].facts["device_key"] == "candela"
+    assert planned.steps[1].facts.get("device_key") is None
+    assert all(
+        step.facts["compound_visit_independent_category_resources"] is True
+        for step in planned.steps
+    )
+    assert all(step.facts["visit_group_id"] == "mixed-category-request" for step in planned.steps)
+    assert all(step.write_intent is not None for step in planned.steps)
+
+
+def _mixed_category_catalog() -> dict[str, object]:
+    return {
+        "services": [
+            {
+                "id": SERVICE_A,
+                "name": "Laser A",
+                "duration_minutes": 60,
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {
+                        "device_key": "candela",
+                        "device_name": "Candela",
+                        "configured": True,
+                        "duration_minutes": 30,
+                        "price_minor": 10000,
+                    }
+                ],
+            },
+            {
+                "id": SERVICE_B,
+                "name": "Dermatology",
+                "duration_minutes": 45,
+                "operational_category": "dermatology",
+                "requires_laser_device": False,
+            },
+        ],
+        "doctors": [
+            {"id": DOCTOR_A, "service_ids": [SERVICE_A], "branch_ids": [BRANCH]},
+            {"id": DOCTOR_B, "service_ids": [SERVICE_B], "branch_ids": [BRANCH]},
+        ],
+        "branches": [{"id": BRANCH, "name": "Main"}],
+    }
+
+
+def test_mixed_category_preflight_builds_one_customer_proposal_with_two_persistence_visits() -> None:
+    adapter = _Adapter(
+        {
+            (SERVICE_A, DAY): _result(
+                SERVICE_A,
+                [_slot(SERVICE_A, DOCTOR_A, "2026-09-20T09:00:00+00:00", "2026-09-20T09:30:00+00:00", device_key="candela")],
+            ),
+            (SERVICE_B, DAY): _result(
+                SERVICE_B,
+                [_slot(SERVICE_B, DOCTOR_B, "2026-09-20T09:30:00+00:00", "2026-09-20T10:15:00+00:00")],
+            ),
+        }
+    )
+    catalog = _mixed_category_catalog()
+    normalized = normalize_compound_turn_plan(
+        TurnPlan(steps=[_booking(0, SERVICE_A, DOCTOR_A), _booking(1, SERVICE_B, DOCTOR_B)]),
+        catalog=catalog,
+    )
+    preflighted = preflight_compound_visit_plan(
+        normalized,
+        context=_context(adapter, catalog=catalog),
+        timezone_name="Africa/Cairo",
+        visit_group_id="mixed-proposal",
+    )
+    prepared, task = _prepare_cross_category_compound_proposal(
+        preflighted,
+        current_task=None,
+        workspace=SimpleNamespace(id=WORKSPACE),
+        patient=SimpleNamespace(id=PATIENT),
+        catalog=catalog,
+        now=datetime(2026, 9, 12, 12, 0, tzinfo=UTC),
+        turn_id="mixed-proposal-turn",
+    )
+
+    assert task is not None
+    assert task.status == "awaiting_confirmation"
+    assert task.write_authorization.authorized is False
+    assert task.requested_service_ids == [SERVICE_A, SERVICE_B]
+    assert task.grouped is None
+    assert task.proposal is not None
+    assert len(task.proposal.visits) == 2
+    assert task.proposal.visits[0].service_ids == [SERVICE_A]
+    assert task.proposal.visits[1].service_ids == [SERVICE_B]
+    assert task.proposal.visits[0].doctor_id == DOCTOR_A
+    assert task.proposal.visits[1].doctor_id == DOCTOR_B
+    assert task.proposal.visits[0].device_key == "candela"
+    assert task.proposal.visits[1].device_key is None
+    assert task.proposal.visits[1].start_at >= task.proposal.visits[0].end_at
+    assert len(prepared.steps) == 1
+    assert prepared.steps[0].response_goal == "booking_proposal"
+    assert prepared.steps[0].write_intent is None
+
+
+def test_ra_g7_compound_proposal_continuation_restores_resources_and_rebuilds_proposal() -> None:
+    day = date(2026, 10, 17)
+    catalog = {
+        "services": [
+            {
+                "id": SERVICE_A,
+                "name": "Underarm",
+                "duration_minutes": 30,
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {
+                        "device_key": "candela",
+                        "device_name": "Candela",
+                        "configured": True,
+                        "duration_minutes": 30,
+                        "price_minor": 10_000,
+                    }
+                ],
+            },
+            {
+                "id": SERVICE_B,
+                "name": "Bikini",
+                "duration_minutes": 30,
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {
+                        "device_key": "candela",
+                        "device_name": "Candela",
+                        "configured": True,
+                        "duration_minutes": 30,
+                        "price_minor": 10_000,
+                    }
+                ],
+            },
+            {
+                "id": SERVICE_C,
+                "name": "Dermatology",
+                "duration_minutes": 30,
+                "operational_category": "dermatology",
+                "requires_laser_device": False,
+            },
+        ],
+        "doctors": [
+            {
+                "id": DOCTOR_A,
+                "name": "Laser Doctor",
+                "service_ids": [SERVICE_A, SERVICE_B],
+                "branch_ids": [BRANCH],
+            },
+            {
+                "id": DOCTOR_B,
+                "name": "Dermatology Doctor",
+                "service_ids": [SERVICE_C],
+                "branch_ids": [BRANCH],
+            },
+        ],
+        "branches": [{"id": BRANCH, "name": "Clinic"}],
+        "appointments": [],
+    }
+    semantic_context = build_semantic_context(catalog)
+    laser_start = datetime.fromisoformat("2026-10-17T18:00:00+03:00")
+    laser_end = datetime.fromisoformat("2026-10-17T18:30:00+03:00")
+    derm_end = datetime.fromisoformat("2026-10-17T19:00:00+03:00")
+    laser_visit = BookingProposalVisit(
+        service_ids=[SERVICE_A, SERVICE_B],
+        main_service_id=SERVICE_A,
+        additional_service_ids=[SERVICE_B],
+        branch_id=BRANCH,
+        doctor_id=DOCTOR_A,
+        start_at=laser_start,
+        end_at=laser_end,
+        device_key="candela",
+        additional_service_device_keys={SERVICE_B: "candela"},
+    )
+    derm_visit = BookingProposalVisit(
+        service_ids=[SERVICE_C],
+        main_service_id=SERVICE_C,
+        branch_id=BRANCH,
+        doctor_id=DOCTOR_B,
+        start_at=laser_end,
+        end_at=derm_end,
+    )
+    proposal = BookingProposal(
+        proposal_id="ra-g7-existing",
+        patient_id=str(PATIENT),
+        service_ids=[SERVICE_A, SERVICE_B, SERVICE_C],
+        main_service_id=SERVICE_A,
+        additional_service_ids=[SERVICE_B],
+        branch_id=BRANCH,
+        doctor_id=DOCTOR_A,
+        start_at=laser_start,
+        end_at=laser_end,
+        device_key="candela",
+        additional_service_device_keys={SERVICE_B: "candela"},
+        visits=[laser_visit, derm_visit],
+        created_at=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+        expires_at=datetime(2026, 10, 17, 12, 15, tzinfo=UTC),
+    )
+    state = BookingTaskState(
+        status="awaiting_confirmation",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id=SERVICE_B,
+            doctor_id=DOCTOR_A,
+            branch_id=BRANCH,
+            device_key="candela",
+            date=DateConstraint(mode="exact", start_date=day.isoformat()),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        requested_service_ids=[SERVICE_A, SERVICE_B, SERVICE_C],
+        service_device_keys={SERVICE_A: "candela", SERVICE_B: "candela"},
+        proposal=proposal,
+        grouped=None,
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date=day.isoformat()),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+                execution_intent="execute",
+                active_task_relationship="continue",
+                continues_previous=True,
+                grouped_booking_action="preserve_group",
+            )
+        ]
+    )
+
+    restored, restored_groups = restore_grouped_booking_understanding(
+        turn,
+        active_task=state,
+        context=semantic_context,
+    )
+    recollapsed, service_sets, visit_groups = recollapse_restored_booking_visit_groups(
+        restored,
+        semantic_context=semantic_context,
+        catalog=catalog,
+        restored_visit_groups=restored_groups,
+    )
+    plan = plan_turn(
+        recollapsed,
+        PlannerContext(
+            semantic_context=semantic_context,
+            active_task=state,
+            now=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+        ),
+    )
+    plan = tag_booking_service_sets(plan, service_sets=service_sets)
+    normalized = normalize_compound_turn_plan(
+        plan,
+        catalog=catalog,
+        operation_visit_groups=visit_groups,
+    )
+    adapter = _Adapter(
+        {
+            (SERVICE_A, day): _result(
+                SERVICE_A,
+                [
+                    _slot(
+                        SERVICE_A,
+                        DOCTOR_A,
+                        "2026-10-17T15:00:00+00:00",
+                        "2026-10-17T15:30:00+00:00",
+                        device_key="candela",
+                    )
+                ],
+            ),
+            (SERVICE_C, day): _result(
+                SERVICE_C,
+                [
+                    _slot(
+                        SERVICE_C,
+                        DOCTOR_B,
+                        "2026-10-17T15:30:00+00:00",
+                        "2026-10-17T16:00:00+00:00",
+                    )
+                ],
+            ),
+        }
+    )
+    preflighted = preflight_compound_visit_plan(
+        normalized,
+        context=_context(adapter, catalog=catalog),
+        timezone_name="Africa/Cairo",
+        visit_group_id="ra-g7-continuation",
+    )
+
+    assert len(preflighted.steps) == 2
+    assert [step.facts["doctor_id"] for step in preflighted.steps] == [DOCTOR_A, DOCTOR_B]
+    assert preflighted.steps[0].facts["device_key"] == "candela"
+    assert preflighted.steps[1].facts.get("device_key") is None
+    assert [step.facts["time"]["start_time"] for step in preflighted.steps] == ["18:00", "18:30"]
+    assert all(step.facts.get("compound_visit_no_joint_window") is not True for step in preflighted.steps)
+
+    prepared, rebuilt = _prepare_cross_category_compound_proposal(
+        preflighted,
+        current_task=state,
+        workspace=SimpleNamespace(id=WORKSPACE),
+        patient=SimpleNamespace(id=PATIENT),
+        catalog=catalog,
+        now=datetime(2026, 10, 17, 12, 0, tzinfo=UTC),
+        turn_id="ra-g7-continuation",
+    )
+
+    assert rebuilt is not None
+    assert rebuilt.status == "awaiting_confirmation"
+    assert rebuilt.requested_service_ids == [SERVICE_A, SERVICE_B, SERVICE_C]
+    assert rebuilt.grouped is None
+    assert rebuilt.proposal is not None
+    assert len(rebuilt.proposal.visits) == 2
+    assert rebuilt.proposal.visits[0].service_ids == [SERVICE_A, SERVICE_B]
+    assert rebuilt.proposal.visits[1].service_ids == [SERVICE_C]
+    assert rebuilt.proposal.visits[0].doctor_id == DOCTOR_A
+    assert rebuilt.proposal.visits[1].doctor_id == DOCTOR_B
+    assert rebuilt.proposal.visits[0].device_key == "candela"
+    assert rebuilt.proposal.visits[1].device_key is None
+    assert len(prepared.steps) == 1
+    assert prepared.steps[0].response_goal == "booking_proposal"
+    assert prepared.steps[0].write_intent is None

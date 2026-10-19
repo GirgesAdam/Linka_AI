@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
@@ -17,6 +17,8 @@ from app.services.agent_v2.active_task_progress import (
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import (
+    BookingProposal,
+    BookingProposalVisit,
     BookingTaskState,
     CustomerConstraints,
     DerivedBookingState,
@@ -172,6 +174,198 @@ def _authorization(operation: str = "booking") -> WriteAuthorization:
         source_turn_id="turn-start",
         granted_at=NOW,
     )
+
+
+def _completed_category_proposal_state(*, with_proposal: bool = True) -> BookingTaskState:
+    start = datetime(2026, 9, 12, 18, 0, tzinfo=UTC)
+    laser_visit = BookingProposalVisit(
+        service_ids=["svc-underarm", "svc-bikini"],
+        main_service_id="svc-underarm",
+        additional_service_ids=["svc-bikini"],
+        branch_id="branch-1",
+        doctor_id="doc-maryam",
+        start_at=start,
+        end_at=start + timedelta(minutes=30),
+        device_key="candela_gentle",
+        additional_service_device_keys={"svc-bikini": "candela_gentle"},
+    )
+    dermatology_visit = BookingProposalVisit(
+        service_ids=["svc-dermatology"],
+        main_service_id="svc-dermatology",
+        branch_id="branch-1",
+        doctor_id="doc-hydra",
+        start_at=start + timedelta(minutes=30),
+        end_at=start + timedelta(minutes=60),
+    )
+    proposal = (
+        BookingProposal(
+            proposal_id="proposal-category-split",
+            patient_id="patient-1",
+            service_ids=["svc-underarm", "svc-bikini", "svc-dermatology"],
+            main_service_id="svc-underarm",
+            additional_service_ids=["svc-bikini"],
+            branch_id="branch-1",
+            doctor_id="doc-maryam",
+            start_at=laser_visit.start_at,
+            end_at=laser_visit.end_at,
+            device_key="candela_gentle",
+            additional_service_device_keys={"svc-bikini": "candela_gentle"},
+            package_usage="unspecified",
+            visits=[laser_visit, dermatology_visit],
+            task_version=1,
+            proposal_version=1,
+            created_at=NOW,
+            expires_at=NOW + timedelta(minutes=15),
+        )
+        if with_proposal
+        else None
+    )
+    return BookingTaskState(
+        status="awaiting_confirmation" if proposal is not None else "collecting",
+        write_authorization=_authorization(),
+        constraints=CustomerConstraints(
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini", "svc-dermatology"],
+        proposal=proposal,
+    )
+
+
+def _compound_category_proposal_step() -> PlanStep:
+    return PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        state_action="none",
+        response_goal="booking_proposal",
+        facts={
+            "compound_category_proposal": True,
+            "requested_service_ids": ["svc-underarm", "svc-bikini"],
+        },
+    )
+
+
+def test_completed_compound_category_proposal_event_bypasses_generic_booking_adaptation() -> None:
+    state = _completed_category_proposal_state()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="continue",
+    )
+    step = _compound_category_proposal_step()
+
+    adapted = adapt_matching_active_task_step(
+        step,
+        operation=operation,
+        active_task=state,
+        context=_continuation_context(),
+        now=NOW,
+    )
+
+    assert adapted == step
+    assert adapted.disposition == "respond"
+    assert adapted.state_action == "none"
+    assert adapted.response_goal == "booking_proposal"
+
+
+def test_active_proposal_normal_customer_correction_still_uses_generic_adaptation() -> None:
+    state = _completed_category_proposal_state()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="19:00")),
+        execution_intent="execute",
+        active_task_relationship="continue",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        state_action="none",
+        response_goal="booking_proposal",
+    )
+
+    adapted = adapt_matching_active_task_step(
+        step,
+        operation=operation,
+        active_task=state,
+        context=_continuation_context(),
+        now=NOW,
+    )
+
+    assert adapted.disposition == "state_update"
+    assert adapted.state_action == "update_active"
+    assert adapted.response_goal == "clarification"
+    assert adapted.facts["time"]["start_time"] == "19:00"
+
+
+def test_compound_category_marker_without_attached_proposal_does_not_bypass_adaptation() -> None:
+    state = _completed_category_proposal_state(with_proposal=False)
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="continue",
+    )
+
+    adapted = adapt_matching_active_task_step(
+        _compound_category_proposal_step(),
+        operation=operation,
+        active_task=state,
+        context=_continuation_context(),
+        now=NOW,
+    )
+
+    assert adapted.disposition == "state_update"
+    assert adapted.state_action == "update_active"
+    assert adapted.response_goal == "clarification"
+
+
+def test_completed_compound_category_proposal_survives_state_processing() -> None:
+    state = _completed_category_proposal_state()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="continue",
+    )
+    adapted = adapt_matching_active_task_step(
+        _compound_category_proposal_step(),
+        operation=operation,
+        active_task=state,
+        context=_continuation_context(),
+        now=NOW,
+    )
+
+    transition = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-category-proposal",
+    )
+
+    assert transition.active_task == state
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.status == "awaiting_confirmation"
+    assert transition.active_task.requested_service_ids == [
+        "svc-underarm",
+        "svc-bikini",
+        "svc-dermatology",
+    ]
+    assert transition.active_task.proposal is not None
+    assert transition.active_task.proposal.service_ids == [
+        "svc-underarm",
+        "svc-bikini",
+        "svc-dermatology",
+    ]
+    assert len(transition.active_task.proposal.visits) == 2
+    assert adapted.response_goal == "booking_proposal"
 
 
 def _reschedule_state() -> RescheduleTaskState:

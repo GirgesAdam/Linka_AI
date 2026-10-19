@@ -522,6 +522,110 @@ def _displayed_booking_availability_context_from_outcome(
     return context
 
 
+
+def _grouped_availability_read_context_from_turn(
+    turn: V2OrchestratedTurn,
+) -> dict[str, Any] | None:
+    active_task = getattr(turn, "active_task", None)
+    if not isinstance(active_task, BookingTaskState):
+        return None
+    requested = list(dict.fromkeys(active_task.requested_service_ids))
+    if len(requested) < 2:
+        return None
+
+    options: list[dict[str, object]] = []
+    presented_keys: set[str] = set()
+    seen_services: set[str] = set()
+    common_scope: dict[str, object] = {}
+    common_scope_initialized = False
+    option_index = 0
+
+    for step in turn.plan.steps:
+        if step.disposition != "read" or step.write_intent is not None:
+            continue
+        availability_read = next(
+            (request for request in step.reads if request.kind == "availability"),
+            None,
+        )
+        if availability_read is None:
+            continue
+        service_id = str(
+            availability_read.parameters.get("service_id")
+            or step.facts.get("service_id")
+            or ""
+        )
+        if service_id not in requested:
+            continue
+        matching_trace = next(
+            (
+                trace
+                for trace in reversed(turn.traces)
+                if trace.operation_index == step.operation_index
+                and trace.outcome is not None
+            ),
+            None,
+        )
+        if matching_trace is None or matching_trace.outcome is None:
+            continue
+        service_name, windows = availability_windows_from_outcome_facts(
+            matching_trace.outcome.facts
+        )
+        if not windows:
+            continue
+        selected_windows, selected_keys, _has_more = select_availability_window_page(
+            windows,
+            service_name=service_name,
+            shown_keys=set(),
+        )
+        verified_slots = [
+            dict(item) for item in getattr(matching_trace, "availability_slots", ())
+        ]
+        component_options = build_availability_reference_options(
+            displayed_windows=selected_windows,
+            verified_slots=verified_slots,
+        )
+        if not component_options:
+            continue
+        seen_services.add(service_id)
+        presented_keys.update(selected_keys)
+        for option in component_options:
+            option_index += 1
+            item = dict(option)
+            item["option_ref"] = f"opt_{option_index}"
+            item["index"] = option_index
+            item["service_id"] = service_id
+            options.append(item)
+
+        component_scope = {
+            key: value
+            for key in ("branch_id", "date", "package_usage")
+            if (value := availability_read.parameters.get(key)) not in (None, "", [], {})
+        }
+        if not common_scope_initialized:
+            common_scope = component_scope
+            common_scope_initialized = True
+        else:
+            common_scope = {
+                key: value
+                for key, value in common_scope.items()
+                if component_scope.get(key) == value
+            }
+
+    if seen_services != set(requested) or not options:
+        return None
+    context: dict[str, Any] = {
+        "operation_type": "availability",
+        "requested_service_ids": requested,
+        "multi_service_single_appointment": True,
+        "availability_reference_options": options,
+        "availability_option_count": len(options),
+        **common_scope,
+    }
+    if presented_keys:
+        context["availability_presented_window_keys"] = sorted(presented_keys)
+    return context
+
+
 def _verified_read_context_from_turn(
     db: Session,
     *,
@@ -533,7 +637,11 @@ def _verified_read_context_from_turn(
     availability_presented = any(
         outcome.response_goal == "present_availability" for outcome in getattr(turn, "outcomes", ())
     )
-    if not availability_presented:
+    if availability_presented:
+        grouped_context = _grouped_availability_read_context_from_turn(turn)
+        if grouped_context is not None:
+            return grouped_context
+    else:
         for step in reversed(turn.plan.steps):
             if step.facts.get("verified_availability_reference") is True and isinstance(
                 previous_read_context, dict
@@ -582,6 +690,7 @@ def _verified_read_context_from_turn(
                     context["appointment_id"] = str(appointment_id)
         for key in (
             "service_id",
+            "requested_service_ids",
             "doctor_id",
             "doctor_ids",
             "device_key",
@@ -713,6 +822,7 @@ def _availability_reference_context_from_turn(
             }
             for key in (
                 "service_id",
+                "requested_service_ids",
                 "doctor_id",
                 "doctor_ids",
                 "device_key",
@@ -768,6 +878,7 @@ def _availability_reference_context_from_turn(
         }
         for key in (
             "service_id",
+            "requested_service_ids",
             "doctor_id",
             "doctor_ids",
             "device_key",

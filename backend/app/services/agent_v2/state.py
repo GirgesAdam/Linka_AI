@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.v2.turn_contract import ClockSource, DateConstraint, PackageUsage, TimeConstraint
 
-TaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
+BookingTaskStatus = Literal["collecting", "awaiting_slot", "awaiting_confirmation"]
+RescheduleTaskStatus = Literal["collecting", "awaiting_choice", "ready", "executing"]
 LegacyPulseUsage = Literal["unspecified", "use_existing", "avoid_existing"]
 ChoicePurpose = Literal[
     "service",
@@ -54,6 +55,41 @@ class CustomerConstraints(StrictStateModel):
     package_usage: PackageUsage = "unspecified"
     # Backward-compatibility only. New turns never populate or consume this field.
     pulse_usage: LegacyPulseUsage = "unspecified"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_clock_source(cls, value: object) -> object:
+        """Migrate removed explicit-period authority into the backend-owned bare-clock policy."""
+        if not isinstance(value, dict):
+            return value
+        if value.get("time_clock_source") != "explicit_period":
+            return value
+
+        normalized = {**value, "time_clock_source": "bare_spoken_12h"}
+        legacy_time = normalized.get("time")
+        if not isinstance(legacy_time, dict) or legacy_time.get("mode") != "exact":
+            return normalized
+
+        raw_start = legacy_time.get("start_time")
+        if not isinstance(raw_start, str):
+            return normalized
+        try:
+            parsed = time.fromisoformat(raw_start.strip())
+        except ValueError:
+            return normalized
+
+        hour = parsed.hour
+        if hour == 0:
+            hour = 12
+        elif hour > 12:
+            hour -= 12
+        migrated_time = {
+            **legacy_time,
+            "start_time": f"{hour:02d}:{parsed.minute:02d}",
+            "start_time_ambiguity": "twelve_hour",
+        }
+        normalized["time"] = migrated_time
+        return normalized
 
     @model_validator(mode="before")
     @classmethod
@@ -109,9 +145,9 @@ class OptionSnapshot(StrictStateModel):
         return self.task_version == task_version and now < self.expires_at
 
 
-class BookingProposal(StrictStateModel):
-    proposal_id: str
-    patient_id: str
+class BookingProposalVisit(StrictStateModel):
+    """One persistence appointment inside a customer-level booking proposal."""
+
     service_ids: list[str] = Field(default_factory=list)
     main_service_id: str
     additional_service_ids: list[str] = Field(default_factory=list)
@@ -123,6 +159,51 @@ class BookingProposal(StrictStateModel):
     additional_service_device_keys: dict[str, str] = Field(default_factory=dict)
     package_usage: PackageUsage = "unspecified"
     package_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_visit(self) -> BookingProposalVisit:
+        ordered = list(dict.fromkeys(item for item in self.service_ids if item))
+        if not ordered or ordered != self.service_ids:
+            raise ValueError("booking proposal visit services must be unique and non-empty.")
+        if self.main_service_id not in ordered:
+            raise ValueError("booking proposal visit main service must be in service_ids.")
+        expected_additional = [item for item in ordered if item != self.main_service_id]
+        if self.additional_service_ids != expected_additional:
+            raise ValueError("booking proposal visit additional services must match non-main services.")
+        if self.end_at <= self.start_at:
+            raise ValueError("booking proposal visit end_at must be after start_at.")
+        if set(self.additional_service_device_keys) - set(self.additional_service_ids):
+            raise ValueError("booking proposal visit device map contains a non-additional service.")
+        if self.additional_service_device_keys:
+            if self.device_key is None:
+                raise ValueError("booking proposal visit laser devices require a visit device.")
+            if any(value != self.device_key for value in self.additional_service_device_keys.values()):
+                raise ValueError("booking proposal visit cannot split laser devices within one appointment.")
+        return self
+
+
+class BookingProposal(StrictStateModel):
+    proposal_id: str
+    patient_id: str
+    service_ids: list[str] = Field(default_factory=list)
+    # DOMAIN CONTRACT - MULTI-SERVICE SEMANTICS:
+    # main_service_id and additional_service_ids are persistence/execution labels only.
+    # The LLM, semantic interpretation, and planning layers must treat every requested
+    # service as an equal peer. Never infer priority, intent, ordering, doctor/device
+    # choice, or conversational meaning from the main/additional labels. The distinction
+    # exists only because one same-session visit may be persisted as one Appointment row
+    # plus additional-service rows.
+    main_service_id: str
+    additional_service_ids: list[str] = Field(default_factory=list)
+    branch_id: str
+    doctor_id: str
+    start_at: datetime
+    end_at: datetime
+    device_key: str | None = None
+    additional_service_device_keys: dict[str, str] = Field(default_factory=dict)
+    package_usage: PackageUsage = "unspecified"
+    package_id: str | None = None
+    visits: list[BookingProposalVisit] = Field(default_factory=list)
     task_version: int = 1
     proposal_version: int = 1
     created_at: datetime
@@ -135,9 +216,30 @@ class BookingProposal(StrictStateModel):
             raise ValueError("booking proposal services must be unique and non-empty.")
         if self.main_service_id not in ordered:
             raise ValueError("booking proposal main service must be in service_ids.")
-        expected_additional = [item for item in ordered if item != self.main_service_id]
-        if self.additional_service_ids != expected_additional:
-            raise ValueError("booking proposal additional services must match non-main services.")
+        if self.visits:
+            flattened = [service_id for visit in self.visits for service_id in visit.service_ids]
+            if flattened != ordered:
+                raise ValueError("compound booking proposal visits must partition service_ids in order.")
+            if len(self.visits) < 2:
+                raise ValueError("compound booking proposal requires at least two visits.")
+            first = self.visits[0]
+            if (
+                self.main_service_id != first.main_service_id
+                or self.additional_service_ids != first.additional_service_ids
+                or self.branch_id != first.branch_id
+                or self.doctor_id != first.doctor_id
+                or self.start_at != first.start_at
+                or self.end_at != first.end_at
+                or self.device_key != first.device_key
+            ):
+                raise ValueError("compound booking proposal compatibility summary must mirror first visit.")
+            for previous, current in zip(self.visits, self.visits[1:], strict=False):
+                if current.start_at < previous.end_at:
+                    raise ValueError("compound booking proposal visits cannot overlap.")
+        else:
+            expected_additional = [item for item in ordered if item != self.main_service_id]
+            if self.additional_service_ids != expected_additional:
+                raise ValueError("booking proposal additional services must match non-main services.")
         if self.end_at <= self.start_at:
             raise ValueError("booking proposal end_at must be after start_at.")
         if self.expires_at <= self.created_at:
@@ -161,7 +263,7 @@ class BookingProposal(StrictStateModel):
 
 
 class GroupedBookingState(StrictStateModel):
-    """Durable component set for one pending same-visit booking."""
+    """Durable component set for one pending grouped booking journey."""
 
     components: list[CustomerConstraints] = Field(default_factory=list)
 
@@ -177,7 +279,7 @@ class GroupedBookingState(StrictStateModel):
 
 class BookingTaskState(StrictStateModel):
     task_type: Literal["booking"] = "booking"
-    status: TaskStatus = "collecting"
+    status: BookingTaskStatus = "collecting"
     write_authorization: WriteAuthorization
     constraints: CustomerConstraints = Field(default_factory=CustomerConstraints)
     requested_service_ids: list[str] = Field(default_factory=list)
@@ -187,6 +289,33 @@ class BookingTaskState(StrictStateModel):
     derived: DerivedBookingState = Field(default_factory=DerivedBookingState)
     option_snapshot: OptionSnapshot | None = None
     version: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_status(cls, value: object) -> object:
+        """Decode legacy booking workflow statuses into the internal stage contract."""
+        if not isinstance(value, dict):
+            return value
+        status = value.get("status")
+        if status == "awaiting_choice":
+            snapshot = value.get("option_snapshot")
+            purpose = (
+                snapshot.purpose
+                if isinstance(snapshot, OptionSnapshot)
+                else snapshot.get("purpose")
+                if isinstance(snapshot, dict)
+                else None
+            )
+            normalized = "awaiting_slot" if purpose == "booking_slot" else "collecting"
+        elif status == "ready":
+            normalized = (
+                "awaiting_confirmation" if value.get("proposal") is not None else "collecting"
+            )
+        elif status == "executing":
+            normalized = "collecting"
+        else:
+            return value
+        return {**value, "status": normalized}
 
     @model_validator(mode="after")
     def validate_version(self) -> BookingTaskState:
@@ -198,6 +327,18 @@ class BookingTaskState(StrictStateModel):
             raise ValueError("requested booking services must be unique.")
         if self.proposal is not None and self.proposal.service_ids != self.requested_service_ids:
             raise ValueError("booking proposal must match the current requested service set.")
+        if self.status == "awaiting_slot":
+            if (
+                self.option_snapshot is None
+                or self.option_snapshot.purpose != "booking_slot"
+                or self.proposal is not None
+            ):
+                raise ValueError("awaiting_slot requires a booking-slot snapshot and no proposal.")
+        if self.status == "awaiting_confirmation":
+            if self.proposal is None:
+                raise ValueError("awaiting_confirmation requires a booking proposal.")
+            if self.option_snapshot is not None and self.option_snapshot.purpose == "booking_slot":
+                raise ValueError("awaiting_confirmation cannot retain a booking-slot snapshot.")
         return self
 
 
@@ -220,7 +361,7 @@ class DerivedRescheduleState(StrictStateModel):
 
 class RescheduleTaskState(StrictStateModel):
     task_type: Literal["reschedule"] = "reschedule"
-    status: TaskStatus = "collecting"
+    status: RescheduleTaskStatus = "collecting"
     write_authorization: WriteAuthorization
     target: RescheduleTarget
     replacement: CustomerConstraints

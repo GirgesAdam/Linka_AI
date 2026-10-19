@@ -33,6 +33,42 @@ def _price_outcome() -> TurnOutcome:
     )
 
 
+def _grouped_visit_total_outcome() -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="answer_price",
+        facts={
+            "visit_total_price": True,
+            "listed_total_not_settlement": False,
+            "multi_service_single_appointment": True,
+            "booking_proposal_required": True,
+            "visit_price": {
+                "service_names": ["Laser Underarm", "Laser Bikini"],
+                "variants": [
+                    {
+                        "device_name": "Candela Gentle",
+                        "components": [
+                            {
+                                "service_name": "Laser Underarm",
+                                "price": "500.00 EGP",
+                                "currency": "EGP",
+                            },
+                            {
+                                "service_name": "Laser Bikini",
+                                "price": "700.00 EGP",
+                                "currency": "EGP",
+                            },
+                        ],
+                        "total_price": "1200.00 EGP",
+                        "currency": "EGP",
+                    }
+                ],
+                "device_required": True,
+                "device_resolved": True,
+            },
+        },
+    )
+
 def _doctor_outcome() -> TurnOutcome:
     return TurnOutcome(
         status="answered",
@@ -425,6 +461,30 @@ def test_doctor_and_price_compound_answer_preserves_typed_truth_without_model(
     assert text.count("د. نور") == 1
 
 
+def test_mixed_doctor_and_grouped_visit_total_renders_verified_total_without_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("verified grouped total must stay deterministic in a mixed reply")
+        ),
+    )
+
+    text, model = compose_v2_customer_reply(
+        clinic_name="Linka Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="Who is the doctor and what is the total price?")],
+        outcomes=[_doctor_outcome(), _grouped_visit_total_outcome()],
+    )
+
+    assert model == "deterministic:mixed-typed-contract"
+    assert "1200" in text
+    assert "\u062f. \u0645\u0631\u064a\u0645" in text
+    assert "not available" not in text.lower()
+
 def test_empty_responder_output_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(responder, "build_realtime_composer_model", lambda: object())
     monkeypatch.setattr(
@@ -736,12 +796,14 @@ def test_booking_proposal_is_rendered_deterministically_without_false_success(mo
         status="answered",
         response_goal="booking_proposal",
         facts={
+            "verified_availability_reference": True,
             "booking_proposal_summary": {
                 "services": ["هيدرافيشل", "ليزر إزالة الشعر - إبط وبكيني"],
                 "start_local": "2026-10-13T11:00:00+03:00",
                 "doctor_name": "مريم حسن",
                 "branch_name": "التجمع الخامس",
-            }
+                "device_name": "Candela Gentle",
+            },
         },
     )
 
@@ -756,7 +818,257 @@ def test_booking_proposal_is_rendered_deterministically_without_false_success(mo
     assert "الموعد المقترح" in reply
     assert "هيدرافيشل" in reply
     assert "إبط وبكيني" in reply
+    assert "Candela Gentle" in reply
     assert "تأكدي" in reply
+    assert "جنيه" not in reply
+    assert "EGP" not in reply
     assert "تم تأكيد" not in reply
     assert "اتأكد" not in reply
+    assert "مش قادر أربط الإشارة" not in reply
+    assert "أنهي اختيار" not in reply
     assert model == "deterministic:mixed-typed-contract"
+
+
+
+def test_booking_proposal_includes_unique_verified_price_without_false_group_total(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("booking proposal must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["ليزر إبط", "ليزر بكيني"],
+                "start_local": "2026-10-17T18:00:00+03:00",
+                "doctor_name": "مريم أحمد",
+                "branch_name": "مدينة نصر",
+                "device_name": "Candela Gentle",
+            },
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر بكيني",
+                    "requires_laser_device": True,
+                    "selected_laser_device": {
+                        "device_name": "Candela Gentle",
+                        "price": "700.00 EGP",
+                    },
+                }
+            },
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="السبت الساعة 6 مناسب، وريني التفاصيل قبل التأكيد")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:mixed-typed-contract"
+    assert "ليزر إبط" in reply
+    assert "ليزر بكيني" in reply
+    assert "مريم أحمد" in reply
+    assert "Candela Gentle" in reply
+    assert "6 مساء" in reply
+    assert "700" in reply
+    assert "جنيه" in reply
+    assert "سعر ليزر بكيني" in reply
+    assert "إجمالي" not in reply
+    assert "تم الحجز" not in reply
+    assert "اتحجز" not in reply
+    assert "تأكدي" in reply
+
+
+def test_booking_proposal_does_not_choose_from_ambiguous_commercial_prices(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("booking proposal must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["ليزر إبط", "ليزر بكيني"],
+                "start_local": "2026-10-17T18:00:00+03:00",
+                "doctor_name": "مريم أحمد",
+                "branch_name": "مدينة نصر",
+            },
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر بكيني",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {"device_name": "Candela Gentle", "price": "700.00 EGP"},
+                        {"device_name": "Prime Lase", "price": "650.00 EGP"},
+                    ],
+                }
+            },
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="وريني تفاصيل الموعد قبل التأكيد")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:mixed-typed-contract"
+    assert "الموعد المقترح" in reply
+    assert "700" not in reply
+    assert "650" not in reply
+    assert "جنيه" not in reply
+    assert "EGP" not in reply
+    assert "إجمالي" not in reply
+
+
+def test_actual_availability_reference_still_owns_verified_option_reply(monkeypatch) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("verified availability reference must not rely on model wording")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="availability_reference",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_index": 1,
+            "availability_reference_option": {
+                "index": 1,
+                "start_time_24h": "20:00",
+                "doctor_name": "مريم أحمد",
+                "laser_device_name": "Candela Gentle",
+            },
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="الأول مناسب")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:verified-availability-reference"
+    assert "الاختيار 1" in reply
+    assert "20:00" in reply
+    assert "مريم أحمد" in reply
+    assert "Candela Gentle" in reply
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_fragment"),
+    [
+        ("needs_anchor", "تقصد أنهي ميعاد"),
+        ("semantic_clarification", "تقصد أنهي ميعاد"),
+        ("window_ambiguous", "فترة فيها أكتر من ميعاد"),
+        ("out_of_range", "مفيش اختيار في الاتجاه ده"),
+    ],
+)
+def test_verified_availability_reference_failure_reasons_still_clarify(
+    monkeypatch,
+    reason: str,
+    expected_fragment: str,
+) -> None:
+    def _must_not_call_model(*args, **kwargs):
+        raise AssertionError("verified availability reference clarification must stay deterministic")
+
+    monkeypatch.setattr(responder, "invoke_typed_structured_output", _must_not_call_model)
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_reason": reason,
+        },
+    )
+
+    reply, model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="المعاد ده")],
+        outcomes=[outcome],
+    )
+
+    assert model == "deterministic:availability-reference-clarification"
+    assert expected_fragment in reply
+
+
+def _compound_proposal_outcome(*, first_start: str, second_start: str) -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["Laser Underarm", "Laser Bikini", "Dermatology"],
+                "visits": [
+                    {
+                        "services": ["Laser Underarm", "Laser Bikini"],
+                        "start_at": first_start,
+                        "end_at": "2026-10-17T15:30:00+00:00" if first_start.endswith("15:00:00+00:00") else "2026-10-17T16:30:00+00:00",
+                        "doctor_id": "laser-doctor",
+                        "branch_id": "main-branch",
+                        "device_key": "candela_gentle",
+                    },
+                    {
+                        "services": ["Dermatology"],
+                        "start_at": second_start,
+                        "end_at": "2026-10-17T16:00:00+00:00" if second_start.endswith("15:30:00+00:00") else "2026-10-17T17:00:00+00:00",
+                        "doctor_id": "dermatology-doctor",
+                        "branch_id": "main-branch",
+                        "device_key": None,
+                    },
+                ],
+            }
+        },
+    )
+
+
+def _compound_proposal_reply(outcome: TurnOutcome) -> str:
+    reply, _model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="\u0627\u0644\u0633\u0627\u0639\u0629 6 \u0645\u0646\u0627\u0633\u0628\u0629.")],
+        outcomes=[outcome],
+    )
+    return reply
+
+
+def test_rw6_compound_booking_proposal_renders_each_canonical_visit_start_time() -> None:
+    reply = _compound_proposal_reply(
+        _compound_proposal_outcome(
+            first_start="2026-10-17T15:00:00+00:00",
+            second_start="2026-10-17T15:30:00+00:00",
+        )
+    )
+
+    assert "6 \u0645\u0633\u0627\u0621" in reply
+    assert "6:30 \u0645\u0633\u0627\u0621" in reply
+
+
+def test_rw7_compound_booking_proposal_renders_initial_and_corrected_visit_times() -> None:
+    initial_reply = _compound_proposal_reply(
+        _compound_proposal_outcome(
+            first_start="2026-10-17T15:00:00+00:00",
+            second_start="2026-10-17T15:30:00+00:00",
+        )
+    )
+    corrected_reply = _compound_proposal_reply(
+        _compound_proposal_outcome(
+            first_start="2026-10-17T16:00:00+00:00",
+            second_start="2026-10-17T16:30:00+00:00",
+        )
+    )
+
+    assert "6 \u0645\u0633\u0627\u0621" in initial_reply
+    assert "6:30 \u0645\u0633\u0627\u0621" in initial_reply
+    assert "7 \u0645\u0633\u0627\u0621" in corrected_reply
+    assert "7:30 \u0645\u0633\u0627\u0621" in corrected_reply

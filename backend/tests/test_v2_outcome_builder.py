@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.terminal_composer import deterministic_terminal_fallback
 from app.agents.v2.turn_contract import (
     EntityReference,
     TiaTurnUnderstanding,
@@ -663,6 +664,116 @@ def test_normal_service_pricing_is_derived_from_verified_read(
     assert service["price"] == expected
 
 
+def test_complete_set_price_evidence_is_scoped_to_the_planned_service_set() -> None:
+    operation = TurnOperation(type="book", entities=TurnEntities(), package_usage="unspecified")
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="service_catalog_set",
+                parameters={"service_ids": ["service-1", "service-2"]},
+            )
+        ],
+        response_goal="answer_price",
+        facts={"requested_service_ids": ["service-1", "service-2"]},
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "service_ids": ["service-1", "service-2"],
+                    "service_names": ["Underarm", "Bikini"],
+                    "variants": [
+                        {
+                            "device_name": "Candela Gentle",
+                            "total_price_minor": 120_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 50_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 70_000, "currency": "EGP"},
+                            ],
+                        },
+                        {
+                            "device_name": "Prime Lase",
+                            "total_price_minor": 110_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 45_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 65_000, "currency": "EGP"},
+                            ],
+                        },
+                    ],
+                    "device_required": True,
+                    "device_resolved": False,
+                },
+            ),
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "service_ids": ["service-1", "service-2"],
+                    "service_names": ["Underarm", "Bikini"],
+                    "variants": [
+                        {
+                            "device_name": "Candela Gentle",
+                            "total_price_minor": 120_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 50_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 70_000, "currency": "EGP"},
+                            ],
+                        }
+                    ],
+                    "device_required": True,
+                    "device_resolved": True,
+                },
+            ),
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "service_ids": ["service-1", "service-2", "service-3"],
+                    "service_names": ["Underarm", "Bikini", "Dermatology"],
+                    "variants": [
+                        {
+                            "device_name": "Candela Gentle",
+                            "total_price_minor": 220_000,
+                            "currency": "EGP",
+                            "components": [
+                                {"service_name": "Underarm", "price_minor": 50_000, "currency": "EGP"},
+                                {"service_name": "Bikini", "price_minor": 70_000, "currency": "EGP"},
+                                {"service_name": "Dermatology", "price_minor": 100_000, "currency": "EGP"},
+                            ],
+                        }
+                    ],
+                    "device_required": True,
+                    "device_resolved": False,
+                },
+            ),
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+
+    visit_price = outcome.facts["visit_price"]
+    assert isinstance(visit_price, dict)
+    assert visit_price["service_names"] == ["Underarm", "Bikini"]
+    assert visit_price["variants"][0]["total_price"] == "1200.00 EGP"
+    assert visit_price["variants"][0]["device_name"] == "Candela Gentle"
+    assert visit_price["device_resolved"] is True
+    assert len(visit_price["variants"]) == 1
+    assert "service_ids" not in visit_price
+
+
 def test_booking_answer_price_goal_exposes_verified_service_price() -> None:
     operation = TurnOperation(
         type="book",
@@ -705,6 +816,75 @@ def test_booking_answer_price_goal_exposes_verified_service_price() -> None:
     )
 
     assert outcome.facts["service_catalog"]["service"]["price"] == "2000.00 EGP"
+
+
+def test_booking_proposal_preserves_same_turn_verified_device_price() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text="ليزر بكيني", ref="S2", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        reads=[ReadRequest(kind="service_catalog", parameters={"service_id": "service-2"})],
+        response_goal="booking_proposal",
+        facts={
+            "service_id": "service-2",
+            "device_key": "candela_gentle",
+            "booking_proposal_summary": {
+                "services": ["ليزر إبط", "ليزر بكيني"],
+                "start_local": "2026-10-17T18:00:00+03:00",
+                "doctor_name": "مريم أحمد",
+                "branch_name": "مدينة نصر",
+                "device_name": "Candela Gentle",
+            },
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog",
+                ok=True,
+                payload={
+                    "service": {
+                        "id": "service-2",
+                        "name": "ليزر بكيني",
+                        "requires_laser_device": True,
+                        "laser_devices": [
+                            {
+                                "device_key": "candela_gentle",
+                                "device_name": "Candela Gentle",
+                                "price_minor": 70_000,
+                                "currency": "EGP",
+                            }
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=_semantic_context(),
+        reads=reads,
+    )
+    selected = outcome.facts["service_catalog"]["service"]["selected_laser_device"]
+    contract = build_customer_response_contract([outcome])
+    truth = contract.units[0].commercial_truth
+
+    assert selected == {"device_name": "Candela Gentle", "price": "700.00 EGP"}
+    assert truth is not None
+    assert truth.kind == "service_device_price"
+    assert [(item.service_name, item.device_name, item.amount, item.currency) for item in truth.options] == [
+        ("ليزر بكيني", "Candela Gentle", "700.00", "EGP")
+    ]
 
 
 def test_selected_laser_device_price_uses_matching_verified_device() -> None:
@@ -1027,3 +1207,210 @@ def test_selected_laser_device_without_verified_price_does_not_fall_back_to_othe
     assert "laser_devices" not in service
     assert contract.units[0].commercial_truth is not None
     assert contract.units[0].commercial_truth.kind == "price_unavailable"
+
+
+def test_grouped_availability_projects_catalog_backed_canonical_service_names() -> None:
+    context = _semantic_context()
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S2", candidate_refs=[]),
+        ),
+        selection=None,
+        package_usage="unspecified",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="availability",
+        disposition="read",
+        reads=[ReadRequest(kind="availability")],
+        response_goal="present_availability",
+        facts={
+            "service_id": "service-2",
+            "requested_service_ids": ["service-1", "service-2"],
+            "multi_service_single_appointment": True,
+            "grouped_read_only_task": True,
+        },
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="availability",
+                ok=True,
+                payload={
+                    "service_id": "service-2",
+                    "service_name": "ليزر بكيني",
+                    "checked_dates": ["2026-09-17"],
+                    "slots": [
+                        {
+                            "doctor_name": "مريم",
+                            "service_id": "service-2",
+                            "service_name": "ليزر بكيني",
+                            "start_local": "2026-09-17T19:00:00+03:00",
+                            "end_local": "2026-09-17T19:30:00+03:00",
+                        }
+                    ],
+                    "search_truncated": False,
+                },
+            )
+        ]
+    )
+
+    outcome = build_step_outcome(
+        step,
+        turn=_turn(operation),
+        semantic_context=context,
+        reads=reads,
+    )
+
+    assert outcome.facts["availability"]["service_name"] == "ليزر بكيني"
+    assert outcome.facts["canonical_service_names"] == ["ليزر إبط", "ليزر بكيني"]
+    assert "service_names" not in outcome.facts["availability"]
+    assert "requested_service_ids" not in outcome.facts
+
+
+
+def _booking_completion_context():
+    return build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "svc-underarm",
+                    "name": "Underarm",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                            "configured": True,
+                        }
+                    ],
+                },
+                {
+                    "id": "svc-bikini",
+                    "name": "Bikini",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                            "configured": True,
+                        }
+                    ],
+                },
+            ],
+            "doctors": [
+                {
+                    "id": "doc-maryam",
+                    "name": "Dr. Maryam",
+                    "service_ids": ["svc-underarm", "svc-bikini"],
+                }
+            ],
+        }
+    )
+
+
+def _confirmed_proposal_payload():
+    return {
+        "proposal_id": "proposal-current",
+        "patient_id": "patient-1",
+        "service_ids": ["svc-underarm", "svc-bikini"],
+        "main_service_id": "svc-bikini",
+        "additional_service_ids": ["svc-underarm"],
+        "branch_id": "branch-1",
+        "doctor_id": "doc-maryam",
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "end_at": "2026-09-12T20:30:00+03:00",
+        "device_key": "candela_gentle",
+        "additional_service_device_keys": {"svc-underarm": "candela_gentle"},
+        "package_usage": "unspecified",
+        "package_id": None,
+        "visits": [],
+        "task_version": 5,
+        "proposal_version": 1,
+        "created_at": "2026-09-12T19:55:00+03:00",
+        "expires_at": "2026-09-12T20:15:00+03:00",
+    }
+
+
+def _confirm_proposal_step(proposal: dict[str, object]) -> PlanStep:
+    return PlanStep(
+        operation_index=0,
+        operation_type="confirm_booking_proposal",
+        disposition="write_ready",
+        response_goal="booking_completed",
+        write_intent=WriteIntent(
+            kind="booking_proposal",
+            authorized=True,
+            parameters={"proposal_id": proposal["proposal_id"], "proposal": proposal},
+        ),
+        facts={
+            "booking_proposal_confirmation": True,
+            "requested_service_ids": list(proposal["service_ids"]),
+        },
+    )
+
+
+def test_confirmed_booking_proposal_completion_exposes_canonical_details() -> None:
+    proposal = _confirmed_proposal_payload()
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+    )
+    outcome = build_step_outcome(
+        _confirm_proposal_step(proposal),
+        turn=_turn(operation),
+        semantic_context=_booking_completion_context(),
+        action_result={
+            "ok": True,
+            "write_kind": "booking_proposal",
+            "proposal_id": "proposal-current",
+            "status": "confirmed",
+        },
+        active_task_summary={"status": "awaiting_confirmation", "proposal": proposal},
+    )
+    contract = build_customer_response_contract([outcome])
+    facts = {fact.key: fact.value for fact in contract.units[0].facts}
+    requirements = {fact.key: fact.requirement for fact in contract.units[0].facts}
+
+    assert outcome.status == "completed"
+    assert facts["service_name"] == "Underarm + Bikini"
+    assert facts["start_local"] == "2026-09-12T20:00:00+03:00"
+    assert facts["doctor_name"] == "Dr. Maryam"
+    assert facts["device_name"] == "Candela Gentle"
+    assert requirements["service_name"] == "required"
+    assert requirements["start_local"] == "required"
+    assert requirements["doctor_name"] == "required"
+    assert requirements["device_name"] == "required"
+
+    text = deterministic_terminal_fallback(contract, arabic=False)
+    assert "Underarm" in text and "Bikini" in text
+    assert "Dr. Maryam" in text
+    assert "Candela Gentle" in text
+    assert "September 12" in text
+    assert "8 PM" in text
+
+
+def test_failed_booking_proposal_write_never_renders_success() -> None:
+    proposal = _confirmed_proposal_payload()
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+    )
+    outcome = build_step_outcome(
+        _confirm_proposal_step(proposal),
+        turn=_turn(operation),
+        semantic_context=_booking_completion_context(),
+        action_result={
+            "ok": False,
+            "write_kind": "booking_proposal",
+            "error_code": "booking_unavailable",
+        },
+        active_task_summary={"status": "awaiting_confirmation", "proposal": proposal},
+    )
+
+    assert outcome.status == "blocked"
+    assert outcome.response_goal != "booking_completed"
+    assert outcome.action_result.get("completed") is not True

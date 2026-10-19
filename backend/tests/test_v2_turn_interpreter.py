@@ -21,6 +21,7 @@ from app.agents.v2.turn_contract import (
     DateConstraint,
     EntityReference,
     TiaTurnUnderstanding,
+    TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
@@ -147,6 +148,12 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     assert "recent_verified_action is a completed book" in str(messages[0].content)
     assert "customer order: cancel_appointment" in str(messages[0].content)
     assert "then availability" in str(messages[0].content)
+    assert "review its details before" in system_prompt
+    assert "until that exact proposal is" in system_prompt
+    assert "one trip, one" in system_prompt
+    assert "a short reply selecting a time" in system_prompt
+    assert "Preserve identity provenance in each EntityReference" in system_prompt
+    assert "Leave `text` null when the entity is present only as inherited/contextual information" in system_prompt
     assert isinstance(messages[1], SystemMessage)
     assert isinstance(messages[2], HumanMessage)
     assert isinstance(messages[3], AIMessage)
@@ -644,6 +651,146 @@ def _minimal_semantic_turn() -> TiaTurnUnderstanding:
             )
         ]
     )
+
+
+
+def _clock_semantic_turn(clock: str, *, hint: str = "none") -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    time=TimeConstraint(
+                        mode="exact",
+                        start_time=clock,
+                        spoken_period_hint=hint,
+                    )
+                ),
+            )
+        ]
+    )
+
+
+def _run_clock_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    customer_text: str,
+    semantic_results: list[TiaTurnUnderstanding],
+) -> tuple[TiaTurnUnderstanding, list[str]]:
+    model = object()
+    calls: list[str] = []
+    queue = list(semantic_results)
+    monkeypatch.setattr(interpreter.settings, "openai_model", "primary-test")
+    monkeypatch.setattr(interpreter.settings, "openai_fallback_model", "primary-test")
+    monkeypatch.setattr(interpreter, "build_realtime_interpreter_model", lambda: model)
+    monkeypatch.setattr(
+        interpreter,
+        "_messages_for_prompt_cache",
+        lambda _model, messages, **_kwargs: messages,
+    )
+    monkeypatch.setattr(interpreter, "merge_presented_availability_context", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "enforce_unscoped_task_boundary", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "isolate_fresh_task_context", lambda value: value)
+    monkeypatch.setattr(interpreter, "merge_verified_read_context", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "merge_verified_action_context", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "merge_automation_context", lambda value, _context, **_kwargs: value)
+    monkeypatch.setattr(interpreter, "ground_turn_references", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "merge_same_turn_pulse_device_context", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "normalize_semantic_invariants", lambda value: value)
+    monkeypatch.setattr(interpreter, "resolve_turn_times_by_clinic_hours", lambda value, _context: value)
+    monkeypatch.setattr(interpreter, "dedupe_exact_operations", lambda value: value)
+
+    def invoke(*, model: object, **_kwargs) -> TiaTurnUnderstanding:
+        calls.append("primary")
+        assert queue, "unexpected extra structured-output attempt"
+        return queue.pop(0)
+
+    monkeypatch.setattr(interpreter, "invoke_typed_structured_output", invoke)
+    result = interpret_customer_turn_v2(
+        history=[HumanMessage(content=customer_text)],
+        semantic_context=build_semantic_context({"services": [], "doctors": [], "appointments": []}),
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 10, 10, 12, 0, tzinfo=UTC),
+    )
+    return result, calls
+
+
+def test_incomplete_nonliteral_2200_is_retried_before_acceptance(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, calls = _run_clock_interpreter(
+        monkeypatch,
+        customer_text="احجز لي بكرة الساعة 10 بالليل",
+        semantic_results=[_clock_semantic_turn("22:00"), _clock_semantic_turn("22:00", hint="pm")],
+    )
+    assert calls == ["primary", "primary"]
+    constraint = result.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.spoken_period_hint == "pm"
+
+
+def test_incomplete_nonliteral_2230_is_retried_before_acceptance(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, calls = _run_clock_interpreter(
+        monkeypatch,
+        customer_text="عايزة أحجز ليزر بكيني الساعة 10 ونص بالليل",
+        semantic_results=[_clock_semantic_turn("22:30"), _clock_semantic_turn("22:30", hint="pm")],
+    )
+    assert calls == ["primary", "primary"]
+    constraint = result.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.spoken_period_hint == "pm"
+
+
+def test_bare_ten_cannot_promote_incomplete_2200_to_pm(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, calls = _run_clock_interpreter(
+        monkeypatch,
+        customer_text="احجز لي بكرة الساعة 10",
+        semantic_results=[_clock_semantic_turn("22:00"), _clock_semantic_turn("10:00")],
+    )
+    assert calls == ["primary", "primary"]
+    constraint = result.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "10:00"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    assert constraint.spoken_period_hint == "none"
+
+
+def test_literal_2200_without_period_hint_remains_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, calls = _run_clock_interpreter(
+        monkeypatch,
+        customer_text="احجز لي بكرة 22:00",
+        semantic_results=[_clock_semantic_turn("22:00")],
+    )
+    assert calls == ["primary"]
+    constraint = result.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "22:00"
+    assert constraint.start_time_ambiguity == "none"
+    assert constraint.spoken_period_hint == "none"
+
+
+def test_nonliteral_2200_with_pm_authority_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, calls = _run_clock_interpreter(
+        monkeypatch,
+        customer_text="احجز لي بكرة الساعة 10 بالليل",
+        semantic_results=[_clock_semantic_turn("22:00", hint="pm")],
+    )
+    assert calls == ["primary"]
+    constraint = result.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.spoken_period_hint == "pm"
+
+
+def test_nonliteral_1000_without_period_hint_keeps_existing_ambiguity(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, calls = _run_clock_interpreter(
+        monkeypatch,
+        customer_text="احجز لي بكرة الساعة 10",
+        semantic_results=[_clock_semantic_turn("10:00")],
+    )
+    assert calls == ["primary"]
+    constraint = result.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "10:00"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    assert constraint.spoken_period_hint == "none"
 
 
 def test_interpreter_structured_primary_exhaustion_uses_configured_fallback(

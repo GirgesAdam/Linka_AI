@@ -5,18 +5,22 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.time_resolution import resolve_bare_clock_constraint
 from app.agents.v2.turn_contract import (
     DateConstraint,
+    TiaTurnUnderstanding,
     TimeConstraint,
     TurnEntities,
     TurnOperation,
 )
+from app.services.agent_v2 import state_persistence
 from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
     plan_active_task_progress,
     prepare_active_task_clock_progress,
     resolve_pending_bare_clock_period,
 )
-from app.services.agent_v2.planner import PlanStep
+from app.services.agent_v2.planner import PlannerContext, PlanStep, plan_turn
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
@@ -25,6 +29,10 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import apply_step_state
+from app.services.agent_v2.state_rules import (
+    apply_booking_branch_change,
+    apply_booking_date_change,
+)
 
 NOW = datetime(2026, 10, 13, 10, 0, tzinfo=UTC)
 DATE = "2026-10-15"
@@ -106,11 +114,13 @@ def _time(
     clock: str,
     *,
     ambiguity: str = "twelve_hour",
+    hint: str = "none",
 ) -> TimeConstraint:
     return TimeConstraint(
         mode="exact",
         start_time=clock,
         start_time_ambiguity=ambiguity,
+        spoken_period_hint=hint,
     )
 
 
@@ -121,6 +131,7 @@ def _booking(
     source: str = "bare_spoken_12h",
     date: str | None = DATE,
     branch_id: str | None = BRANCH,
+    hint: str = "none",
 ) -> BookingTaskState:
     return BookingTaskState(
         write_authorization=_authorization(),
@@ -128,7 +139,7 @@ def _booking(
             service_id=SERVICE,
             branch_id=branch_id,
             date=DateConstraint(mode="exact", start_date=date) if date else None,
-            time=_time(clock, ambiguity=ambiguity),
+            time=_time(clock, ambiguity=ambiguity, hint=hint),
             time_clock_source=source,
         ),
         requested_service_ids=[SERVICE],
@@ -300,21 +311,12 @@ def test_ap8_literal_exact_time_cannot_be_reopened_by_clinic_hours() -> None:
     assert availability[0].parameters["time"]["start_time"] == "03:00"
 
 
-def test_ap9_explicit_period_time_cannot_be_reopened() -> None:
-    state = _booking(
-        "23:00",
-        ambiguity="none",
-        source="explicit_period",
-    )
-    context = _context(start="09:00", end="21:00")
-    prepared, gate = prepare_active_task_clock_progress(
-        state,
-        operation_index=0,
-        context=context,
-    )
-    assert gate is None
-    assert prepared == state
-    assert _prepared_clock(prepared) == "23:00"
+def test_ap9_legacy_explicit_period_clock_source_is_read_compatibility_only() -> None:
+    state = _booking("10:00")
+    payload = state.model_dump(mode="json")
+    payload["constraints"]["time_clock_source"] = "explicit_period"
+    restored = BookingTaskState.model_validate(payload)
+    assert restored.constraints.time_clock_source == "bare_spoken_12h"
 
 
 def test_ap10_missing_date_gathers_context_without_exact_availability_or_write() -> None:
@@ -368,65 +370,59 @@ def test_ap11_state_json_round_trip_preserves_clock_source_and_safety_gate() -> 
     _assert_write_barrier(legacy_step)
 
 
-def test_ap12_period_answer_updates_same_task_then_continues_at_22() -> None:
+@pytest.mark.parametrize(
+    ("clock", "hint", "expected"),
+    [
+        ("10:00", "pm", "22:00"),
+        ("10:00", "am", "10:00"),
+        ("11:00", "pm", "23:00"),
+        ("11:00", "am", "11:00"),
+    ],
+)
+def test_typed_period_hint_resolves_same_booking_task(
+    clock: str,
+    hint: str,
+    expected: str,
+) -> None:
+    state = _booking(clock)
+    context = _context(start="09:00", end="23:30")
+    result = resolve_pending_bare_clock_period(state, hint, context=context)
+    assert result is not None
+    updated, resolved_period = result
+    assert isinstance(updated, BookingTaskState)
+    assert resolved_period == hint
+    assert updated.constraints.service_id == state.constraints.service_id
+    assert updated.constraints.branch_id == state.constraints.branch_id
+    assert updated.constraints.date == state.constraints.date
+    assert updated.requested_service_ids == state.requested_service_ids
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == expected
+    assert updated.constraints.time.start_time_ambiguity == "none"
+    assert updated.constraints.time.spoken_period_hint == "none"
+    assert updated.constraints.time_clock_source == "bare_spoken_12h"
+    assert updated.proposal is None
+
+
+def test_period_hint_requires_both_operational_candidates() -> None:
+    state = _booking("10:00")
+    assert (
+        resolve_pending_bare_clock_period(
+            state,
+            "pm",
+            context=_context(start="09:00", end="21:00"),
+        )
+        is None
+    )
+
+
+def test_unknown_or_missing_typed_period_hint_keeps_clock_unresolved() -> None:
     state = _booking("10:00")
     context = _context(start="09:00", end="23:30")
-    gate = plan_active_task_progress(state, operation_index=0, context=context)
-    assert gate.clarification_field == "time"
-    _assert_write_barrier(gate)
-
-    answer = TurnOperation(
-        type="book",
-        active_task_relationship="continue",
-        active_task_explicit_fields=["time"],
-        entities=TurnEntities(
-            time=TimeConstraint(
-                mode="exact",
-                start_time="22:00",
-                start_time_ambiguity="none",
-                period_status="explicit",
-            )
-        ),
-    )
-    update = PlanStep(
-        operation_index=0,
-        operation_type="book",
-        disposition="state_update",
-        state_action="update_active",
-        response_goal="clarification",
-        facts={
-            "time": answer.entities.time.model_dump(mode="json"),
-            "time_clock_source": answer.clock_source,
-        },
-    )
-    transition = apply_step_state(
-        state,
-        step=update,
-        operation=answer,
-        reads=None,
-        now=NOW,
-        turn_id="night-answer",
-    )
-    assert isinstance(transition.active_task, BookingTaskState)
-    continued = transition.active_task
-    assert continued.constraints.service_id == state.constraints.service_id
-    assert continued.constraints.branch_id == state.constraints.branch_id
-    assert continued.constraints.date == state.constraints.date
-    assert continued.requested_service_ids == state.requested_service_ids
-    assert continued.constraints.time is not None
-    assert continued.constraints.time.start_time == "22:00"
-    assert continued.constraints.time.start_time_ambiguity == "none"
-    assert continued.constraints.time_clock_source == "explicit_period"
-    assert continued.proposal is None
-
-    next_step = plan_active_task_progress(
-        continued,
-        operation_index=0,
-        context=context,
-    )
-    availability = [read for read in next_step.reads if read.kind == "availability"]
-    assert availability
-    assert availability[0].parameters["time"]["start_time"] == "22:00"
+    assert resolve_pending_bare_clock_period(state, None, context=context) is None
+    step = plan_active_task_progress(state, operation_index=0, context=context)
+    assert step.clarification_field == "time"
+    assert step.facts["valid_operating_hour_candidates"] == ["10:00", "22:00"]
+    _assert_write_barrier(step)
 
 
 def test_reschedule_unresolved_bare_clock_uses_same_write_barrier() -> None:
@@ -452,106 +448,11 @@ def test_unresolved_ambiguous_clock_without_bare_source_fails_closed() -> None:
     _assert_write_barrier(step)
 
 
-@pytest.mark.parametrize(
-    ("clock", "reply", "expected", "period"),
-    [
-        ("10:00", "بالليل", "22:00", "pm"),
-        ("10:00", "الصبح", "10:00", "am"),
-        ("11:00", "بالليل", "23:00", "pm"),
-        ("11:00", "الصبح", "11:00", "am"),
-    ],
-)
-def test_contextual_period_reply_resolves_same_booking_task(
-    clock: str,
-    reply: str,
-    expected: str,
-    period: str,
-) -> None:
-    state = _booking(clock)
-    result = resolve_pending_bare_clock_period(
-        state,
-        reply,
-        context=_context(start="09:00", end="23:30"),
-    )
-    assert result is not None
-    updated, resolved_period = result
-    assert isinstance(updated, BookingTaskState)
-    assert resolved_period == period
-    assert updated.constraints.service_id == state.constraints.service_id
-    assert updated.constraints.branch_id == state.constraints.branch_id
-    assert updated.constraints.date == state.constraints.date
-    assert updated.requested_service_ids == state.requested_service_ids
-    assert updated.constraints.time is not None
-    assert updated.constraints.time.start_time == expected
-    assert updated.constraints.time.start_time_ambiguity == "none"
-    assert updated.constraints.time_clock_source == "explicit_period"
-    assert updated.proposal is None
-
-
-@pytest.mark.parametrize("reply", ["تمام", "ماشي", "مش عارف", "طيب"])
-def test_unknown_period_reply_keeps_10_unresolved_and_blocked(reply: str) -> None:
-    state = _booking("10:00")
-    context = _context(start="09:00", end="23:30")
-    assert resolve_pending_bare_clock_period(state, reply, context=context) is None
-    step = plan_active_task_progress(state, operation_index=0, context=context)
-    assert step.clarification_field == "time"
-    assert step.facts["valid_operating_hour_candidates"] == ["10:00", "22:00"]
-    _assert_write_barrier(step)
-
-
-def test_period_keyword_is_not_global_command() -> None:
-    context = _context(start="09:00", end="23:30")
-    explicit = _booking("16:15", ambiguity="none", source="literal_24h")
-    assert resolve_pending_bare_clock_period(explicit, "بالليل", context=context) is None
-    pending = _booking("10:00")
-    assert (
-        resolve_pending_bare_clock_period(
-            pending,
-            "انا بفضل المواعيد بالليل",
-            context=context,
-        )
-        is None
-    )
-
-
-def test_period_keyword_requires_both_operational_candidates() -> None:
-    state = _booking("10:00")
-    assert (
-        resolve_pending_bare_clock_period(
-            state,
-            "بالليل",
-            context=_context(start="09:00", end="21:00"),
-        )
-        is None
-    )
-
-
-@pytest.mark.parametrize(
-    "reply",
-    [
-        "صباحًا",
-        "a.m.",
-        "الصبح طبعًا",
-        "مساءً",
-        "p.m.",
-        "بالليل طبعًا",
-    ],
-)
-def test_contextual_period_reply_normalization_stays_narrow(reply: str) -> None:
-    state = _booking("10:00")
-    result = resolve_pending_bare_clock_period(
-        state,
-        reply,
-        context=_context(start="09:00", end="23:30"),
-    )
-    assert result is not None
-
-
-def test_contextual_period_reply_resolves_reschedule_same_boundary() -> None:
+def test_typed_period_hint_resolves_reschedule_same_boundary() -> None:
     state = _reschedule("10:00")
     result = resolve_pending_bare_clock_period(
         state,
-        "بالليل",
+        "pm",
         context=_context(start="09:00", end="23:30"),
     )
     assert result is not None
@@ -564,4 +465,338 @@ def test_contextual_period_reply_resolves_reschedule_same_boundary() -> None:
     assert updated.replacement.time is not None
     assert updated.replacement.time.start_time == "22:00"
     assert updated.replacement.time.start_time_ambiguity == "none"
-    assert updated.replacement.time_clock_source == "explicit_period"
+    assert updated.replacement.time_clock_source == "bare_spoken_12h"
+
+
+def test_p1_missing_date_persists_explicit_pm_hint_until_backend_can_resolve() -> None:
+    state = _booking("10:30", date=None, hint="pm")
+    restored = BookingTaskState.model_validate(state_persistence._task_namespace(state)["active_task"])
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.spoken_period_hint == "pm"
+    dated = apply_booking_date_change(
+        restored, date=DateConstraint(mode="exact", start_date=DATE)
+    )
+    prepared, gate = prepare_active_task_clock_progress(
+        dated, operation_index=0, context=_context(start="00:00", end="23:59")
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
+    assert prepared.constraints.time.spoken_period_hint == "none"
+    persisted_resolved = state_persistence._task_namespace(prepared)["active_task"]
+    assert "spoken_period_hint" not in persisted_resolved["constraints"]["time"]
+
+
+def test_p2_missing_branch_persists_pm_hint_until_selected_branch_resolves() -> None:
+    state = _booking("10:30", branch_id=None, hint="pm")
+    restored = BookingTaskState.model_validate(state_persistence._task_namespace(state)["active_task"])
+    assert restored.constraints.time is not None
+    assert restored.constraints.time.spoken_period_hint == "pm"
+    selected = apply_booking_branch_change(restored, branch_id=BRANCH)
+    prepared, gate = prepare_active_task_clock_progress(
+        selected,
+        operation_index=0,
+        context=_context(start="00:00", end="23:59", second_branch=("09:00", "21:00")),
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.spoken_period_hint == "none"
+
+
+def test_p3_side_question_round_trip_preserves_unresolved_pm_hint() -> None:
+    state = _booking("10:30", branch_id=None, hint="pm")
+    after_first_persist = BookingTaskState.model_validate(state_persistence._task_namespace(state)["active_task"])
+    after_side_question_persist = BookingTaskState.model_validate(
+        state_persistence._task_namespace(after_first_persist)["active_task"]
+    )
+    assert after_side_question_persist.constraints.time is not None
+    assert after_side_question_persist.constraints.time.spoken_period_hint == "pm"
+    selected = apply_booking_branch_change(after_side_question_persist, branch_id=BRANCH)
+    prepared, gate = prepare_active_task_clock_progress(
+        selected, operation_index=0, context=_context(start="00:00", end="23:59")
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+
+
+def test_p4_bare_both_valid_clarification_pm_resolves_same_task() -> None:
+    state = _booking("10:30")
+    context = _context(start="00:00", end="23:59")
+    prepared, gate = prepare_active_task_clock_progress(
+        state, operation_index=0, context=context
+    )
+    assert gate is not None
+    assert gate.clarification_field == "time"
+    _assert_write_barrier(gate)
+    result = resolve_pending_bare_clock_period(prepared, "pm", context=context)
+    assert result is not None
+    updated, _ = result
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "22:30"
+    assert updated.constraints.time.spoken_period_hint == "none"
+
+
+def test_p5_bare_both_valid_clarification_am_resolves_same_task() -> None:
+    state = _booking("10:30")
+    context = _context(start="00:00", end="23:59")
+    result = resolve_pending_bare_clock_period(state, "am", context=context)
+    assert result is not None
+    updated, _ = result
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "10:30"
+    assert updated.constraints.time.spoken_period_hint == "none"
+
+
+
+
+def test_explicit_pm_canonicalization_survives_date_only_continuation() -> None:
+    context = _context(start="09:00", end="21:00")
+    resolution = resolve_bare_clock_constraint(
+        _time("10:30", hint="pm"),
+        date_constraint=None,
+        context=context,
+        branch_id=BRANCH,
+    )
+    assert resolution.status == "resolved"
+    assert resolution.constraint is not None
+    assert resolution.constraint.start_time == "22:30"
+    assert resolution.constraint.start_time_ambiguity == "none"
+    assert resolution.constraint.spoken_period_hint == "none"
+
+    loaded = _booking(
+        resolution.constraint.start_time,
+        ambiguity=resolution.constraint.start_time_ambiguity,
+        date=None,
+        hint=resolution.constraint.spoken_period_hint,
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date=DATE)),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        continues_previous=True,
+    )
+    planner_step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation]),
+        PlannerContext(semantic_context=context, active_task=loaded, now=NOW),
+    ).steps[0]
+    adapted = adapt_matching_active_task_step(
+        planner_step,
+        operation=operation,
+        active_task=loaded,
+        context=context,
+        now=NOW,
+    )
+    transition = apply_step_state(
+        loaded,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-explicit-pm-date-only",
+    )
+    updated = transition.active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "22:30"
+    assert updated.constraints.time.start_time_ambiguity == "none"
+    assert updated.constraints.time.spoken_period_hint == "none"
+
+    prepared, gate = prepare_active_task_clock_progress(
+        updated,
+        operation_index=0,
+        context=context,
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
+
+
+def test_p1_actual_date_only_pipeline_preserves_pm_until_clock_progression() -> None:
+    loaded = BookingTaskState.model_validate(
+        state_persistence._task_namespace(
+            _booking("10:30", date=None, branch_id=None, hint="pm")
+        )["active_task"]
+    )
+    assert loaded.constraints.time is not None
+    assert loaded.constraints.time.spoken_period_hint == "pm"
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date=DATE)),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        continues_previous=True,
+    )
+    context = _context(start="00:00", end="23:59")
+    planner_step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation]),
+        PlannerContext(semantic_context=context, active_task=loaded, now=NOW),
+    ).steps[0]
+    adapted = adapt_matching_active_task_step(
+        planner_step,
+        operation=operation,
+        active_task=loaded,
+        context=context,
+        now=NOW,
+    )
+    transition = apply_step_state(
+        loaded,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-p1-date",
+    )
+    after_update = transition.active_task
+    assert isinstance(after_update, BookingTaskState)
+    assert after_update.constraints.time is not None
+    assert after_update.constraints.time.start_time == "10:30"
+    assert after_update.constraints.time.start_time_ambiguity == "twelve_hour"
+    assert after_update.constraints.time.spoken_period_hint == "pm"
+    assert after_update.version == loaded.version + 1
+
+    prepared, gate = prepare_active_task_clock_progress(
+        after_update,
+        operation_index=0,
+        context=context,
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
+    assert prepared.constraints.time.spoken_period_hint == "none"
+
+
+def test_date_only_echo_survives_two_persistence_cycles_before_context_complete() -> None:
+    state = _booking("10:30", date=None, branch_id=None, hint="pm")
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date=DATE)),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        continues_previous=True,
+    )
+    stripped = TimeConstraint(
+        mode="exact", start_time="10:30", start_time_ambiguity="twelve_hour"
+    ).model_dump(mode="json")
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+        facts={
+            "date": operation.entities.date.model_dump(mode="json"),
+            "time": stripped,
+        },
+    )
+    updated = apply_step_state(
+        state,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-cycle-date",
+    ).active_task
+    assert isinstance(updated, BookingTaskState)
+    one = BookingTaskState.model_validate(
+        state_persistence._task_namespace(updated)["active_task"]
+    )
+    two = BookingTaskState.model_validate(
+        state_persistence._task_namespace(one)["active_task"]
+    )
+    assert two.constraints.time is not None
+    assert two.constraints.time.start_time == "10:30"
+    assert two.constraints.time.start_time_ambiguity == "twelve_hour"
+    assert two.constraints.time.spoken_period_hint == "pm"
+
+
+@pytest.mark.parametrize(
+    ("clock", "hint", "expected"),
+    [
+        ("10:30", "am", "10:30"),
+        ("10:30", "pm", "22:30"),
+        ("11:30", "pm", "23:30"),
+    ],
+)
+def test_date_only_continuation_generic_minutes_preserves_period_then_resolves(
+    clock: str, hint: str, expected: str
+) -> None:
+    state = _booking(clock, date=None, hint=hint)
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date=DATE)),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+    )
+    stripped = TimeConstraint(
+        mode="exact", start_time=clock, start_time_ambiguity="twelve_hour"
+    ).model_dump(mode="json")
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        facts={"date": operation.entities.date.model_dump(mode="json"), "time": stripped},
+    )
+    updated = apply_step_state(
+        state, step=step, operation=operation, reads=None, now=NOW, turn_id="turn-minutes"
+    ).active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.spoken_period_hint == hint
+    prepared, gate = prepare_active_task_clock_progress(
+        updated, operation_index=0, context=_context(start="00:00", end="23:59")
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == expected
+    assert prepared.constraints.time.spoken_period_hint == "none"
+
+
+def test_past_temporal_resume_producer_marks_and_applies_intentional_time_clear() -> None:
+    state = _booking("10:30", date="2026-10-14", hint="pm")
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        continues_previous=True,
+    )
+    seed = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+        facts={},
+    )
+    adapted = adapt_matching_active_task_step(
+        seed,
+        operation=operation,
+        active_task=state,
+        context=_context(start="00:00", end="23:59"),
+        now=datetime(2026, 10, 16, 10, 0, tzinfo=UTC),
+    )
+    assert adapted.facts["date"] is None
+    assert adapted.facts["time"] is None
+    assert adapted.facts["_backend_time_state_action"] == "clear_past"
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=datetime(2026, 10, 16, 10, 0, tzinfo=UTC),
+        turn_id="turn-past-resume",
+    ).active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.date is None
+    assert updated.constraints.time is None

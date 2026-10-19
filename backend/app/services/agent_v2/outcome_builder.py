@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agents.availability_presentation import availability_windows_from_slots
-from app.agents.v2.semantic_context import SemanticContext
+from app.agents.v2.semantic_context import ReferenceKind, SemanticContext
 from app.agents.v2.terminal_composer import format_customer_datetime
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from app.services.agent_v2.outcome import OutcomeChoice, ResponseGoal, TurnOutcome
@@ -111,6 +111,33 @@ def _visible_value(value: object) -> object:
     if isinstance(value, tuple):
         return [item for item in (_visible_value(row) for row in value) if item not in (None, {}, [])]
     return value
+
+
+def _canonical_service_names(
+    raw_service_ids: object,
+    *,
+    semantic_context: SemanticContext,
+) -> list[str]:
+    if not isinstance(raw_service_ids, (list, tuple)) or not raw_service_ids:
+        return []
+    services = semantic_context.model_input.get("services")
+    if not isinstance(services, list):
+        return []
+
+    name_by_id: dict[str, str] = {}
+    for row in services:
+        if not isinstance(row, dict):
+            continue
+        ref = str(row.get("ref") or "").strip()
+        name = str(row.get("name") or "").strip()
+        canonical_id = semantic_context.resolve(ref, expected_kind="service") if ref else None
+        if canonical_id and name:
+            name_by_id[canonical_id] = name
+
+    requested_ids = [str(value) for value in raw_service_ids if value not in (None, "")]
+    if not requested_ids or any(service_id not in name_by_id for service_id in requested_ids):
+        return []
+    return [name_by_id[service_id] for service_id in requested_ids]
 
 
 def customer_visible_outcome(outcome: TurnOutcome) -> dict[str, object]:
@@ -240,6 +267,7 @@ def _requested_service_details(step: PlanStep, turn: TiaTurnUnderstanding) -> se
     details = set(operation.requested_service_details)
     if operation.type in {"pricing", "package_compare"} or step.response_goal in {
         "answer_price",
+        "booking_proposal",
         "package_comparison",
     }:
         details.add("price")
@@ -459,6 +487,11 @@ def _read_facts(
                 )
         return {
             "visit_price": {
+                "service_ids": [
+                    str(item)
+                    for item in result.payload.get("service_ids", [])
+                    if str(item).strip()
+                ],
                 "service_names": [
                     str(item)
                     for item in result.payload.get("service_names", [])
@@ -897,6 +930,83 @@ def _patient_crm_response_facts(
     return shaped
 
 
+def _canonical_entity_name(
+    semantic_context: SemanticContext,
+    *,
+    collection: str,
+    canonical_id: object,
+    expected_kind: ReferenceKind,
+) -> str | None:
+    if canonical_id in (None, ""):
+        return None
+    rows = semantic_context.model_input.get(collection)
+    if not isinstance(rows, list):
+        return None
+    target_id = str(canonical_id)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ref = str(row.get("ref") or "").strip()
+        if not ref or semantic_context.resolve(ref, expected_kind=expected_kind) != target_id:
+            continue
+        name = str(row.get("name") or "").strip()
+        return name or None
+    return None
+
+
+def _confirmed_booking_proposal_facts(
+    facts: dict[str, object],
+    *,
+    step: PlanStep,
+    action_result: dict[str, object],
+    active_task_summary: dict[str, object],
+    semantic_context: SemanticContext,
+) -> dict[str, object]:
+    """Project customer-visible details from the exact verified proposal that just succeeded."""
+    intent = step.write_intent
+    if intent is None or intent.kind != "booking_proposal" or action_result.get("ok") is not True:
+        return facts
+    proposal = active_task_summary.get("proposal")
+    if not isinstance(proposal, dict):
+        return facts
+    expected_id = str(intent.parameters.get("proposal_id") or "")
+    proposal_id = str(proposal.get("proposal_id") or "")
+    if not expected_id or proposal_id != expected_id:
+        return facts
+    written_id = str(action_result.get("proposal_id") or "")
+    if written_id and written_id != expected_id:
+        return facts
+
+    shaped = dict(facts)
+    service_ids = proposal.get("service_ids")
+    names = _canonical_service_names(service_ids, semantic_context=semantic_context)
+    if names:
+        shaped["service_name"] = " + ".join(names)
+
+    start_at = proposal.get("start_at")
+    if isinstance(start_at, str) and start_at.strip():
+        shaped["start_local"] = start_at.strip()
+
+    doctor_name = _canonical_entity_name(
+        semantic_context,
+        collection="doctors",
+        canonical_id=proposal.get("doctor_id"),
+        expected_kind="doctor",
+    )
+    if doctor_name:
+        shaped["doctor_name"] = doctor_name
+
+    device_name = _canonical_entity_name(
+        semantic_context,
+        collection="devices",
+        canonical_id=proposal.get("device_key"),
+        expected_kind="device",
+    )
+    if device_name:
+        shaped["device_name"] = device_name
+    return shaped
+
+
 def _facts_for_completed_write(facts: dict[str, object], write_kind: str) -> dict[str, object]:
     """Hide scheduling end-times after booking/reschedule completion.
 
@@ -1174,6 +1284,50 @@ def build_handoff_outcome(plan: TurnPlan) -> TurnOutcome:
     )
 
 
+def _scope_visit_price_facts(
+    read_facts: dict[str, object],
+    *,
+    requested_service_ids: object,
+) -> None:
+    """Keep pricing evidence scoped to the exact service set requested by this step."""
+    raw = read_facts.get("visit_price")
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    identified = [
+        row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("service_ids"), list)
+    ]
+    requested = (
+        {str(item) for item in requested_service_ids if str(item).strip()}
+        if isinstance(requested_service_ids, list)
+        else set()
+    )
+    if requested and identified:
+        rows = [
+            row
+            for row in identified
+            if {str(item) for item in row["service_ids"] if str(item).strip()} == requested
+        ]
+        if not rows:
+            read_facts.pop("visit_price", None)
+            return
+
+    resolved_device_rows = [
+        row for row in rows if isinstance(row, dict) and row.get("device_resolved") is True
+    ]
+    if resolved_device_rows:
+        rows = resolved_device_rows
+
+    sanitized = [
+        {key: value for key, value in row.items() if key != "service_ids"}
+        if isinstance(row, dict)
+        else row
+        for row in rows
+    ]
+    if sanitized:
+        read_facts["visit_price"] = sanitized[0] if len(sanitized) == 1 else sanitized
+
+
 def build_step_outcome(
     step: PlanStep,
     *,
@@ -1197,7 +1351,26 @@ def build_step_outcome(
         requested_service_details=requested_details,
         selected_device_key=selected_device_key,
     )
+    _scope_visit_price_facts(
+        read_facts,
+        requested_service_ids=step.facts.get("requested_service_ids"),
+    )
     base_facts = {**_visible_dict(step.facts), **read_facts}
+    availability = base_facts.get("availability")
+    canonical_service_names = _canonical_service_names(
+        step.facts.get("requested_service_ids"),
+        semantic_context=semantic_context,
+    )
+    visit_price = base_facts.get("visit_price")
+    verified_visit_service_names = (
+        visit_price.get("service_names") if isinstance(visit_price, dict) else None
+    )
+    if (
+        isinstance(availability, dict)
+        and canonical_service_names
+        and verified_visit_service_names != canonical_service_names
+    ):
+        base_facts["canonical_service_names"] = canonical_service_names
     if step.operation_type == "service_info":
         base_facts["service_requested_details"] = sorted(requested_details)
     if step.operation_type == "clinic_info":
@@ -1303,10 +1476,18 @@ def build_step_outcome(
                 active_task_summary=active_summary,
             )
         assert step.write_intent is not None
+        completed_facts = _facts_for_completed_write(base_facts, step.write_intent.kind)
+        completed_facts = _confirmed_booking_proposal_facts(
+            completed_facts,
+            step=step,
+            action_result=action_result,
+            active_task_summary=dict(active_task_summary or {}),
+            semantic_context=semantic_context,
+        )
         return TurnOutcome(
             status="completed",
             response_goal=_completed_write_goal(step),
-            facts=_facts_for_completed_write(base_facts, step.write_intent.kind),
+            facts=completed_facts,
             action_result=_visible_dict(action_result),
             active_task_summary=active_summary,
         )

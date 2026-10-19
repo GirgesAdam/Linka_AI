@@ -14,12 +14,16 @@ from app.agents.v2.turn_contract import (
 )
 from app.integrations.clinic.base import AvailabilityResult, AvailabilitySlot
 from app.services.agent_v2.compound_turn_policy import (
-    compound_write_group,
     normalize_compound_turn_plan,
 )
 from app.services.agent_v2.compound_visit_preflight import preflight_compound_visit_plan
 from app.services.agent_v2.planner import PlannerContext, plan_turn
 from app.services.agent_v2.read_executor import ReadExecutionContext
+from app.services.agent_v2.turn_normalization import (
+    collapse_booking_service_sets,
+    merge_same_visit_booking_operations,
+    tag_booking_service_sets,
+)
 
 NOW = datetime(2026, 9, 13, 8, 0, tzinfo=UTC)
 SERVICE_A = "11111111-1111-1111-1111-111111111111"
@@ -33,20 +37,22 @@ PATIENT = UUID("55555555-5555-5555-5555-555555555555")
 DAY = date(2026, 9, 14)
 
 
+def _catalog() -> dict[str, object]:
+    return {
+        "services": [
+            {"id": SERVICE_A, "name": "???", "duration_minutes": 30, "operational_category": "laser"},
+            {"id": SERVICE_B, "name": "?????", "duration_minutes": 30, "operational_category": "laser"},
+        ],
+        "doctors": [
+            {"id": DOCTOR_A, "name": "????", "service_ids": [SERVICE_A, SERVICE_B]},
+            {"id": DOCTOR_B, "name": "????", "service_ids": [SERVICE_A, SERVICE_B]},
+            {"id": DOCTOR_C, "name": "????", "service_ids": [SERVICE_A]},
+        ],
+    }
+
+
 def _semantic():
-    return build_semantic_context(
-        {
-            "services": [
-                {"id": SERVICE_A, "name": "إبط", "duration_minutes": 30},
-                {"id": SERVICE_B, "name": "بكيني", "duration_minutes": 30},
-            ],
-            "doctors": [
-                {"id": DOCTOR_A, "name": "أحمد", "service_ids": [SERVICE_A, SERVICE_B]},
-                {"id": DOCTOR_B, "name": "مريم", "service_ids": [SERVICE_A, SERVICE_B]},
-                {"id": DOCTOR_C, "name": "سارة", "service_ids": [SERVICE_A]},
-            ],
-        }
-    )
+    return build_semantic_context(_catalog())
 
 
 def _turn() -> TiaTurnUnderstanding:
@@ -133,47 +139,41 @@ def test_multi_service_booking_does_not_ask_customer_to_pick_common_doctor() -> 
     assert all(step.clarification_field is None for step in plan.steps)
 
 
-def test_nearest_multi_service_visit_selects_one_common_doctor_and_group_id() -> None:
+def test_same_category_multi_service_visit_collapses_to_one_appointment_contract() -> None:
     semantic = _semantic()
-    plan = normalize_compound_turn_plan(
-        plan_turn(_turn(), PlannerContext(semantic_context=semantic, active_task=None, now=NOW)),
-        catalog=semantic.model_input,
+    normalized_turn = merge_same_visit_booking_operations(_turn())
+    collapsed, service_sets = collapse_booking_service_sets(
+        normalized_turn,
+        semantic_context=semantic,
+        catalog=_catalog(),
     )
-    groups = {compound_write_group(step) for step in plan.steps}
-    assert len(groups) == 1
-    assert None not in groups
+    plan = tag_booking_service_sets(
+        plan_turn(
+            collapsed,
+            PlannerContext(semantic_context=semantic, active_task=None, now=NOW),
+        ),
+        service_sets=service_sets,
+    )
 
-    context = ReadExecutionContext(
-        db=_Db(),
-        workspace=SimpleNamespace(id=WORKSPACE, primary_branch_id=UUID(BRANCH)),
-        patient=SimpleNamespace(id=PATIENT),
-        now=NOW,
-        catalog={
-            "services": [
-                {"id": SERVICE_A, "duration_minutes": 30},
-                {"id": SERVICE_B, "duration_minutes": 30},
-            ],
-            "doctors": [
-                {"id": DOCTOR_A, "service_ids": [SERVICE_A, SERVICE_B]},
-                {"id": DOCTOR_B, "service_ids": [SERVICE_A, SERVICE_B]},
-                {"id": DOCTOR_C, "service_ids": [SERVICE_A]},
-            ],
-        },
-        adapter=_Adapter(),
-    )
-    resolved = preflight_compound_visit_plan(
-        plan,
-        context=context,
-        timezone_name="Africa/Cairo",
-        visit_group_id="66666666-6666-6666-6666-666666666666",
-    )
-    bookings = [step for step in resolved.steps if step.write_intent is not None]
-    assert len(bookings) == 2
-    assert {step.write_intent.parameters["doctor_id"] for step in bookings} == {DOCTOR_B}
-    assert {step.write_intent.parameters["visit_group_id"] for step in bookings} == {
-        "66666666-6666-6666-6666-666666666666"
-    }
-    assert all("doctor_ids" not in step.write_intent.parameters for step in bookings)
+    assert len(collapsed.operations) == 1
+    assert service_sets == {0: [SERVICE_A, SERVICE_B]}
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.facts["requested_service_ids"] == [SERVICE_A, SERVICE_B]
+    assert step.facts["multi_service_single_appointment"] is True
+    assert step.facts["booking_proposal_required"] is True
+    booking_writes = [
+        item
+        for item in plan.steps
+        if item.write_intent is not None and item.write_intent.kind == "booking"
+    ]
+    assert len(booking_writes) <= 1
+    if booking_writes:
+        assert booking_writes[0].write_intent is not None
+        assert booking_writes[0].write_intent.parameters["requested_service_ids"] == [
+            SERVICE_A,
+            SERVICE_B,
+        ]
 
 
 def test_no_common_doctor_blocks_entire_compound_visit() -> None:

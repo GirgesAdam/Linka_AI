@@ -2,14 +2,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
+from app.agents.v2.availability_pagination import (
+    availability_windows_from_outcome_facts,
+    select_availability_window_page,
+)
+from app.agents.v2.availability_reference_interpreter import (
+    interpret_availability_reference_turn,
+)
 from app.agents.v2.responder import compose_v2_customer_reply
 from app.agents.v2.semantic_context import SemanticContext, build_semantic_context
-from app.agents.v2.semantic_state_view import with_safe_task_context
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.semantic_state_view import (
+    with_safe_availability_reference_context,
+    with_safe_read_context,
+    with_safe_task_context,
+)
+from app.agents.v2.turn_contract import Selection, TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.services.agent_v2.active_task_progress import (
     adapt_matching_active_task_step,
@@ -22,6 +34,12 @@ from app.services.agent_v2.grouped_booking_continuity import (
     explicitly_narrow_grouped_booking_task,
     restore_grouped_booking_understanding,
 )
+from app.services.agent_v2.orchestrator import (
+    _attach_verified_booking_proposal_to_task,
+    _grouped_visit_reference_understanding,
+    _prepare_booking_proposal,
+    _verified_booking_selection_plan,
+)
 from app.services.agent_v2.outcome import TurnOutcome
 from app.services.agent_v2.outcome_builder import build_handoff_outcome, build_step_outcome
 from app.services.agent_v2.planner import (
@@ -32,7 +50,8 @@ from app.services.agent_v2.planner import (
     plan_turn,
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle
-from app.services.agent_v2.state import ActiveTaskState, BookingTaskState
+from app.services.agent_v2.reference_resolution import build_availability_reference_options
+from app.services.agent_v2.state import ActiveTaskState, BookingProposal, BookingTaskState
 from app.services.agent_v2.state_executor import (
     apply_step_state,
     complete_state_after_action,
@@ -47,7 +66,9 @@ from app.services.agent_v2.turn_normalization import (
     collapse_booking_service_sets,
     expand_multi_service_operations,
     guard_multiple_booking_writes,
+    merge_same_turn_grouped_availability_operations,
     merge_same_visit_booking_operations,
+    recollapse_restored_booking_visit_groups,
     tag_booking_service_sets,
 )
 
@@ -61,6 +82,129 @@ class V2StatefulHarnessResult:
     reply: str
     responder_model: str
     active_task: ActiveTaskState | None
+    recent_read_context: dict[str, Any] | None = None
+    availability_reference_context: dict[str, Any] | None = None
+    reference_semantic_path_used: bool = False
+    reference_action: str | None = None
+    selected_option_ref: str | None = None
+    reference_exact_time: str | None = None
+    reference_selection_scope: str | None = None
+    full_interpreter_called: bool = True
+    reference_structured_output_error: bool = False
+
+
+
+def _fixture_availability_context(
+    *,
+    plan: TurnPlan,
+    traces: list[V2HarnessStepTrace],
+    fixture: V2FixtureEnvironment,
+    active_task: ActiveTaskState | None,
+) -> dict[str, Any] | None:
+    requested = (
+        list(dict.fromkeys(active_task.requested_service_ids))
+        if isinstance(active_task, BookingTaskState)
+        else []
+    )
+    canonical_grouped_requested: list[str] = []
+    components: list[tuple[str, dict[str, object], list[dict[str, object]], list[str]]] = []
+    for trace in traces:
+        if trace.outcome.response_goal != "present_availability":
+            continue
+        step = next(
+            (item for item in plan.steps if item.operation_index == trace.operation_index),
+            None,
+        )
+        if step is None:
+            continue
+        step_requested = step.facts.get("requested_service_ids")
+        if (
+            step.facts.get("multi_service_single_appointment") is True
+            and isinstance(step_requested, list)
+        ):
+            canonical_requested = list(
+                dict.fromkeys(
+                    str(item) for item in step_requested if item not in (None, "")
+                )
+            )
+            if len(canonical_requested) > 1 and set(canonical_requested) == set(requested):
+                canonical_grouped_requested = canonical_requested
+        availability_read = next(
+            (request for request in step.reads if request.kind == "availability"),
+            None,
+        )
+        if availability_read is None:
+            continue
+        service_id = str(availability_read.parameters.get("service_id") or "")
+        service_name, windows = availability_windows_from_outcome_facts(trace.outcome.facts)
+        if not service_id or not windows:
+            continue
+        selected_windows, selected_keys, _ = select_availability_window_page(
+            windows,
+            service_name=service_name,
+            shown_keys=set(),
+        )
+        bundle = execute_fixture_reads(step, fixture)
+        verified_slots: list[dict[str, object]] = []
+        for result in bundle.results:
+            if result.kind != "availability":
+                continue
+            raw_slots = result.payload.get("slots")
+            if isinstance(raw_slots, list):
+                verified_slots.extend(dict(item) for item in raw_slots if isinstance(item, dict))
+        options = build_availability_reference_options(
+            displayed_windows=selected_windows,
+            verified_slots=verified_slots,
+        )
+        if options:
+            components.append((service_id, availability_read.parameters, options, selected_keys))
+    if not components:
+        return None
+
+    if canonical_grouped_requested:
+        selected_components = [
+            item for item in components if item[0] in canonical_grouped_requested
+        ]
+        requested = canonical_grouped_requested
+    elif len(requested) > 1 and {item[0] for item in components} >= set(requested):
+        selected_components = [item for item in components if item[0] in requested]
+    else:
+        selected_components = [components[-1]]
+        requested = []
+
+    options: list[dict[str, object]] = []
+    keys: set[str] = set()
+    common_scope: dict[str, object] | None = None
+    for service_id, params, component_options, selected_keys in selected_components:
+        keys.update(selected_keys)
+        scope = {
+            key: value
+            for key in ("branch_id", "date", "package_usage")
+            if (value := params.get(key)) not in (None, "", [], {})
+        }
+        common_scope = scope if common_scope is None else {
+            key: value
+            for key, value in common_scope.items()
+            if scope.get(key) == value
+        }
+        for option in component_options:
+            item = dict(option)
+            item["index"] = len(options) + 1
+            item["option_ref"] = f"opt_{len(options) + 1}"
+            item["service_id"] = service_id
+            options.append(item)
+    context: dict[str, Any] = {
+        "operation_type": "availability",
+        "availability_reference_options": options,
+        "availability_option_count": len(options),
+        **(common_scope or {}),
+    }
+    if requested:
+        context["requested_service_ids"] = requested
+        context["multi_service_single_appointment"] = True
+    if keys:
+        context["availability_presented_window_keys"] = sorted(keys)
+    return context
 
 
 def _task_dict(active_task: ActiveTaskState | None) -> dict[str, Any] | None:
@@ -95,6 +239,26 @@ def _operation_for_step(
         raise RuntimeError("V2 plan referenced an operation outside the structured turn.") from exc
 
 
+def _fixture_additional_service_resolver(
+    proposal: BookingProposal,
+    *,
+    catalog: dict[str, Any],
+) -> list[object]:
+    services = {
+        str(row.get("id")): row
+        for row in (catalog.get("services") or [])
+        if isinstance(row, dict) and row.get("id") not in (None, "")
+    }
+    resolved: list[object] = []
+    for service_id in proposal.additional_service_ids:
+        row = services.get(str(service_id))
+        if row is None:
+            return []
+        device_key = proposal.device_key if row.get("requires_laser_device") is True else None
+        resolved.append(SimpleNamespace(service_id=service_id, device_key=device_key))
+    return resolved
+
+
 def _execute_step(
     *,
     step: PlanStep,
@@ -104,11 +268,32 @@ def _execute_step(
     fixture: V2FixtureEnvironment,
     current_task: ActiveTaskState | None,
     local_now: datetime,
+    timezone_name: str,
     turn_id: str,
     simulate_writes: bool,
 ) -> tuple[V2HarnessStepTrace, TurnOutcome, ActiveTaskState | None]:
     bundle = execute_fixture_reads(step, fixture) if step.reads else ReadExecutionBundle()
     advanced = _advance(step, bundle)
+    pending_proposal = None
+    if (
+        isinstance(current_task, BookingTaskState)
+        and advanced.facts.get("verified_booking_slot_selection") is True
+    ):
+        advanced, pending_proposal = _prepare_booking_proposal(
+            advanced,
+            reads=bundle,
+            current_task=current_task,
+            db=object(),
+            workspace=SimpleNamespace(id="fixture-workspace", timezone=timezone_name),
+            patient=SimpleNamespace(id="fixture-patient"),
+            catalog=fixture.catalog,
+            now=local_now,
+            turn_id=turn_id,
+            additional_service_resolver=lambda proposal: _fixture_additional_service_resolver(
+                proposal,
+                catalog=fixture.catalog,
+            ),
+        )
     transition = apply_step_state(
         current_task,
         step=advanced,
@@ -120,6 +305,14 @@ def _execute_step(
     )
     advanced = finalize_step_after_state_transition(advanced, transition)
     task_after_transition = transition.active_task
+    if pending_proposal is not None and isinstance(task_after_transition, BookingTaskState):
+        task_after_transition = _attach_verified_booking_proposal_to_task(
+            task_after_transition,
+            proposal=pending_proposal,
+            selected_option_ref=str(advanced.facts.get("selected_option_ref") or ""),
+            catalog=fixture.catalog,
+            timezone_name=timezone_name,
+        )
     simulated_write, action_result = _simulated_action(
         advanced,
         simulate_writes=simulate_writes,
@@ -159,6 +352,8 @@ def run_v2_stateful_fixture_turn(
     clinic_name: str = "Linka Test Clinic",
     env: V2FixtureEnvironment | None = None,
     active_task: ActiveTaskState | None = None,
+    recent_read_context: dict[str, Any] | None = None,
+    availability_reference_context: dict[str, Any] | None = None,
     simulate_writes: bool = True,
     turn_id: str | None = None,
 ) -> V2StatefulHarnessResult:
@@ -173,6 +368,14 @@ def run_v2_stateful_fixture_turn(
         semantic_context,
         active_task=_task_dict(active_task),
     )
+    semantic_context = with_safe_read_context(
+        semantic_context,
+        read_context=recent_read_context,
+    )
+    semantic_context = with_safe_availability_reference_context(
+        semantic_context,
+        availability_context=availability_reference_context,
+    )
     latest_customer_text = next(
         (
             str(message.content).strip()
@@ -183,6 +386,46 @@ def run_v2_stateful_fixture_turn(
         ),
         "",
     )
+    reference_interpretation = None
+    full_interpreter_called = False
+    grouped_reference_understanding = None
+    grouped_reference_task = None
+    reference_plan_override = None
+    if (
+        latest_customer_text
+        and isinstance(availability_reference_context, dict)
+        and isinstance(
+            availability_reference_context.get("availability_reference_options"), list
+        )
+    ):
+        reference_interpretation = interpret_availability_reference_turn(
+            latest_customer_text=latest_customer_text,
+            availability_context=availability_reference_context,
+        )
+        verified_selection = _verified_booking_selection_plan(
+            active_task,
+            decision=reference_interpretation.decision,
+            availability_context=availability_reference_context,
+            catalog=fixture.catalog,
+            selection_time=reference_interpretation.decision.exact_time,
+            now=local_now,
+        )
+        if verified_selection is not None:
+            reference_plan_override, availability_reference_context = verified_selection
+        grouped_reference = (
+            _grouped_visit_reference_understanding(
+                active_task,
+                decision=reference_interpretation.decision,
+                availability_context=availability_reference_context,
+                catalog=fixture.catalog,
+            )
+            if reference_plan_override is None
+            and reference_interpretation.decision.action == "clarify"
+            else None
+        )
+        if grouped_reference is not None:
+            grouped_reference_understanding, grouped_reference_task = grouped_reference
+
     contextual_period_resolution = resolve_pending_bare_clock_period(
         active_task,
         latest_customer_text,
@@ -205,14 +448,65 @@ def run_v2_stateful_fixture_turn(
                 )
             ]
         )
+    elif reference_plan_override is not None:
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="book",
+                    entities=TurnEntities(),
+                    selection=Selection(
+                        kind="ref",
+                        ref=str(reference_interpretation.decision.option_ref),
+                    ),
+                    execution_intent="informational",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+    elif grouped_reference_understanding is not None:
+        understanding = grouped_reference_understanding
+        active_task = grouped_reference_task
     else:
+        full_interpreter_called = True
         understanding = interpret_customer_turn_v2(
             history=history,
             semantic_context=semantic_context,
             timezone_name=timezone_name,
             local_now=local_now,
         )
+    reference_semantic_path_used = reference_interpretation is not None
+    reference_action = (
+        reference_interpretation.decision.action
+        if reference_interpretation is not None
+        else None
+    )
+    selected_option_ref = (
+        reference_interpretation.decision.option_ref
+        if reference_interpretation is not None
+        else None
+    )
+    reference_exact_time = (
+        reference_interpretation.decision.exact_time
+        if reference_interpretation is not None
+        else None
+    )
+    reference_selection_scope = (
+        reference_interpretation.decision.selection_scope
+        if reference_interpretation is not None
+        else None
+    )
+    reference_structured_output_error = (
+        reference_interpretation.structured_output_error
+        if reference_interpretation is not None
+        else False
+    )
     understanding = merge_same_visit_booking_operations(understanding)
+    understanding = merge_same_turn_grouped_availability_operations(
+        understanding,
+        semantic_context=semantic_context,
+        catalog=fixture.catalog,
+    )
     initial_booking_task = active_task if isinstance(active_task, BookingTaskState) else None
     understanding, booking_service_sets = collapse_booking_service_sets(
         understanding,
@@ -236,13 +530,24 @@ def run_v2_stateful_fixture_turn(
         understanding,
         active_task=initial_booking_task,
         context=semantic_context,
+        booking_service_sets=booking_service_sets,
     )
+    if restored_visit_groups:
+        understanding, restored_service_sets, restored_visit_groups = (
+            recollapse_restored_booking_visit_groups(
+                understanding,
+                semantic_context=semantic_context,
+                catalog=fixture.catalog,
+                restored_visit_groups=restored_visit_groups,
+            )
+        )
+        booking_service_sets = {**booking_service_sets, **restored_service_sets}
     semantic_visit_groups = {
         **semantic_visit_groups,
         **restored_visit_groups,
     }
     planner_active_task: ActiveTaskState | None = narrowed_booking_task or active_task
-    plan = plan_turn(
+    plan = reference_plan_override or plan_turn(
         understanding,
         PlannerContext(
             semantic_context=semantic_context,
@@ -250,7 +555,9 @@ def run_v2_stateful_fixture_turn(
             now=local_now,
         ),
     )
-    plan = tag_booking_service_sets(plan, service_sets=booking_service_sets)
+    plan = tag_booking_service_sets(
+        plan, service_sets=booking_service_sets, catalog=fixture.catalog
+    )
     plan = normalize_compound_turn_plan(
         plan,
         catalog=fixture.catalog,
@@ -276,6 +583,15 @@ def run_v2_stateful_fixture_turn(
             reply=reply,
             responder_model=model,
             active_task=active_task,
+            recent_read_context=recent_read_context,
+            availability_reference_context=availability_reference_context,
+            reference_semantic_path_used=reference_semantic_path_used,
+            reference_action=reference_action,
+            selected_option_ref=selected_option_ref,
+            reference_exact_time=reference_exact_time,
+            reference_selection_scope=reference_selection_scope,
+            full_interpreter_called=full_interpreter_called,
+            reference_structured_output_error=reference_structured_output_error,
         )
 
     current_task: ActiveTaskState | None = narrowed_booking_task or active_task
@@ -316,6 +632,7 @@ def run_v2_stateful_fixture_turn(
                     fixture=fixture,
                     current_task=current_task,
                     local_now=local_now,
+                    timezone_name=timezone_name,
                     turn_id=resolved_turn_id,
                     simulate_writes=simulate_writes,
                 )
@@ -333,6 +650,7 @@ def run_v2_stateful_fixture_turn(
                     fixture=fixture,
                     current_task=current_task,
                     local_now=local_now,
+                    timezone_name=timezone_name,
                     turn_id=resolved_turn_id,
                     simulate_writes=simulate_writes,
                 )
@@ -345,6 +663,7 @@ def run_v2_stateful_fixture_turn(
                 fixture=fixture,
                 current_task=current_task,
                 local_now=local_now,
+                timezone_name=timezone_name,
                 turn_id=resolved_turn_id,
                 simulate_writes=simulate_writes,
             )
@@ -359,6 +678,15 @@ def run_v2_stateful_fixture_turn(
         history=history,
         outcomes=outcomes,
     )
+    next_availability_context = _fixture_availability_context(
+        plan=plan,
+        traces=traces,
+        fixture=fixture,
+        active_task=current_task,
+    )
+    if next_availability_context is None:
+        next_availability_context = availability_reference_context
+    next_read_context = next_availability_context or recent_read_context
     return V2StatefulHarnessResult(
         understanding=understanding,
         plan=plan,
@@ -367,4 +695,13 @@ def run_v2_stateful_fixture_turn(
         reply=reply,
         responder_model=model,
         active_task=current_task,
+        recent_read_context=next_read_context,
+        availability_reference_context=next_availability_context,
+        reference_semantic_path_used=reference_semantic_path_used,
+        reference_action=reference_action,
+        selected_option_ref=selected_option_ref,
+        reference_exact_time=reference_exact_time,
+        reference_selection_scope=reference_selection_scope,
+        full_interpreter_called=full_interpreter_called,
+        reference_structured_output_error=reference_structured_output_error,
     )

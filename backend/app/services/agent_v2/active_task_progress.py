@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import unicodedata
 from datetime import datetime, time
 from typing import Literal
 
@@ -296,7 +295,11 @@ def _past_temporal_resume_updates(
             and end_date < today
         )
         if fully_past:
-            return {"date": None, "time": None}
+            return {
+                "date": None,
+                "time": None,
+                "_backend_time_state_action": "clear_past",
+            }
 
         if (
             date_constraint.mode == "exact"
@@ -329,6 +332,7 @@ def _past_temporal_resume_updates(
             )
             if time_fully_past:
                 updates["time"] = None
+                updates["_backend_time_state_action"] = "clear_past"
     return updates
 
 
@@ -396,6 +400,27 @@ def adapt_matching_active_task_step(
     now: datetime | None = None,
 ) -> PlanStep:
     """Merge continuations or mark an explicit fresh task for safe replacement."""
+    if (
+        isinstance(active_task, BookingTaskState)
+        and step.facts.get("verified_booking_slot_selection") is True
+    ):
+        # A concrete server-owned slot selection is already a deterministic workflow event.
+        # Do not reinterpret it through generic active-task progression before fresh verification.
+        return step
+
+    if (
+        isinstance(active_task, BookingTaskState)
+        and active_task.proposal is not None
+        and active_task.status == "awaiting_confirmation"
+        and operation.type == "book"
+        and step.state_action == "none"
+        and step.response_goal == "booking_proposal"
+        and step.facts.get("compound_category_proposal") is True
+    ):
+        # A backend-built compound category proposal is already a completed workflow event.
+        # Do not reinterpret its synthetic responder step as a fresh customer correction.
+        return step
+
     grouped_step = step.facts.get("compound_visit_group") not in (None, "") or step.facts.get(
         "compound_write_group"
     ) not in (None, "")
@@ -692,72 +717,18 @@ def _sync_grouped_clock(
     )
 
 
-_AM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
-    {
-        "الصبح",
-        "صباح",
-        "صباحا",
-        "am",
-        "الصبح طبعا",
-        "صباح طبعا",
-        "صباحا طبعا",
-        "am طبعا",
-    }
-)
-_PM_CONTEXTUAL_PERIOD_REPLIES = frozenset(
-    {
-        "بالليل",
-        "بليل",
-        "الليل",
-        "مساء",
-        "مساءا",
-        "pm",
-        "بالليل طبعا",
-        "بليل طبعا",
-        "الليل طبعا",
-        "مساء طبعا",
-        "مساءا طبعا",
-        "pm طبعا",
-    }
-)
-def _normalize_contextual_period_reply(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text).strip().lower()
-    cleaned: list[str] = []
-    for char in normalized:
-        category = unicodedata.category(char)
-        if char == "ـ" or category.startswith("M"):
-            continue
-        if char == ".":
-            continue
-        if category.startswith("P"):
-            cleaned.append(" ")
-            continue
-        cleaned.append(char)
-    return " ".join("".join(cleaned).split())
-
-
-def _contextual_period_reply(text: str) -> Literal["am", "pm"] | None:
-    normalized = _normalize_contextual_period_reply(text)
-    if normalized in _AM_CONTEXTUAL_PERIOD_REPLIES:
-        return "am"
-    if normalized in _PM_CONTEXTUAL_PERIOD_REPLIES:
-        return "pm"
-    return None
-
-
 def resolve_pending_bare_clock_period(
     state: ActiveTaskState | None,
-    customer_text: str,
+    spoken_period_hint: Literal["am", "pm"] | None,
     *,
     context: SemanticContext,
 ) -> tuple[ActiveTaskState, Literal["am", "pm"]] | None:
-    """Resolve a narrow 10/11 AM/PM follow-up only at the persisted clock gate.
+    """Resolve a persisted 10/11 ambiguity from one typed semantic hint.
 
-    The customer text has no authority by itself. The active task must still contain
-    an unresolved bare 10/11 clock, and the canonical clinic-hours resolver must
-    independently prove that both AM and PM candidates are operationally valid.
+    The hint never outranks clinic hours: this path is available only when both
+    backend-generated candidates are operationally valid.
     """
-    if state is None or not customer_text.strip():
+    if state is None or spoken_period_hint not in {"am", "pm"}:
         return None
     constraints = state.constraints if state.task_type == "booking" else state.replacement
     clock = constraints.time
@@ -780,7 +751,7 @@ def resolve_pending_bare_clock_period(
         minute = int(parts[1]) if len(parts) > 1 else 0
     except (TypeError, ValueError):
         return None
-    if hour not in {10, 11} or minute != 0:
+    if hour not in {10, 11}:
         return None
 
     resolution = resolve_bare_clock_constraint(
@@ -792,35 +763,39 @@ def resolve_pending_bare_clock_period(
     if resolution.status != "clarify_period" or len(resolution.valid_operating_hour_candidates) != 2:
         return None
 
-    period = _contextual_period_reply(customer_text)
-    if period is None:
-        return None
-    canonical_time = f"{hour:02d}:00" if period == "am" else f"{hour + 12:02d}:00"
+    canonical_time = (
+        f"{hour:02d}:{minute:02d}"
+        if spoken_period_hint == "am"
+        else f"{hour + 12:02d}:{minute:02d}"
+    )
     if canonical_time not in resolution.valid_operating_hour_candidates:
         return None
 
     canonical = clock.model_copy(
-        update={"start_time": canonical_time, "start_time_ambiguity": "none"}
+        update={
+            "start_time": canonical_time,
+            "start_time_ambiguity": "none",
+            "spoken_period_hint": "none",
+        }
     )
     if isinstance(state, BookingTaskState):
         updated: ActiveTaskState = apply_booking_time_change(
             state,
             time=canonical,
-            clock_source="explicit_period",
+            clock_source="bare_spoken_12h",
         )
         updated = _sync_grouped_clock(
             updated,
             time_constraint=canonical,
-            clock_source="explicit_period",
+            clock_source="bare_spoken_12h",
         )
     else:
         updated = apply_reschedule_time_change(
             state,
             time=canonical,
-            clock_source="explicit_period",
+            clock_source="bare_spoken_12h",
         )
-    return updated, period
-
+    return updated, spoken_period_hint
 
 def prepare_active_task_clock_progress(
     state: ActiveTaskState,
@@ -1069,6 +1044,31 @@ def _commercial_basis_key(state: BookingTaskState) -> str | None:
     return f"{service_id}|{device}|{path}"
 
 
+def _booking_device_price_read(
+    state: BookingTaskState,
+    *,
+    laser_service_ids: list[str],
+    common_device_keys: list[str],
+) -> ReadRequest:
+    if len(state.requested_service_ids) > 1:
+        return ReadRequest(
+            kind="service_catalog_set",
+            parameters={"service_ids": list(state.requested_service_ids)},
+        )
+    service_id = laser_service_ids[0]
+    return ReadRequest(
+        kind="service_catalog",
+        parameters={
+            "service_id": service_id,
+            **(
+                {"device_keys": list(common_device_keys)}
+                if len(laser_service_ids) > 1
+                else {}
+            ),
+        },
+    )
+
+
 def _booking_progress(
     state: BookingTaskState,
     *,
@@ -1127,20 +1127,16 @@ def _booking_progress(
         and state.constraints.device_key is not None
         and state.constraints.device_key not in common_device_keys
     ):
-        device_anchor_service_id = laser_service_ids[0]
+        device_price_read = _booking_device_price_read(
+            state,
+            laser_service_ids=laser_service_ids,
+            common_device_keys=common_device_keys,
+        )
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
             disposition="read",
-            reads=[
-                ReadRequest(
-                    kind="service_catalog",
-                    parameters={
-                        "service_id": device_anchor_service_id,
-                        "device_keys": list(common_device_keys),
-                    },
-                )
-            ],
+            reads=[device_price_read],
             state_action="update_active",
             response_goal="answer_price",
             facts={
@@ -1150,28 +1146,20 @@ def _booking_progress(
                 "multi_service_device_invalid": True,
                 "booking_device_price_step": True,
                 "compatible_visit_device_keys": list(common_device_keys),
-                "device_anchor_service_id": device_anchor_service_id,
+                "device_anchor_service_id": laser_service_ids[0],
             },
         )
     if requires_device and state.constraints.device_key is None:
-        device_anchor_service_id = laser_service_ids[0]
+        device_price_read = _booking_device_price_read(
+            state,
+            laser_service_ids=laser_service_ids,
+            common_device_keys=common_device_keys,
+        )
         return PlanStep(
             operation_index=operation_index,
             operation_type="continue_active",
             disposition="read",
-            reads=[
-                ReadRequest(
-                    kind="service_catalog",
-                    parameters={
-                        "service_id": device_anchor_service_id,
-                        **(
-                            {"device_keys": list(common_device_keys)}
-                            if len(laser_service_ids) > 1
-                            else {}
-                        ),
-                    },
-                )
-            ],
+            reads=[device_price_read],
             state_action="update_active",
             response_goal="answer_price",
             facts={
@@ -1179,7 +1167,7 @@ def _booking_progress(
                 "service_requires_laser_device": True,
                 "booking_device_price_step": True,
                 "compatible_visit_device_keys": list(common_device_keys),
-                "device_anchor_service_id": device_anchor_service_id,
+                "device_anchor_service_id": laser_service_ids[0],
             },
         )
     if state.constraints.date is not None:
@@ -1215,18 +1203,31 @@ def _booking_progress(
     ):
         commercial_presented = True
     if not commercial_presented:
-        commercial_read = ReadRequest(
-            kind=(
-                "customer_packages"
-                if state.constraints.package_usage == "use_existing"
-                else "service_catalog"
-            ),
-            parameters={
-                key: params[key]
-                for key in ("service_id", "device_key")
-                if key in params and (key != "device_key" or main_requires_device)
-            },
-        )
+        if state.constraints.package_usage != "use_existing" and len(state.requested_service_ids) > 1:
+            commercial_read = ReadRequest(
+                kind="service_catalog_set",
+                parameters={
+                    "service_ids": list(state.requested_service_ids),
+                    **(
+                        {"device_key": state.constraints.device_key}
+                        if state.constraints.device_key is not None
+                        else {}
+                    ),
+                },
+            )
+        else:
+            commercial_read = ReadRequest(
+                kind=(
+                    "customer_packages"
+                    if state.constraints.package_usage == "use_existing"
+                    else "service_catalog"
+                ),
+                parameters={
+                    key: params[key]
+                    for key in ("service_id", "device_key")
+                    if key in params and (key != "device_key" or main_requires_device)
+                },
+            )
         reads = [commercial_read]
         if state.constraints.date is not None:
             availability_params = dict(params)
@@ -1272,11 +1273,27 @@ def _booking_progress(
     availability_params = dict(params)
     if not main_requires_device:
         availability_params.pop("device_key", None)
+    proposal_reads = []
+    if len(state.requested_service_ids) > 1 and state.constraints.package_usage != "use_existing":
+        proposal_reads.append(
+            ReadRequest(
+                kind="service_catalog_set",
+                parameters={
+                    "service_ids": list(state.requested_service_ids),
+                    **(
+                        {"device_key": state.constraints.device_key}
+                        if state.constraints.device_key is not None
+                        else {}
+                    ),
+                },
+            )
+        )
+    proposal_reads.append(ReadRequest(kind="availability", parameters=availability_params))
     return PlanStep(
         operation_index=operation_index,
         operation_type="book",
         disposition="read",
-        reads=[ReadRequest(kind="availability", parameters=availability_params)],
+        reads=proposal_reads,
         write_intent=WriteIntent(
             kind="booking",
             authorized=state.write_authorization.authorized,

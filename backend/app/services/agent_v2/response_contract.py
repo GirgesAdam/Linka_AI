@@ -284,6 +284,14 @@ _AVAILABILITY_STATE_BY_GOAL: dict[ResponseGoal, AvailabilityState] = {
     "no_availability": "no_availability",
 }
 _REQUIRED_KEYS_BY_GOAL: dict[ResponseGoal, frozenset[str]] = {
+    "booking_completed": frozenset({
+        "service_name",
+        "start_local",
+        "date",
+        "time",
+        "doctor_name",
+        "device_name",
+    }),
     "answer_price": frozenset({"service_name", "price", "device_price_options"}),
     "answer_doctor": frozenset({"doctors"}),
     "present_availability": frozenset({"availability_windows"}),
@@ -598,6 +606,61 @@ def _commercial_option(
 
 def _service_commercial_truth(facts: dict[str, object]) -> CommercialTruth | None:
     visit_price = facts.get("visit_price")
+    if isinstance(visit_price, list):
+        rows = [row for row in visit_price if isinstance(row, dict)]
+        if not rows or len(rows) != len(visit_price):
+            return CommercialTruth(kind="price_unavailable", complete_set=True)
+        raw_names = rows[0].get("service_names")
+        service_names = (
+            [str(item).strip() for item in raw_names if str(item).strip()]
+            if isinstance(raw_names, list)
+            else []
+        )
+        service_name = " + ".join(service_names) or None
+        if not service_names or any(
+            not isinstance(row.get("service_names"), list)
+            or [str(item).strip() for item in row["service_names"] if str(item).strip()]
+            != service_names
+            for row in rows
+        ):
+            return CommercialTruth(
+                kind="price_unavailable",
+                service_name=service_name,
+                complete_set=True,
+            )
+
+        variants_by_device: dict[str | None, tuple[str, str]] = {}
+        variants: list[dict[str, object]] = []
+        for row in rows:
+            raw_variants = row.get("variants")
+            if not isinstance(raw_variants, list):
+                return CommercialTruth(
+                    kind="price_unavailable",
+                    service_name=service_name,
+                    complete_set=True,
+                )
+            for raw_variant in raw_variants:
+                if not isinstance(raw_variant, dict):
+                    continue
+                device_name = str(raw_variant.get("device_name") or "").strip() or None
+                total_price = str(raw_variant.get("total_price") or "").strip()
+                currency = str(raw_variant.get("currency") or "").strip()
+                if not total_price:
+                    continue
+                signature = (total_price, currency)
+                previous = variants_by_device.get(device_name)
+                if previous is not None:
+                    if previous != signature:
+                        return CommercialTruth(
+                            kind="price_unavailable",
+                            service_name=service_name,
+                            complete_set=True,
+                        )
+                    continue
+                variants_by_device[device_name] = signature
+                variants.append(raw_variant)
+        visit_price = {"service_names": service_names, "variants": variants}
+
     if isinstance(visit_price, dict):
         raw_names = visit_price.get("service_names")
         service_names = (
@@ -790,11 +853,20 @@ def _device_clarification_commercial_truth(
 
 
 def _commercial_truth(outcome: TurnOutcome) -> CommercialTruth | None:
-    if outcome.status == "answered" and outcome.response_goal == "answer_price":
-        return (
-            _service_commercial_truth(outcome.facts)
-            or _package_commercial_truth(outcome.facts)
-        )
+    if outcome.status == "answered":
+        if outcome.response_goal == "answer_price":
+            return (
+                _service_commercial_truth(outcome.facts)
+                or _package_commercial_truth(outcome.facts)
+            )
+        if outcome.response_goal == "booking_proposal":
+            return _service_commercial_truth(outcome.facts)
+        if outcome.response_goal == "present_availability" and isinstance(
+            outcome.facts.get("visit_price"), dict
+        ):
+            # Grouped booking reads may return availability and a complete visit total together.
+            # Keep that backend-owned commercial truth attached to the availability response.
+            return _service_commercial_truth(outcome.facts)
     return _device_clarification_commercial_truth(outcome)
 
 
@@ -1488,6 +1560,17 @@ def _doctor_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Response
     return [_make_fact(goal=goal, key="doctors", value=_safe_value(rows), required=True, complete_set=True)]
 
 
+def _availability_service_names(facts: dict[str, object]) -> list[str]:
+    raw_names = facts.get("canonical_service_names")
+    if not isinstance(raw_names, list) or not raw_names:
+        visit_price = facts.get("visit_price")
+        raw_names = visit_price.get("service_names") if isinstance(visit_price, dict) else None
+    if not isinstance(raw_names, list):
+        return []
+    names = [str(value).strip() for value in raw_names if str(value).strip()]
+    return names if len(names) == len(raw_names) else []
+
+
 def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[ResponseFact]:
     availability = facts.get("availability")
     safe = _safe_value(availability) if isinstance(availability, dict) else {}
@@ -1507,12 +1590,19 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
                     complete_set=True,
                 )
             )
-        for key in (
-            "service_name",
-            "checked_dates",
-            "available_option_count",
-            "search_truncated",
-        ):
+        service_names = _availability_service_names(facts)
+        if service_names:
+            result.append(
+                _make_fact(
+                    goal=goal,
+                    key="service_names",
+                    value=service_names,
+                    complete_set=True,
+                )
+            )
+        elif safe.get("service_name") not in (None, ""):
+            result.append(_make_fact(goal=goal, key="service_name", value=safe["service_name"]))
+        for key in ("checked_dates", "available_option_count", "search_truncated"):
             if safe.get(key) not in (None, "", [], {}):
                 result.append(_make_fact(goal=goal, key=key, value=safe[key]))
         date_constraint = facts.get("date")
@@ -1559,7 +1649,19 @@ def _availability_facts(goal: ResponseGoal, facts: dict[str, object]) -> list[Re
                 )
             )
 
-    for key in ("service_name", "checked_dates", "search_truncated"):
+    service_names = _availability_service_names(facts)
+    if service_names:
+        result.append(
+            _make_fact(
+                goal=goal,
+                key="service_names",
+                value=service_names,
+                complete_set=True,
+            )
+        )
+    elif safe.get("service_name") not in (None, ""):
+        result.append(_make_fact(goal=goal, key="service_name", value=safe["service_name"]))
+    for key in ("checked_dates", "search_truncated"):
         if safe.get(key) not in (None, "", [], {}):
             result.append(_make_fact(goal=goal, key=key, value=safe[key]))
     return result
@@ -1602,6 +1704,13 @@ def _terminal_facts(goal: ResponseGoal, outcome: TurnOutcome) -> list[ResponseFa
                 if value not in (None, "") and target_key not in seen:
                     result.append(_make_fact(goal=goal, key=target_key, value=value))
                     seen.add(target_key)
+    if goal == "booking_completed" and "start_local" in seen:
+        result = [
+            fact.model_copy(update={"requirement": "optional"})
+            if fact.key in {"date", "time"}
+            else fact
+            for fact in result
+        ]
     return result
 
 
@@ -1823,7 +1932,10 @@ def is_pure_supported_price_device_contract(
             continue
         if not truth.options:
             return False
-        if truth.kind in {
+        if truth.kind == "visit_service_total":
+            if len(truth.options) != 1 or truth.complete_set is not True:
+                return False
+        elif truth.kind in {
             "service_device_price_options",
             "device_price_clarification",
         }:

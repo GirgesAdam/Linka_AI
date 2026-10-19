@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnOperation
-from app.services.agent_v2.multi_service_booking import select_main_service_id
+from app.services.agent_v2.multi_service_booking import (
+    common_laser_device_keys,
+    laser_service_ids,
+    partition_service_ids_by_operational_category,
+    select_main_service_id,
+    service_operational_category,
+)
 from app.services.agent_v2.planner import TurnPlan
 from app.services.agent_v2.state import BookingTaskState
 
@@ -89,6 +95,89 @@ def merge_same_visit_booking_operations(
     return turn.model_copy(update={"operations": operations})
 
 
+def merge_same_turn_grouped_availability_operations(
+    turn: TiaTurnUnderstanding,
+    *,
+    semantic_context: SemanticContext,
+    catalog: dict[str, object],
+) -> TiaTurnUnderstanding:
+    """Collapse same-category availability peers from one multi-service turn.
+
+    The interpreter may emit one informational availability operation per requested
+    service even when the customer asks for the services together. Availability is
+    still read-only, so canonicalization is safe only when every service resolves to
+    the same backend operational category and the typed scheduling/resource
+    constraints are identical. Different categories or conflicting constraints stay
+    independent and are never guessed into one visit.
+    """
+    groups: dict[tuple[object, ...], list[int]] = {}
+    for index, operation in enumerate(turn.operations):
+        if operation.type != "availability" or operation.execution_intent != "informational":
+            continue
+        service = operation.entities.service
+        if service is None or service.ref is None:
+            continue
+        canonical = semantic_context.resolve(service.ref, expected_kind="service")
+        if canonical is None:
+            continue
+        category = service_operational_category(catalog, canonical)
+        if category is None:
+            continue
+        signature = (
+            category,
+            _same_visit_signature(operation),
+            operation.package_usage,
+            operation.continuation_condition,
+        )
+        groups.setdefault(signature, []).append(index)
+
+    replacements: dict[int, TurnOperation] = {}
+    removed: set[int] = set()
+    for indexes in groups.values():
+        if len(indexes) < 2:
+            continue
+        refs: list[str] = []
+        for index in indexes:
+            service = turn.operations[index].entities.service
+            assert service is not None and service.ref is not None
+            if service.ref not in refs:
+                refs.append(service.ref)
+        if len(refs) < 2:
+            continue
+        first_index = indexes[0]
+        first = turn.operations[first_index]
+        service = first.entities.service
+        assert service is not None
+        replacements[first_index] = first.model_copy(
+            update={
+                "entities": first.entities.model_copy(
+                    update={
+                        "service": service.model_copy(
+                            update={
+                                "ref": None,
+                                "candidate_refs": refs,
+                                "candidate_mode": "set",
+                            }
+                        )
+                    }
+                )
+            }
+        )
+        removed.update(indexes[1:])
+
+    if not replacements:
+        return turn
+    return turn.model_copy(
+        update={
+            "operations": [
+                replacements.get(index, operation)
+                for index, operation in enumerate(turn.operations)
+                if index not in removed
+            ]
+        }
+    )
+
+
 def guard_multiple_booking_writes(plan: TurnPlan) -> TurnPlan:
     """Never fall back to legacy multiple Appointment writes for one Agent turn."""
     bookings = [
@@ -97,6 +186,11 @@ def guard_multiple_booking_writes(plan: TurnPlan) -> TurnPlan:
         if step.write_intent is not None and step.write_intent.kind == "booking"
     ]
     if len(bookings) < 2:
+        return plan
+    compound_groups = {
+        str(step.facts.get("compound_write_group") or "") for step in bookings
+    }
+    if len(compound_groups) == 1 and "" not in compound_groups:
         return plan
     first = bookings[0]
     guarded = first.model_copy(
@@ -136,7 +230,7 @@ def collapse_booking_service_sets(
     """
     normalized: list[TurnOperation] = []
     service_sets: dict[int, list[str]] = {}
-    for index, operation in enumerate(turn.operations):
+    for operation in turn.operations:
         entity = operation.entities.service
         operation_type = getattr(operation, "type", None)
         execution_intent = getattr(operation, "execution_intent", "execute")
@@ -161,8 +255,9 @@ def collapse_booking_service_sets(
             explicit_grouped_service_mutation
             and operation.grouped_booking_action == "remove_other_components"
         )
-        explicit_singleton_narrowing = (
-            explicit_grouped_service_correction
+        explicit_singleton_mutation = (
+            explicit_grouped_service_mutation
+            and execution_intent == "execute"
             and entity is not None
             and isinstance(entity.ref, str)
             and bool(entity.ref)
@@ -175,7 +270,7 @@ def collapse_booking_service_sets(
                 or fresh_grouped_availability
             )
             or entity is None
-            or (entity.candidate_mode != "set" and not explicit_singleton_narrowing)
+            or (entity.candidate_mode != "set" and not explicit_singleton_mutation)
         ):
             normalized.append(operation)
             continue
@@ -210,6 +305,30 @@ def collapse_booking_service_sets(
             if not current_ids and active_task.constraints.service_id:
                 current_ids = [active_task.constraints.service_id]
             if operation.grouped_booking_action == "preserve_group":
+                if (
+                    entity.candidate_mode == "set"
+                    and len(current_ids) > 1
+                    and len(canonical_ids) == len(current_ids)
+                    and set(canonical_ids) == set(current_ids)
+                    and len(
+                        partition_service_ids_by_operational_category(catalog, current_ids)
+                    )
+                    > 1
+                ):
+                    # A provider may redundantly reconstruct the durable service set on
+                    # a constraint-only continuation. Across categories that echo would
+                    # otherwise fan out into multiple operations before grouped restoration.
+                    # Treat it as omitted service identity so durable constraints survive.
+                    normalized.append(
+                        operation.model_copy(
+                            update={
+                                "entities": operation.entities.model_copy(
+                                    update={"service": None}
+                                )
+                            }
+                        )
+                    )
+                    continue
                 canonical_ids = [
                     *current_ids,
                     *(service_id for service_id in canonical_ids if service_id not in current_ids),
@@ -220,48 +339,167 @@ def collapse_booking_service_sets(
                     *(service_id for service_id in current_ids if service_id in selected),
                     *(service_id for service_id in canonical_ids if service_id not in current_ids),
                 ]
-        main_id = select_main_service_id(catalog, canonical_ids)
+        category_groups = partition_service_ids_by_operational_category(
+            catalog, canonical_ids
+        )
         ref_by_id = {canonical: ref for ref, canonical in resolved}
         for ref, target in semantic_context.reference_map.items():
             if target.kind == "service" and target.canonical_id in canonical_ids:
                 ref_by_id.setdefault(target.canonical_id, ref)
-        main_ref = ref_by_id.get(main_id)
-        if main_ref is None:
-            normalized.append(operation)
-            continue
-        # Equivalent provider shapes must not change single-service business semantics.
-        # A one-item candidate_mode=set becomes the same grounded singleton ref unless
-        # it is authoritatively narrowing an existing grouped booking.
-        if len(canonical_ids) > 1 or explicit_grouped_service_correction:
-            service_sets[index] = canonical_ids
-        normalized.append(
-            operation.model_copy(
-                update={
-                    "entities": operation.entities.model_copy(
-                        update={
-                            "service": entity.model_copy(
-                                update={
-                                    "ref": main_ref,
-                                    "candidate_refs": [],
-                                    "candidate_mode": "ambiguous",
-                                }
-                            )
-                        }
-                    )
-                }
-            )
-        )
 
-    if all(current is original for current, original in zip(normalized, turn.operations, strict=True)):
+        emitted = False
+        for _category, category_ids in category_groups:
+            main_id = select_main_service_id(catalog, category_ids)
+            main_ref = ref_by_id.get(main_id)
+            if main_ref is None:
+                continue
+            output_index = len(normalized)
+            if len(category_ids) > 1 or (
+                explicit_grouped_service_correction and len(category_groups) == 1
+            ):
+                service_sets[output_index] = list(category_ids)
+            normalized.append(
+                operation.model_copy(
+                    update={
+                        "entities": operation.entities.model_copy(
+                            update={
+                                "service": entity.model_copy(
+                                    update={
+                                        "ref": main_ref,
+                                        "candidate_refs": [],
+                                        "candidate_mode": "ambiguous",
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            )
+            emitted = True
+        if not emitted:
+            normalized.append(operation)
+
+    if len(normalized) == len(turn.operations) and all(
+        current is original
+        for current, original in zip(normalized, turn.operations, strict=True)
+    ):
         return turn, service_sets
     normalized_turn = turn.model_copy(update={"operations": normalized})
     return normalized_turn, service_sets
+
+
+
+def recollapse_restored_booking_visit_groups(
+    turn: TiaTurnUnderstanding,
+    *,
+    semantic_context: SemanticContext,
+    catalog: dict[str, object],
+    restored_visit_groups: dict[int, str],
+) -> tuple[TiaTurnUnderstanding, dict[int, list[str]], dict[int, str]]:
+    """Restore category-level visit boundaries before compound sequencing.
+
+    Grouped-continuation recovery rebuilds durable service components so corrections
+    can be applied to every member. Those component operations are not visit
+    boundaries. Partition the recovered peers by backend operational_category, merge
+    only peers in the same category, then run the normal canonical service-set collapse.
+    """
+    if not restored_visit_groups:
+        return turn, {}, {}
+    group_keys = set(restored_visit_groups.values())
+    if len(group_keys) != 1:
+        return turn, {}, restored_visit_groups
+    restored_indexes = sorted(restored_visit_groups)
+    if not restored_indexes or any(index >= len(turn.operations) for index in restored_indexes):
+        return turn, {}, restored_visit_groups
+
+    restored_rows: list[tuple[int, TurnOperation, str, str | None]] = []
+    for index in restored_indexes:
+        operation = turn.operations[index]
+        entity = operation.entities.service
+        if operation.type != "book" or entity is None or entity.ref is None:
+            return turn, {}, restored_visit_groups
+        service_id = semantic_context.resolve(entity.ref, expected_kind="service")
+        if service_id is None:
+            return turn, {}, restored_visit_groups
+        restored_rows.append(
+            (index, operation, service_id, service_operational_category(catalog, service_id))
+        )
+
+    category_rows: list[list[tuple[int, TurnOperation, str, str | None]]] = []
+    category_positions: dict[str, int] = {}
+    for row in restored_rows:
+        category = row[3]
+        if category is None:
+            category_rows.append([row])
+            continue
+        position = category_positions.get(category)
+        if position is None:
+            category_positions[category] = len(category_rows)
+            category_rows.append([row])
+        else:
+            category_rows[position].append(row)
+
+    replacement_by_index: dict[int, TurnOperation] = {}
+    removed: set[int] = set()
+    for rows in category_rows:
+        first_index, first, _service_id, _category = rows[0]
+        if len(rows) == 1:
+            replacement_by_index[first_index] = first
+            continue
+        refs = [
+            operation.entities.service.ref
+            for _index, operation, _canonical, _category in rows
+            if operation.entities.service is not None and operation.entities.service.ref
+        ]
+        assert first.entities.service is not None
+        replacement_by_index[first_index] = first.model_copy(
+            update={
+                "entities": first.entities.model_copy(
+                    update={
+                        "service": first.entities.service.model_copy(
+                            update={
+                                "ref": None,
+                                "candidate_refs": refs,
+                                "candidate_mode": "set",
+                            }
+                        )
+                    }
+                )
+            }
+        )
+        removed.update(index for index, *_rest in rows[1:])
+
+    operations = [
+        replacement_by_index.get(index, operation)
+        for index, operation in enumerate(turn.operations)
+        if index not in removed
+    ]
+    category_turn = turn.model_copy(update={"operations": operations})
+    collapsed, service_sets = collapse_booking_service_sets(
+        category_turn,
+        semantic_context=semantic_context,
+        catalog=catalog,
+        active_task=None,
+    )
+    expanded, _ = expand_multi_service_operations(
+        collapsed,
+        semantic_context=semantic_context,
+        booking_service_sets=service_sets,
+    )
+    group_key = next(iter(group_keys))
+    category_visit_groups = {
+        index: group_key
+        for index, operation in enumerate(expanded.operations)
+        if operation.type == "book" and operation.grouped_booking_action == "preserve_group"
+    }
+    return expanded, service_sets, category_visit_groups
 
 
 def tag_booking_service_sets(
     plan: TurnPlan,
     *,
     service_sets: dict[int, list[str]],
+    catalog: dict[str, object] | None = None,
 ) -> TurnPlan:
     if not service_sets:
         return plan
@@ -287,7 +525,45 @@ def tag_booking_service_sets(
                     }
                 }
             )
+        reads = step.reads
+        disposition = step.disposition
+        response_goal = step.response_goal
+        clarification_field = step.clarification_field
         state_action = step.state_action
+        if (
+            catalog is not None
+            and len(requested) > 1
+            and facts.get("booking_device_price_step") is True
+            and facts.get("service_requires_laser_device") is True
+            and any(request.kind == "service_catalog" for request in reads)
+        ):
+            laser_ids = laser_service_ids(catalog, requested)
+            if len(laser_ids) > 1:
+                compatible_devices = common_laser_device_keys(catalog, requested)
+                facts["compatible_visit_device_keys"] = list(compatible_devices)
+                if compatible_devices:
+                    # Use the existing complete-set price read instead of showing a
+                    # device choice based only on the arbitrarily selected main service.
+                    reads = [
+                        request.model_copy(
+                            update={
+                                "kind": "service_catalog_set",
+                                "parameters": {"service_ids": list(requested)},
+                            }
+                        )
+                        if request.kind == "service_catalog"
+                        else request
+                        for request in reads
+                    ]
+                    facts["visit_total_price"] = True
+                else:
+                    disposition = "clarify"
+                    reads = []
+                    write_intent = None
+                    response_goal = "clarification"
+                    clarification_field = "device"
+                    facts["multi_service_no_common_device"] = True
+
         if (
             step.operation_type in {"availability", "book"}
             and len(requested) > 1
@@ -302,6 +578,10 @@ def tag_booking_service_sets(
             step.model_copy(
                 update={
                     "facts": facts,
+                    "reads": reads,
+                    "disposition": disposition,
+                    "response_goal": response_goal,
+                    "clarification_field": clarification_field,
                     "write_intent": write_intent,
                     "state_action": state_action,
                 }
@@ -374,6 +654,41 @@ def _constraint_signature(operation: TurnOperation) -> tuple[object, ...]:
     return (date, time, branch_ref)
 
 
+def _fresh_isolation_nearest_time_asymmetry(operations: list[TurnOperation]) -> bool:
+    """Allow only the None/nearest skew caused by fresh-task isolation."""
+    present = [operation for operation in operations if operation.entities.time is not None]
+    missing = [operation for operation in operations if operation.entities.time is None]
+    if not present or not missing:
+        return False
+    if not all(
+        operation.fresh_task and "time" not in operation.fresh_task_explicit_fields
+        for operation in missing
+    ):
+        return False
+    if not any(not operation.fresh_task for operation in present):
+        return False
+
+    time_signatures = set()
+    for operation in present:
+        time = operation.entities.time
+        assert time is not None
+        if time.mode != "nearest" or time.start_time is not None or time.end_time is not None:
+            return False
+        time_signatures.add(repr(time.model_dump(mode="json")))
+    return len(time_signatures) == 1
+
+
+def _implicit_multi_book_constraints_match(operations: list[TurnOperation]) -> bool:
+    signatures = [_constraint_signature(operation) for operation in operations]
+    if len({repr(signature) for signature in signatures}) == 1:
+        return True
+
+    date_branch_signatures = {(repr(signature[0]), signature[2]) for signature in signatures}
+    if len(date_branch_signatures) != 1:
+        return False
+    return _fresh_isolation_nearest_time_asymmetry(operations)
+
+
 def _implicit_multi_book_visit_group(
     operations: list[TurnOperation],
 ) -> dict[int, str]:
@@ -392,11 +707,7 @@ def _implicit_multi_book_visit_group(
     service_refs = {operation.entities.service.ref for operation in operations}
     if len(service_refs) != len(operations):
         return {}
-    signatures = {
-        repr(_constraint_signature(operation))
-        for operation in operations
-    }
-    if len(signatures) != 1:
+    if not _implicit_multi_book_constraints_match(operations):
         return {}
     actions = {operation.grouped_booking_action for operation in operations}
     if len(actions) != 1 or next(iter(actions)) not in {

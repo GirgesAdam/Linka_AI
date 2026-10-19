@@ -5,9 +5,16 @@ on:
     paths:
       - .github/workflows/grouped-multiservice-intent-live-review.yml
       - backend/scripts/run_grouped_multiservice_intent_live_review.py
+      - backend/scripts/run_phase3_real_world_agent_audit.py
       - backend/app/services/agent_v2/**
       - backend/app/agents/v2/**
   workflow_dispatch:
+    inputs:
+      run_phase3:
+        description: Run optional Phase 3.3 real-world diagnostic audit
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +23,7 @@ jobs:
   standalone:
     name: RA-G standalone #241
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 75
     environment: staging
     services:
       postgres:
@@ -89,16 +96,35 @@ jobs:
           SQL
       - name: Apply clean migrations
         run: python -m alembic upgrade head
-      - name: Run focused C7 replacement
-        env:
-          RA_G_SCENARIOS: RA-C7-REPLACEMENT
-        run: python scripts/run_grouped_multiservice_intent_live_review.py
-      - name: Run focused C7 pure addition
-        env:
-          RA_G_SCENARIOS: RA-C7-ADDITION
-        run: python scripts/run_grouped_multiservice_intent_live_review.py
       - name: Run full grouped multi-service review
-        run: python scripts/run_grouped_multiservice_intent_live_review.py
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-standalone.log
+      - name: Run Phase 3.3 real-world agent strength audit
+        if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_phase3 }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/run_phase3_real_world_agent_audit.py 2>&1 | tee artifacts/phase3-real-world-agent-audit.log
+      - name: Upload Phase 3.3 real-world audit diagnostics
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_phase3 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-real-world-agent-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/phase3-real-world-agent-audit.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload RA-G standalone diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra-g-standalone-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/ra-g-standalone.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   batch1-compatibility:
     name: RA-G Batch-1 compatibility overlay
@@ -191,4 +217,16 @@ jobs:
       - name: Apply clean migrations
         run: python -m alembic upgrade head
       - name: Run RA-G1 through RA-G5 on audit-only #241 + #249 overlay
-        run: python scripts/run_grouped_multiservice_intent_live_review.py
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-batch1-compatibility.log
+      - name: Upload RA-G Batch-1 compatibility diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra-g-batch1-compatibility-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend/artifacts/ra-g-batch1-compatibility.log
+          if-no-files-found: ignore
+          retention-days: 7

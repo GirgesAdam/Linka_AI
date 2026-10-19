@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -36,11 +36,21 @@ _CAPABILITY_BY_TASK = {
     "booking": "appointment_creation",
     "reschedule": "appointment_reschedule",
 }
-_FLOW_STATUS_BY_TASK_STATUS = {
+_BOOKING_FLOW_STATUS_BY_TASK_STATUS = {
+    "collecting": "collecting_requirements",
+    "awaiting_slot": "awaiting_option_selection",
+    "awaiting_confirmation": "ready_to_execute",
+}
+_RESCHEDULE_FLOW_STATUS_BY_TASK_STATUS = {
     "collecting": "collecting_requirements",
     "awaiting_choice": "awaiting_option_selection",
     "ready": "ready_to_execute",
     "executing": "ready_to_execute",
+}
+_BOOKING_WIRE_STATUS_BY_INTERNAL_STATUS = {
+    "collecting": "collecting",
+    "awaiting_slot": "awaiting_choice",
+    "awaiting_confirmation": "ready",
 }
 
 
@@ -72,17 +82,70 @@ def _flow_type_for_task(active_task: ActiveTaskState) -> str:
 
 
 def _flow_status_for_task(active_task: ActiveTaskState) -> str:
-    return _FLOW_STATUS_BY_TASK_STATUS[active_task.status]
+    if isinstance(active_task, BookingTaskState):
+        return _BOOKING_FLOW_STATUS_BY_TASK_STATUS[active_task.status]
+    return _RESCHEDULE_FLOW_STATUS_BY_TASK_STATUS[active_task.status]
 
 
 def _capabilities_for_task(active_task: ActiveTaskState) -> list[str]:
     return [_CAPABILITY_BY_TASK[active_task.task_type]]
 
 
+def _inject_unresolved_spoken_period_hint(
+    *,
+    constraints: object,
+    payload: object,
+) -> None:
+    """Persist only unresolved 10/11 disambiguation without polluting general serialization."""
+    time_constraint = getattr(constraints, "time", None)
+    if time_constraint is None or not isinstance(payload, dict):
+        return
+    hint = getattr(time_constraint, "spoken_period_hint", "none")
+    raw_start = getattr(time_constraint, "start_time", None)
+    try:
+        parsed_start = time.fromisoformat(str(raw_start))
+    except ValueError:
+        return
+    if (
+        parsed_start.hour not in {10, 11}
+        or getattr(time_constraint, "start_time_ambiguity", "none") != "twelve_hour"
+        or hint not in {"am", "pm"}
+    ):
+        return
+    time_payload = payload.get("time")
+    if isinstance(time_payload, dict):
+        time_payload["spoken_period_hint"] = hint
+
+
+def _persisted_task_payload(active_task: ActiveTaskState) -> dict[str, object]:
+    payload = active_task.model_dump(mode="json")
+    if isinstance(active_task, BookingTaskState):
+        payload["status"] = _BOOKING_WIRE_STATUS_BY_INTERNAL_STATUS[active_task.status]
+        constraints_payload = payload.get("constraints")
+        _inject_unresolved_spoken_period_hint(
+            constraints=active_task.constraints, payload=constraints_payload
+        )
+        grouped_payload = payload.get("grouped")
+        if active_task.grouped is not None and isinstance(grouped_payload, dict):
+            component_payloads = grouped_payload.get("components")
+            if isinstance(component_payloads, list):
+                for component, component_payload in zip(
+                    active_task.grouped.components, component_payloads, strict=False
+                ):
+                    _inject_unresolved_spoken_period_hint(
+                        constraints=component, payload=component_payload
+                    )
+    else:
+        _inject_unresolved_spoken_period_hint(
+            constraints=active_task.replacement, payload=payload.get("replacement")
+        )
+    return payload
+
+
 def _task_namespace(active_task: ActiveTaskState) -> dict[str, object]:
     return {
         "schema_version": _V2_SCHEMA_VERSION,
-        "active_task": active_task.model_dump(mode="json"),
+        "active_task": _persisted_task_payload(active_task),
     }
 
 
@@ -330,9 +393,25 @@ def save_active_task(
     if active_task.task_type != expected.active_task.task_type:
         raise V2StateConflictError("A persisted V2 task cannot change task type in place.")
 
+    booking_choice_pending = (
+        isinstance(active_task, BookingTaskState)
+        and active_task.option_snapshot is not None
+        and (
+            active_task.status == "awaiting_slot"
+            or (
+                active_task.status == "collecting"
+                and active_task.option_snapshot.purpose != "booking_slot"
+            )
+        )
+    )
+    reschedule_choice_pending = (
+        isinstance(active_task, RescheduleTaskState)
+        and active_task.status == "awaiting_choice"
+        and active_task.option_snapshot is not None
+    )
     event_type = (
         "options_presented"
-        if active_task.status == "awaiting_choice" and active_task.option_snapshot is not None
+        if booking_choice_pending or reschedule_choice_pending
         else "updated"
     )
     try:

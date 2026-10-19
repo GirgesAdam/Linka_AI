@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from app.agents.v2.semantic_context import SemanticContext
-from app.agents.v2.turn_contract import EntityReference, TiaTurnUnderstanding, TurnOperation
+from app.agents.v2.turn_contract import (
+    EntityReference,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnOperation,
+)
 from app.services.agent_v2.active_task_progress import resolved_operation_parameters
 from app.services.agent_v2.compound_turn_policy import (
     compound_visit_group,
@@ -26,6 +32,34 @@ from app.services.agent_v2.state import (
 _BOOKING_OPERATION_TYPES = frozenset({"book", "continue_active"})
 
 
+def _grouped_state_time(
+    value: object,
+    *,
+    semantic: TimeConstraint | None,
+) -> object:
+    """Carry only unresolved 10/11 AM/PM meaning into durable grouped state."""
+    if not isinstance(value, dict) or semantic is None:
+        return value
+    try:
+        constraint = TimeConstraint.model_validate(value)
+    except ValueError:
+        return value
+    if (
+        constraint.start_time_ambiguity != "twelve_hour"
+        or semantic.start_time_ambiguity != "twelve_hour"
+        or constraint.start_time != semantic.start_time
+        or semantic.spoken_period_hint not in {"am", "pm"}
+    ):
+        return value
+    try:
+        hour = int(str(constraint.start_time).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return value
+    if hour not in {10, 11}:
+        return value
+    return {**value, "spoken_period_hint": semantic.spoken_period_hint}
+
+
 def _constraints_from_step(
     step: PlanStep,
     *,
@@ -39,7 +73,9 @@ def _constraints_from_step(
             "branch_id": str(facts["branch_id"]) if facts.get("branch_id") else None,
             "device_key": str(facts["device_key"]) if facts.get("device_key") else None,
             "date": facts.get("date"),
-            "time": facts.get("time"),
+            "time": _grouped_state_time(
+                facts.get("time"), semantic=operation.entities.time
+            ),
             "time_clock_source": operation.clock_source,
             "package_usage": facts.get("package_usage") or "unspecified",
         }
@@ -50,6 +86,18 @@ def _grouped_booking_steps(plan: TurnPlan) -> list[PlanStep] | None:
     groups: dict[str, list[PlanStep]] = {}
     for step in plan.steps:
         if step.operation_type not in _BOOKING_OPERATION_TYPES:
+            continue
+        if (
+            step.facts.get("compound_visit_independent_category_resources") is True
+            and (
+                step.write_intent is not None
+                or step.response_goal != "present_availability"
+            )
+        ):
+            # A read-only preflight result still needs durable component state so a later
+            # customer-selected start time can rebuild the complete cross-category proposal.
+            # Once the full proposal is write-ready, _prepare_cross_category_compound_proposal
+            # owns the state transition instead of treating visits as one same-category group.
             continue
         group = compound_visit_group(step)
         if group is None or step.facts.get("service_id") in (None, ""):
@@ -85,27 +133,79 @@ def grouped_booking_task_from_plan(
     now: datetime,
     turn_id: str,
 ) -> BookingTaskState | None:
-    """Capture one same-visit component set as durable booking state."""
+    """Capture one grouped booking journey as durable component state."""
     steps = _grouped_booking_steps(plan)
     if steps is None:
         return None
 
-    components = [
-        _constraints_from_step(
+    components: list[CustomerConstraints] = []
+    seen_service_ids: set[str] = set()
+    for step in steps:
+        constraints = _constraints_from_step(
             step,
             operation=understanding.operations[step.operation_index],
         )
-        for step in steps
-    ]
+        requested_raw = step.facts.get("requested_service_ids")
+        requested = (
+            list(dict.fromkeys(requested_raw))
+            if isinstance(requested_raw, list)
+            and all(isinstance(item, str) and item for item in requested_raw)
+            else []
+        )
+        service_ids = (
+            requested
+            if len(requested) > 1 and constraints.service_id in requested
+            else [constraints.service_id]
+        )
+        for service_id in service_ids:
+            if service_id is None or service_id in seen_service_ids:
+                continue
+            components.append(constraints.model_copy(update={"service_id": service_id}))
+            seen_service_ids.add(service_id)
     grouped = GroupedBookingState(components=components)
-    if existing is not None and existing.grouped is not None:
-        if existing.grouped == grouped and existing.constraints == components[0]:
+    requested_service_ids = [
+        component.service_id
+        for component in components
+        if component.service_id is not None
+    ]
+    if existing is not None:
+        main_constraints = components[0]
+        if existing.grouped is None and existing.constraints.service_id is not None:
+            main_constraints = next(
+                (
+                    component
+                    for component in components
+                    if component.service_id == existing.constraints.service_id
+                ),
+                main_constraints,
+            )
+        if existing.grouped == grouped and existing.constraints == main_constraints:
             return existing
+        requested = list(existing.requested_service_ids) or [
+            component.service_id
+            for component in components
+            if component.service_id is not None
+        ]
+        service_device_keys = {
+            key: value
+            for key, value in existing.service_device_keys.items()
+            if key in requested
+        }
+        service_device_keys.update(
+            {
+                component.service_id: component.device_key
+                for component in components
+                if component.service_id is not None and component.device_key is not None
+            }
+        )
         return existing.model_copy(
             update={
                 "status": "collecting",
-                "constraints": components[0],
+                "constraints": main_constraints,
+                "requested_service_ids": requested,
+                "service_device_keys": service_device_keys,
                 "grouped": grouped,
+                "proposal": None,
                 "derived": DerivedBookingState(),
                 "option_snapshot": None,
                 "version": existing.version + 1,
@@ -121,6 +221,7 @@ def grouped_booking_task_from_plan(
             granted_at=now if authorized else None,
         ),
         constraints=components[0],
+        requested_service_ids=requested_service_ids,
         grouped=grouped,
     )
 
@@ -141,11 +242,11 @@ def _canonical_ref(
     return matches[0] if len(matches) == 1 else None
 
 
-def _entity_ref(ref: str | None) -> EntityReference | None:
+def _entity_ref(ref: str | None, *, text: str | None = None) -> EntityReference | None:
     if ref is None:
         return None
     return EntityReference(
-        text=None,
+        text=text,
         ref=ref,
         candidate_refs=[],
         candidate_mode="ambiguous",
@@ -187,12 +288,51 @@ def _operation_for_component(
     if component.device_key is not None and device_ref is None:
         return None
 
+    # Canonical grouped reconstruction must not erase explicit identity provenance.
+    # Preserve text only when the customer's named reference resolves to this component;
+    # inherited identities remain textless and cannot overwrite active-task state.
+    service_text = (
+        template.entities.service.text
+        if template.entities.service is not None
+        and template.entities.service.ref is not None
+        and template.entities.service.text
+        and context.resolve(template.entities.service.ref, expected_kind="service")
+        == component.service_id
+        else None
+    )
+    doctor_text = (
+        template.entities.doctor.text
+        if template.entities.doctor is not None
+        and template.entities.doctor.ref is not None
+        and template.entities.doctor.text
+        and context.resolve(template.entities.doctor.ref, expected_kind="doctor")
+        == component.doctor_id
+        else None
+    )
+    branch_text = (
+        template.entities.branch.text
+        if template.entities.branch is not None
+        and template.entities.branch.ref is not None
+        and template.entities.branch.text
+        and context.resolve(template.entities.branch.ref, expected_kind="branch")
+        == component.branch_id
+        else None
+    )
+    device_text = (
+        template.entities.device.text
+        if template.entities.device is not None
+        and template.entities.device.ref is not None
+        and template.entities.device.text
+        and context.resolve(template.entities.device.ref, expected_kind="device")
+        == component.device_key
+        else None
+    )
     entities = template.entities.model_copy(
         update={
-            "service": _entity_ref(service_ref),
-            "doctor": _entity_ref(doctor_ref),
-            "branch": _entity_ref(branch_ref),
-            "device": _entity_ref(device_ref),
+            "service": _entity_ref(service_ref, text=service_text),
+            "doctor": _entity_ref(doctor_ref, text=doctor_text),
+            "branch": _entity_ref(branch_ref, text=branch_text),
+            "device": _entity_ref(device_ref, text=device_text),
             "appointment": None,
             "package": None,
             "date": component.date,
@@ -206,7 +346,7 @@ def _operation_for_component(
             "source_appointment": None,
             "selection": None,
             "package_usage": component.package_usage,
-            "execution_intent": "execute",
+            "execution_intent": template.execution_intent,
             "grouped_booking_action": "preserve_group",
         }
     )
@@ -218,18 +358,72 @@ def _merge_component(
     operation: TurnOperation,
     params: dict[str, object],
     apply_to_all: bool,
+    device_service_ids: set[str] | None = None,
 ) -> CustomerConstraints:
     updates: dict[str, object] = {}
-    for key in ("doctor_id", "branch_id", "date", "time"):
+    for key in ("doctor_id", "branch_id", "date"):
         if key in params:
             updates[key] = params[key]
-    if not apply_to_all and "device_key" in params:
+    if "time" in params:
+        updates["time"] = _grouped_state_time(
+            params["time"], semantic=operation.entities.time
+        )
+    if "device_key" in params and (
+        not apply_to_all
+        or component.service_id in (device_service_ids or set())
+    ):
         updates["device_key"] = params["device_key"]
     if operation.package_usage != "unspecified":
         updates["package_usage"] = operation.package_usage
     payload = component.model_dump(mode="json")
+    if "time" not in updates and component.time is not None:
+        # Normal serialization excludes spoken_period_hint.  An omitted-time
+        # continuation must retain the durable TimeConstraint object unchanged.
+        payload["time"] = component.time
     payload.update(updates)
     return CustomerConstraints.model_validate(payload)
+
+
+def _compound_proposal_components(
+    active_task: BookingTaskState,
+) -> list[CustomerConstraints] | None:
+    proposal = active_task.proposal
+    if proposal is None or len(proposal.visits) < 2:
+        return None
+
+    requested_service_ids = list(active_task.requested_service_ids)
+    represented_service_ids = [
+        service_id
+        for visit in proposal.visits
+        for service_id in visit.service_ids
+    ]
+    if (
+        len(represented_service_ids) != len(set(represented_service_ids))
+        or set(represented_service_ids) != set(requested_service_ids)
+    ):
+        return None
+
+    components: list[CustomerConstraints] = []
+    for visit in proposal.visits:
+        for service_id in visit.service_ids:
+            if service_id in active_task.service_device_keys:
+                device_key = active_task.service_device_keys[service_id]
+            elif service_id == visit.main_service_id:
+                device_key = visit.device_key
+            else:
+                device_key = visit.additional_service_device_keys.get(service_id)
+            components.append(
+                active_task.constraints.model_copy(
+                    update={
+                        "service_id": service_id,
+                        "doctor_id": visit.doctor_id,
+                        "branch_id": visit.branch_id,
+                        "device_key": device_key,
+                        "package_usage": visit.package_usage,
+                    }
+                )
+            )
+    return components
 
 
 def restore_grouped_booking_understanding(
@@ -237,17 +431,127 @@ def restore_grouped_booking_understanding(
     *,
     active_task: BookingTaskState | None,
     context: SemanticContext,
+    booking_service_sets: dict[int, list[str]] | None = None,
+    catalog: dict[str, Any] | None = None,
 ) -> tuple[TiaTurnUnderstanding, dict[int, str]]:
     """Restore all durable components when a continuation mentions only one of them."""
-    if active_task is None or active_task.grouped is None:
+    if active_task is None:
         return turn, {}
+    if active_task.grouped is not None:
+        durable_components = [
+            component.model_copy(
+                update={
+                    "device_key": active_task.service_device_keys[component.service_id]
+                }
+            )
+            if component.device_key is None
+            and component.service_id in active_task.service_device_keys
+            else component
+            for component in active_task.grouped.components
+        ]
+    elif (
+        active_task.status == "awaiting_confirmation"
+        and active_task.proposal is not None
+        and active_task.proposal.visits
+    ):
+        durable_components = _compound_proposal_components(active_task)
+        if durable_components is None:
+            return turn, {}
+    elif len(active_task.requested_service_ids) > 1:
+        durable_components = [
+            active_task.constraints.model_copy(
+                update={
+                    "service_id": service_id,
+                    "device_key": active_task.service_device_keys.get(service_id),
+                }
+            )
+            for service_id in active_task.requested_service_ids
+        ]
+    else:
+        return turn, {}
+
+    device_service_ids = (
+        set(
+            laser_service_ids(
+                catalog,
+                [
+                    component.service_id
+                    for component in durable_components
+                    if component.service_id is not None
+                ],
+            )
+        )
+        if catalog is not None
+        else set()
+    )
 
     executable = [
         (index, operation)
         for index, operation in enumerate(turn.operations)
         if operation.type in _BOOKING_OPERATION_TYPES
-        and operation.execution_intent == "execute"
+        and operation.execution_intent in {"execute", "informational"}
     ]
+    if len(executable) > 1:
+        durable_devices = {
+            component.service_id: component.device_key
+            for component in durable_components
+            if component.service_id is not None
+        }
+        operations = list(turn.operations)
+        changed = False
+        for operation_index, operation in executable:
+            if (
+                operation.grouped_booking_action != "preserve_group"
+                or operation.fresh_task
+                or operation.active_task_relationship == "replace"
+                or operation.entities.device is not None
+            ):
+                continue
+            params = resolved_operation_parameters(operation, context=context)
+            representative_service = params.get("service_id")
+            if not isinstance(representative_service, str) or not representative_service:
+                continue
+            represented_raw = (
+                booking_service_sets.get(operation_index)
+                if booking_service_sets is not None
+                else None
+            )
+            represented_services = (
+                list(dict.fromkeys(represented_raw))
+                if isinstance(represented_raw, list)
+                and represented_raw
+                and all(isinstance(item, str) and item for item in represented_raw)
+                and representative_service in represented_raw
+                else [representative_service]
+            )
+            represented_devices = [
+                durable_devices.get(service_id) for service_id in represented_services
+            ]
+            if any(device_key is None for device_key in represented_devices):
+                continue
+            common_devices = {str(device_key) for device_key in represented_devices}
+            if len(common_devices) != 1:
+                continue
+            device_key = next(iter(common_devices))
+            device_ref = _canonical_ref(
+                context,
+                kind="device",
+                canonical_id=device_key,
+            )
+            if device_ref is None:
+                continue
+            operations[operation_index] = operation.model_copy(
+                update={
+                    "entities": operation.entities.model_copy(
+                        update={"device": _entity_ref(device_ref)}
+                    )
+                }
+            )
+            changed = True
+        return (
+            turn.model_copy(update={"operations": operations}) if changed else turn,
+            {},
+        )
     if len(executable) != 1:
         return turn, {}
     source_index, operation = executable[0]
@@ -258,14 +562,27 @@ def restore_grouped_booking_understanding(
     target_service = params.get("service_id")
     service_ids = {
         component.service_id
-        for component in active_task.grouped.components
+        for component in durable_components
         if component.service_id is not None
     }
+    representative_set = (
+        booking_service_sets.get(source_index)
+        if booking_service_sets is not None
+        else None
+    )
+    representative_is_full_group = (
+        operation.grouped_booking_action == "preserve_group"
+        and representative_set is not None
+        and len(representative_set) > 1
+        and {str(service_id) for service_id in representative_set} == service_ids
+    )
+    if representative_is_full_group:
+        target_service = None
     if target_service is not None and str(target_service) not in service_ids:
         return turn, {}
 
     rebuilt: list[TurnOperation] = []
-    for component in active_task.grouped.components:
+    for component in durable_components:
         apply_to_all = target_service is None
         if target_service is not None and component.service_id != str(target_service):
             merged = component
@@ -275,6 +592,7 @@ def restore_grouped_booking_understanding(
                 operation=operation,
                 params=params,
                 apply_to_all=apply_to_all,
+                device_service_ids=device_service_ids,
             )
         rebuilt_operation = _operation_for_component(
             operation,
@@ -388,7 +706,6 @@ def explicitly_narrow_grouped_booking_task(
         if component.service_id is not None
     ]
     if catalog is not None:
-        main_service_id = select_main_service_id(catalog, retained_service_ids)
         laser_ids = laser_service_ids(catalog, retained_service_ids)
         common_devices = common_laser_device_keys(catalog, retained_service_ids)
         selected_device = active_task.constraints.device_key
@@ -396,6 +713,9 @@ def explicitly_narrow_grouped_booking_task(
             selected_device = None
         elif selected_device not in common_devices:
             selected_device = common_devices[0] if len(common_devices) == 1 else None
+        main_service_id = select_main_service_id(
+            catalog, retained_service_ids, device_key=selected_device
+        )
 
         normalized_components = [
             component.model_copy(

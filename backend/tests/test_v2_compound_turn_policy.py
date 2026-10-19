@@ -9,6 +9,7 @@ from app.services.agent_v2.compound_turn_policy import (
 )
 from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
+from app.services.agent_v2.turn_normalization import guard_multiple_booking_writes
 
 
 def _booking(index: int, service_id: str, *, device_key: str | None = None) -> PlanStep:
@@ -320,3 +321,19 @@ def test_package_first_keeps_dependent_and_other_booking_in_same_compound_visit(
     assert _time(dependent)["start_time"] == "12:00"
     assert _time(other)["mode"] == "after"
     assert _time(other)["start_time"] == "12:30"
+
+
+def test_multiple_booking_guard_allows_only_normalized_atomic_compound_group() -> None:
+    raw = TurnPlan(steps=[_booking(0, "service-a"), _booking(1, "service-b")])
+    blocked = guard_multiple_booking_writes(raw)
+    assert len(blocked.steps) == 1
+    assert blocked.steps[0].write_intent is None
+    assert blocked.steps[0].facts["multiple_appointment_write_blocked"] is True
+
+    normalized = normalize_compound_turn_plan(raw, catalog=_catalog())
+    allowed = guard_multiple_booking_writes(normalized)
+    assert len(allowed.steps) == 2
+    assert all(step.write_intent is not None for step in allowed.steps)
+    groups = {step.facts.get("compound_write_group") for step in allowed.steps}
+    assert len(groups) == 1
+    assert None not in groups

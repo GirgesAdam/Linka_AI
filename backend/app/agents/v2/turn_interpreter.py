@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, time
+from typing import get_args
 from zoneinfo import ZoneInfo
 
 from langchain_core.exceptions import OutputParserException
@@ -21,6 +22,9 @@ from app.agents.v2.turn_contract import (
     AppointmentSelector,
     DateConstraint,
     EntityReference,
+    ExecutionIntent,
+    OperationType,
+    ResponseDisposition,
     Selection,
     TiaTurnUnderstanding,
     TimeAmbiguity,
@@ -33,6 +37,63 @@ from app.agents.v2.turn_normalization import (
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+_MAX_REJECTED_SEMANTIC_OPERATIONS = 6
+_SAFE_OPERATION_TYPES = frozenset(get_args(OperationType))
+_SAFE_EXECUTION_INTENTS = frozenset(get_args(ExecutionIntent))
+_SAFE_RESPONSE_DISPOSITIONS = frozenset(get_args(ResponseDisposition))
+
+
+def _safe_rejected_turn_semantic_shape(payload: object) -> dict[str, object] | str:
+    """Summarize only schema-controlled turn fields from a rejected parsed payload."""
+    if not isinstance(payload, dict):
+        return "not_observable"
+    raw_operations = payload.get("operations")
+    if not isinstance(raw_operations, list):
+        return "not_observable"
+
+    shape: dict[str, object] = {"operation_count": len(raw_operations)}
+    operations: list[dict[str, str]] = []
+    for raw_operation in raw_operations[:_MAX_REJECTED_SEMANTIC_OPERATIONS]:
+        if not isinstance(raw_operation, dict):
+            continue
+        operation: dict[str, str] = {}
+        operation_type = raw_operation.get("type")
+        if isinstance(operation_type, str) and operation_type in _SAFE_OPERATION_TYPES:
+            operation["type"] = operation_type
+        execution_intent = raw_operation.get("execution_intent")
+        if isinstance(execution_intent, str) and execution_intent in _SAFE_EXECUTION_INTENTS:
+            operation["execution_intent"] = execution_intent
+        if operation:
+            operations.append(operation)
+    if operations:
+        shape["operations"] = operations
+    if len(raw_operations) > _MAX_REJECTED_SEMANTIC_OPERATIONS:
+        shape["operations_truncated"] = True
+
+    response_disposition = payload.get("response_disposition")
+    if (
+        isinstance(response_disposition, str)
+        and response_disposition in _SAFE_RESPONSE_DISPOSITIONS
+    ):
+        shape["response_disposition"] = response_disposition
+    return shape
+
+
+def safe_turn_interpreter_rejection_diagnostics(
+    error: StructuredOutputError,
+) -> dict[str, object]:
+    """Return bounded diagnostics and discard any short-lived rejected payload reference."""
+    shape = error.rejected_semantic_shape
+    if shape is None:
+        shape = _safe_rejected_turn_semantic_shape(error.rejected_payload_for_diagnostics)
+        error.attach_rejected_semantic_shape(shape)
+    error.clear_rejected_payload()
+    return {
+        **error.safe_diagnostics(),
+        "rejected_semantic_shape": shape,
+    }
 
 
 def _message_text(message: BaseMessage, *, limit: int = 1200) -> str:
@@ -83,6 +144,12 @@ SEMANTIC PRINCIPLES
   candidate_refs, and candidate_mode=ambiguous. If the customer intentionally refers to several
   entities as a group to inspect or compare, use candidate_refs with candidate_mode=set. Never invent
   a reference.
+- Preserve identity provenance in each EntityReference: when the latest customer message explicitly
+  names a concrete service, doctor, branch, device, package, or appointment, set that entity's `text`
+  to the customer-grounded name alongside its supplied `ref`, even if the reference resolves the name.
+  Leave `text` null when the entity is present only as inherited/contextual information from an active
+  task, verified read, assistant prose, or older dialogue. Python uses this distinction to accept an
+  explicit customer choice without allowing context-only references to overwrite task state.
 - A direct comparison between two or more supplied doctors, devices, services, packages, or other
   entities is a set comparison, not an identity ambiguity. Keep the comparison informational and use
   candidate_mode=set for the compared entity set. For an availability comparison with no explicit
@@ -131,10 +198,17 @@ SEMANTIC PRINCIPLES
   Set continuation_condition=if_previous_no_availability only when the operation is
   explicitly conditional on the immediately previous verified availability having no options; use
   continuation_condition=always for ordinary continuations and unconditional nearest requests.
-- execution_intent describes whether the customer authorizes an action now. Use execute only when
-  the customer is actually asking Linka to perform the action now. Questions, comparisons,
-  hypotheticals, "should I" choices, and requests to inspect consequences/options are informational,
-  even if they mention booking, cancellation, rescheduling, or purchasing.
+- Separate booking-workflow intent from final appointment-write authorization. `book` means the
+  customer wants to start or continue arranging a new appointment; `execution_intent=execute` means
+  start that workflow now. When the customer wants a visit and asks to review its details before
+  confirming, still use `book` with `execution_intent=execute`: the backend verifies availability and
+  presents a server-owned proposal, but must not create an Appointment until that exact proposal is
+  explicitly confirmed. Use `availability` with `execution_intent=informational` only when the customer
+  wants to inspect possible times without starting a booking task, or explicitly says not to start
+  booking now. A hypothetical about whether booking would be possible, without intent to arrange the
+  visit, remains informational. For non-book actions, questions, comparisons, hypotheticals, "should I"
+  choices, and requests to inspect consequences/options remain informational; mentions alone do not
+  authorize cancellation, rescheduling, purchasing, or other mutations.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.
@@ -146,6 +220,21 @@ SEMANTIC PRINCIPLES
   requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
   the requested components to one canonical service ref. Do not decide which service is primary/main;
   Python chooses that deterministically from catalog duration.
+- When the customer wants services from different operational categories arranged in one trip, one
+  after another, preserve each category as a separate book operation in the customer's requested order.
+  Copy the shared date and any explicit starting-time constraint to every related operation. This is one
+  compound booking workflow, not a set of unrelated availability questions. If no starting time is given,
+  the backend may present read-only availability and retain the complete grouped task while the customer
+  chooses a start time; do not create an Appointment before explicit proposal confirmation.
+- For an active grouped booking, distinguish a pure service addition from a constraint-only edit. For a
+  pure addition, emit grouped_booking_action=preserve_group and entities.service MUST identify the newly
+  added service or services from supplied references. Do not omit a newly named service merely because
+  active_task already contains a group, and do not reconstruct/repeat the existing services solely to
+  preserve them; deterministic Python keeps the durable group and merges the newly supplied services.
+  For a constraint-only change such as date, time, doctor, branch, or device when the customer did not
+  add or replace a service, use grouped_booking_action=preserve_group and entities.service may remain
+  null/omitted. A service replacement/removal is not an addition: use remove_other_components and emit
+  the complete resulting service set under the existing replacement contract.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
   reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the
@@ -216,6 +305,13 @@ SEMANTIC PRINCIPLES
   cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
   unspecified for side reads/social turns and when no active task applies. Python, not this marker,
   performs the lifecycle transition.
+- If an unfinished booking task is active and the latest assistant reply asked the customer to choose a
+  time, a short reply selecting a time is a constraint-only continuation of that task. Emit `book` with
+  `execution_intent=execute`, `active_task_relationship=continue`, and `active_task_explicit_fields=["time"]`,
+  with the selected time as the new semantic value. For a grouped task, use `grouped_booking_action=preserve_group`
+  and do not reconstruct the services. Do not emit `availability` or ask whether to check availability again;
+  the backend will recheck canonical availability and prepare a fresh proposal. Appointment creation still
+  requires explicit confirmation of that proposal.
   For an active booking or reschedule continuation, active_task_explicit_fields must list date and/or time
   only when that dimension is explicitly supplied or corrected in the latest customer message. For a booking
   correction, emit only the NEW semantic value in entities; an older value mentioned only as the value being
@@ -440,7 +536,7 @@ DATE/TIME REPRESENTATION
 - date range: mode=range with start_date/end_date.
 - starting from a date: mode=from_date with start_date.
 - nearest available date: mode=next_available with no invented date.
-- exact time: mode=exact with start_time.
+- exact time: mode=exact, start_time.
 - after/before constraints: mode=after or mode=before with start_time. After/from a time includes the
   boundary itself; Python treats this lower bound as inclusive.
 - time range: mode=range with start_time/end_time.
@@ -1356,8 +1452,8 @@ def merge_verified_action_context(
 
 
 
-def _normalize_periodless_clock(value: str | None) -> str | None:
-    """Remove an inferred AM/PM choice while preserving the model's minute meaning."""
+def _normalize_spoken_clock_base(value: str | None) -> str | None:
+    """Neutralize model AM/PM choice while preserving the spoken hour/minute meaning."""
     raw = str(value or "").strip()[:5]
     try:
         parsed = time.fromisoformat(raw)
@@ -1371,25 +1467,7 @@ def _normalize_periodless_clock(value: str | None) -> str | None:
     return f"{hour:02d}:{parsed.minute:02d}"
 
 
-def _explicit_clock_conflicts_with_literal(value: str | None, literal_clock: str) -> bool:
-    """Validate semantic explicit-period time against structural HH:MM evidence only."""
-    raw = str(value or "").strip()[:5]
-    try:
-        semantic = time.fromisoformat(raw)
-        literal = time.fromisoformat(literal_clock)
-    except ValueError:
-        return True
-    if semantic.minute != literal.minute:
-        return True
-    if literal.hour == 0 or literal.hour > 12:
-        return semantic.hour != literal.hour
-    return not (semantic.hour == literal.hour or abs(semantic.hour - literal.hour) == 12)
-
-
-def _derive_periodless_clock_ambiguity(
-    value: str | None, *, literal_clock: str | None
-) -> TimeAmbiguity:
-    """Derive bare 12-hour ambiguity at the latest-turn boundary, never from keywords."""
+def _derive_spoken_clock_ambiguity(value: str | None, *, literal_clock: str | None) -> TimeAmbiguity:
     if value is None or literal_clock is not None:
         return "none"
     try:
@@ -1411,82 +1489,77 @@ def _count_time_targets(turn: TiaTurnUnderstanding) -> int:
     return count
 
 
-def _verified_period_evidence(
-    evidence_text: str | None,
-    *,
-    latest_customer_text: str,
-) -> bool | None:
-    """Verify model-reported semantic evidence without parsing customer language."""
-    if evidence_text is None:
-        return False
-    evidence = str(evidence_text).strip()
-    if not evidence:
-        return None
-    if evidence not in latest_customer_text:
-        return None
-    # Period evidence must be semantic wording, not the clock digits themselves.
-    if any(char.isdigit() for char in evidence) or ":" in evidence:
-        return None
-    return True
-
-
-def _normalize_one_clock(
+def _normalize_one_spoken_clock(
     value: str,
     *,
-    existing_status: str,
-    existing_ambiguity: TimeAmbiguity,
-    evidence_text: str | None,
-    latest_customer_text: str,
     literal_clock: str | None,
-) -> tuple[str, TimeAmbiguity, str]:
-    """Convert semantic clock output into backend-owned authority metadata."""
-    if not latest_customer_text.strip():
-        # Internal/unit-test construction has no latest-turn language evidence.
-        return value, existing_ambiguity, existing_status
-
-    # period_status is runtime-only now. Preserve explicit/conflict authority only
-    # for internal callers that set it deliberately; the provider cannot emit it.
-    if evidence_text is None and existing_status == "conflict":
-        return value, "none", "conflict"
-    if evidence_text is None and existing_status == "explicit":
-        if literal_clock is not None and _explicit_clock_conflicts_with_literal(
-            value, literal_clock
-        ):
-            return value, "none", "conflict"
-        return value, "none", "explicit"
-
-    evidence_state = _verified_period_evidence(
-        evidence_text,
-        latest_customer_text=latest_customer_text,
-    )
-    if evidence_state is None:
-        return value, "none", "conflict"
-
-    if evidence_state:
-        if literal_clock is not None and _explicit_clock_conflicts_with_literal(
-            value, literal_clock
-        ):
-            return value, "none", "conflict"
-        # The LLM owns language understanding only. Once its explicit-period evidence
-        # is proven to exist in the latest customer message, its normalized semantic
-        # clock can be treated as exact. Clinic hours never reinterpret it.
-        return value, "none", "explicit"
-
+) -> tuple[str, TimeAmbiguity]:
+    """Keep structural HH:MM exact; all other spoken clocks become backend-owned 12h bases."""
     if literal_clock is not None:
-        # Defensive compatibility: a customer-typed colon HH:MM remains structural
-        # exact authority when no semantic period wording is present (#230).
-        return literal_clock, "none", "none"
-
-    # No explicit period evidence: strip any AM/PM choice invented by the semantic
-    # model and let deterministic clinic-hours policy own the 12-hour resolution.
-    neutral = _normalize_periodless_clock(value)
+        return literal_clock, "none"
+    neutral = _normalize_spoken_clock_base(value)
     if neutral is None:
-        return value, "none", "conflict"
-    return (
-        neutral,
-        _derive_periodless_clock_ambiguity(neutral, literal_clock=None),
-        "none",
-    )
+        return value, "none"
+    return neutral, _derive_spoken_clock_ambiguity(neutral, literal_clock=None)
+
+
+def _normalize_spoken_period_hint(
+    value: str,
+    *,
+    ambiguity: TimeAmbiguity,
+    hint: str,
+    literal_clock: str | None,
+) -> str:
+    """Keep provider hints only where clinic hours cannot resolve the spoken clock alone."""
+    if literal_clock is not None or ambiguity != "twelve_hour":
+        return "none"
+    try:
+        parsed = time.fromisoformat(value)
+    except ValueError:
+        return "none"
+    if 1 <= parsed.hour <= 9:
+        return "none"
+    if parsed.hour in {10, 11}:
+        return hint if hint in {"am", "pm"} else "none"
+    if parsed.hour == 12:
+        return "midnight" if hint == "midnight" else "none"
+    return "none"
+
+def _validate_spoken_clock_authority(
+    turn: TiaTurnUnderstanding,
+    *,
+    latest_customer_text: str,
+) -> TiaTurnUnderstanding:
+    """Reject incomplete non-literal 10/11 PM semantics before they gain state authority."""
+    structural_literal = extract_single_explicit_hhmm(latest_customer_text)
+    literal_clock = structural_literal if _count_time_targets(turn) == 1 else None
+    if literal_clock is not None:
+        return turn
+
+    def validate_clock(value: str | None, hint: str) -> None:
+        if value is None or hint in {"am", "pm"}:
+            return
+        try:
+            parsed = time.fromisoformat(value)
+        except ValueError:
+            return
+        if parsed.hour not in {22, 23}:
+            return
+        neutral = _normalize_spoken_clock_base(value)
+        if neutral is None or _derive_spoken_clock_ambiguity(neutral, literal_clock=None) != "twelve_hour":
+            return
+        raise StructuredOutputError(
+            "Non-literal spoken 10/11 PM semantics require explicit period authority."
+        )
+
+    for operation in turn.operations:
+        constraint = operation.entities.time
+        if constraint is not None:
+            validate_clock(constraint.start_time, constraint.spoken_period_hint)
+        selection = operation.selection
+        if selection is not None and selection.kind == "time":
+            validate_clock(selection.time, selection.spoken_period_hint)
+    return turn
 
 
 def _normalize_time_semantics_v2(
@@ -1507,19 +1580,20 @@ def _normalize_time_semantics_v2(
         selection = operation.selection
 
         if constraint is not None and constraint.start_time is not None:
-            value, ambiguity, status = _normalize_one_clock(
+            value, ambiguity = _normalize_one_spoken_clock(
                 constraint.start_time,
-                existing_status=constraint.period_status,
-                existing_ambiguity=constraint.start_time_ambiguity,
-                evidence_text=constraint.period_evidence_text,
-                latest_customer_text=latest_customer_text,
                 literal_clock=literal_clock,
             )
             constraint = constraint.model_copy(
                 update={
                     "start_time": value,
                     "start_time_ambiguity": ambiguity,
-                    "period_status": status,
+                    "spoken_period_hint": _normalize_spoken_period_hint(
+                        value,
+                        ambiguity=ambiguity,
+                        hint=constraint.spoken_period_hint,
+                        literal_clock=literal_clock,
+                    ),
                 }
             )
             entities = entities.model_copy(update={"time": constraint})
@@ -1535,26 +1609,26 @@ def _normalize_time_semantics_v2(
                         mode="exact",
                         start_time=literal_clock,
                         start_time_ambiguity="none",
-                        period_evidence_text=None,
-                        period_status="none",
+                        spoken_period_hint="none",
                     )
                 }
             )
 
         if selection is not None and selection.kind == "time" and selection.time is not None:
-            value, ambiguity, status = _normalize_one_clock(
+            value, ambiguity = _normalize_one_spoken_clock(
                 selection.time,
-                existing_status=selection.period_status,
-                existing_ambiguity=selection.time_ambiguity,
-                evidence_text=selection.period_evidence_text,
-                latest_customer_text=latest_customer_text,
                 literal_clock=literal_clock,
             )
             selection = selection.model_copy(
                 update={
                     "time": value,
                     "time_ambiguity": ambiguity,
-                    "period_status": status,
+                    "spoken_period_hint": _normalize_spoken_period_hint(
+                        value,
+                        ambiguity=ambiguity,
+                        hint=selection.spoken_period_hint,
+                        literal_clock=literal_clock,
+                    ),
                 }
             )
 
@@ -1573,8 +1647,10 @@ def interpret_customer_turn_v2(
     timezone_name: str,
     local_now: datetime,
 ) -> TiaTurnUnderstanding:
-    """One semantic LLM call; Python verifies period evidence and owns clock authority."""
+    """One semantic LLM call; Python owns final spoken-clock authority."""
 
+    latest_index = _latest_customer_index(history)
+    latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
     messages = _build_interpreter_messages(
         history=history,
         semantic_context=semantic_context,
@@ -1591,15 +1667,25 @@ def interpret_customer_turn_v2(
     ) -> TiaTurnUnderstanding:
         def call_once() -> TiaTurnUnderstanding:
             try:
-                return invoke_typed_structured_output(
+                typed = invoke_typed_structured_output(
                     model=model,
                     schema=TiaTurnUnderstanding,
                     messages=request_messages,
                 )
+                return _validate_spoken_clock_authority(
+                    typed,
+                    latest_customer_text=latest_customer_text,
+                )
+            except StructuredOutputError as exc:
+                safe_turn_interpreter_rejection_diagnostics(exc)
+                raise
             except OutputParserException as exc:
-                raise StructuredOutputError(
-                    "LLM provider returned structured data that could not be parsed."
-                ) from exc
+                error = StructuredOutputError(
+                    "LLM provider returned structured data that could not be parsed.",
+                    validation_category="payload_extraction",
+                )
+                safe_turn_interpreter_rejection_diagnostics(error)
+                raise error from exc
 
         try:
             return call_once()
@@ -1672,8 +1758,6 @@ def interpret_customer_turn_v2(
             model_name=fallback_invocation.model_name,
             used_fallback=True,
         )
-    latest_index = _latest_customer_index(history)
-    latest_customer_text = _message_text(history[latest_index]) if latest_index is not None else ""
     time_safe = _normalize_time_semantics_v2(
         invocation.value,
         latest_customer_text=latest_customer_text,

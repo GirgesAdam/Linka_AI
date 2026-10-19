@@ -217,3 +217,94 @@ def test_different_branch_schedules_are_not_merged_or_guessed() -> None:
 
     assert "clinic_operating_hours" not in context.model_input
     assert context.server_metadata["clinic_operating_hours"] == []
+
+
+
+def _turn_without_date(time_constraint: TimeConstraint) -> TiaTurnUnderstanding:
+    return TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(time=time_constraint),
+            )
+        ]
+    )
+
+
+def test_explicit_pm_resolves_without_date_before_clinic_context() -> None:
+    context = build_semantic_context(_catalog(start="09:00", end="21:00"))
+    turn = _turn_without_date(
+        TimeConstraint(
+            mode="exact",
+            start_time="10:30",
+            start_time_ambiguity="twelve_hour",
+            spoken_period_hint="pm",
+        )
+    )
+
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "22:30"
+    assert constraint.start_time_ambiguity == "none"
+    assert constraint.spoken_period_hint == "none"
+
+
+def test_explicit_am_resolves_without_date_before_clinic_context() -> None:
+    context = build_semantic_context(_catalog(start="20:00", end="23:59"))
+    turn = _turn_without_date(
+        TimeConstraint(
+            mode="exact",
+            start_time="10:30",
+            start_time_ambiguity="twelve_hour",
+            spoken_period_hint="am",
+        )
+    )
+
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "10:30"
+    assert constraint.start_time_ambiguity == "none"
+    assert constraint.spoken_period_hint == "none"
+
+
+def test_explicit_pm_with_exact_date_resolves_to_pm_clock() -> None:
+    context = build_semantic_context(_catalog(start="00:00", end="23:59"))
+    turn = _turn(
+        TimeConstraint(
+            mode="exact",
+            start_time="10:30",
+            start_time_ambiguity="twelve_hour",
+            spoken_period_hint="pm",
+        )
+    )
+
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "22:30"
+    assert constraint.start_time_ambiguity == "none"
+
+
+def test_explicit_pm_outside_clinic_hours_remains_pm() -> None:
+    context = build_semantic_context(_catalog(start="09:00", end="21:00"))
+    turn = _turn(
+        TimeConstraint(
+            mode="exact",
+            start_time="10:30",
+            start_time_ambiguity="twelve_hour",
+            spoken_period_hint="pm",
+        )
+    )
+
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "22:30"
+    assert constraint.start_time_ambiguity == "none"
+    assert constraint.spoken_period_hint == "none"

@@ -390,7 +390,8 @@ def test_d6_multi_service_intersection_two_requires_one_visit_level_choice() -> 
     step = plan_active_task_progress(state, operation_index=0, context=build_semantic_context(catalog))
     assert step.facts["compatible_visit_device_keys"] == [CANDELA, DEKA]
     assert len(step.reads) == 1
-    assert step.reads[0].kind == "service_catalog"
+    assert step.reads[0].kind == "service_catalog_set"
+    assert step.reads[0].parameters["service_ids"] == [UNDERARM, FULL_ARMS]
 
 
 def test_d7_selected_device_survives_side_reads_without_reasking_device() -> None:
@@ -479,6 +480,41 @@ def test_d11_zero_common_devices_fails_closed_before_availability_or_write() -> 
     assert step.facts["multi_service_no_common_device"] is True
     assert step.reads == []
     assert step.write_intent is None
+
+
+def test_singleton_auto_resolver_uses_one_complete_set_price_variant() -> None:
+    step = _device_step([CANDELA])
+    step = step.model_copy(
+        update={
+            "facts": {
+                **step.facts,
+                "compatible_visit_device_keys": [CANDELA],
+            }
+        }
+    )
+    reads = ReadExecutionBundle(
+        results=[
+            ReadResult(
+                kind="service_catalog_set",
+                ok=True,
+                payload={
+                    "device_required": True,
+                    "variants": [
+                        {
+                            "device_name": "Candela",
+                            "total_price_minor": 120_000,
+                            "currency": "EGP",
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+
+    resolved = _auto_resolve_single_booking_device(step, reads)
+
+    assert resolved.facts["device_key"] == CANDELA
+    assert resolved.facts["device_auto_resolved"] is True
 
 
 def test_singleton_auto_resolver_never_selects_outside_common_visit_set() -> None:

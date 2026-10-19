@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.agents.v2.price_device_composer import deterministic_price_device_fallback
 from app.agents.v2.responder import _deterministic_booking_proposal_reply
 from app.agents.v2.semantic_context import build_semantic_context
@@ -21,6 +23,7 @@ from app.services.agent_v2.read_executor import (
 from app.services.agent_v2.response_contract import build_customer_response_contract
 from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
 from app.services.laser_slot_metadata import encode_laser_slot_branch
+from scripts.run_human_conversation_quality_batch1_review import _assert_ra_h3_final_transition
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 
@@ -223,6 +226,35 @@ def test_q2_known_single_service_price_uses_active_canonical_service_without_cla
     assert step.facts["device_key"] == "candela"
 
 
+def test_booking_proposal_includes_verified_complete_set_total_price() -> None:
+    _, pricing_outcome = _visit_total_reply(same_total=False, device_key="candela")
+    visit_price = pricing_outcome.facts.get("visit_price")
+    assert isinstance(visit_price, dict)
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            **pricing_outcome.facts,
+            # Duplicate read batches may carry the same complete-set total more than once.
+            "visit_price": [visit_price, visit_price],
+            "booking_proposal_summary": {
+                "services": ["Underarm", "Full Arms"],
+                "start_local": "2026-10-17 18:00",
+                "doctor_name": "Mariam",
+                "branch_name": "Main Branch",
+                "device_name": "Candela",
+            },
+        },
+    )
+    unit = build_customer_response_contract([outcome]).units[0]
+
+    text = _deterministic_booking_proposal_reply(unit, arabic=True)
+
+    assert text is not None
+    assert "1300" in text
+    assert "EGP" in text
+
+
 def test_q3_multi_service_total_uses_active_canonical_set_and_deterministic_aggregate() -> None:
     step = _plan_for_active(
         _active_task(["svc-underarm", "svc-arms"], device_key="candela")
@@ -335,3 +367,61 @@ def test_q12_q13_q14_status_copy_is_appointment_specific() -> None:
     assert 'confirmed: "\u0645\u0624\u0643\u062f"' in appointment
     assert 'pending: "\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631"' in generic
     assert "appointmentLabels[value]" not in label_function
+
+
+
+def _ra_h3_proposal(*, proposal_id: str = "proposal-current") -> dict[str, object]:
+    return {
+        "proposal_id": proposal_id,
+        "service_ids": ["svc-underarm", "svc-bikini"],
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "doctor_id": "doc-maryam",
+        "device_key": "candela_gentle",
+    }
+
+
+def _ra_h3_last(*, write: str | None, completed: bool) -> SimpleNamespace:
+    outcomes = (
+        [
+            SimpleNamespace(
+                status="completed",
+                response_goal="booking_completed",
+                facts={"booking_proposal_confirmation": True},
+            )
+        ]
+        if completed
+        else [SimpleNamespace(status="answered", response_goal="booking_proposal", facts={})]
+    )
+    return SimpleNamespace(
+        traces=[SimpleNamespace(simulated_write=write)],
+        outcomes=outcomes,
+    )
+
+
+def test_ra_h3_reviewer_allows_confirmation_of_current_verified_proposal() -> None:
+    proposal = _ra_h3_proposal()
+    assert _assert_ra_h3_final_transition(
+        pre_final_task={"status": "awaiting_confirmation", "proposal": proposal},
+        final_task={"status": "awaiting_confirmation", "proposal": dict(proposal)},
+        last=_ra_h3_last(write="booking_proposal", completed=True),
+    ) is True
+
+
+def test_ra_h3_reviewer_requires_no_write_when_final_turn_creates_first_proposal() -> None:
+    proposal = _ra_h3_proposal()
+    assert _assert_ra_h3_final_transition(
+        pre_final_task={"status": "awaiting_slot", "proposal": None},
+        final_task={"status": "awaiting_confirmation", "proposal": proposal},
+        last=_ra_h3_last(write=None, completed=False),
+    ) is False
+
+
+def test_ra_h3_reviewer_rejects_stale_or_mutated_proposal_write() -> None:
+    current = _ra_h3_proposal(proposal_id="proposal-current")
+    stale = _ra_h3_proposal(proposal_id="proposal-stale")
+    with pytest.raises(AssertionError):
+        _assert_ra_h3_final_transition(
+            pre_final_task={"status": "awaiting_confirmation", "proposal": current},
+            final_task={"status": "awaiting_confirmation", "proposal": stale},
+            last=_ra_h3_last(write="booking_proposal", completed=True),
+        )

@@ -5,12 +5,29 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from app.agents.structured_output import StructuredOutputError
-from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
+from app.agents.v2.availability_reference_interpreter import (
+    ReferenceDecision,
+    ReferenceInterpretation,
+)
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
 from app.services.agent_v2 import orchestrator as runtime
 from app.services.agent_v2.outcome import TurnOutcome
-from app.services.agent_v2.planner import PlanStep, ReadRequest, TurnPlan, WriteIntent
+from app.services.agent_v2.planner import (
+    PlanStep,
+    ReadRequest,
+    TurnPlan,
+    VerificationFacts,
+    WriteIntent,
+)
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import (
     BookingTaskState,
@@ -939,3 +956,691 @@ def test_availability_update_does_not_carry_unrelated_pending_choice() -> None:
     assert runtime._is_pure_informational_side_question(TiaTurnUnderstanding(operations=[TurnOperation(type="clinic_info", entities=TurnEntities(), execution_intent="informational")])) is True
     assert runtime._is_pure_informational_side_question(_understanding("availability")) is False
     assert runtime._is_pure_informational_side_question(_understanding("book")) is False
+
+
+
+def test_h3b_grouped_time_reference_uses_visit_level_orchestrator_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-b", branch_id="branch-1"),
+        requested_service_ids=["service-a", "service-b"],
+        option_snapshot=OptionSnapshot(
+            snapshot_id="old-bikini-only",
+            purpose="booking_slot",
+            task_version=2,
+            created_at=_NOW,
+            expires_at=_NOW + timedelta(minutes=15),
+            options=[
+                OptionChoice(
+                    ref="slot-old",
+                    label="20:00",
+                    payload={
+                        "service_id": "service-a",
+                        "branch_id": "branch-1",
+                        "doctor_id": "doctor-1",
+                        "device_key": "device-1",
+                        "laser_device_key": "device-1",
+                        "start_local": "2026-09-12T20:00:00+03:00",
+                        "start_time_24h": "20:00",
+                    },
+                )
+            ],
+        ),
+        version=2,
+    )
+    persisted = PersistedActiveTask(active_task=task, flow_id=uuid4(), flow_version=4)
+    catalog = {
+        "services": [
+            {
+                "id": "service-a",
+                "name": "Service A",
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "duration_minutes": 15,
+                "laser_devices": [
+                    {
+                        "device_key": "device-1",
+                        "device_name": "Device 1",
+                        "price_minor": 50_000,
+                        "duration_minutes": 15,
+                        "configured": True,
+                    }
+                ],
+            },
+            {
+                "id": "service-b",
+                "name": "Service B",
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "duration_minutes": 20,
+                "laser_devices": [
+                    {
+                        "device_key": "device-1",
+                        "device_name": "Device 1",
+                        "price_minor": 70_000,
+                        "duration_minutes": 20,
+                        "configured": True,
+                    }
+                ],
+            },
+        ],
+        "doctors": [
+            {
+                "id": "doctor-1",
+                "name": "Doctor 1",
+                "service_ids": ["service-a", "service-b"],
+                "branch_ids": ["branch-1"],
+            }
+        ],
+        "branches": [{"id": "branch-1", "name": "Clinic"}],
+        "appointments": [],
+    }
+    reference_context = {
+        "operation_type": "availability",
+        "requested_service_ids": ["service-a", "service-b"],
+        "multi_service_single_appointment": True,
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "service_id": "service-a",
+                "start_time_24h": "20:00",
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "slot": {
+                    "service_id": "service-a",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "laser_device_key": "device-1",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                },
+            },
+            {
+                "option_ref": "opt_2",
+                "index": 2,
+                "concrete": True,
+                "service_id": "service-b",
+                "start_time_24h": "20:00",
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "slot": {
+                    "service_id": "service-b",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "laser_device_key": "device-1",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                    "start_time_24h": "20:00",
+                },
+            },
+        ],
+    }
+    monkeypatch.setattr(runtime, "load_active_task", lambda *args, **kwargs: persisted)
+    monkeypatch.setattr(
+        runtime,
+        "interpret_availability_reference_turn",
+        lambda **kwargs: ReferenceInterpretation(
+            decision=ReferenceDecision(
+                action="select_presented_option",
+                option_ref="opt_1",
+                exact_time=None,
+                selection_scope="none",
+            ),
+            model_name="deterministic-test",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "interpret_customer_turn_v2",
+        lambda **kwargs: pytest.fail("grouped reference selection must not call the full interpreter"),
+    )
+    captured: list[TurnPlan] = []
+
+    def capture_preflight(plan: TurnPlan, **_kwargs: object) -> TurnPlan:
+        captured.append(plan)
+        return plan
+
+    monkeypatch.setattr(runtime, "preflight_compound_visit_plan", capture_preflight)
+    fresh_slot = {
+        "service_id": "service-b",
+        "branch_id": "branch-1",
+        "doctor_id": "doctor-1",
+        "laser_device_key": "device-1",
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "end_at": "2026-09-12T20:20:00+03:00",
+        "start_local": "2026-09-12T20:00:00+03:00",
+        "start_time_24h": "20:00",
+        "doctor_name": "Doctor 1",
+        "laser_device_name": "Device 1",
+    }
+    monkeypatch.setattr(
+        runtime,
+        "execute_step_reads",
+        lambda *args, **kwargs: ReadExecutionBundle(
+            results=[ReadResult(kind="availability", ok=True, payload={"slots": [fresh_slot]})],
+            verification=VerificationFacts(
+                exact_slot_match_count=1,
+                verified_parameters={
+                    "service_id": "service-b",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "device_key": "device-1",
+                    "start_at": "2026-09-12T20:00:00+03:00",
+                },
+            ),
+        ),
+    )
+    monkeypatch.setattr(runtime, "resolve_additional_services", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: ("visit-level selection", "deterministic-test"),
+    )
+    saved: list[BookingTaskState] = []
+
+    def save_task(*args: object, **kwargs: object) -> PersistedActiveTask:
+        active = kwargs["active_task"]
+        assert isinstance(active, BookingTaskState)
+        saved.append(active)
+        return PersistedActiveTask(active_task=active, flow_id=persisted.flow_id, flow_version=5)
+
+    monkeypatch.setattr(runtime, "save_active_task", save_task)
+
+    args = _runtime_args()
+    args.update(
+        {
+            "catalog": catalog,
+            "history": [HumanMessage(content="?????? 8 ???? ??????")],
+            "availability_reference_context": reference_context,
+        }
+    )
+    result = runtime.orchestrate_v2_turn(**args)
+
+    assert captured
+    preflight_plan = captured[0]
+    assert len(preflight_plan.steps) == 1
+    step = preflight_plan.steps[0]
+    assert step.facts["requested_service_ids"] == ["service-a", "service-b"]
+    assert step.facts["doctor_id"] == "doctor-1"
+    assert step.facts["device_key"] == "device-1"
+    assert step.write_intent is not None
+    assert step.write_intent.kind == "booking"
+    assert step.write_intent.authorized is True
+    assert step.write_intent.requires_verification is True
+    assert step.facts["booking_proposal_required"] is True
+    assert step.facts["verified_booking_slot_selection"] is True
+    assert step.clarification_field != "service"
+    assert step.response_goal != "answer_price"
+    assert any(read.kind == "availability" for read in step.reads)
+    assert result.pending_write is None
+    assert result.reference_action == "select_presented_option"
+    assert result.selected_option_ref == "opt_1"
+    assert result.full_interpreter_called is False
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.requested_service_ids == ["service-a", "service-b"]
+    assert result.active_task.status == "awaiting_confirmation"
+    assert result.active_task.derived.selected_slot_ref == "opt_1"
+    assert result.active_task.proposal is not None
+    assert result.active_task.proposal.service_ids == ["service-a", "service-b"]
+    assert result.active_task.proposal.doctor_id == "doctor-1"
+    assert result.active_task.proposal.device_key == "device-1"
+    assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
+    assert result.active_task.constraints.doctor_id == "doctor-1"
+    assert result.active_task.constraints.device_key == "device-1"
+    assert result.active_task.constraints.date is not None
+    assert result.active_task.constraints.date.start_date == "2026-09-12"
+    assert result.active_task.constraints.time is not None
+    assert result.active_task.constraints.time.start_time == "20:00"
+    assert result.active_task.write_authorization.authorized is False
+    assert result.outcomes[0].response_goal == "booking_proposal"
+    assert saved and saved[-1].requested_service_ids == ["service-a", "service-b"]
+
+
+
+
+
+def _run_ra_g6_unpresented_exact_time_case(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exact_time_requested: bool = True,
+    continuation_available: bool = True,
+    device_auto_resolved: bool = False,
+    stale_reference_selection: bool = False,
+):
+    task = BookingTaskState(
+        status="awaiting_slot",
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-initial",
+            granted_at=_NOW,
+        ),
+        constraints=CustomerConstraints(
+            service_id="service-a",
+            doctor_id="doctor-1",
+            branch_id="branch-1",
+            device_key="device-1",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="after", start_time="10:00"),
+        ),
+        requested_service_ids=["service-a", "service-b"],
+        service_device_keys={"service-a": "device-1", "service-b": "device-1"},
+        option_snapshot=OptionSnapshot(
+            snapshot_id="slot-10",
+            purpose="booking_slot",
+            task_version=2,
+            created_at=_NOW,
+            expires_at=_NOW + timedelta(minutes=15),
+            options=[
+                OptionChoice(
+                    ref="opt_10",
+                    label="10:00",
+                    payload={
+                        "service_id": "service-a",
+                        "branch_id": "branch-1",
+                        "doctor_id": "doctor-1",
+                        "device_key": "device-1",
+                        "laser_device_key": "device-1",
+                        "start_local": "2026-09-12T10:00:00+03:00",
+                        "start_time_24h": "10:00",
+                    },
+                )
+            ],
+        ),
+        version=2,
+    )
+    persisted = PersistedActiveTask(active_task=task, flow_id=uuid4(), flow_version=4)
+    catalog = {
+        "services": [
+            {
+                "id": "service-a",
+                "name": "Service A",
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "duration_minutes": 25,
+                "laser_devices": [{
+                    "device_key": "device-1",
+                    "device_name": "Device 1",
+                    "price_minor": 50_000,
+                    "duration_minutes": 25,
+                    "configured": True,
+                }],
+            },
+            {
+                "id": "service-b",
+                "name": "Service B",
+                "operational_category": "laser",
+                "requires_laser_device": True,
+                "duration_minutes": 20,
+                "laser_devices": [{
+                    "device_key": "device-1",
+                    "device_name": "Device 1",
+                    "price_minor": 70_000,
+                    "duration_minutes": 20,
+                    "configured": True,
+                }],
+            },
+        ],
+        "doctors": [{
+            "id": "doctor-1",
+            "name": "Doctor 1",
+            "service_ids": ["service-a", "service-b"],
+            "branch_ids": ["branch-1"],
+        }],
+        "branches": [{"id": "branch-1", "name": "Clinic"}],
+        "appointments": [],
+    }
+    reference_context = {
+        "operation_type": "availability",
+        "requested_service_ids": ["service-a", "service-b"],
+        "multi_service_single_appointment": True,
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [{
+            "option_ref": "opt_10",
+            "index": 1,
+            "concrete": True,
+            "service_id": "service-a",
+            "start_time_24h": "10:00",
+            "start_local": "2026-09-12T10:00:00+03:00",
+            "slot": {
+                "service_id": "service-a",
+                "branch_id": "branch-1",
+                "doctor_id": "doctor-1",
+                "laser_device_key": "device-1",
+                "start_local": "2026-09-12T10:00:00+03:00",
+                "start_time_24h": "10:00",
+            },
+        }],
+    }
+    monkeypatch.setattr(runtime, "load_active_task", lambda *args, **kwargs: persisted)
+    monkeypatch.setattr(
+        runtime,
+        "interpret_availability_reference_turn",
+        lambda **kwargs: ReferenceInterpretation(
+            decision=ReferenceDecision(
+                action=("select_presented_option" if stale_reference_selection else "new_search"),
+                option_ref="stale-option" if stale_reference_selection else None,
+                exact_time=None,
+                selection_scope="none",
+            ),
+            model_name="deterministic-test",
+        ),
+    )
+    interpreted = TiaTurnUnderstanding(
+        operations=[TurnOperation(
+            type="continue_active",
+            entities=TurnEntities(time=TimeConstraint(
+                mode="exact" if exact_time_requested else "after",
+                start_time="20:00",
+                start_time_ambiguity="none",
+            )),
+            execution_intent="execute",
+            active_task_relationship="continue",
+            continues_previous=True,
+            grouped_booking_action="preserve_group",
+        )]
+    )
+    monkeypatch.setattr(runtime, "interpret_customer_turn_v2", lambda **kwargs: interpreted)
+    commercial_facts = {
+        "service_id": "service-a",
+        "requested_service_ids": ["service-a", "service-b"],
+        "doctor_id": "doctor-1",
+        "branch_id": "branch-1",
+        "device_key": "device-1",
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "time": {
+            "mode": "exact" if exact_time_requested else "after",
+            "start_time": "20:00",
+            "end_time": None,
+        },
+        "multi_service_single_appointment": True,
+        "booking_commercial_basis_step": True,
+        "commercial_basis_key": "service-a|device-1|standalone",
+        "booking_next_field": "booking",
+        "exact_time_requested": exact_time_requested,
+    }
+    if device_auto_resolved:
+        commercial_facts["device_auto_resolved"] = True
+    commercial_step = PlanStep(
+        operation_index=0,
+        operation_type="continue_active",
+        disposition="read",
+        reads=[
+            ReadRequest(kind="service_catalog", parameters={"service_id": "service-a", "device_key": "device-1"}),
+            ReadRequest(kind="availability", parameters={
+                "service_id": "service-a",
+                "branch_id": "branch-1",
+                "doctor_id": "doctor-1",
+                "device_key": "device-1",
+                "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+                "time": {"mode": "exact", "start_time": "20:00", "end_time": None},
+            }),
+        ],
+        state_action="update_active",
+        response_goal="answer_price",
+        facts=commercial_facts,
+    )
+    monkeypatch.setattr(runtime, "plan_turn", lambda *args, **kwargs: TurnPlan(steps=[commercial_step]))
+    if device_auto_resolved:
+        real_progress = runtime.plan_active_task_progress
+        progress_calls = 0
+
+        def progress_with_auto_resolve(*args: object, **kwargs: object) -> PlanStep:
+            nonlocal progress_calls
+            progress_calls += 1
+            if progress_calls == 1:
+                return commercial_step
+            return real_progress(*args, **kwargs)
+
+        monkeypatch.setattr(runtime, "plan_active_task_progress", progress_with_auto_resolve)
+    monkeypatch.setattr(runtime, "expand_multi_service_operations", lambda turn, **kwargs: (turn, {}))
+    monkeypatch.setattr(runtime, "restore_grouped_booking_understanding", lambda turn, **kwargs: (turn, {}))
+    monkeypatch.setattr(runtime, "preflight_compound_visit_plan", lambda plan, **kwargs: plan)
+    monkeypatch.setattr(runtime, "adapt_matching_active_task_step", lambda step, **kwargs: step)
+    monkeypatch.setattr(runtime, "persist_initial_task_intent", lambda step, **kwargs: step)
+    monkeypatch.setattr(runtime, "resolve_additional_services", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runtime, "compose_v2_customer_reply", lambda **kwargs: ("proposal reply", "deterministic-test"))
+
+    slot = {
+        "service_id": "service-a",
+        "branch_id": "branch-1",
+        "doctor_id": "doctor-1",
+        "laser_device_key": "device-1",
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "end_at": "2026-09-12T20:20:00+03:00",
+        "start_local": "2026-09-12T20:00:00+03:00",
+        "start_time_24h": "20:00",
+        "doctor_name": "Doctor 1",
+        "laser_device_name": "Device 1",
+    }
+    read_calls: list[list[str]] = []
+
+    def execute_reads(step: PlanStep, *_args: object, **_kwargs: object) -> ReadExecutionBundle:
+        kinds = [request.kind for request in step.reads]
+        read_calls.append(kinds)
+        if any(kind in {"service_catalog", "service_catalog_set"} for kind in kinds):
+            catalog_kind = (
+                "service_catalog_set" if "service_catalog_set" in kinds else "service_catalog"
+            )
+            catalog_payload = (
+                {
+                    "variants": [
+                        {"device_name": "Device 1", "total_price_minor": 100_000, "currency": "EGP"}
+                    ]
+                }
+                if catalog_kind == "service_catalog_set"
+                else {"services": []}
+            )
+            available_slots = [slot] if len(read_calls) == 1 or continuation_available else []
+            return ReadExecutionBundle(
+                results=[
+                    ReadResult(kind=catalog_kind, ok=True, payload=catalog_payload),
+                    ReadResult(kind="availability", ok=True, payload={"slots": available_slots}),
+                ],
+                verification=VerificationFacts(
+                    exact_slot_match_count=len(available_slots),
+                    verified_parameters=(
+                        {
+                            "service_id": "service-a",
+                            "branch_id": "branch-1",
+                            "doctor_id": "doctor-1",
+                            "device_key": "device-1",
+                            "start_at": "2026-09-12T20:00:00+03:00",
+                        }
+                        if available_slots
+                        else {}
+                    ),
+                ),
+            )
+        continuation_slots = [slot] if continuation_available else []
+        return ReadExecutionBundle(
+            results=[ReadResult(kind="availability", ok=True, payload={"slots": continuation_slots})],
+            verification=VerificationFacts(
+                exact_slot_match_count=len(continuation_slots),
+                verified_parameters=(
+                    {
+                        "service_id": "service-a",
+                        "branch_id": "branch-1",
+                        "doctor_id": "doctor-1",
+                        "device_key": "device-1",
+                        "start_at": "2026-09-12T20:00:00+03:00",
+                    }
+                    if continuation_slots else {}
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(runtime, "execute_step_reads", execute_reads)
+    saved: list[BookingTaskState] = []
+
+    def save_task(*args: object, **kwargs: object) -> PersistedActiveTask:
+        active = kwargs["active_task"]
+        assert isinstance(active, BookingTaskState)
+        saved.append(active)
+        return PersistedActiveTask(
+            active_task=active,
+            flow_id=persisted.flow_id,
+            flow_version=persisted.flow_version + 1,
+        )
+
+    monkeypatch.setattr(runtime, "save_active_task", save_task)
+    args = _runtime_args()
+    args.update({
+        "catalog": catalog,
+        "history": [HumanMessage(content="الساعة 8 مساء مناسبة")],
+        "availability_reference_context": None if stale_reference_selection else reference_context,
+    })
+    result = runtime.orchestrate_v2_turn(**args)
+    return result, read_calls, saved
+
+
+def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, saved = _run_ra_g6_unpresented_exact_time_case(monkeypatch)
+    assert result.reference_action == "new_search"
+    assert result.selected_option_ref is None
+    assert result.full_interpreter_called is True
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.requested_service_ids == ["service-a", "service-b"]
+    assert result.active_task.status == "awaiting_confirmation"
+    assert result.active_task.proposal is not None
+    assert result.active_task.proposal.service_ids == ["service-a", "service-b"]
+    assert result.active_task.proposal.doctor_id == "doctor-1"
+    assert result.active_task.proposal.device_key == "device-1"
+    assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
+    assert result.outcomes[-1].response_goal == "booking_proposal"
+    assert saved and saved[-1].proposal is not None
+
+
+def test_ra_g6_unpresented_exact_time_fails_closed_when_fresh_continuation_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        continuation_available=False,
+    )
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.proposal is None
+    assert result.outcomes[-1].response_goal == "requested_time_unavailable"
+
+
+def test_stale_active_option_reference_falls_back_to_full_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, _read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        stale_reference_selection=True,
+    )
+
+    assert result.full_interpreter_called is True
+    assert result.plan.steps[0].disposition == "read"
+    assert result.active_task is not None
+    assert result.active_task.proposal is not None
+
+
+def test_ra_g6_non_exact_commercial_step_does_not_auto_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        exact_time_requested=False,
+    )
+    assert read_calls == [["service_catalog_set", "availability"]]
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.proposal is None
+
+
+def test_device_auto_resolved_same_turn_continuation_still_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        exact_time_requested=False,
+        device_auto_resolved=True,
+    )
+    assert read_calls == [
+        ["service_catalog", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+
+
+def test_h3b_grouped_reference_rejects_resource_not_common_to_service_set() -> None:
+    task = BookingTaskState(
+        status="awaiting_choice",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-b", branch_id="branch-1"),
+        requested_service_ids=["service-a", "service-b"],
+    )
+    catalog = {
+        "services": [
+            {
+                "id": "service-a",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {"device_key": "device-1", "price_minor": 1, "duration_minutes": 15}
+                ],
+            },
+            {
+                "id": "service-b",
+                "requires_laser_device": True,
+                "laser_devices": [
+                    {"device_key": "device-2", "price_minor": 1, "duration_minutes": 20}
+                ],
+            },
+        ],
+        "doctors": [
+            {
+                "id": "doctor-1",
+                "service_ids": ["service-a", "service-b"],
+                "branch_ids": ["branch-1"],
+            }
+        ],
+    }
+    reference_context = {
+        "requested_service_ids": ["service-a", "service-b"],
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "start_time_24h": "20:00",
+                "slot": {
+                    "service_id": "service-b",
+                    "branch_id": "branch-1",
+                    "doctor_id": "doctor-1",
+                    "laser_device_key": "device-1",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                    "start_time_24h": "20:00",
+                },
+            }
+        ],
+    }
+
+    result = runtime._grouped_visit_reference_understanding(
+        task,
+        decision=ReferenceDecision(action="clarify", option_ref=None, exact_time="20:00"),
+        availability_context=reference_context,
+        catalog=catalog,
+    )
+
+    assert result is None
+    assert task.constraints.device_key is None
+    assert task.write_authorization.authorized is False

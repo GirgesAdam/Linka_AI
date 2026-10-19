@@ -197,6 +197,79 @@ def test_grouped_price_projects_only_visit_compatible_devices() -> None:
     ]
 
 
+def test_booking_proposal_carries_verified_service_device_commercial_truth() -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {"services": ["ليزر إبط", "ليزر بكيني"]},
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر بكيني",
+                    "requires_laser_device": True,
+                    "selected_laser_device": {
+                        "device_name": "Candela Gentle",
+                        "price": "700.00 EGP",
+                    },
+                }
+            },
+        },
+    )
+
+    unit = build_customer_response_contract([outcome]).units[0]
+    truth = unit.commercial_truth
+
+    assert truth is not None
+    assert truth.kind == "service_device_price"
+    assert len(truth.options) == 1
+    assert truth.options[0].service_name == "ليزر بكيني"
+    assert truth.options[0].device_name == "Candela Gentle"
+    assert truth.options[0].amount == "700.00"
+    assert truth.options[0].currency == "EGP"
+
+
+def test_booking_proposal_without_current_commercial_read_has_no_commercial_truth() -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={"booking_proposal_summary": {"services": ["ليزر إبط", "ليزر بكيني"]}},
+    )
+
+    unit = build_customer_response_contract([outcome]).units[0]
+
+    assert unit.commercial_truth is None
+
+
+def test_booking_proposal_keeps_multiple_device_prices_ambiguous() -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {"services": ["ليزر إبط", "ليزر بكيني"]},
+            "service_catalog": {
+                "service": {
+                    "name": "ليزر بكيني",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {"device_name": "Candela Gentle", "price": "700.00 EGP"},
+                        {"device_name": "Prime Lase", "price": "650.00 EGP"},
+                    ],
+                }
+            },
+        },
+    )
+
+    truth = build_customer_response_contract([outcome]).units[0].commercial_truth
+
+    assert truth is not None
+    assert truth.kind == "service_device_price_options"
+    assert truth.complete_set is True
+    assert [(item.device_name, item.amount) for item in truth.options] == [
+        ("Candela Gentle", "700.00"),
+        ("Prime Lase", "650.00"),
+    ]
+
+
 def test_doctor_list_is_a_complete_required_set() -> None:
     doctors = [{"name": "Dr. Mary"}, {"name": "Dr. Sara"}]
     outcome = TurnOutcome(

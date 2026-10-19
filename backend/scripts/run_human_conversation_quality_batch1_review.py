@@ -78,6 +78,13 @@ def _turn_evidence(result) -> dict[str, object]:
             }
             for trace in result.traces
         ],
+        "reference_semantic_path_used": result.reference_semantic_path_used,
+        "reference_action": result.reference_action,
+        "selected_option_ref": result.selected_option_ref,
+        "reference_exact_time": result.reference_exact_time,
+        "reference_selection_scope": result.reference_selection_scope,
+        "full_interpreter_called": result.full_interpreter_called,
+        "reference_structured_output_error": result.reference_structured_output_error,
         "active_task": _task_evidence(result.active_task),
     }
 
@@ -91,6 +98,8 @@ def _run(
 ) -> tuple[list[dict[str, object]], object]:
     history: list[BaseMessage] = []
     active_task: ActiveTaskState | None = None
+    recent_read_context: dict[str, object] | None = None
+    availability_reference_context: dict[str, object] | None = None
     transcript: list[dict[str, object]] = []
     last = None
     for index, message in enumerate(messages, start=1):
@@ -99,6 +108,8 @@ def _run(
             history=history,
             local_now=now,
             active_task=active_task,
+            recent_read_context=recent_read_context,
+            availability_reference_context=availability_reference_context,
             env=env,
             simulate_writes=True,
             turn_id=f"{name}-{index}",
@@ -113,6 +124,8 @@ def _run(
         )
         history.append(AIMessage(content=result.reply))
         active_task = result.active_task
+        recent_read_context = result.recent_read_context
+        availability_reference_context = result.availability_reference_context
         last = result
     print(
         "RA_RESULT="
@@ -129,11 +142,36 @@ def _run(
 
 
 def _priced_env() -> V2FixtureEnvironment:
-    return V2FixtureEnvironment()
+    base = V2FixtureEnvironment()
+    catalog = deepcopy(base.catalog)
+    catalog["primary_branch_id"] = "single-location"
+    catalog["branches"] = [
+        {
+            "id": "single-location",
+            "name": "Main Branch",
+            "timezone": TZ,
+            "working_hours": [
+                {"weekday": weekday, "start": "10:00", "end": "22:00"}
+                for weekday in range(7)
+            ],
+        }
+    ]
+    for doctor in catalog.get("doctors", []):
+        if isinstance(doctor, dict):
+            doctor["branch_ids"] = ["single-location"]
+    return V2FixtureEnvironment(
+        catalog=catalog,
+        clinic_info=deepcopy(base.clinic_info),
+        profile=deepcopy(base.profile),
+        history=deepcopy(base.history),
+        slots=deepcopy(base.slots),
+        package_offers=deepcopy(base.package_offers),
+        refund_quotes=deepcopy(base.refund_quotes),
+    )
 
 
 def _marker_env() -> V2FixtureEnvironment:
-    base = V2FixtureEnvironment()
+    base = _priced_env()
     slots = deepcopy(base.slots)
     for slot in slots:
         if (
@@ -171,7 +209,9 @@ def ra_h1_marker_leak() -> None:
         env=_marker_env(),
     )
     _assert_no_marker(transcript)
-    assert "Candela" in str(transcript[-1]["agent"])
+    task = transcript[-1]["canonical"]["active_task"]
+    assert task is not None
+    assert task["constraints"]["device_key"] == "candela_gentle"
 
 
 def ra_h2_multiservice_total() -> None:
@@ -192,8 +232,47 @@ def ra_h2_multiservice_total() -> None:
     assert last.active_task is not None
 
 
+def _assert_ra_h3_final_transition(
+    *,
+    pre_final_task: dict[str, object],
+    final_task: dict[str, object],
+    last,
+) -> bool:
+    """Validate confirmation authority against the actual pre-final task state."""
+    writes = [trace.simulated_write for trace in last.traces if trace.simulated_write is not None]
+    expected_proposal = pre_final_task.get("proposal")
+    can_confirm = (
+        pre_final_task.get("status") == "awaiting_confirmation"
+        and isinstance(expected_proposal, dict)
+    )
+
+    if can_confirm:
+        assert writes == ["booking_proposal"]
+        completed = [
+            outcome
+            for outcome in last.outcomes
+            if outcome.status == "completed" and outcome.response_goal == "booking_completed"
+        ]
+        assert len(completed) == 1
+        assert completed[0].facts.get("booking_proposal_confirmation") is True
+        final_proposal = final_task.get("proposal")
+        assert isinstance(final_proposal, dict)
+        for field in ("proposal_id", "service_ids", "start_at", "doctor_id", "device_key"):
+            assert final_proposal.get(field) == expected_proposal.get(field)
+        return True
+
+    assert writes == []
+    assert not any(
+        outcome.status == "completed" and outcome.response_goal == "booking_completed"
+        for outcome in last.outcomes
+    )
+    assert final_task.get("status") == "awaiting_confirmation"
+    assert isinstance(final_task.get("proposal"), dict)
+    return False
+
+
 def ra_h3_long_continuation() -> None:
-    transcript, _ = _run(
+    transcript, last = _run(
         "RA-H3",
         [
             "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0625\u0628\u0637 \u0648\u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0645\u0639 \u0628\u0639\u0636 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0632\u064a\u0627\u0631\u0629\u060c \u0627\u062e\u062a\u0627\u0631 \u062f\u0643\u062a\u0648\u0631 \u0648\u0627\u062d\u062f \u064a\u0639\u0645\u0644 \u0627\u0644\u0627\u062a\u0646\u064a\u0646 \u0648\u0648\u0631\u064a\u0646\u064a \u0623\u0642\u0631\u0628 \u0645\u064a\u0639\u0627\u062f \u0645\u0646\u0627\u0633\u0628 \u0642\u0628\u0644 \u0645\u0627 \u062a\u062d\u062c\u0632",
@@ -209,9 +288,30 @@ def ra_h3_long_continuation() -> None:
     assert "1200" in _ascii_decimal_digits(price_turn["agent"])
     task = price_turn["canonical"]["active_task"]
     assert task is not None and set(task["requested_service_ids"]) == {"svc-underarm", "svc-bikini"}
-    selection_reply = str(transcript[5]["agent"])
-    assert "Candela" in selection_reply
-    assert "Prime Lase" not in selection_reply
+    final_task = transcript[5]["canonical"]["active_task"]
+    assert final_task is not None
+    assert set(final_task["requested_service_ids"]) == {"svc-underarm", "svc-bikini"}
+    assert all(step.clarification_field != "service" for step in last.plan.steps)
+    confirmed = _assert_ra_h3_final_transition(
+        pre_final_task=task,
+        final_task=final_task,
+        last=last,
+    )
+    assert last.active_task is not None
+    assert set(last.active_task.requested_service_ids) == {"svc-underarm", "svc-bikini"}
+    if confirmed:
+        final_reply = str(transcript[5]["agent"] or "")
+        assert "Candela Gentle" in final_reply
+        assert "\u0645\u0631\u064a\u0645" in final_reply
+        assert "\u0625\u0628\u0637" in final_reply and "\u0628\u0643\u064a\u0646\u064a" in final_reply
+        final_digits = _ascii_decimal_digits(final_reply)
+        assert "12" in final_digits
+        assert "20" in final_digits or "8" in final_digits
+    assert last.availability_reference_context is not None
+    assert set(last.availability_reference_context.get("requested_service_ids", [])) == {
+        "svc-underarm",
+        "svc-bikini",
+    }
     _assert_no_marker(transcript)
 
 

@@ -16,7 +16,7 @@ from app.models.patient import Patient
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.agent_v2.package_booking_policy import resolve_booking_package
-from app.services.agent_v2.state import BookingProposal
+from app.services.agent_v2.state import BookingProposal, BookingProposalVisit
 from app.services.appointment_commerce import add_additional_service
 from app.services.appointment_creation import create_appointment_operation
 from app.services.appointment_operations import AppointmentOperationError
@@ -59,14 +59,37 @@ def service_duration_minutes(catalog: dict[str, Any], service_id: str) -> int:
     raise MultiServiceBookingError("Requested service is not in the active catalog.")
 
 
-def select_main_service_id(catalog: dict[str, Any], service_ids: list[str]) -> str:
+def select_main_service_id(
+    catalog: dict[str, Any],
+    service_ids: list[str],
+    *,
+    device_key: str | None = None,
+) -> str:
+    # DOMAIN CONTRACT: this chooses a persistence/execution representative only.
+    # It must never turn one requested service into a semantically primary service;
+    # the LLM and planning layers treat all requested services as equal peers.
     ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
     if not ordered:
         raise MultiServiceBookingError("At least one canonical service is required.")
+    selected_device = (device_key or "").strip() or None
+    if selected_device is None:
+        categories = {service_operational_category(catalog, item) for item in ordered}
+        if categories == {"laser"}:
+            common_devices = common_laser_device_keys(catalog, ordered)
+            if len(common_devices) == 1:
+                selected_device = common_devices[0]
+
+    def duration(service_id: str) -> int:
+        if selected_device is not None:
+            return effective_service_duration_minutes(
+                catalog, service_id, device_key=selected_device
+            )
+        return service_duration_minutes(catalog, service_id)
+
     # Stable max: customer-request canonical order wins duration ties.
     return max(
         enumerate(ordered),
-        key=lambda item: (service_duration_minutes(catalog, item[1]), -item[0]),
+        key=lambda item: (duration(item[1]), -item[0]),
     )[1]
 
 
@@ -81,6 +104,45 @@ def _catalog_service_row(catalog: dict[str, Any], service_id: str) -> dict[str, 
         if str(canonical_id or "") == str(service_id):
             return row
     raise MultiServiceBookingError("Requested service is not in the active catalog.")
+
+
+def service_operational_category(catalog: dict[str, Any], service_id: str) -> str | None:
+    """Return the canonical server-owned operational category for one service.
+
+    Missing/blank categories remain unknown; callers must fail closed rather than infer
+    grouping from names, free-form category labels, or laser requirements.
+    """
+    row = _catalog_service_row(catalog, service_id)
+    value = row.get("operational_category")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().casefold()
+    return normalized or None
+
+
+def partition_service_ids_by_operational_category(
+    catalog: dict[str, Any], service_ids: list[str]
+) -> list[tuple[str | None, list[str]]]:
+    """Partition requested peer services by canonical operational category.
+
+    Unknown-category services are deliberately isolated into singleton groups so they
+    can never collapse into one Appointment without canonical category authority.
+    """
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    grouped: list[tuple[str | None, list[str]]] = []
+    indexes: dict[str, int] = {}
+    for service_id in ordered:
+        category = service_operational_category(catalog, service_id)
+        if category is None:
+            grouped.append((None, [service_id]))
+            continue
+        index = indexes.get(category)
+        if index is None:
+            indexes[category] = len(grouped)
+            grouped.append((category, [service_id]))
+        else:
+            grouped[index][1].append(service_id)
+    return grouped
 
 
 def laser_service_ids(catalog: dict[str, Any], service_ids: list[str]) -> list[str]:
@@ -125,6 +187,96 @@ def common_laser_device_keys(catalog: dict[str, Any], service_ids: list[str]) ->
         allowed = set(configured_laser_device_keys(catalog, service_id))
         common = [device_key for device_key in common if device_key in allowed]
     return common
+
+
+def effective_service_duration_minutes(
+    catalog: dict[str, Any],
+    service_id: str,
+    *,
+    device_key: str | None = None,
+) -> int:
+    """Return the booking duration for one service from canonical backend facts."""
+    category = service_operational_category(catalog, service_id)
+    if category != "laser":
+        return service_duration_minutes(catalog, service_id)
+    selected_device = (device_key or "").strip() or None
+    if selected_device is None:
+        raise MultiServiceBookingError(
+            "A selected configured laser device is required to determine service duration.",
+            dimension="device",
+        )
+    row = _catalog_service_row(catalog, service_id)
+    variants = row.get("laser_devices")
+    if not isinstance(variants, list):
+        raise MultiServiceBookingError(
+            "Laser device duration is unavailable.", dimension="device"
+        )
+    for variant in variants:
+        if not isinstance(variant, dict) or variant.get("configured") is False:
+            continue
+        if str(variant.get("device_key") or "").strip() != selected_device:
+            continue
+        try:
+            duration = int(variant.get("duration_minutes"))
+        except (TypeError, ValueError) as exc:
+            raise MultiServiceBookingError(
+                "Laser device duration is unavailable.", dimension="device"
+            ) from exc
+        if duration <= 0:
+            raise MultiServiceBookingError(
+                "Laser device duration is invalid.", dimension="device"
+            )
+        return duration
+    raise MultiServiceBookingError(
+        "The selected laser device is not configured for every requested service.",
+        dimension="device",
+    )
+
+
+def category_group_duration_minutes(
+    catalog: dict[str, Any],
+    service_ids: list[str],
+    *,
+    device_key: str | None = None,
+) -> int:
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    if not ordered:
+        raise MultiServiceBookingError("At least one canonical service is required.")
+    categories = {service_operational_category(catalog, item) for item in ordered}
+    if len(categories) != 1 or None in categories:
+        raise MultiServiceBookingError(
+            "Only services with the same known operational category can share one appointment."
+        )
+    return max(
+        effective_service_duration_minutes(catalog, item, device_key=device_key)
+        for item in ordered
+    )
+
+
+def common_doctor_ids(
+    catalog: dict[str, Any],
+    service_ids: list[str],
+    *,
+    branch_id: str | None = None,
+) -> list[str]:
+    ordered = list(dict.fromkeys(str(item) for item in service_ids if str(item)))
+    doctors = catalog.get("doctors")
+    if not ordered or not isinstance(doctors, list):
+        return []
+    required = set(ordered)
+    result: list[str] = []
+    for row in doctors:
+        if not isinstance(row, dict) or row.get("id") in (None, ""):
+            continue
+        available = row.get("service_ids")
+        if not isinstance(available, list) or not required.issubset({str(item) for item in available}):
+            continue
+        if branch_id is not None:
+            branches = row.get("branch_ids")
+            if not isinstance(branches, list) or str(branch_id) not in {str(item) for item in branches}:
+                continue
+        result.append(str(row["id"]))
+    return sorted(dict.fromkeys(result))
 
 
 def validate_additional_service_compatibility(
@@ -202,7 +354,7 @@ def resolve_additional_services(
     db: Session,
     *,
     workspace: Workspace,
-    proposal: BookingProposal,
+    proposal: BookingProposal | BookingProposalVisit,
 ) -> list[AdditionalServiceResolution]:
     branch_id = UUID(proposal.branch_id)
     doctor_id = UUID(proposal.doctor_id)
@@ -226,7 +378,7 @@ def _main_appointment_device_key(
     db: Session,
     *,
     workspace: Workspace,
-    proposal: BookingProposal,
+    proposal: BookingProposal | BookingProposalVisit,
 ) -> str | None:
     service = db.scalar(
         select(Service).where(
@@ -301,51 +453,75 @@ def booking_proposal_alternatives(
     return alternatives
 
 
-def execute_booking_proposal(
+def _validate_proposal_visit_category(
+    db: Session,
+    *,
+    workspace: Workspace,
+    visit: BookingProposal | BookingProposalVisit,
+) -> None:
+    service_ids = [UUID(value) for value in visit.service_ids]
+    rows = list(
+        db.scalars(
+            select(Service).where(
+                Service.workspace_id == workspace.id,
+                Service.id.in_(service_ids),
+                Service.is_active.is_(True),
+            )
+        )
+    )
+    if len(rows) != len(service_ids):
+        raise MultiServiceBookingError("One or more proposed services are unavailable.")
+    categories = {
+        str(row.operational_category).strip().casefold()
+        if row.operational_category not in (None, "")
+        else None
+        for row in rows
+    }
+    if len(service_ids) > 1 and (None in categories or len(categories) != 1):
+        raise MultiServiceBookingError(
+            "Cross-category services require separate appointments."
+        )
+
+
+def _execute_booking_proposal_visit(
     db: Session,
     *,
     workspace: Workspace,
     patient: Patient,
-    proposal: BookingProposal,
+    visit: BookingProposal | BookingProposalVisit,
+    visit_group_id: UUID | None,
     idempotency_key: str | None,
 ) -> dict[str, object]:
-    if str(patient.id) != proposal.patient_id:
-        raise MultiServiceBookingError("Booking proposal does not belong to this patient.")
-    if patient.status == "blocked":
-        raise MultiServiceBookingError("Blocked patients cannot receive new appointments.")
+    _validate_proposal_visit_category(db, workspace=workspace, visit=visit)
+    additionals = resolve_additional_services(db, workspace=workspace, proposal=visit)
 
-    # Resolve every additional service against the single visit-level device before
-    # creating the main appointment. This fail-closed boundary prevents partial or
-    # cross-device same-visit writes.
-    additionals = resolve_additional_services(db, workspace=workspace, proposal=proposal)
-
-    main_service_id = UUID(proposal.main_service_id)
+    main_service_id = UUID(visit.main_service_id)
     main_appointment_device_key = _main_appointment_device_key(
-        db, workspace=workspace, proposal=proposal
+        db, workspace=workspace, proposal=visit
     )
     package_resolution = resolve_booking_package(
         db,
         workspace=workspace,
         patient=patient,
         service_id=main_service_id,
-        start_at=proposal.start_at,
+        start_at=visit.start_at,
         device_key=main_appointment_device_key,
-        package_usage=proposal.package_usage,
-        requested_package_id=(UUID(proposal.package_id) if proposal.package_id else None),
+        package_usage=visit.package_usage,
+        requested_package_id=(UUID(visit.package_id) if visit.package_id else None),
     )
     try:
         appointment = create_appointment_operation(
             db,
             workspace=workspace,
             patient_id=patient.id,
-            branch_id=UUID(proposal.branch_id),
-            doctor_id=UUID(proposal.doctor_id),
+            branch_id=UUID(visit.branch_id),
+            doctor_id=UUID(visit.doctor_id),
             service_id=main_service_id,
-            requested_start_at=proposal.start_at,
+            requested_start_at=visit.start_at,
             created_by_user_id=None,
             patient_package_id=package_resolution.package_id,
             use_pulse_balance=False,
-            visit_group_id=None,
+            visit_group_id=visit_group_id,
             source="ai",
             laser_device_key=main_appointment_device_key,
             idempotency_key=(f"{idempotency_key}:main" if idempotency_key else None),
@@ -356,7 +532,7 @@ def execute_booking_proposal(
             raise MultiServiceBookingUnavailable(
                 "The proposed appointment time is no longer available.",
                 alternatives=booking_proposal_alternatives(
-                    db, workspace=workspace, proposal=proposal
+                    db, workspace=workspace, proposal=visit
                 ),
             ) from exc
         raise
@@ -378,14 +554,76 @@ def execute_booking_proposal(
         lines.append(line)
 
     return {
-        "ok": True,
-        "write_kind": "booking_proposal",
         "appointment_id": str(appointment.id),
         "status": appointment.status,
         "main_service_id": str(appointment.service_id),
         "additional_service_ids": [str(line.service_id) for line in lines],
         "additional_service_row_ids": [str(line.id) for line in lines],
         "reserved_duration_minutes": int(appointment.duration_minutes),
-        "proposal_id": proposal.proposal_id,
         "package_used": bool(package_resolution.package_used),
+    }
+
+
+def execute_booking_proposal(
+    db: Session,
+    *,
+    workspace: Workspace,
+    patient: Patient,
+    proposal: BookingProposal,
+    idempotency_key: str | None,
+) -> dict[str, object]:
+    if str(patient.id) != proposal.patient_id:
+        raise MultiServiceBookingError("Booking proposal does not belong to this patient.")
+    if patient.status == "blocked":
+        raise MultiServiceBookingError("Blocked patients cannot receive new appointments.")
+
+    if not proposal.visits:
+        result = _execute_booking_proposal_visit(
+            db,
+            workspace=workspace,
+            patient=patient,
+            visit=proposal,
+            visit_group_id=None,
+            idempotency_key=idempotency_key,
+        )
+        return {
+            "ok": True,
+            "write_kind": "booking_proposal",
+            **result,
+            "proposal_id": proposal.proposal_id,
+        }
+
+    try:
+        group_id = UUID(proposal.proposal_id)
+    except ValueError:
+        group_id = None
+    results: list[dict[str, object]] = []
+    with db.begin_nested():
+        for index, visit in enumerate(proposal.visits):
+            results.append(
+                _execute_booking_proposal_visit(
+                    db,
+                    workspace=workspace,
+                    patient=patient,
+                    visit=visit,
+                    visit_group_id=group_id,
+                    idempotency_key=(
+                        f"{idempotency_key}:visit:{index}" if idempotency_key else None
+                    ),
+                )
+            )
+    first = results[0]
+    return {
+        "ok": True,
+        "write_kind": "booking_proposal",
+        "appointment_id": first["appointment_id"],
+        "appointment_ids": [result["appointment_id"] for result in results],
+        "appointments": results,
+        "status": first["status"],
+        "main_service_id": first["main_service_id"],
+        "additional_service_ids": first["additional_service_ids"],
+        "additional_service_row_ids": first["additional_service_row_ids"],
+        "reserved_duration_minutes": first["reserved_duration_minutes"],
+        "proposal_id": proposal.proposal_id,
+        "package_used": any(bool(result["package_used"]) for result in results),
     }

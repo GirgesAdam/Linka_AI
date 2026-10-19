@@ -424,3 +424,235 @@ def test_pulse_billed_additional_service_excludes_line_price_and_keeps_overage()
     )
 
     assert breakdown == (100000, 0, 0, 0, 0, 90000, 190000)
+
+
+def _editable_appointment_for_service_edit(*, duration_minutes: int = 20):
+    from datetime import UTC, datetime, timedelta
+
+    appointment = _appointment(status="confirmed")
+    appointment.branch_id = uuid4()
+    appointment.doctor_id = uuid4()
+    appointment.start_at = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+    appointment.duration_minutes = duration_minutes
+    appointment.end_at = appointment.start_at + timedelta(minutes=duration_minutes)
+    appointment.busy_start_at = appointment.start_at
+    appointment.busy_end_at = appointment.end_at + timedelta(minutes=10)
+    appointment.currency = "EGP"
+    appointment.laser_device_key = None
+    return appointment
+
+
+def test_cross_category_additional_service_is_rejected_by_commerce_guard(monkeypatch) -> None:
+    appointment = _editable_appointment_for_service_edit()
+    candidate_id = uuid4()
+    primary = SimpleNamespace(
+        id=appointment.service_id,
+        operational_category="laser",
+        requires_laser_device=False,
+    )
+    candidate = SimpleNamespace(
+        id=candidate_id,
+        operational_category="dermatology",
+        requires_laser_device=False,
+        price_minor=50000,
+        currency="EGP",
+        name="Consultation",
+    )
+    monkeypatch.setattr(commerce, "_locked_appointment", lambda *args, **kwargs: appointment)
+    monkeypatch.setattr(
+        commerce,
+        "_active_service",
+        lambda _db, *, workspace_id, service_id: candidate if service_id == candidate_id else primary,
+    )
+
+    with pytest.raises(
+        commerce.AppointmentCommerceError,
+        match="Cross-category services require separate appointments",
+    ):
+        commerce.add_additional_service(
+            _Db(),
+            workspace_id=appointment.workspace_id,
+            appointment_id=appointment.id,
+            service_id=candidate_id,
+            laser_device_key=None,
+            created_by_user_id=None,
+        )
+
+
+def test_add_longer_same_category_service_expands_only_after_availability_revalidation(monkeypatch) -> None:
+    appointment = _editable_appointment_for_service_edit(duration_minutes=20)
+    candidate = SimpleNamespace(
+        id=uuid4(),
+        operational_category="dermatology",
+        requires_laser_device=False,
+        price_minor=50000,
+        currency="EGP",
+        name="Long Consultation",
+    )
+    doctor_service = SimpleNamespace(custom_price_minor=None)
+
+    class _EditDb:
+        def __init__(self):
+            self.scalar_calls = 0
+            self.added = []
+        def scalar(self, _stmt):
+            self.scalar_calls += 1
+            return doctor_service if self.scalar_calls == 1 else None
+        def add(self, value):
+            self.added.append(value)
+        def flush(self):
+            pass
+
+    db = _EditDb()
+    expansion = []
+    monkeypatch.setattr(commerce, "_locked_appointment", lambda *args, **kwargs: appointment)
+    monkeypatch.setattr(commerce, "_active_service", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(commerce, "_require_same_operational_category", lambda *args, **kwargs: "dermatology")
+    monkeypatch.setattr(
+        commerce,
+        "_visit_duration_authority",
+        lambda *args, **kwargs: (45, candidate, None),
+    )
+    monkeypatch.setattr(
+        commerce,
+        "_ensure_duration_expansion_available",
+        lambda *args, **kwargs: expansion.append(kwargs["duration_service"].id),
+    )
+    monkeypatch.setattr(commerce, "refresh_appointment_payment_snapshots", lambda *args, **kwargs: None)
+    monkeypatch.setattr(commerce, "record_activity_event", lambda *args, **kwargs: None)
+
+    commerce.add_additional_service(
+        db,
+        workspace_id=appointment.workspace_id,
+        appointment_id=appointment.id,
+        service_id=candidate.id,
+        laser_device_key=None,
+        created_by_user_id=None,
+    )
+
+    assert expansion == [candidate.id]
+    assert appointment.duration_minutes == 45
+    assert len(db.added) == 1
+
+
+def test_add_longer_service_conflict_rejects_without_line_or_duration_mutation(monkeypatch) -> None:
+    appointment = _editable_appointment_for_service_edit(duration_minutes=20)
+    candidate = SimpleNamespace(
+        id=uuid4(),
+        operational_category="dermatology",
+        requires_laser_device=False,
+        price_minor=50000,
+        currency="EGP",
+        name="Long Consultation",
+    )
+    doctor_service = SimpleNamespace(custom_price_minor=None)
+
+    class _EditDb:
+        def __init__(self):
+            self.scalar_calls = 0
+            self.added = []
+        def scalar(self, _stmt):
+            self.scalar_calls += 1
+            return doctor_service if self.scalar_calls == 1 else None
+        def add(self, value):
+            self.added.append(value)
+        def flush(self):
+            pass
+
+    db = _EditDb()
+    monkeypatch.setattr(commerce, "_locked_appointment", lambda *args, **kwargs: appointment)
+    monkeypatch.setattr(commerce, "_active_service", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(commerce, "_require_same_operational_category", lambda *args, **kwargs: "dermatology")
+    monkeypatch.setattr(
+        commerce,
+        "_visit_duration_authority",
+        lambda *args, **kwargs: (45, candidate, None),
+    )
+    monkeypatch.setattr(
+        commerce,
+        "_ensure_duration_expansion_available",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            commerce.AppointmentCommerceError("unavailable time window")
+        ),
+    )
+
+    with pytest.raises(commerce.AppointmentCommerceError, match="unavailable time window"):
+        commerce.add_additional_service(
+            db,
+            workspace_id=appointment.workspace_id,
+            appointment_id=appointment.id,
+            service_id=candidate.id,
+            laser_device_key=None,
+            created_by_user_id=None,
+        )
+    assert appointment.duration_minutes == 20
+    assert db.added == []
+
+
+def test_remove_longest_additional_service_shrinks_visit_duration(monkeypatch) -> None:
+    appointment = _editable_appointment_for_service_edit(duration_minutes=45)
+    line = SimpleNamespace(
+        id=uuid4(),
+        service_id=uuid4(),
+        patient_package_id=None,
+        billing_context="standard",
+    )
+
+    class _RemoveDb:
+        def __init__(self):
+            self.deleted = []
+        def scalar(self, _stmt):
+            return line
+        def delete(self, value):
+            self.deleted.append(value)
+        def flush(self):
+            pass
+
+    db = _RemoveDb()
+    monkeypatch.setattr(commerce, "_locked_appointment", lambda *args, **kwargs: appointment)
+    monkeypatch.setattr(
+        commerce,
+        "_visit_duration_authority",
+        lambda *args, **kwargs: (20, SimpleNamespace(id=appointment.service_id), None),
+    )
+    monkeypatch.setattr(commerce, "refresh_appointment_payment_snapshots", lambda *args, **kwargs: None)
+    monkeypatch.setattr(commerce, "record_activity_event", lambda *args, **kwargs: None)
+
+    commerce.remove_additional_service(
+        db,
+        workspace_id=appointment.workspace_id,
+        appointment_id=appointment.id,
+        line_id=line.id,
+        changed_by_user_id=None,
+    )
+
+    assert db.deleted == [line]
+    assert appointment.duration_minutes == 20
+
+
+def test_appointment_end_and_busy_end_follow_recalculated_duration() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.appointment import Appointment
+
+    start = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+    appointment = Appointment(
+        workspace_id=uuid4(),
+        patient_id=uuid4(),
+        branch_id=uuid4(),
+        doctor_id=uuid4(),
+        service_id=uuid4(),
+        start_at=start,
+        end_at=start + timedelta(minutes=45),
+        busy_start_at=start,
+        busy_end_at=start + timedelta(minutes=55),
+        duration_minutes=45,
+        price_minor=0,
+        currency="EGP",
+        status="confirmed",
+        source="staff",
+    )
+    commerce._apply_visit_duration(appointment, 20)
+    assert appointment.duration_minutes == 20
+    assert appointment.end_at.isoformat() == "2026-10-20T15:20:00+00:00"
+    assert appointment.busy_end_at.isoformat() == "2026-10-20T15:30:00+00:00"
