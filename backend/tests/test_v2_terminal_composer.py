@@ -940,3 +940,84 @@ def test_active_task_cancelled_stays_on_legacy_responder(
 
     assert "وقفت" in text
     assert source == "legacy-model"
+
+
+def test_booking_completion_start_local_satisfies_datetime_without_duplicates() -> None:
+    contract = build_customer_response_contract(
+        [
+            _terminal(
+                "booking_completed",
+                facts={
+                    "service_name": "Laser Underarm",
+                    "start_local": "2026-10-03T18:30:00+03:00",
+                    "date": {"mode": "exact", "start_date": "2026-10-03"},
+                    "time": {"mode": "exact", "start_time": "18:30"},
+                    "doctor_name": "Dr. Mary",
+                    "device_name": "Candela Gentle",
+                },
+            )
+        ]
+    )
+    facts = {fact.key: fact for fact in contract.units[0].facts}
+
+    text = deterministic_terminal_fallback(contract, arabic=False)
+
+    assert facts["start_local"].requirement == "required"
+    assert facts["date"].requirement == "optional"
+    assert facts["time"].requirement == "optional"
+    assert "Laser Underarm" in text
+    assert "October 3" in text
+    assert "6:30 PM" in text
+    assert "Dr. Mary" in text
+    assert "Candela Gentle" in text
+    assert text.count("October 3") == 1
+    assert text.count("6:30 PM") == 1
+
+
+def test_booking_completion_date_time_remain_required_fallback_without_start_local() -> None:
+    contract = build_customer_response_contract(
+        [
+            _terminal(
+                "booking_completed",
+                facts={
+                    "service_name": "Hydrafacial",
+                    "date": {"mode": "exact", "start_date": "2026-10-03"},
+                    "time": {"mode": "exact", "start_time": "18:30"},
+                    "doctor_name": "Dr. Mary",
+                },
+            )
+        ]
+    )
+    facts = {fact.key: fact for fact in contract.units[0].facts}
+
+    text = deterministic_terminal_fallback(contract, arabic=False)
+
+    assert "start_local" not in facts
+    assert facts["date"].requirement == "required"
+    assert facts["time"].requirement == "required"
+    assert "October 3" in text
+    assert "6:30 PM" in text
+
+
+def test_non_device_booking_completion_does_not_require_or_invent_device() -> None:
+    contract = build_customer_response_contract(
+        [
+            _terminal(
+                "booking_completed",
+                facts={
+                    "service_name": "Dermatology Consultation",
+                    "start_local": "2026-10-03T18:30:00+03:00",
+                    "doctor_name": "Dr. Mary",
+                },
+            )
+        ]
+    )
+    facts = {fact.key: fact for fact in contract.units[0].facts}
+
+    text = deterministic_terminal_fallback(contract, arabic=False)
+
+    assert "device_name" not in facts
+    assert "Dermatology Consultation" in text
+    assert "October 3" in text
+    assert "6:30 PM" in text
+    assert "Dr. Mary" in text

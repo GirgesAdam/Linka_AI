@@ -1704,6 +1704,13 @@ def _terminal_facts(goal: ResponseGoal, outcome: TurnOutcome) -> list[ResponseFa
                 if value not in (None, "") and target_key not in seen:
                     result.append(_make_fact(goal=goal, key=target_key, value=value))
                     seen.add(target_key)
+    if goal == "booking_completed" and "start_local" in seen:
+        result = [
+            fact.model_copy(update={"requirement": "optional"})
+            if fact.key in {"date", "time"}
+            else fact
+            for fact in result
+        ]
     return result
 
 
