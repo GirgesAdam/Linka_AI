@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PHASE3_AUDIT = REPO_ROOT / "backend" / "scripts" / "run_phase3_real_world_agent_audit.py"
+GROUPED_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "grouped-multiservice-intent-live-review.yml"
 SPOKEN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "clinic-hours-clock-real-agent-review.yml"
 RETIRED_SPOKEN_FILES = (
     REPO_ROOT / "backend" / "scripts" / "run_clinic_hours_clock_live_review.py",
@@ -69,3 +70,51 @@ def test_retired_gates_do_not_remove_deterministic_business_coverage() -> None:
     assert "test_rw7_explicit_date_change_still_replaces_durable_date" in grouped
     assert "test_rw7_redundancy_normalization_does_not_hide_real_service_addition" in grouped
     assert "test_rw7_compound_booking_proposal_renders_initial_and_corrected_visit_times" in responder
+
+
+def _workflow_step(source: str, name: str, next_name: str) -> str:
+    start = source.index(f"      - name: {name}")
+    end = source.index(f"      - name: {next_name}", start)
+    return source[start:end]
+
+
+def test_phase3_is_manual_opt_in_while_required_grouped_gates_remain_automatic() -> None:
+    source = GROUPED_WORKFLOW.read_text(encoding="utf-8")
+    assert "workflow_dispatch:\n    inputs:\n      run_phase3:" in source
+    assert "type: boolean" in source
+    assert "default: false" in source
+
+    full_grouped = _workflow_step(
+        source,
+        "Run full grouped multi-service review",
+        "Run Phase 3.3 real-world agent strength audit",
+    )
+    assert "\n        if:" not in full_grouped
+
+    phase3 = _workflow_step(
+        source,
+        "Run Phase 3.3 real-world agent strength audit",
+        "Upload Phase 3.3 real-world audit diagnostics",
+    )
+    assert "github.event_name == 'workflow_dispatch'" in phase3
+    assert "inputs.run_phase3" in phase3
+    assert "always()" in phase3
+    assert "!cancelled()" in phase3
+
+    phase3_upload = _workflow_step(
+        source,
+        "Upload Phase 3.3 real-world audit diagnostics",
+        "Upload RA-G standalone diagnostics",
+    )
+    assert "github.event_name == 'workflow_dispatch'" in phase3_upload
+    assert "inputs.run_phase3" in phase3_upload
+
+    assert "batch1-compatibility:" in source
+    assert "Run RA-G1 through RA-G5 on audit-only #241 + #249 overlay" in source
+
+
+def test_phase3_manual_diagnostic_implementation_remains_available() -> None:
+    source = GROUPED_WORKFLOW.read_text(encoding="utf-8")
+    assert "backend/scripts/run_phase3_real_world_agent_audit.py" in source
+    assert "python scripts/run_phase3_real_world_agent_audit.py" in source
+    assert "phase3-real-world-agent-audit.log" in source

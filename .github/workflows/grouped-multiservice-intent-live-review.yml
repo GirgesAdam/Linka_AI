@@ -9,6 +9,12 @@ on:
       - backend/app/services/agent_v2/**
       - backend/app/agents/v2/**
   workflow_dispatch:
+    inputs:
+      run_phase3:
+        description: Run optional Phase 3.3 real-world diagnostic audit
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,14 +111,14 @@ jobs:
           set -o pipefail
           python scripts/run_grouped_multiservice_intent_live_review.py 2>&1 | tee artifacts/ra-g-standalone.log
       - name: Run Phase 3.3 real-world agent strength audit
-        if: ${{ always() && !cancelled() }}
+        if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.run_phase3 }}
         shell: bash
         run: |
           mkdir -p artifacts
           set -o pipefail
           python scripts/run_phase3_real_world_agent_audit.py 2>&1 | tee artifacts/phase3-real-world-agent-audit.log
       - name: Upload Phase 3.3 real-world audit diagnostics
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.run_phase3 }}
         uses: actions/upload-artifact@v4
         with:
           name: phase3-real-world-agent-audit-${{ github.run_id }}-${{ github.run_attempt }}
