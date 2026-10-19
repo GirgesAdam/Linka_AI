@@ -209,7 +209,16 @@ class Context:
 
 
 def _setup(db: Session, scenario: str, *, hole: bool = False) -> Context:
-    workspace, patient, doctor, underarm, bikini, arms = build_fixture(db)
+    (
+        workspace,
+        patient,
+        doctor,
+        _dermatology_doctor,
+        underarm,
+        bikini,
+        arms,
+        _dermatology,
+    ) = build_fixture(db)
     if hole:
         bikini.duration_minutes = 15
         price = db.scalar(

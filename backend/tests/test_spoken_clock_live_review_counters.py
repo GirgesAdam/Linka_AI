@@ -14,7 +14,7 @@ from scripts.run_clinic_hours_clock_live_review import (
     _transactional_safety_deltas,
     _validate_stateful_same_clock_correction,
 )
-from scripts.spoken_clock_live_review_base import _dump_provider_value
+from scripts.spoken_clock_live_review_base import _dump_provider_value, _setup
 
 
 def test_wrong_transactional_time_write_is_counted_even_when_persistence_will_rollback() -> None:
@@ -139,3 +139,28 @@ def test_sr4_silent_2230_resolution_fails_closed() -> None:
         assert SAFETY_COUNTERS["arbitrary_10_11_resolution"] > snapshot["arbitrary_10_11_resolution"]
     finally:
         _restore_counters(snapshot)
+
+
+def test_spoken_clock_setup_accepts_shared_grouped_fixture_shape(monkeypatch) -> None:
+    fixture = tuple(object() for _ in range(8))
+    monkeypatch.setattr(
+        "scripts.spoken_clock_live_review_base.build_fixture",
+        lambda _db: fixture,
+    )
+
+    class FakeDB:
+        committed = False
+
+        def commit(self) -> None:
+            self.committed = True
+
+    db = FakeDB()
+    context = _setup(db, "fixture-contract")
+
+    assert context.workspace is fixture[0]
+    assert context.patient is fixture[1]
+    assert context.doctor is fixture[2]
+    assert context.underarm is fixture[4]
+    assert context.bikini is fixture[5]
+    assert context.arms is fixture[6]
+    assert db.committed is True
