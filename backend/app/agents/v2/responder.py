@@ -990,6 +990,7 @@ def _deterministic_booking_proposal_reply(
     unit: CustomerResponseUnit,
     *,
     arabic: bool,
+    timezone_name: str | None = None,
 ) -> str | None:
     if unit.response_goal != "booking_proposal":
         return None
@@ -1006,6 +1007,7 @@ def _deterministic_booking_proposal_reply(
     doctor_name = str(summary.get("doctor_name") or "").strip()
     branch_name = str(summary.get("branch_name") or "").strip()
     device_name = str(summary.get("device_name") or "").strip()
+    visits = summary.get("visits")
     details: list[str] = []
     if service_names:
         details.append(("الخدمات: " if arabic else "Services: ") + "، ".join(service_names))
@@ -1017,6 +1019,31 @@ def _deterministic_booking_proposal_reply(
         details.append(("في " if arabic else "at ") + branch_name)
     if device_name:
         details.append(("على جهاز " if arabic else "on ") + device_name)
+    if isinstance(visits, list):
+        for index, visit in enumerate(visits, start=1):
+            if not isinstance(visit, dict) or not visit.get("start_at"):
+                continue
+            visit_services = visit.get("services")
+            visit_names = (
+                [str(item).strip() for item in visit_services if str(item).strip()]
+                if isinstance(visit_services, list)
+                else []
+            )
+            visit_label = (
+                f"\u0627\u0644\u0632\u064a\u0627\u0631\u0629 {index}"
+                if arabic
+                else f"Visit {index}"
+            )
+            if visit_names:
+                separator = "\u060c " if arabic else ", "
+                visit_label += " (" + separator.join(visit_names) + ")"
+            details.append(
+                visit_label
+                + ": "
+                + format_customer_datetime(
+                    visit["start_at"], arabic=arabic, timezone_name=timezone_name
+                )
+            )
     commercial_detail = _booking_proposal_commercial_detail(unit, arabic=arabic)
     if commercial_detail:
         details.append(commercial_detail)
@@ -1076,12 +1103,17 @@ def _deterministic_typed_unit_reply(
     *,
     history: list[BaseMessage],
     unit: CustomerResponseUnit,
+    timezone_name: str | None = None,
 ) -> str | None:
     """Render one supported typed unit from backend-owned truth only."""
     contract = CustomerResponseContract(units=(unit,))
     arabic = _latest_customer_is_arabic(history)
 
-    proposal_reply = _deterministic_booking_proposal_reply(unit, arabic=arabic)
+    proposal_reply = _deterministic_booking_proposal_reply(
+        unit,
+        arabic=arabic,
+        timezone_name=timezone_name,
+    )
     if proposal_reply is not None:
         return proposal_reply
     booking_ack_reply = _deterministic_same_booking_ack_reply(unit, arabic=arabic)
@@ -1270,6 +1302,7 @@ def _compose_mixed_typed_contract_reply(
     history: list[BaseMessage],
     outcomes: list[TurnOutcome],
     contract: CustomerResponseContract,
+    timezone_name: str | None = None,
 ) -> tuple[str, str] | None:
     """Compose multi-unit replies without dropping requested units or mutating typed truth."""
     if not outcomes or len(contract.units) != len(outcomes):
@@ -1278,7 +1311,11 @@ def _compose_mixed_typed_contract_reply(
     arabic = _latest_customer_is_arabic(history)
     typed_chunks: dict[int, str] = {}
     for index, unit in enumerate(contract.units):
-        rendered = _deterministic_typed_unit_reply(history=history, unit=unit)
+        rendered = _deterministic_typed_unit_reply(
+            history=history,
+            unit=unit,
+            timezone_name=timezone_name,
+        )
         if rendered is not None and rendered.strip():
             typed_chunks[index] = rendered.strip()
 
@@ -1452,6 +1489,7 @@ def compose_v2_customer_reply(
         history=history,
         outcomes=outcomes,
         contract=response_contract,
+        timezone_name=timezone_name,
     )
     if mixed_reply is not None:
         return mixed_reply

@@ -999,3 +999,76 @@ def test_verified_availability_reference_failure_reasons_still_clarify(
 
     assert model == "deterministic:availability-reference-clarification"
     assert expected_fragment in reply
+
+
+def _compound_proposal_outcome(*, first_start: str, second_start: str) -> TurnOutcome:
+    return TurnOutcome(
+        status="answered",
+        response_goal="booking_proposal",
+        facts={
+            "booking_proposal_summary": {
+                "services": ["Laser Underarm", "Laser Bikini", "Dermatology"],
+                "visits": [
+                    {
+                        "services": ["Laser Underarm", "Laser Bikini"],
+                        "start_at": first_start,
+                        "end_at": "2026-10-17T15:30:00+00:00" if first_start.endswith("15:00:00+00:00") else "2026-10-17T16:30:00+00:00",
+                        "doctor_id": "laser-doctor",
+                        "branch_id": "main-branch",
+                        "device_key": "candela_gentle",
+                    },
+                    {
+                        "services": ["Dermatology"],
+                        "start_at": second_start,
+                        "end_at": "2026-10-17T16:00:00+00:00" if second_start.endswith("15:30:00+00:00") else "2026-10-17T17:00:00+00:00",
+                        "doctor_id": "dermatology-doctor",
+                        "branch_id": "main-branch",
+                        "device_key": None,
+                    },
+                ],
+            }
+        },
+    )
+
+
+def _compound_proposal_reply(outcome: TurnOutcome) -> str:
+    reply, _model = compose_v2_customer_reply(
+        clinic_name="Linka",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="\u0627\u0644\u0633\u0627\u0639\u0629 6 \u0645\u0646\u0627\u0633\u0628\u0629.")],
+        outcomes=[outcome],
+    )
+    return reply
+
+
+def test_rw6_compound_booking_proposal_renders_each_canonical_visit_start_time() -> None:
+    reply = _compound_proposal_reply(
+        _compound_proposal_outcome(
+            first_start="2026-10-17T15:00:00+00:00",
+            second_start="2026-10-17T15:30:00+00:00",
+        )
+    )
+
+    assert "6 \u0645\u0633\u0627\u0621" in reply
+    assert "6:30 \u0645\u0633\u0627\u0621" in reply
+
+
+def test_rw7_compound_booking_proposal_renders_initial_and_corrected_visit_times() -> None:
+    initial_reply = _compound_proposal_reply(
+        _compound_proposal_outcome(
+            first_start="2026-10-17T15:00:00+00:00",
+            second_start="2026-10-17T15:30:00+00:00",
+        )
+    )
+    corrected_reply = _compound_proposal_reply(
+        _compound_proposal_outcome(
+            first_start="2026-10-17T16:00:00+00:00",
+            second_start="2026-10-17T16:30:00+00:00",
+        )
+    )
+
+    assert "6 \u0645\u0633\u0627\u0621" in initial_reply
+    assert "6:30 \u0645\u0633\u0627\u0621" in initial_reply
+    assert "7 \u0645\u0633\u0627\u0621" in corrected_reply
+    assert "7:30 \u0645\u0633\u0627\u0621" in corrected_reply
