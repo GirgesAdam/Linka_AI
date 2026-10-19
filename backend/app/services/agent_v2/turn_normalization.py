@@ -305,6 +305,30 @@ def collapse_booking_service_sets(
             if not current_ids and active_task.constraints.service_id:
                 current_ids = [active_task.constraints.service_id]
             if operation.grouped_booking_action == "preserve_group":
+                if (
+                    entity.candidate_mode == "set"
+                    and len(current_ids) > 1
+                    and len(canonical_ids) == len(current_ids)
+                    and set(canonical_ids) == set(current_ids)
+                    and len(
+                        partition_service_ids_by_operational_category(catalog, current_ids)
+                    )
+                    > 1
+                ):
+                    # A provider may redundantly reconstruct the durable service set on
+                    # a constraint-only continuation. Across categories that echo would
+                    # otherwise fan out into multiple operations before grouped restoration.
+                    # Treat it as omitted service identity so durable constraints survive.
+                    normalized.append(
+                        operation.model_copy(
+                            update={
+                                "entities": operation.entities.model_copy(
+                                    update={"service": None}
+                                )
+                            }
+                        )
+                    )
+                    continue
                 canonical_ids = [
                     *current_ids,
                     *(service_id for service_id in canonical_ids if service_id not in current_ids),

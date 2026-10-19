@@ -39,6 +39,7 @@ from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
     DerivedBookingState,
+    GroupedBookingState,
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import apply_step_state
@@ -1639,3 +1640,277 @@ def test_restored_mixed_category_continuation_sequences_category_visits_not_serv
     assert plan.steps[0].facts["time"]["start_time"] == "18:00"
     assert plan.steps[1].facts["service_id"] == "svc-dermatology"
     assert plan.steps[1].facts["time"]["start_time"] == "18:30"
+
+
+
+def _rw7_durable_continuation_fixture():
+    dermatology = "svc-dermatology"
+    catalog = _catalog(common_devices=1)
+    catalog["services"].append(
+        {
+            "id": dermatology,
+            "name": "Dermatology Consultation",
+            "duration_minutes": 30,
+            "operational_category": "dermatology",
+            "requires_laser_device": False,
+            "price_minor": 100_000,
+            "currency": "EGP",
+        }
+    )
+    catalog["doctors"].append(
+        {
+            "id": "doc-dermatology",
+            "name": "Dermatology Doctor",
+            "service_ids": [dermatology],
+            "branch_ids": ["branch-1"],
+        }
+    )
+    catalog["branches"] = [{"id": "branch-1", "name": "Main"}]
+    context = build_semantic_context(catalog)
+    date = DateConstraint(mode="exact", start_date="2026-10-17")
+    components = [
+        CustomerConstraints(
+            service_id=A,
+            doctor_id="doc-common",
+            branch_id="branch-1",
+            device_key="v1",
+            date=date,
+        ),
+        CustomerConstraints(
+            service_id=B,
+            doctor_id="doc-common",
+            branch_id="branch-1",
+            device_key="v1",
+            date=date,
+        ),
+        CustomerConstraints(
+            service_id=dermatology,
+            doctor_id="doc-dermatology",
+            branch_id="branch-1",
+            date=date,
+        ),
+    ]
+    state = BookingTaskState(
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=components[1],
+        requested_service_ids=[A, B, dermatology],
+        service_device_keys={A: "v1", B: "v1"},
+        grouped=GroupedBookingState(components=components),
+    )
+    return catalog, context, state, dermatology
+
+
+def _rw7_candidate_from_turn(
+    turn: TiaTurnUnderstanding,
+    *,
+    catalog: dict[str, object],
+    context,
+    state: BookingTaskState,
+) -> BookingTaskState:
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    normalized, semantic_groups = expand_multi_service_operations(
+        normalized,
+        semantic_context=context,
+        booking_service_sets=service_sets,
+    )
+    normalized, restored_groups = restore_grouped_booking_understanding(
+        normalized,
+        active_task=state,
+        context=context,
+        booking_service_sets=service_sets,
+        catalog=catalog,
+    )
+    if restored_groups:
+        normalized, restored_sets, restored_groups = recollapse_restored_booking_visit_groups(
+            normalized,
+            semantic_context=context,
+            catalog=catalog,
+            restored_visit_groups=restored_groups,
+        )
+        service_sets = {**service_sets, **restored_sets}
+    visit_groups = {**semantic_groups, **restored_groups}
+    plan = tag_booking_service_sets(
+        plan_turn(
+            normalized,
+            PlannerContext(semantic_context=context, active_task=state, now=NOW),
+        ),
+        service_sets=service_sets,
+        catalog=catalog,
+    )
+    plan = normalize_compound_turn_plan(
+        plan,
+        catalog=catalog,
+        operation_visit_groups=visit_groups,
+    )
+    candidate = grouped_booking_task_from_plan(
+        plan,
+        understanding=normalized,
+        existing=state,
+        now=NOW,
+        turn_id="rw7-durable-continuation",
+    )
+    assert candidate is not None
+    return candidate
+
+
+def test_rw7_redundant_full_group_time_only_preserves_durable_date() -> None:
+    catalog, context, state, dermatology = _rw7_durable_continuation_fixture()
+    refs = _refs(context)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                active_task_explicit_fields=["time"],
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[dermatology]],
+                        candidate_mode="set",
+                    ),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+            )
+        ]
+    )
+
+    candidate = _rw7_candidate_from_turn(
+        turn,
+        catalog=catalog,
+        context=context,
+        state=state,
+    )
+
+    assert candidate.requested_service_ids == [A, B, dermatology]
+    assert candidate.constraints.date is not None
+    assert candidate.constraints.date.start_date == "2026-10-17"
+    assert candidate.constraints.time is not None
+    assert candidate.constraints.time.start_time == "18:00"
+    assert candidate.constraints.doctor_id == "doc-common"
+    assert candidate.constraints.branch_id == "branch-1"
+    assert candidate.constraints.device_key == "v1"
+    assert candidate.grouped is not None
+    assert {component.date.start_date for component in candidate.grouped.components if component.date} == {
+        "2026-10-17"
+    }
+
+
+def test_rw7_sparse_time_only_matches_redundant_full_group_result() -> None:
+    catalog, context, state, dermatology = _rw7_durable_continuation_fixture()
+    sparse = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                active_task_explicit_fields=["time"],
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="18:00")),
+            )
+        ]
+    )
+    refs = _refs(context)
+    redundant = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                active_task_explicit_fields=["time"],
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[dermatology]],
+                        candidate_mode="set",
+                    ),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+            )
+        ]
+    )
+
+    sparse_candidate = _rw7_candidate_from_turn(
+        sparse,
+        catalog=catalog,
+        context=context,
+        state=state,
+    )
+    redundant_candidate = _rw7_candidate_from_turn(
+        redundant,
+        catalog=catalog,
+        context=context,
+        state=state,
+    )
+
+    assert redundant_candidate.constraints == sparse_candidate.constraints
+    assert redundant_candidate.requested_service_ids == sparse_candidate.requested_service_ids
+    assert redundant_candidate.grouped == sparse_candidate.grouped
+
+
+def test_rw7_explicit_date_change_still_replaces_durable_date() -> None:
+    catalog, context, state, _dermatology = _rw7_durable_continuation_fixture()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                active_task_explicit_fields=["date"],
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    date=DateConstraint(mode="exact", start_date="2026-10-24")
+                ),
+            )
+        ]
+    )
+
+    candidate = _rw7_candidate_from_turn(
+        turn,
+        catalog=catalog,
+        context=context,
+        state=state,
+    )
+
+    assert candidate.constraints.date is not None
+    assert candidate.constraints.date.start_date == "2026-10-24"
+    assert candidate.grouped is not None
+    assert {component.date.start_date for component in candidate.grouped.components if component.date} == {
+        "2026-10-24"
+    }
+
+
+def test_rw7_redundancy_normalization_does_not_hide_real_service_addition() -> None:
+    catalog, context, state, dermatology = _rw7_durable_continuation_fixture()
+    refs = _refs(context)
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[dermatology], refs[ARMS]],
+                        candidate_mode="set",
+                    )
+                ),
+            )
+        ]
+    )
+
+    normalized, service_sets = collapse_booking_service_sets(
+        turn,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+
+    assert len(normalized.operations) == 2
+    assert service_sets == {0: [A, B, ARMS]}
