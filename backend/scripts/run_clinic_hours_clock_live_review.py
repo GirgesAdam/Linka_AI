@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -42,6 +42,33 @@ SAFETY_COUNTERS = {
 }
 
 CLOCK_TRACE: list[dict[str, Any]] = []
+
+def _next_review_thursday(today: date) -> date:
+    days_ahead = (3 - today.weekday()) % 7 or 7
+    return today + timedelta(days=days_ahead)
+
+
+CLOCK_REVIEW_TODAY = datetime.now(base.CAIRO).date()
+CLOCK_REVIEW_DATE = _next_review_thursday(CLOCK_REVIEW_TODAY)
+CLOCK_REVIEW_DATE_ISO = CLOCK_REVIEW_DATE.isoformat()
+_ARABIC_MONTHS = (
+    "\u064a\u0646\u0627\u064a\u0631",
+    "\u0641\u0628\u0631\u0627\u064a\u0631",
+    "\u0645\u0627\u0631\u0633",
+    "\u0623\u0628\u0631\u064a\u0644",
+    "\u0645\u0627\u064a\u0648",
+    "\u064a\u0648\u0646\u064a\u0648",
+    "\u064a\u0648\u0644\u064a\u0648",
+    "\u0623\u063a\u0633\u0637\u0633",
+    "\u0633\u0628\u062a\u0645\u0628\u0631",
+    "\u0623\u0643\u062a\u0648\u0628\u0631",
+    "\u0646\u0648\u0641\u0645\u0628\u0631",
+    "\u062f\u064a\u0633\u0645\u0628\u0631",
+)
+_ARABIC_DATE_TEXT = (
+    f"{CLOCK_REVIEW_DATE.day} {_ARABIC_MONTHS[CLOCK_REVIEW_DATE.month - 1]} "
+    f"{CLOCK_REVIEW_DATE.year}"
+)
 _ORIGINAL_RESOLVE_BARE = time_resolution.resolve_bare_clock_constraint
 
 
@@ -95,104 +122,104 @@ class ScenarioSpec:
 SCENARIOS = [
     ScenarioSpec(
         name="RA1",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 3\u061f",
         start="10:00", end="22:00", expected_hint=None, expected_canonical="15:00",
         expected_bare_status="resolved", expected_candidates=("03:00", "15:00"),
         expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
         name="RA2",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3 \u0627\u0644\u0635\u0628\u062d\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 3 \u0627\u0644\u0635\u0628\u062d\u061f",
         start="10:00", end="22:00", expected_hint=None, expected_canonical="15:00",
         expected_bare_status="resolved", expected_candidates=("03:00", "15:00"),
         expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
         name="RA3",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 3 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 3 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
         start="10:00", end="22:00", expected_hint=None, expected_canonical="15:00",
         expected_bare_status="resolved", expected_candidates=("03:00", "15:00"),
         expected_valid_candidates=("15:00",),
     ),
     ScenarioSpec(
         name="RA4",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 4 \u0648\u0631\u0628\u0639\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 4 \u0648\u0631\u0628\u0639\u061f",
         start="10:00", end="22:00", expected_hint=None, expected_canonical="16:15",
         expected_bare_status="resolved", expected_candidates=("04:15", "16:15"),
         expected_valid_candidates=("16:15",),
     ),
     ScenarioSpec(
         name="RA5",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 10\u061f",
         start="00:00", end="23:59", expected_hint="none", expected_canonical=None,
         expected_bare_status="clarify_period", expected_candidates=("10:00", "22:00"),
         expected_valid_candidates=("10:00", "22:00"), clarification_required=True,
     ),
     ScenarioSpec(
         name="RA6",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
         start="00:00", end="23:59", expected_hint="pm", expected_canonical="22:00",
         expected_bare_status="resolved", expected_candidates=("10:00", "22:00"),
         expected_valid_candidates=("10:00", "22:00"),
     ),
     ScenarioSpec(
         name="RA7",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0627\u0644\u0635\u0628\u062d\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0627\u0644\u0635\u0628\u062d\u061f",
         start="00:00", end="23:59", expected_hint="am", expected_canonical="10:00",
         expected_bare_status="resolved", expected_candidates=("10:00", "22:00"),
         expected_valid_candidates=("10:00", "22:00"),
     ),
     ScenarioSpec(
         name="RA8",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635\u061f",
         start="00:00", end="23:59", expected_hint="none", expected_canonical=None,
         expected_bare_status="clarify_period", expected_candidates=("10:30", "22:30"),
         expected_valid_candidates=("10:30", "22:30"), clarification_required=True,
     ),
     ScenarioSpec(
         name="RA9",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
         start="00:00", end="23:59", expected_hint="pm", expected_canonical="22:30",
         expected_bare_status="resolved", expected_candidates=("10:30", "22:30"),
         expected_valid_candidates=("10:30", "22:30"),
     ),
     ScenarioSpec(
         name="RA10",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0627\u0644\u0635\u0628\u062d\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0627\u0644\u0635\u0628\u062d\u061f",
         start="00:00", end="23:59", expected_hint="am", expected_canonical="10:30",
         expected_bare_status="resolved", expected_candidates=("10:30", "22:30"),
         expected_valid_candidates=("10:30", "22:30"),
     ),
     ScenarioSpec(
         name="RA11",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 11\u061f",
         start="00:00", end="23:59", expected_hint="none", expected_canonical=None,
         expected_bare_status="clarify_period", expected_candidates=("11:00", "23:00"),
         expected_valid_candidates=("11:00", "23:00"), clarification_required=True,
     ),
     ScenarioSpec(
         name="RA12",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
         start="00:00", end="23:59", expected_hint="pm", expected_canonical="23:00",
         expected_bare_status="resolved", expected_candidates=("11:00", "23:00"),
         expected_valid_candidates=("11:00", "23:00"),
     ),
     ScenarioSpec(
         name="RA13",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0627\u0644\u0635\u0628\u062d\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 11 \u0627\u0644\u0635\u0628\u062d\u061f",
         start="00:00", end="23:59", expected_hint="am", expected_canonical="11:00",
         expected_bare_status="resolved", expected_candidates=("11:00", "23:00"),
         expected_valid_candidates=("11:00", "23:00"),
     ),
     ScenarioSpec(
         name="RA14",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 03:00\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 03:00\u061f",
         start="10:00", end="22:00", expected_hint="none", expected_canonical="03:00",
         unavailable=True,
     ),
     ScenarioSpec(
         name="RA15",
-        customer="\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 15 \u0623\u0643\u062a\u0648\u0628\u0631 2026 \u0627\u0644\u0633\u0627\u0639\u0629 12 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
+        customer=f"\u0645\u0645\u0643\u0646 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u064a\u0648\u0645 \u0627\u0644\u062e\u0645\u064a\u0633 {_ARABIC_DATE_TEXT} \u0627\u0644\u0633\u0627\u0639\u0629 12 \u0628\u0627\u0644\u0644\u064a\u0644\u061f",
         start="00:00", end="05:00", expected_hint="midnight", expected_canonical="00:00",
         unavailable=True,
     ),
@@ -570,7 +597,7 @@ def _validate_record(record: dict[str, Any], spec: ScenarioSpec, ctx: base.Conte
         "Raw spoken_period_hint": hint,
         "Typed semantic time": time_value,
         "Effective clinic/branch operating hours": {
-            "requested_date": "2026-10-15",
+            "requested_date": CLOCK_REVIEW_DATE_ISO,
             "weekday": 3,
             "branch_id": str(ctx.workspace.primary_branch_id),
             "start": spec.start,
@@ -627,7 +654,7 @@ def _validate_ra_t10_continuation(
     )
     first_date = first_constraints.get("date")
     _require(
-        isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
+        isinstance(first_date, dict) and first_date.get("start_date") == CLOCK_REVIEW_DATE_ISO,
         counter="wrong_time_writes",
         message="RA-T10: clarification lost requested date",
     )
@@ -663,7 +690,7 @@ def _validate_ra_t10_continuation(
         continued_date = continued_constraints.get("date")
         _require(
             isinstance(continued_date, dict)
-            and continued_date.get("start_date") == "2026-10-15",
+            and continued_date.get("start_date") == CLOCK_REVIEW_DATE_ISO,
             counter="wrong_time_writes",
             message="RA-T10: continuation changed requested date",
         )
@@ -732,7 +759,7 @@ def _validate_ra_t10_continuation(
         "DB_effect": continued.get("db_effect"),
         "same_service_id": str(first_constraints.get("service_id") or "") == str(ctx.bikini.id),
         "same_branch_id": str(first_constraints.get("branch_id") or "") == str(ctx.workspace.primary_branch_id),
-        "same_date": isinstance(first_date, dict) and first_date.get("start_date") == "2026-10-15",
+        "same_date": isinstance(first_date, dict) and first_date.get("start_date") == CLOCK_REVIEW_DATE_ISO,
     }
 
 

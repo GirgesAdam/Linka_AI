@@ -9,6 +9,10 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from scripts.run_clinic_hours_clock_live_review import (
+    CLOCK_REVIEW_DATE,
+    CLOCK_REVIEW_TODAY,
+    SCENARIOS,
+    _ARABIC_DATE_TEXT,
     SAFETY_COUNTERS,
     _serialized_period_hint,
     _transactional_safety_deltas,
@@ -164,3 +168,9 @@ def test_spoken_clock_setup_accepts_shared_grouped_fixture_shape(monkeypatch) ->
     assert context.bikini is fixture[5]
     assert context.arms is fixture[6]
     assert db.committed is True
+
+
+def test_spoken_clock_review_uses_a_future_thursday_date() -> None:
+    assert CLOCK_REVIEW_DATE > CLOCK_REVIEW_TODAY
+    assert CLOCK_REVIEW_DATE.weekday() == 3
+    assert all(_ARABIC_DATE_TEXT in scenario.customer for scenario in SCENARIOS)
