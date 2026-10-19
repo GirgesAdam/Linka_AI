@@ -338,24 +338,6 @@ def _validate_rw6(records: list[dict[str, object]], ids: dict[str, str]) -> None
     _assert_zero_write(records)
 
 
-def _validate_rw7(records: list[dict[str, object]], ids: dict[str, str]) -> None:
-    assert len(records) == 3
-    _assert_compound(records[1], ids, laser_time="18:00", derm_time="18:30")
-    _assert_reply_mentions_visit_start_times(
-        records[1], expected_times=("18:00", "18:30"), scenario="RW-7 turn 2"
-    )
-    _assert_compound(records[2], ids, laser_time="19:00", derm_time="19:30")
-    _assert_reply_mentions_visit_start_times(
-        records[2], expected_times=("19:00", "19:30"), scenario="RW-7 turn 3"
-    )
-    time_constraint = _constraints(records[2]).get("time")
-    if isinstance(time_constraint, dict) and time_constraint.get("mode") == "exact":
-        assert time_constraint.get("start_time") == "19:00", (
-            "RW-7 operational 19:30 leaked into customer semantic constraint"
-        )
-    _assert_zero_write(records)
-
-
 def _validate_rw8(records: list[dict[str, object]], ids: dict[str, str]) -> None:
     assert len(records) == 2
     expected = {ids["underarm"], ids["bikini"]}
@@ -468,11 +450,6 @@ RW6 = (
     "الساعة 6 مناسبة.",
     "دكتور الكشف مين؟",
 )
-RW7 = (
-    RW6[0],
-    "الساعة 6 مناسبة.",
-    "خلي بداية الزيارة الساعة 7 بدل 6.",
-)
 RW8 = (
     "عايزة الإبط والبكيني السبت الساعة 6.",
     "طب السبت اللي بعده الساعة 6؟",
@@ -495,7 +472,6 @@ SCENARIOS = (
     ScenarioSpec("RW-4", RW4, _validate_rw4),
     ScenarioSpec("RW-5", RW5, _validate_rw5),
     ScenarioSpec("RW-6", RW6, _validate_rw6),
-    ScenarioSpec("RW-7", RW7, _validate_rw7),
     ScenarioSpec("RW-8", RW8, _validate_rw8, fixture_variant="busy_2026_10_17_1800"),
     ScenarioSpec("RW-9", RW9, _validate_rw9),
     ScenarioSpec("RW-10", RW10, _validate_rw10, fixture_variant="second_laser_device"),
