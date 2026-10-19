@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.time_resolution import resolve_bare_clock_constraint
 from app.agents.v2.turn_contract import (
     DateConstraint,
     TiaTurnUnderstanding,
@@ -548,6 +549,72 @@ def test_p5_bare_both_valid_clarification_am_resolves_same_task() -> None:
     assert updated.constraints.time.start_time == "10:30"
     assert updated.constraints.time.spoken_period_hint == "none"
 
+
+
+
+def test_explicit_pm_canonicalization_survives_date_only_continuation() -> None:
+    context = _context(start="09:00", end="21:00")
+    resolution = resolve_bare_clock_constraint(
+        _time("10:30", hint="pm"),
+        date_constraint=None,
+        context=context,
+        branch_id=BRANCH,
+    )
+    assert resolution.status == "resolved"
+    assert resolution.constraint is not None
+    assert resolution.constraint.start_time == "22:30"
+    assert resolution.constraint.start_time_ambiguity == "none"
+    assert resolution.constraint.spoken_period_hint == "none"
+
+    loaded = _booking(
+        resolution.constraint.start_time,
+        ambiguity=resolution.constraint.start_time_ambiguity,
+        date=None,
+        hint=resolution.constraint.spoken_period_hint,
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date=DATE)),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        continues_previous=True,
+    )
+    planner_step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation]),
+        PlannerContext(semantic_context=context, active_task=loaded, now=NOW),
+    ).steps[0]
+    adapted = adapt_matching_active_task_step(
+        planner_step,
+        operation=operation,
+        active_task=loaded,
+        context=context,
+        now=NOW,
+    )
+    transition = apply_step_state(
+        loaded,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-explicit-pm-date-only",
+    )
+    updated = transition.active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "22:30"
+    assert updated.constraints.time.start_time_ambiguity == "none"
+    assert updated.constraints.time.spoken_period_hint == "none"
+
+    prepared, gate = prepare_active_task_clock_progress(
+        updated,
+        operation_index=0,
+        context=context,
+    )
+    assert gate is None
+    assert prepared.constraints.time is not None
+    assert prepared.constraints.time.start_time == "22:30"
+    assert prepared.constraints.time.start_time_ambiguity == "none"
 
 
 def test_p1_actual_date_only_pipeline_preserves_pm_until_clock_progression() -> None:

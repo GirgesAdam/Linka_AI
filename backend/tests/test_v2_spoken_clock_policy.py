@@ -152,14 +152,14 @@ def test_10_11_candidate_policy(
         assert _constraint(turn).start_time_ambiguity == "none"
 
 
-def test_11_pm_hint_does_not_override_only_am_candidate() -> None:
+def test_11_pm_hint_remains_authoritative_when_pm_is_outside_hours() -> None:
     turn, _ = _pipeline("23:00", text="11 ??????", hint="pm", start="09:00", end="21:00")
-    assert _clock(turn) == "11:00"
-
-
-def test_11_am_hint_does_not_override_only_pm_candidate() -> None:
-    turn, _ = _pipeline("11:00", text="11 ?????", hint="am", start="20:00", end="23:59")
     assert _clock(turn) == "23:00"
+
+
+def test_11_am_hint_remains_authoritative_when_am_is_outside_hours() -> None:
+    turn, _ = _pipeline("11:00", text="11 ?????", hint="am", start="20:00", end="23:59")
+    assert _clock(turn) == "11:00"
 
 
 @pytest.mark.parametrize("clock", ["10:00", "11:00"])
@@ -281,8 +281,8 @@ def test_structural_literal_neutralizes_provider_hint() -> None:
         ("00:00", "23:59", "none", "10:30", True),
         ("00:00", "23:59", "am", "10:30", False),
         ("00:00", "23:59", "pm", "22:30", False),
-        ("09:00", "21:00", "pm", "10:30", False),
-        ("20:00", "23:30", "am", "22:30", False),
+        ("09:00", "21:00", "pm", "22:30", False),
+        ("20:00", "23:30", "am", "10:30", False),
     ],
     ids=[
         "T1030-1-only-am",
@@ -290,8 +290,8 @@ def test_structural_literal_neutralizes_provider_hint() -> None:
         "T1030-3-both-no-hint",
         "T1030-4-both-am",
         "T1030-5-both-pm",
-        "T1030-6-only-am-wrong-pm",
-        "T1030-7-only-pm-wrong-am",
+        "T1030-6-explicit-pm-outside-hours",
+        "T1030-7-explicit-am-outside-hours",
     ],
 )
 def test_1030_required_matrix(

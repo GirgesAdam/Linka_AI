@@ -326,6 +326,35 @@ def resolve_bare_clock_constraint(
             ),
         )
 
+    # Explicit customer period authority resolves the spoken 12-hour clock before
+    # clinic context. Operating hours may later make the canonical request
+    # unavailable, but they must never reinterpret an explicit AM/PM as the
+    # opposite period.
+    if constraint.spoken_period_hint in {"am", "pm"}:
+        chosen = (
+            candidate_minutes[0]
+            if constraint.spoken_period_hint == "am"
+            else candidate_minutes[1]
+        )
+        resolved = constraint.model_copy(
+            update={
+                "start_time": _clock(chosen),
+                "start_time_ambiguity": "none",
+                "spoken_period_hint": "none",
+            }
+        )
+        return BareClockResolution(
+            status="resolved",
+            constraint=resolved,
+            candidate_clocks=candidate_clocks,
+            branch_id=branch_id,
+            requested_date=(
+                date_constraint.start_date
+                if date_constraint is not None and date_constraint.mode == "exact"
+                else None
+            ),
+        )
+
     exact = _exact_weekday(date_constraint)
     if exact is None:
         return BareClockResolution(
@@ -422,24 +451,6 @@ def resolve_bare_clock_constraint(
             requested_date=requested_date,
         )
     if len(valid_minutes) == 2:
-        if constraint.spoken_period_hint in {"am", "pm"}:
-            chosen = valid_minutes[0] if constraint.spoken_period_hint == "am" else valid_minutes[1]
-            resolved = constraint.model_copy(
-                update={
-                    "start_time": _clock(chosen),
-                    "start_time_ambiguity": "none",
-                    "spoken_period_hint": "none",
-                }
-            )
-            return BareClockResolution(
-                status="resolved",
-                constraint=resolved,
-                candidate_clocks=candidate_clocks,
-                valid_operating_hour_candidates=valid_clocks,
-                operating_hours=operating_hours,
-                branch_id=resolved_branch,
-                requested_date=requested_date,
-            )
         return BareClockResolution(
             status="clarify_period",
             constraint=constraint,

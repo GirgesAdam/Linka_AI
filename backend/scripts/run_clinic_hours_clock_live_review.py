@@ -770,6 +770,85 @@ def _run_scenario(ctx: base.Context, spec: ScenarioSpec) -> None:
     _validate_record(record, spec, ctx)
 
 
+
+def _run_stateful_explicit_period_canonical_continuation(
+    ctx: base.Context,
+    *,
+    scenario: str,
+    first_customer: str,
+    expected_canonical: str,
+) -> None:
+    """Assert explicit period authority is consumed before state persistence."""
+    _set_operating_hours(ctx, start="00:00", end="23:59")
+    CLOCK_TRACE.clear()
+    first = base._chat(ctx, first_customer)
+    first_constraints = _task_constraint_facts(first)
+    first_time = first_constraints.get("time") if isinstance(first_constraints, dict) else None
+    _require(
+        isinstance(first_time, dict)
+        and first_time.get("start_time") == expected_canonical
+        and first_time.get("start_time_ambiguity") == "none"
+        and _serialized_period_hint(first_time) == "none",
+        counter="contextual_period_misresolution",
+        message=f"{scenario}: explicit period was not canonicalized before persistence: {first_time!r}",
+    )
+    _require(
+        not (first.get("availability_requests") or []) and not (first.get("appointments") or []),
+        counter="wrong_time_writes",
+        message=f"{scenario}: missing-date turn progressed to time-dependent availability/write",
+    )
+    _require(
+        not _looks_like_period_question(str(first.get("agent") or "")),
+        counter="repeated_period_clarifications",
+        message=f"{scenario}: explicit period turn unnecessarily asked AM/PM before date",
+    )
+
+    CLOCK_TRACE.clear()
+    continued = base._chat(ctx, "\u0627\u0644\u062e\u0645\u064a\u0633")
+    canonical = next(
+        (
+            value
+            for value in (
+                _availability_clock(continued),
+                base._task_time(continued),
+                _proposal_clock(continued),
+                base._appointment_clock(continued),
+            )
+            if value
+        ),
+        None,
+    )
+    _record_transactional_safety(continued, expected_clock=expected_canonical)
+    _require(
+        canonical == expected_canonical,
+        counter="contextual_period_misresolution",
+        message=f"{scenario}: date-only continuation changed canonical time: {canonical}",
+    )
+    _require(
+        not _looks_like_period_question(str(continued.get("agent") or "")),
+        counter="repeated_period_clarifications",
+        message=f"{scenario}: date-only continuation reopened AM/PM after canonicalization",
+    )
+    continued_constraints = _task_constraint_facts(continued)
+    continued_time = (
+        continued_constraints.get("time") if isinstance(continued_constraints, dict) else None
+    )
+    if isinstance(continued_time, dict):
+        _require(
+            continued_time.get("start_time") == expected_canonical
+            and continued_time.get("start_time_ambiguity") == "none"
+            and _serialized_period_hint(continued_time) == "none",
+            counter="contextual_period_misresolution",
+            message=f"{scenario}: canonical time regressed after date-only continuation: {continued_time!r}",
+        )
+    continued["stateful_period_continuation_evidence"] = {
+        "first_persisted_time": first_time,
+        "second_canonical_time": canonical,
+        "second_persisted_time": continued_time,
+        "repeated_period_question": _looks_like_period_question(str(continued.get("agent") or "")),
+    }
+
+
 def _run_stateful_period_continuation(
     ctx: base.Context,
     *,
@@ -991,12 +1070,10 @@ def main() -> int:
     stateful_specs = [
         (
             "RA-S1",
-            lambda ctx: _run_stateful_period_continuation(
+            lambda ctx: _run_stateful_explicit_period_canonical_continuation(
                 ctx,
                 scenario="RA-S1",
                 first_customer="\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0627\u0644\u0633\u0627\u0639\u0629 10 \u0648\u0646\u0635 \u0628\u0627\u0644\u0644\u064a\u0644",
-                persisted_clock="10:30",
-                expected_hint="pm",
                 expected_canonical="22:30",
             ),
         ),
