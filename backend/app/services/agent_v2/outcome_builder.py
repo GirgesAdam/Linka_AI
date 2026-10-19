@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agents.availability_presentation import availability_windows_from_slots
-from app.agents.v2.semantic_context import SemanticContext
+from app.agents.v2.semantic_context import ReferenceKind, SemanticContext
 from app.agents.v2.terminal_composer import format_customer_datetime
 from app.agents.v2.turn_contract import TiaTurnUnderstanding
 from app.services.agent_v2.outcome import OutcomeChoice, ResponseGoal, TurnOutcome
@@ -930,6 +930,83 @@ def _patient_crm_response_facts(
     return shaped
 
 
+def _canonical_entity_name(
+    semantic_context: SemanticContext,
+    *,
+    collection: str,
+    canonical_id: object,
+    expected_kind: ReferenceKind,
+) -> str | None:
+    if canonical_id in (None, ""):
+        return None
+    rows = semantic_context.model_input.get(collection)
+    if not isinstance(rows, list):
+        return None
+    target_id = str(canonical_id)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ref = str(row.get("ref") or "").strip()
+        if not ref or semantic_context.resolve(ref, expected_kind=expected_kind) != target_id:
+            continue
+        name = str(row.get("name") or "").strip()
+        return name or None
+    return None
+
+
+def _confirmed_booking_proposal_facts(
+    facts: dict[str, object],
+    *,
+    step: PlanStep,
+    action_result: dict[str, object],
+    active_task_summary: dict[str, object],
+    semantic_context: SemanticContext,
+) -> dict[str, object]:
+    """Project customer-visible details from the exact verified proposal that just succeeded."""
+    intent = step.write_intent
+    if intent is None or intent.kind != "booking_proposal" or action_result.get("ok") is not True:
+        return facts
+    proposal = active_task_summary.get("proposal")
+    if not isinstance(proposal, dict):
+        return facts
+    expected_id = str(intent.parameters.get("proposal_id") or "")
+    proposal_id = str(proposal.get("proposal_id") or "")
+    if not expected_id or proposal_id != expected_id:
+        return facts
+    written_id = str(action_result.get("proposal_id") or "")
+    if written_id and written_id != expected_id:
+        return facts
+
+    shaped = dict(facts)
+    service_ids = proposal.get("service_ids")
+    names = _canonical_service_names(service_ids, semantic_context=semantic_context)
+    if names:
+        shaped["service_name"] = " + ".join(names)
+
+    start_at = proposal.get("start_at")
+    if isinstance(start_at, str) and start_at.strip():
+        shaped["start_local"] = start_at.strip()
+
+    doctor_name = _canonical_entity_name(
+        semantic_context,
+        collection="doctors",
+        canonical_id=proposal.get("doctor_id"),
+        expected_kind="doctor",
+    )
+    if doctor_name:
+        shaped["doctor_name"] = doctor_name
+
+    device_name = _canonical_entity_name(
+        semantic_context,
+        collection="devices",
+        canonical_id=proposal.get("device_key"),
+        expected_kind="device",
+    )
+    if device_name:
+        shaped["device_name"] = device_name
+    return shaped
+
+
 def _facts_for_completed_write(facts: dict[str, object], write_kind: str) -> dict[str, object]:
     """Hide scheduling end-times after booking/reschedule completion.
 
@@ -1399,10 +1476,18 @@ def build_step_outcome(
                 active_task_summary=active_summary,
             )
         assert step.write_intent is not None
+        completed_facts = _facts_for_completed_write(base_facts, step.write_intent.kind)
+        completed_facts = _confirmed_booking_proposal_facts(
+            completed_facts,
+            step=step,
+            action_result=action_result,
+            active_task_summary=dict(active_task_summary or {}),
+            semantic_context=semantic_context,
+        )
         return TurnOutcome(
             status="completed",
             response_goal=_completed_write_goal(step),
-            facts=_facts_for_completed_write(base_facts, step.write_intent.kind),
+            facts=completed_facts,
             action_result=_visible_dict(action_result),
             active_task_summary=active_summary,
         )

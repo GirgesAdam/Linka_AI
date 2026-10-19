@@ -284,6 +284,14 @@ _AVAILABILITY_STATE_BY_GOAL: dict[ResponseGoal, AvailabilityState] = {
     "no_availability": "no_availability",
 }
 _REQUIRED_KEYS_BY_GOAL: dict[ResponseGoal, frozenset[str]] = {
+    "booking_completed": frozenset({
+        "service_name",
+        "start_local",
+        "date",
+        "time",
+        "doctor_name",
+        "device_name",
+    }),
     "answer_price": frozenset({"service_name", "price", "device_price_options"}),
     "answer_doctor": frozenset({"doctors"}),
     "present_availability": frozenset({"availability_windows"}),

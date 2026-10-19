@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.terminal_composer import deterministic_terminal_fallback
 from app.agents.v2.turn_contract import (
     EntityReference,
     TiaTurnUnderstanding,
@@ -1266,3 +1267,150 @@ def test_grouped_availability_projects_catalog_backed_canonical_service_names() 
     assert outcome.facts["canonical_service_names"] == ["ليزر إبط", "ليزر بكيني"]
     assert "service_names" not in outcome.facts["availability"]
     assert "requested_service_ids" not in outcome.facts
+
+
+
+def _booking_completion_context():
+    return build_semantic_context(
+        {
+            "services": [
+                {
+                    "id": "svc-underarm",
+                    "name": "Underarm",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                            "configured": True,
+                        }
+                    ],
+                },
+                {
+                    "id": "svc-bikini",
+                    "name": "Bikini",
+                    "requires_laser_device": True,
+                    "laser_devices": [
+                        {
+                            "device_key": "candela_gentle",
+                            "device_name": "Candela Gentle",
+                            "configured": True,
+                        }
+                    ],
+                },
+            ],
+            "doctors": [
+                {
+                    "id": "doc-maryam",
+                    "name": "Dr. Maryam",
+                    "service_ids": ["svc-underarm", "svc-bikini"],
+                }
+            ],
+        }
+    )
+
+
+def _confirmed_proposal_payload():
+    return {
+        "proposal_id": "proposal-current",
+        "patient_id": "patient-1",
+        "service_ids": ["svc-underarm", "svc-bikini"],
+        "main_service_id": "svc-bikini",
+        "additional_service_ids": ["svc-underarm"],
+        "branch_id": "branch-1",
+        "doctor_id": "doc-maryam",
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "end_at": "2026-09-12T20:30:00+03:00",
+        "device_key": "candela_gentle",
+        "additional_service_device_keys": {"svc-underarm": "candela_gentle"},
+        "package_usage": "unspecified",
+        "package_id": None,
+        "visits": [],
+        "task_version": 5,
+        "proposal_version": 1,
+        "created_at": "2026-09-12T19:55:00+03:00",
+        "expires_at": "2026-09-12T20:15:00+03:00",
+    }
+
+
+def _confirm_proposal_step(proposal: dict[str, object]) -> PlanStep:
+    return PlanStep(
+        operation_index=0,
+        operation_type="confirm_booking_proposal",
+        disposition="write_ready",
+        response_goal="booking_completed",
+        write_intent=WriteIntent(
+            kind="booking_proposal",
+            authorized=True,
+            parameters={"proposal_id": proposal["proposal_id"], "proposal": proposal},
+        ),
+        facts={
+            "booking_proposal_confirmation": True,
+            "requested_service_ids": list(proposal["service_ids"]),
+        },
+    )
+
+
+def test_confirmed_booking_proposal_completion_exposes_canonical_details() -> None:
+    proposal = _confirmed_proposal_payload()
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+    )
+    outcome = build_step_outcome(
+        _confirm_proposal_step(proposal),
+        turn=_turn(operation),
+        semantic_context=_booking_completion_context(),
+        action_result={
+            "ok": True,
+            "write_kind": "booking_proposal",
+            "proposal_id": "proposal-current",
+            "status": "confirmed",
+        },
+        active_task_summary={"status": "awaiting_confirmation", "proposal": proposal},
+    )
+    contract = build_customer_response_contract([outcome])
+    facts = {fact.key: fact.value for fact in contract.units[0].facts}
+    requirements = {fact.key: fact.requirement for fact in contract.units[0].facts}
+
+    assert outcome.status == "completed"
+    assert facts["service_name"] == "Underarm + Bikini"
+    assert facts["start_local"] == "2026-09-12T20:00:00+03:00"
+    assert facts["doctor_name"] == "Dr. Maryam"
+    assert facts["device_name"] == "Candela Gentle"
+    assert requirements["service_name"] == "required"
+    assert requirements["start_local"] == "required"
+    assert requirements["doctor_name"] == "required"
+    assert requirements["device_name"] == "required"
+
+    text = deterministic_terminal_fallback(contract, arabic=False)
+    assert "Underarm" in text and "Bikini" in text
+    assert "Dr. Maryam" in text
+    assert "Candela Gentle" in text
+    assert "September 12" in text
+    assert "8 PM" in text
+
+
+def test_failed_booking_proposal_write_never_renders_success() -> None:
+    proposal = _confirmed_proposal_payload()
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+    )
+    outcome = build_step_outcome(
+        _confirm_proposal_step(proposal),
+        turn=_turn(operation),
+        semantic_context=_booking_completion_context(),
+        action_result={
+            "ok": False,
+            "write_kind": "booking_proposal",
+            "error_code": "booking_unavailable",
+        },
+        active_task_summary={"status": "awaiting_confirmation", "proposal": proposal},
+    )
+
+    assert outcome.status == "blocked"
+    assert outcome.response_goal != "booking_completed"
+    assert outcome.action_result.get("completed") is not True

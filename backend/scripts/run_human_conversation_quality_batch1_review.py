@@ -253,9 +253,30 @@ def ra_h3_long_continuation() -> None:
     assert final_task is not None
     assert set(final_task["requested_service_ids"]) == {"svc-underarm", "svc-bikini"}
     assert all(step.clarification_field != "service" for step in last.plan.steps)
-    assert all(trace.simulated_write is None for trace in last.traces)
+    expected_proposal = task.get("proposal")
+    assert isinstance(expected_proposal, dict)
+    writes = [trace.simulated_write for trace in last.traces if trace.simulated_write is not None]
+    assert writes == ["booking_proposal"]
+    completed = [
+        outcome
+        for outcome in last.outcomes
+        if outcome.status == "completed" and outcome.response_goal == "booking_completed"
+    ]
+    assert len(completed) == 1
+    assert completed[0].facts.get("booking_proposal_confirmation") is True
     assert last.active_task is not None
     assert set(last.active_task.requested_service_ids) == {"svc-underarm", "svc-bikini"}
+    final_proposal = transcript[5]["canonical"]["active_task"].get("proposal")
+    assert isinstance(final_proposal, dict)
+    for field in ("proposal_id", "service_ids", "start_at", "doctor_id", "device_key"):
+        assert final_proposal.get(field) == expected_proposal.get(field)
+    final_reply = str(transcript[5]["agent"] or "")
+    assert "Candela Gentle" in final_reply
+    assert "\u0645\u0631\u064a\u0645" in final_reply
+    assert "\u0625\u0628\u0637" in final_reply and "\u0628\u0643\u064a\u0646\u064a" in final_reply
+    final_digits = _ascii_decimal_digits(final_reply)
+    assert "12" in final_digits
+    assert "20" in final_digits or "8" in final_digits
     assert last.availability_reference_context is not None
     assert set(last.availability_reference_context.get("requested_service_ids", [])) == {
         "svc-underarm",

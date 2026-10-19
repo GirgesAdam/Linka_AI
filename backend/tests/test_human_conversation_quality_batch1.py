@@ -364,3 +364,17 @@ def test_q12_q13_q14_status_copy_is_appointment_specific() -> None:
     assert 'confirmed: "\u0645\u0624\u0643\u062f"' in appointment
     assert 'pending: "\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631"' in generic
     assert "appointmentLabels[value]" not in label_function
+
+
+
+def test_ra_h3_reviewer_contract_allows_verified_proposal_confirmation_write() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_human_conversation_quality_batch1_review.py"
+    ).read_text(encoding="utf-8")
+    body = source.split("def ra_h3_long_continuation()", 1)[1].split("def ra_h4_one_device()", 1)[0]
+
+    assert "assert all(trace.simulated_write is None for trace in last.traces)" not in body
+    assert 'writes == ["booking_proposal"]' in body
+    assert "booking_proposal_confirmation" in body
