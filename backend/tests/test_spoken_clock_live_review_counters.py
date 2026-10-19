@@ -9,11 +9,11 @@ from app.agents.v2.turn_contract import (
     TurnOperation,
 )
 from scripts.run_clinic_hours_clock_live_review import (
+    _ARABIC_DATE_TEXT,
     CLOCK_REVIEW_DATE,
     CLOCK_REVIEW_TODAY,
-    SCENARIOS,
-    _ARABIC_DATE_TEXT,
     SAFETY_COUNTERS,
+    SCENARIOS,
     _serialized_period_hint,
     _transactional_safety_deltas,
     _validate_stateful_same_clock_correction,
