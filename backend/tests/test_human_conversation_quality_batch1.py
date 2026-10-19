@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.agents.v2.price_device_composer import deterministic_price_device_fallback
 from app.agents.v2.responder import _deterministic_booking_proposal_reply
 from app.agents.v2.semantic_context import build_semantic_context
@@ -21,6 +23,7 @@ from app.services.agent_v2.read_executor import (
 from app.services.agent_v2.response_contract import build_customer_response_contract
 from app.services.agent_v2.state import BookingTaskState, CustomerConstraints, WriteAuthorization
 from app.services.laser_slot_metadata import encode_laser_slot_branch
+from scripts.run_human_conversation_quality_batch1_review import _assert_ra_h3_final_transition
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 
@@ -367,14 +370,58 @@ def test_q12_q13_q14_status_copy_is_appointment_specific() -> None:
 
 
 
-def test_ra_h3_reviewer_contract_allows_verified_proposal_confirmation_write() -> None:
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "scripts"
-        / "run_human_conversation_quality_batch1_review.py"
-    ).read_text(encoding="utf-8")
-    body = source.split("def ra_h3_long_continuation()", 1)[1].split("def ra_h4_one_device()", 1)[0]
+def _ra_h3_proposal(*, proposal_id: str = "proposal-current") -> dict[str, object]:
+    return {
+        "proposal_id": proposal_id,
+        "service_ids": ["svc-underarm", "svc-bikini"],
+        "start_at": "2026-09-12T20:00:00+03:00",
+        "doctor_id": "doc-maryam",
+        "device_key": "candela_gentle",
+    }
 
-    assert "assert all(trace.simulated_write is None for trace in last.traces)" not in body
-    assert 'writes == ["booking_proposal"]' in body
-    assert "booking_proposal_confirmation" in body
+
+def _ra_h3_last(*, write: str | None, completed: bool) -> SimpleNamespace:
+    outcomes = (
+        [
+            SimpleNamespace(
+                status="completed",
+                response_goal="booking_completed",
+                facts={"booking_proposal_confirmation": True},
+            )
+        ]
+        if completed
+        else [SimpleNamespace(status="answered", response_goal="booking_proposal", facts={})]
+    )
+    return SimpleNamespace(
+        traces=[SimpleNamespace(simulated_write=write)],
+        outcomes=outcomes,
+    )
+
+
+def test_ra_h3_reviewer_allows_confirmation_of_current_verified_proposal() -> None:
+    proposal = _ra_h3_proposal()
+    assert _assert_ra_h3_final_transition(
+        pre_final_task={"status": "awaiting_confirmation", "proposal": proposal},
+        final_task={"status": "awaiting_confirmation", "proposal": dict(proposal)},
+        last=_ra_h3_last(write="booking_proposal", completed=True),
+    ) is True
+
+
+def test_ra_h3_reviewer_requires_no_write_when_final_turn_creates_first_proposal() -> None:
+    proposal = _ra_h3_proposal()
+    assert _assert_ra_h3_final_transition(
+        pre_final_task={"status": "awaiting_slot", "proposal": None},
+        final_task={"status": "awaiting_confirmation", "proposal": proposal},
+        last=_ra_h3_last(write=None, completed=False),
+    ) is False
+
+
+def test_ra_h3_reviewer_rejects_stale_or_mutated_proposal_write() -> None:
+    current = _ra_h3_proposal(proposal_id="proposal-current")
+    stale = _ra_h3_proposal(proposal_id="proposal-stale")
+    with pytest.raises(AssertionError):
+        _assert_ra_h3_final_transition(
+            pre_final_task={"status": "awaiting_confirmation", "proposal": current},
+            final_task={"status": "awaiting_confirmation", "proposal": stale},
+            last=_ra_h3_last(write="booking_proposal", completed=True),
+        )
