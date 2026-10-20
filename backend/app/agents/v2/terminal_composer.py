@@ -176,6 +176,70 @@ _BOOKING_PHRASES_EN_BY_STATUS: dict[str, dict[ComposerStyle, str]] = {
     },
 }
 
+_ALREADY_COMPLETED_ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
+    "booking": {
+        "plain": "الحجز مسجل بالفعل",
+        "warm": "حجزك مسجل بالفعل",
+        "friendly": "الحجز متسجل بالفعل",
+    },
+    "reschedule": {
+        "plain": "الموعد تم تغييره بالفعل",
+        "warm": "ميعادك متغير بالفعل",
+        "friendly": "ميعادك متعدل بالفعل",
+    },
+    "cancel_appointment": {
+        "plain": "الموعد ملغي بالفعل",
+        "warm": "ميعادك ملغي بالفعل",
+        "friendly": "ميعادك متلغي بالفعل",
+    },
+}
+
+_ALREADY_COMPLETED_ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
+    "booking": {
+        "plain": "The booking was already registered",
+        "warm": "Your booking is already registered",
+        "friendly": "Your booking is already in place",
+    },
+    "reschedule": {
+        "plain": "The appointment was already rescheduled",
+        "warm": "Your appointment is already rescheduled",
+        "friendly": "Your appointment was already moved",
+    },
+    "cancel_appointment": {
+        "plain": "The appointment was already cancelled",
+        "warm": "Your appointment is already cancelled",
+        "friendly": "Your appointment was already cancelled",
+    },
+}
+
+_FAILED_ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
+    goal: {style: phrase for style in ("plain", "warm", "friendly")}
+    for goal, phrase in {
+        "booking_completed": "لم يكتمل الحجز",
+        "reschedule_completed": "لم يتم تغيير الموعد",
+        "cancellation_completed": "لم يتم إلغاء الموعد",
+        "appointment_confirmed": "لم يتم تأكيد الموعد",
+        "package_purchased": "لم تتم إضافة الباكدج للحساب",
+        "pulse_pack_purchased": "لم تتم إضافة باقة الـPulses للحساب",
+        "follow_up_created": "لم يتم تسجيل المتابعة",
+        "marketing_updated": "لم يتم تحديث تفضيلات التواصل التسويقي",
+    }.items()
+}
+
+_FAILED_ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
+    goal: {style: phrase for style in ("plain", "warm", "friendly")}
+    for goal, phrase in {
+        "booking_completed": "The booking was not completed",
+        "reschedule_completed": "The reschedule was not completed",
+        "cancellation_completed": "The cancellation was not completed",
+        "appointment_confirmed": "The appointment confirmation was not completed",
+        "package_purchased": "The package purchase was not completed",
+        "pulse_pack_purchased": "The Pulse pack purchase was not completed",
+        "follow_up_created": "The follow-up was not scheduled",
+        "marketing_updated": "The marketing preference update was not completed",
+    }.items()
+}
+
 _ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
     "booking_completed": {
         "plain": "Your booking is confirmed",
@@ -413,11 +477,26 @@ def validate_terminal_composer_draft(
             raise TerminalComposerValidationError(
                 "Terminal composer changed compound unit ordering."
             )
-        if unit.action_truth is None or unit.action_truth.succeeded is not True:
+        if unit.action_truth is None:
             raise TerminalComposerValidationError(
-                "Terminal composer received a unit without successful action truth."
+                "Terminal composer received a unit without action truth."
             )
         expected_action = TERMINAL_ACTION_BY_GOAL.get(unit.response_goal)
+        if unit.response_goal == "social_ack":
+            acknowledgment = next(
+                (fact.value for fact in unit.facts if fact.key == "acknowledgment"),
+                None,
+            )
+            if (
+                not isinstance(acknowledgment, dict)
+                or acknowledgment.get("already_completed") is not True
+                or acknowledgment.get("action") != unit.action_truth.action
+                or unit.action_truth.succeeded is not True
+            ):
+                raise TerminalComposerValidationError(
+                    "Terminal composer received invalid completed-action acknowledgment truth."
+                )
+            expected_action = unit.action_truth.action
         if expected_action is None or unit.action_truth.action != expected_action:
             raise TerminalComposerValidationError(
                 "Terminal composer received mismatched action identity."
@@ -636,7 +715,19 @@ def _action_phrase(
 ) -> str:
     phrases = _ACTION_PHRASES_AR if arabic else _ACTION_PHRASES_EN
     try:
-        if unit.response_goal == "booking_completed":
+        if unit.response_goal == "social_ack":
+            if unit.action_truth is None:
+                raise KeyError("missing action truth")
+            acknowledgment_phrases = (
+                _ALREADY_COMPLETED_ACTION_PHRASES_AR
+                if arabic
+                else _ALREADY_COMPLETED_ACTION_PHRASES_EN
+            )
+            phrase = acknowledgment_phrases[unit.action_truth.action][style]
+        elif unit.action_truth is not None and unit.action_truth.succeeded is False:
+            failed_phrases = _FAILED_ACTION_PHRASES_AR if arabic else _FAILED_ACTION_PHRASES_EN
+            phrase = failed_phrases[unit.response_goal][style]
+        elif unit.response_goal == "booking_completed":
             status = _booking_status(unit)
             if status == "confirmed":
                 phrase = phrases[unit.response_goal][style]
