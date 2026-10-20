@@ -1725,16 +1725,45 @@ def _continuation_condition_satisfied(
     *,
     previous_reads: ReadExecutionBundle | None,
     recent_read_context: dict[str, Any] | None = None,
-) -> bool:
+) -> bool | None:
     condition = getattr(operation, "continuation_condition", "always")
     if condition == "always":
         return True
     if condition == "if_previous_no_availability":
         if previous_reads is not None:
-            return _verified_no_availability(previous_reads)
-        if not bool(getattr(operation, "continues_previous", False)):
+            if _verified_no_availability(previous_reads):
+                return True
+            availability_results = [
+                result for result in previous_reads.results if result.kind == "availability"
+            ]
+            if not availability_results:
+                return None
+            for result in availability_results:
+                if not result.ok:
+                    return None
+                count = result.payload.get("matching_slot_count")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    return None
             return False
-        return _verified_recent_no_availability(recent_read_context)
+
+        if (
+            isinstance(recent_read_context, dict)
+            and recent_read_context.get("operation_type")
+            in {"availability", "book", "reschedule"}
+        ):
+            found = recent_read_context.get("availability_found")
+            option_count = recent_read_context.get("availability_option_count")
+            if (
+                isinstance(option_count, int)
+                and not isinstance(option_count, bool)
+                and option_count >= 0
+            ):
+                if isinstance(found, bool) and found is not (option_count > 0):
+                    return None
+                return option_count == 0
+            if found is True:
+                return False
+        return None
     raise RuntimeError(f"Unsupported continuation condition: {condition}")
 
 
@@ -3191,11 +3220,24 @@ def orchestrate_v2_turn(
             timezone_name=timezone_name,
         )
         operation = _operation_for_step(understanding, planned_step)
-        if not _continuation_condition_satisfied(
+        condition_result = _continuation_condition_satisfied(
             operation,
             previous_reads=operation_reads.get(planned_step.operation_index - 1),
             recent_read_context=recent_read_context,
-        ):
+        )
+        unverified_safe_reply_read = (
+            condition_result is None
+            and understanding.response_disposition == "reply"
+            and operation.type == "availability"
+            and operation.execution_intent == "informational"
+            and planned_step.disposition == "read"
+            and planned_step.write_intent is None
+            and planned_step.state_action == "none"
+            and bool(planned_step.reads)
+            and all(read.kind == "availability" for read in planned_step.reads)
+        )
+        if condition_result is not True and not unverified_safe_reply_read:
+            skip_state = "unverified" if condition_result is None else "false"
             traces.append(
                 V2RuntimeStepTrace(
                     operation_index=planned_step.operation_index,
@@ -3205,7 +3247,7 @@ def orchestrate_v2_turn(
                     read_kinds=(),
                     skipped=True,
                     skip_reason=(
-                        "continuation_condition_false:"
+                        f"continuation_condition_{skip_state}:"
                         f"{getattr(operation, 'continuation_condition', 'always')}"
                     ),
                 )
