@@ -893,6 +893,14 @@ def merge_presented_availability_context(
         isinstance(followup, dict)
         and followup.get("action") == "new_search"
     )
+    followup_time = None
+    if replace_search_scope and isinstance(followup, dict):
+        raw_followup_time = followup.get("time_constraint")
+        if isinstance(raw_followup_time, dict):
+            try:
+                followup_time = TimeConstraint.model_validate(raw_followup_time)
+            except ValueError:
+                followup_time = None
     operations: list = []
     changed = False
     for operation in turn.operations:
@@ -926,7 +934,11 @@ def merge_presented_availability_context(
             # A related new-search continuation changes only the dimensions the
             # customer actually expressed. Preserve the server-owned displayed
             # date when omitted (for example an unavailable exact-time probe),
-            # while deliberately never inheriting the old displayed time.
+            # while deliberately never inheriting the old displayed time. A typed
+            # time change supplied by the narrow semantic resolver is the verified
+            # semantic delta for this displayed-availability continuation.
+            if followup_time is not None:
+                updates["time"] = followup_time
             if operation.entities.date is None:
                 inherited_date = raw.get("date")
                 if isinstance(inherited_date, dict):

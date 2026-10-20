@@ -103,7 +103,10 @@ def _semantic_context(
     )
     if followup_action in {"new_search", "refresh_availability"}:
         model_input = dict(context.model_input)
-        model_input["availability_followup_intent"] = {"action": followup_action}
+        model_input["availability_followup_intent"] = {
+            "action": followup_action,
+            "time_constraint": None,
+        }
         context = SemanticContext(
             model_input=model_input,
             reference_map=context.reference_map,
@@ -225,6 +228,21 @@ def _run_search_case(
             reference,
             followup_action=decision.action,
         )
+        if decision.action in {"new_search", "refresh_availability"}:
+            model_input = dict(context.model_input)
+            model_input["availability_followup_intent"] = {
+                "action": decision.action,
+                "time_constraint": (
+                    decision.time_constraint.model_dump(mode="json")
+                    if decision.time_constraint is not None
+                    else None
+                ),
+            }
+            context = SemanticContext(
+                model_input=model_input,
+                reference_map=context.reference_map,
+                server_metadata=context.server_metadata,
+            )
         if decision.action == "clarify":
             details["failure_stage"] = "clarify_override"
             understanding = TiaTurnUnderstanding(
