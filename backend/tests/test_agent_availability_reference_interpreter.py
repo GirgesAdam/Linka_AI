@@ -10,7 +10,7 @@ from app.agents.v2.availability_reference_interpreter import (
     ReferenceDecision,
     interpret_availability_reference_turn,
 )
-from app.agents.v2.turn_contract import Selection
+from app.agents.v2.turn_contract import Selection, TimeConstraint
 from app.core.config import settings
 
 
@@ -68,6 +68,12 @@ def test_reference_decision_contract_is_tiny_and_rejects_invalid_ref_shape() -> 
     assert ReferenceDecision(action="refresh_availability", option_ref=None).option_ref is None
     exact = ReferenceDecision(action="new_search", option_ref=None, exact_time="03:00")
     assert exact.exact_time == "03:00"
+    relative_search = ReferenceDecision(
+        action="new_search",
+        option_ref=None,
+        time_constraint=TimeConstraint(mode="before", start_time="18:00"),
+    )
+    assert relative_search.time_constraint == TimeConstraint(mode="before", start_time="18:00")
     with pytest.raises(ValueError):
         ReferenceDecision(action="select_presented_option", option_ref=None)
     with pytest.raises(ValueError):
@@ -86,6 +92,12 @@ def test_reference_decision_contract_is_tiny_and_rejects_invalid_ref_shape() -> 
     assert clarified_exact.exact_time == "16:00"
     with pytest.raises(ValueError):
         ReferenceDecision(action="normal", option_ref=None, exact_time="03:00")
+    with pytest.raises(ValueError):
+        ReferenceDecision(
+            action="select_presented_option",
+            option_ref="opt_1",
+            time_constraint=TimeConstraint(mode="after", start_time="18:00"),
+        )
     with pytest.raises(ValueError):
         ReferenceDecision(action="normal", option_ref=None, selection_scope="device")
 
