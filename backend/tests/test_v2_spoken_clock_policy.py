@@ -83,16 +83,16 @@ def _clock(turn: TiaTurnUnderstanding) -> str:
     ("model_clock", "text", "hint", "expected"),
     [
         ("01:00", "?????? 1", "none", "13:00"),
-        ("01:00", "?????? 1 ?????", "am", "13:00"),
+        ('01:00', '?????? 1 ?????', 'am', '01:00'),
         ("03:00", "?????? 3", "none", "15:00"),
-        ("03:00", "?????? 3 ?????", "am", "15:00"),
-        ("15:00", "?????? 3 ??????", "pm", "15:00"),
+        ('03:00', '?????? 3 ?????', 'am', '03:00'),
+        ('15:00', '?????? 3 ??????', 'pm', '15:00'),
         ("16:15", "?????? 4 ????", "none", "16:15"),
-        ("04:15", "?????? 4 ???? ?????", "am", "16:15"),
+        ('04:15', '?????? 4 ???? ?????', 'am', '04:15'),
         ("09:00", "?????? 9", "none", "21:00"),
     ],
 )
-def test_spoken_1_to_9_normal_clinic_prefers_pm(
+def test_spoken_1_to_9_respects_explicit_period_else_prefers_operational_pm(
     model_clock: str, text: str, hint: str, expected: str
 ) -> None:
     turn, _ = _pipeline(model_clock, text=text, hint=hint, start="10:00", end="22:00")
@@ -105,13 +105,13 @@ def test_spoken_1_to_9_normal_clinic_prefers_pm(
     ("model_clock", "text", "hint", "expected"),
     [
         ("01:00", "?????? 1", "none", "01:00"),
-        ("13:00", "?????? 1 ??????", "pm", "01:00"),
+        ('13:00', '?????? 1 ??????', 'pm', '13:00'),
         ("03:00", "?????? 3", "none", "03:00"),
-        ("15:00", "?????? 3 ??????", "pm", "03:00"),
-        ("03:00", "?????? 3 ?????", "am", "03:00"),
+        ('15:00', '?????? 3 ??????', 'pm', '15:00'),
+        ('03:00', '?????? 3 ?????', 'am', '03:00'),
     ],
 )
-def test_spoken_1_to_9_am_only_clinic_ignores_period_hint(
+def test_spoken_1_to_9_am_only_clinic_preserves_explicit_period(
     model_clock: str, text: str, hint: str, expected: str
 ) -> None:
     turn, _ = _pipeline(model_clock, text=text, hint=hint, start="00:00", end="05:00")
@@ -255,13 +255,13 @@ def test_noon_is_not_a_provider_hint_value() -> None:
 
 
 @pytest.mark.parametrize("hint", ["am", "pm"])
-def test_1_to_9_provider_hint_is_neutralized_before_resolution(hint: str) -> None:
+def test_1_to_9_provider_hint_is_preserved_before_resolution(hint: str) -> None:
     normalized = _normalize_time_semantics_v2(
         _turn("03:00", hint=hint), latest_customer_text="?????? 3 ?????"
     )
     assert _constraint(normalized).start_time == "03:00"
     assert _constraint(normalized).start_time_ambiguity == "twelve_hour"
-    assert _constraint(normalized).spoken_period_hint == "none"
+    assert _constraint(normalized).spoken_period_hint == hint
 
 
 def test_structural_literal_neutralizes_provider_hint() -> None:
@@ -320,3 +320,48 @@ def test_1130_uses_same_generic_candidate_policy() -> None:
     )
     assert _clock(turn) == "23:30"
     assert _constraint(turn).spoken_period_hint == "none"
+
+
+@pytest.mark.parametrize(
+    ("model_clock", "hint", "clinic_start", "clinic_end", "expected"),
+    [
+        ("09:00", "am", "10:00", "22:00", "09:00"),
+        ("21:00", "pm", "00:00", "23:59", "21:00"),
+        ("15:00", "pm", "00:00", "05:00", "15:00"),
+    ],
+)
+def test_explicit_1_to_9_period_authority_outranks_clinic_hours(
+    model_clock: str, hint: str, clinic_start: str, clinic_end: str, expected: str
+) -> None:
+    turn, _ = _pipeline(
+        model_clock,
+        text="spoken clock with explicit period",
+        hint=hint,
+        start=clinic_start,
+        end=clinic_end,
+    )
+
+    assert _clock(turn) == expected
+    assert _constraint(turn).start_time_ambiguity == "none"
+    assert _constraint(turn).spoken_period_hint == "none"
+
+
+def test_explicit_period_outside_hours_keeps_exact_clock_until_availability_check() -> None:
+    turn, context = _pipeline(
+        "09:00",
+        text="spoken clock with explicit morning period",
+        hint="am",
+        start="10:00",
+        end="22:00",
+    )
+
+    step = plan_turn(
+        turn,
+        PlannerContext(semantic_context=context, active_task=None, now=NOW),
+    ).steps[0]
+
+    assert _clock(turn) == "09:00"
+    assert step.disposition == "read"
+    assert step.write_intent is None
+    assert any(read.kind == "availability" for read in step.reads)
+    assert step.facts["time"]["start_time"] == "09:00"

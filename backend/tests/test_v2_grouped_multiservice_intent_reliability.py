@@ -975,7 +975,7 @@ def test_integrated_grouped_spoken_clock_addition_preserves_canonical_time() -> 
                     time=TimeConstraint(
                         mode="exact",
                         start_time="03:00",
-                        spoken_period_hint="am",
+                        spoken_period_hint="none",
                     ),
                 ),
             )

@@ -1510,7 +1510,7 @@ def _normalize_spoken_period_hint(
     hint: str,
     literal_clock: str | None,
 ) -> str:
-    """Keep provider hints only where clinic hours cannot resolve the spoken clock alone."""
+    """Preserve explicit AM/PM authority for ambiguous spoken clocks."""
     if literal_clock is not None or ambiguity != "twelve_hour":
         return "none"
     try:
@@ -1518,7 +1518,7 @@ def _normalize_spoken_period_hint(
     except ValueError:
         return "none"
     if 1 <= parsed.hour <= 9:
-        return "none"
+        return hint if hint in {"am", "pm"} else "none"
     if parsed.hour in {10, 11}:
         return hint if hint in {"am", "pm"} else "none"
     if parsed.hour == 12:
