@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
+    ActiveTaskRelativeDate,
     DateConstraint,
+    Selection,
     TiaTurnUnderstanding,
     TimeConstraint,
     TurnEntities,
@@ -21,7 +23,12 @@ from app.services.agent_v2.planner import (
     plan_turn,
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
-from app.services.agent_v2.state import RescheduleTaskState
+from app.services.agent_v2.state import (
+    CustomerConstraints,
+    RescheduleTarget,
+    RescheduleTaskState,
+    WriteAuthorization,
+)
 from app.services.agent_v2.state_executor import apply_step_state
 
 NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
@@ -96,6 +103,242 @@ def _appointment_row(appointment_id: str = "apt-1") -> dict[str, object]:
         "laser_device_key": "candela_gentle",
         "start_local": "2026-09-14T19:00:00+03:00",
     }
+
+
+def _active_reschedule_state(
+    *,
+    target_start_local: str = "2026-10-24T15:00:00+03:00",
+    replacement_date: str | None = None,
+) -> RescheduleTaskState:
+    return RescheduleTaskState(
+        write_authorization=WriteAuthorization(
+            operation="reschedule",
+            authorized=True,
+            source_turn_id="turn-anchor",
+            granted_at=NOW,
+        ),
+        target=RescheduleTarget(
+            appointment_id="apt-1",
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            start_local=target_start_local,
+        ),
+        replacement=CustomerConstraints(
+            service_id="svc-underarm",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            date=(
+                DateConstraint(mode="exact", start_date=replacement_date)
+                if replacement_date
+                else None
+            ),
+        ),
+    )
+
+
+
+def _relative_reschedule_operation(*, weekday: str, requested_time: str | None = None) -> TurnOperation:
+    explicit_fields = ["date"]
+    if requested_time is not None:
+        explicit_fields.append("time")
+    return TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            time=(
+                TimeConstraint(mode="exact", start_time=requested_time)
+                if requested_time is not None
+                else None
+            )
+        ),
+        active_task_relative_date=ActiveTaskRelativeDate(
+            relation="next_occurrence",
+            weekday=weekday,
+        ),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=explicit_fields,
+    )
+
+
+def _adapt_active_reschedule(
+    state: RescheduleTaskState,
+    operation: TurnOperation,
+):
+    fresh_step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(active_task=state),
+    ).steps[0]
+    return adapt_matching_active_task_step(
+        fresh_step,
+        operation=operation,
+        active_task=state,
+        context=_semantic_context(),
+    )
+
+
+def test_active_reschedule_next_same_weekday_resolves_from_verified_target_and_writes_later_date() -> None:
+    state = _active_reschedule_state()
+    operation = _relative_reschedule_operation(weekday="saturday", requested_time="18:00")
+    adapted = _adapt_active_reschedule(state, operation)
+
+    assert adapted.disposition == "state_update"
+    assert adapted.facts["date"]["start_date"] == "2026-10-31"
+    assert adapted.facts["time"]["start_time"] == "18:00"
+
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-next-saturday",
+    ).active_task
+    assert isinstance(updated, RescheduleTaskState)
+    assert updated.replacement.date is not None
+    assert updated.replacement.date.start_date == "2026-10-31"
+    assert updated.replacement.time is not None
+    assert updated.replacement.time.start_time == "18:00"
+
+    progress = plan_active_task_progress(updated, operation_index=0, context=_semantic_context())
+    availability = next(read for read in progress.reads if read.kind == "availability")
+    assert availability.parameters["date"]["start_date"] == "2026-10-31"
+    assert availability.parameters["time"]["start_time"] == "18:00"
+
+    ready = advance_step_after_verification(
+        progress,
+        VerificationFacts(
+            appointment_match_count=1,
+            exact_slot_match_count=1,
+            verified_parameters={"start_at": "2026-10-31T18:00:00+03:00"},
+        ),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.parameters["start_at"] == "2026-10-31T18:00:00+03:00"
+
+
+def test_active_reschedule_next_weekday_uses_current_replacement_as_repeated_anchor() -> None:
+    state = _active_reschedule_state(replacement_date="2026-10-31")
+    operation = _relative_reschedule_operation(weekday="saturday")
+    adapted = _adapt_active_reschedule(state, operation)
+    assert adapted.facts["date"]["start_date"] == "2026-11-07"
+
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-next-saturday-again",
+    ).active_task
+    assert isinstance(updated, RescheduleTaskState)
+    assert updated.replacement.date is not None
+    assert updated.replacement.date.start_date == "2026-11-07"
+
+
+def test_active_reschedule_next_different_weekday_uses_calendar_distance_not_fixed_week() -> None:
+    state = _active_reschedule_state(target_start_local="2026-10-22T15:00:00+03:00")
+    operation = _relative_reschedule_operation(weekday="saturday")
+    adapted = _adapt_active_reschedule(state, operation)
+    assert adapted.facts["date"]["start_date"] == "2026-10-24"
+
+
+def test_active_reschedule_relative_date_without_verified_anchor_fails_closed() -> None:
+    state = _active_reschedule_state(target_start_local=None)
+    operation = _relative_reschedule_operation(weekday="saturday")
+    adapted = _adapt_active_reschedule(state, operation)
+    assert adapted.disposition == "clarify"
+    assert adapted.clarification_field == "date"
+    assert adapted.state_action == "none"
+    assert adapted.write_intent is None
+
+
+def test_active_reschedule_same_date_and_explicit_exact_date_controls_remain_normal() -> None:
+    state = _active_reschedule_state()
+    same_date = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-24"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+    )
+    same_adapted = _adapt_active_reschedule(state, same_date)
+    same_updated = apply_step_state(
+        state,
+        step=same_adapted,
+        operation=same_date,
+        reads=None,
+        now=NOW,
+        turn_id="turn-same-date",
+    ).active_task
+    assert isinstance(same_updated, RescheduleTaskState)
+    assert same_updated.replacement.date is not None
+    assert same_updated.replacement.date.start_date == "2026-10-24"
+    assert same_updated.replacement.time is not None
+    assert same_updated.replacement.time.start_time == "18:00"
+
+    exact_date = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(date=DateConstraint(mode="exact", start_date="2026-10-31")),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+    )
+    exact_adapted = _adapt_active_reschedule(state, exact_date)
+    exact_updated = apply_step_state(
+        state,
+        step=exact_adapted,
+        operation=exact_date,
+        reads=None,
+        now=NOW,
+        turn_id="turn-exact-date",
+    ).active_task
+    assert isinstance(exact_updated, RescheduleTaskState)
+    assert exact_updated.replacement.date is not None
+    assert exact_updated.replacement.date.start_date == "2026-10-31"
+
+
+def test_reschedule_misrouted_relative_option_shape_fails_closed_before_state_authority() -> None:
+    state = _active_reschedule_state()
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-24"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        selection=Selection(kind="relative", relative="next"),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+    )
+    fresh_step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(active_task=state),
+    ).steps[0]
+    adapted = adapt_matching_active_task_step(
+        fresh_step,
+        operation=operation,
+        active_task=state,
+        context=_semantic_context(),
+    )
+
+    assert adapted.disposition == "clarify"
+    assert adapted.state_action == "none"
+    assert adapted.write_intent is None
+
+    transition = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="turn-bad-relative-shape",
+    )
+    assert transition.active_task == state
 
 
 def test_reschedule_anchors_unique_target_before_date_then_reuses_same_id_on_follow_up() -> None:

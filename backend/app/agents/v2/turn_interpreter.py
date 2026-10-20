@@ -320,6 +320,13 @@ SEMANTIC PRINCIPLES
   If the customer explicitly supplies a next-available date scope and an exact time in the same message, list
   both date and time. If the latest message only authorizes/acknowledges the change without restating either
   dimension, leave this list empty even if an inferred/default date or time entity is emitted.
+- For an active reschedule continuation, when the latest customer turn explicitly asks for the next
+  occurrence of a named weekday relative to the current active reschedule date, set
+  active_task_relative_date with relation=next_occurrence and that weekday, include date in
+  active_task_explicit_fields, and leave entities.date null. Do not calculate the resulting exact date
+  and do not use Selection.relative for this calendar meaning; Python resolves it from durable verified
+  reschedule state. If the customer supplies an exact/same date instead, leave active_task_relative_date
+  null and use the normal entities.date contract.
 - cleared_active_task_fields is explicit CLEAR provenance, not omission. In this contract only doctor is
   supported. When the customer explicitly removes any doctor preference for the current unfinished task,
   set cleared_active_task_fields=[doctor] and leave entities.doctor null. Do not use CLEAR for an unknown or

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.time_resolution import BareClockResolution, resolve_bare_clock_constraint
-from app.agents.v2.turn_contract import TimeConstraint, TurnOperation
+from app.agents.v2.turn_contract import DateConstraint, TimeConstraint, TurnOperation
 from app.services.agent_v2.branch_task_resolution import resolve_scheduling_branch_parameters
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import ActiveTaskState, BookingTaskState, RescheduleTaskState
@@ -359,6 +359,54 @@ def _booking_followup_parameters(
     )
 
 
+def _active_reschedule_date_anchor(state: RescheduleTaskState) -> date | None:
+    replacement_date = state.replacement.date
+    if (
+        replacement_date is not None
+        and replacement_date.mode == "exact"
+        and replacement_date.start_date is not None
+    ):
+        try:
+            return date.fromisoformat(replacement_date.start_date)
+        except ValueError:
+            return None
+
+    start_local = state.target.start_local
+    if not start_local:
+        return None
+    try:
+        return datetime.fromisoformat(start_local.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _resolve_active_reschedule_relative_date(
+    operation: TurnOperation,
+    *,
+    state: RescheduleTaskState,
+) -> DateConstraint | None:
+    relative_date = operation.active_task_relative_date
+    if relative_date is None:
+        return None
+    anchor = _active_reschedule_date_anchor(state)
+    if anchor is None:
+        return None
+    target_weekday = (
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ).index(relative_date.weekday)
+    delta = (target_weekday - anchor.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    resolved = anchor + timedelta(days=delta)
+    return DateConstraint(mode="exact", start_date=resolved.isoformat())
+
+
 ActiveTaskLifecycle = Literal["preserve", "continue", "replace"]
 
 
@@ -557,6 +605,17 @@ def adapt_matching_active_task_step(
     if appointment is not None and appointment.candidate_refs:
         return step
 
+    if operation.selection is not None and operation.selection.kind == "relative":
+        return PlanStep(
+            operation_index=step.operation_index,
+            operation_type=operation.type,
+            disposition="clarify",
+            state_action="none",
+            response_goal="clarification",
+            clarification_field="date",
+            facts={"reason": "relative_selection_is_not_calendar_authority"},
+        )
+
     alternatives = _verified_alternative_doctor_candidates(
         operation,
         service_id=active_task.replacement.service_id,
@@ -603,6 +662,23 @@ def adapt_matching_active_task_step(
     explicit_target = params.pop("appointment_id", None)
     if explicit_target is not None and str(explicit_target) != active_task.target.appointment_id:
         return step
+
+    if operation.active_task_relative_date is not None:
+        resolved_relative_date = _resolve_active_reschedule_relative_date(
+            operation,
+            state=active_task,
+        )
+        if resolved_relative_date is None:
+            return PlanStep(
+                operation_index=step.operation_index,
+                operation_type=operation.type,
+                disposition="clarify",
+                state_action="none",
+                response_goal="clarification",
+                clarification_field="date",
+                facts={"reason": "missing_authoritative_reschedule_date_anchor"},
+            )
+        params["date"] = resolved_relative_date.model_dump(mode="json")
 
     # ``next_available`` is a search scope, not a concrete reschedule date.  If the
     # durable task still has no replacement date while an exact time is already

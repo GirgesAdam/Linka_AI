@@ -61,6 +61,15 @@ ClockSource = Literal[
 ]
 SelectionKind = Literal["index", "time", "ref", "relative"]
 RelativeSelection = Literal["next", "previous", "first", "last"]
+CalendarWeekday = Literal[
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
 EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
 FinancialOwnership = Literal["none", "reception"]
@@ -287,6 +296,13 @@ class Selection(StrictContractModel):
         return self
 
 
+class ActiveTaskRelativeDate(StrictContractModel):
+    """Turn-local calendar relation for an active reschedule date correction."""
+
+    relation: Literal["next_occurrence"]
+    weekday: CalendarWeekday
+
+
 class AppointmentSelector(StrictContractModel):
     """Existing-appointment identity constraints, separate from replacement constraints."""
 
@@ -444,6 +460,17 @@ class TurnOperation(StrictContractModel):
             "this marker on non-task operations."
         ),
     )
+    active_task_relative_date: ActiveTaskRelativeDate | None = Field(
+        default=None,
+        description=(
+            "Turn-local calendar relation for an active reschedule continuation. Use only when the "
+            "latest customer turn explicitly requests the next occurrence of a named weekday relative "
+            "to the current active reschedule date. Set relation=next_occurrence and the requested "
+            "weekday, include date in active_task_explicit_fields, and leave entities.date null. "
+            "Python resolves the canonical exact date from durable verified reschedule state. Never "
+            "use Selection.relative for calendar-date meaning."
+        ),
+    )
     active_task_explicit_fields: list[ActiveTaskExplicitField] = Field(
         default_factory=list,
         description=(
@@ -599,10 +626,11 @@ class TurnOperation(StrictContractModel):
         else:
             date_entity = getattr(entities, "date", None)
             time_entity = getattr(entities, "time", None)
+        relative_date = value.get("active_task_relative_date")
         applicable = [
             field
             for field in explicit
-            if (field != "date" or date_entity is not None)
+            if (field != "date" or date_entity is not None or relative_date is not None)
             and (field != "time" or time_entity is not None)
         ]
         if applicable == explicit:
@@ -618,10 +646,37 @@ class TurnOperation(StrictContractModel):
             raise ValueError(
                 "active_task_explicit_fields is only valid for active booking/reschedule continuations."
             )
-        if "date" in explicit and self.entities.date is None:
-            raise ValueError("active-task explicit date marker requires a date entity.")
+        if (
+            "date" in explicit
+            and self.entities.date is None
+            and self.active_task_relative_date is None
+        ):
+            raise ValueError(
+                "active-task explicit date marker requires a date entity or typed relative date."
+            )
         if "time" in explicit and self.entities.time is None:
             raise ValueError("active-task explicit time marker requires a time entity.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_active_task_relative_date(self) -> TurnOperation:
+        relative_date = self.active_task_relative_date
+        if relative_date is None:
+            return self
+        if self.type != "reschedule" or self.active_task_relationship != "continue":
+            raise ValueError(
+                "active_task_relative_date is only valid for active reschedule continuations."
+            )
+        if self.fresh_task:
+            raise ValueError("active_task_relative_date cannot start a fresh reschedule task.")
+        if "date" not in set(self.active_task_explicit_fields):
+            raise ValueError("active_task_relative_date requires explicit active-task date provenance.")
+        if self.entities.date is not None:
+            raise ValueError("active_task_relative_date cannot compete with entities.date authority.")
+        if self.selection is not None and self.selection.kind == "relative":
+            raise ValueError(
+                "calendar-relative date semantics cannot reuse Selection.relative option authority."
+            )
         return self
 
     @model_validator(mode="after")
