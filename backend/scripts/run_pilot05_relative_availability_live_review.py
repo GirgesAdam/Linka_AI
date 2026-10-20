@@ -378,7 +378,7 @@ def main() -> int:
         ),
         _run_search_case(
             "D_earlier",
-            message="عايز حاجة أبدر من الوقت ده",
+            message="عايز ميعاد أبكر من الساعة دي",
             recent_time=exact_1800,
             selected_ref="opt_2",
             expected_action="new_search",
@@ -387,7 +387,7 @@ def main() -> int:
         ),
         _run_search_case(
             "E_later",
-            message="عايز حاجة بعد الوقت ده",
+            message="عايز ميعاد متأخر عن الساعة دي",
             recent_time=exact_1800,
             selected_ref="opt_2",
             expected_action="new_search",
