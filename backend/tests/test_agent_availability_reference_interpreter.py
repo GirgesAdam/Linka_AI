@@ -40,6 +40,9 @@ def _context(*, selected: str | None = None) -> dict[str, object]:
                 "end_time_24h": "17:00",
                 "doctor_name": "Mariam",
                 "slot": {"doctor_id": "must-never-reach-model"},
+                "canonical_candidates": [
+                    {"doctor_id": "internal-only", "start_time_24h": "16:00"}
+                ],
             },
         ]
     }
@@ -128,6 +131,7 @@ def test_model_input_contains_only_displayed_safe_options_and_opaque_refs() -> N
     assert payload["last_presented_availability_options"][2]["concrete"] is False
     assert "slot" not in payload["last_presented_availability_options"][0]
     assert "doctor_id" not in payload["last_presented_availability_options"][0]
+    assert "canonical_candidates" not in payload["last_presented_availability_options"][2]
 
 
 @pytest.mark.parametrize(

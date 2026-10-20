@@ -140,6 +140,7 @@ class PlannerContext:
     now: datetime
     pending_choice: OptionSnapshot | None = None
     explicit_user_time: str | None = None
+    availability_reference_exact_time: str | None = None
     recent_read_context: dict[str, object] | None = None
     availability_reference_context: dict[str, object] | None = None
 
@@ -486,6 +487,39 @@ def _clarify(
         response_goal=goal,
         clarification_field=field,
         facts=dict(facts or {}),
+    )
+
+
+def _availability_reference_clarification(
+    *,
+    index: int,
+    operation: TurnOperation,
+    resolution: dict[str, object],
+) -> PlanStep:
+    raw_dimensions = resolution.get("ambiguous_dimensions")
+    dimensions = (
+        [str(item) for item in raw_dimensions if str(item) in {"doctor", "device"}]
+        if isinstance(raw_dimensions, list)
+        else []
+    )
+    field: ClarificationField = (
+        dimensions[0] if len(dimensions) == 1 else "availability_reference"
+    )
+    status = str(resolution.get("status") or "unavailable")
+    exact_time = str(resolution.get("exact_time") or "").strip()[:5]
+    return _clarify(
+        index=index,
+        operation=operation,
+        field=field,
+        facts={
+            "verified_availability_reference": True,
+            "availability_reference_reason": status,
+            **(
+                {"availability_reference_pending_time": exact_time}
+                if exact_time and status == "window_ambiguous"
+                else {}
+            ),
+        },
     )
 
 
@@ -853,10 +887,13 @@ def _plan_verified_availability_reference(
     ):
         return None
     reference_context = context.availability_reference_context or context.recent_read_context
+    reference_exact_time = (
+        context.availability_reference_exact_time or context.explicit_user_time
+    )
     resolution = resolve_verified_availability_reference(
         selection,
         reference_context,
-        explicit_user_time=context.explicit_user_time,
+        explicit_user_time=reference_exact_time,
     )
     status = str(resolution.get("status") or "unavailable")
     if status == "resolved":
@@ -875,16 +912,10 @@ def _plan_verified_availability_reference(
                     "availability_reference_option": safe_option,
                 },
             )
-    return PlanStep(
-        operation_index=index,
-        operation_type=operation.type,
-        disposition="clarify",
-        response_goal="clarification",
-        clarification_field="availability_reference",
-        facts={
-            "verified_availability_reference": True,
-            "availability_reference_reason": status,
-        },
+    return _availability_reference_clarification(
+        index=index,
+        operation=operation,
+        resolution=resolution,
     )
 
 
@@ -942,19 +973,15 @@ def _plan_operation(
         resolution = resolve_verified_availability_reference(
             operation.selection,
             context.availability_reference_context,
-            explicit_user_time=context.explicit_user_time,
+            explicit_user_time=(
+                context.availability_reference_exact_time or context.explicit_user_time
+            ),
         )
         if resolution.get("status") != "resolved":
-            return _clarify(
+            return _availability_reference_clarification(
                 index=index,
                 operation=operation,
-                field="availability_reference",
-                facts={
-                    "verified_availability_reference": True,
-                    "availability_reference_reason": str(
-                        resolution.get("status") or "unavailable"
-                    ),
-                },
+                resolution=resolution,
             )
         params.update(_verified_reference_parameters(resolution))
         params["verified_availability_reference"] = True

@@ -241,6 +241,207 @@ def test_compressed_availability_window_never_becomes_invented_slot() -> None:
     assert resolved["status"] == "window_ambiguous"
 
 
+
+def _compressed_window_for_slots(
+    slots: list[dict[str, object]],
+    *,
+    doctor_name: str | None = None,
+    device_name: str | None = None,
+) -> dict[str, object]:
+    return {
+        "start_local": slots[0]["start_local"],
+        "end_local": slots[-1]["start_local"],
+        "start_time_24h": slots[0]["start_time_24h"],
+        "end_time_24h": slots[-1]["start_time_24h"],
+        **({"doctor_name": doctor_name} if doctor_name is not None else {}),
+        **({"laser_device_name": device_name} if device_name is not None else {}),
+    }
+
+
+def test_compressed_window_exact_clock_resolves_one_canonical_candidate() -> None:
+    slots = [_slot("17:00"), _slot("17:30"), _slot("18:00"), _slot("18:30")]
+    options = build_availability_reference_options(
+        displayed_windows=[
+            _compressed_window_for_slots(
+                slots,
+                doctor_name=str(slots[0]["doctor_name"]),
+                device_name="Candela",
+            )
+        ],
+        verified_slots=slots,
+    )
+    assert options[0]["concrete"] is False
+    assert "slot" not in options[0]
+
+    resolved = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        {"availability_reference_options": options},
+        explicit_user_time="18:00",
+    )
+
+    assert resolved["status"] == "resolved"
+    option = resolved["option"]
+    assert isinstance(option, dict)
+    assert option["concrete"] is True
+    assert option["slot"]["start_time_24h"] == "18:00"
+    assert option["slot"]["doctor_id"] == DOCTOR_ID
+    assert option["slot"]["laser_device_key"] == DEVICE_KEY
+
+
+def test_compressed_window_exact_clock_zero_match_never_snaps_to_neighbor() -> None:
+    slots = [_slot("17:00"), _slot("17:30"), _slot("18:00")]
+    options = build_availability_reference_options(
+        displayed_windows=[_compressed_window_for_slots(slots)],
+        verified_slots=slots,
+    )
+
+    resolved = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        {"availability_reference_options": options},
+        explicit_user_time="18:15",
+    )
+
+    assert resolved["status"] == "explicit_time_mismatch"
+    assert "slot" not in resolved["option"]
+
+
+def test_compressed_window_same_clock_multiple_candidates_preserves_clock_and_dimension() -> None:
+    first = _slot("18:00")
+    second = _slot("18:00")
+    second["doctor_id"] = "doctor-sara"
+    second["doctor_name"] = "Sara"
+    options = build_availability_reference_options(
+        displayed_windows=[
+            {
+                "start_local": first["start_local"],
+                "end_local": first["start_local"],
+                "start_time_24h": "18:00",
+                "end_time_24h": "18:00",
+                "laser_device_name": "Candela",
+            }
+        ],
+        verified_slots=[first, second],
+    )
+
+    resolved = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        {"availability_reference_options": options},
+        explicit_user_time="18:00",
+    )
+
+    assert resolved["status"] == "window_ambiguous"
+    assert resolved["exact_time"] == "18:00"
+    assert resolved["ambiguous_dimensions"] == ["doctor"]
+    assert "slot" not in resolved["option"]
+
+
+def test_compressed_doctor_and_device_windows_resolve_exact_clock_without_invention() -> None:
+    doctor_slots = [_slot("17:00"), _slot("17:30")]
+    device_slots = [_slot("19:30"), _slot("20:00")]
+    doctor_options = build_availability_reference_options(
+        displayed_windows=[
+            _compressed_window_for_slots(doctor_slots, doctor_name=str(doctor_slots[0]["doctor_name"]))
+        ],
+        verified_slots=doctor_slots,
+    )
+    device_options = build_availability_reference_options(
+        displayed_windows=[
+            _compressed_window_for_slots(device_slots, device_name="Candela")
+        ],
+        verified_slots=device_slots,
+    )
+
+    doctor = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        {"availability_reference_options": doctor_options},
+        explicit_user_time="17:00",
+    )
+    device = resolve_verified_availability_reference(
+        Selection(kind="ref", ref="opt_1"),
+        {"availability_reference_options": device_options},
+        explicit_user_time="20:00",
+    )
+
+    assert doctor["status"] == "resolved"
+    assert doctor["option"]["slot"]["doctor_id"] == DOCTOR_ID
+    assert doctor["option"]["slot"]["start_time_24h"] == "17:00"
+    assert device["status"] == "resolved"
+    assert device["option"]["slot"]["laser_device_key"] == DEVICE_KEY
+    assert device["option"]["slot"]["start_time_24h"] == "20:00"
+
+
+
+def test_semantic_exact_clock_reaches_reference_planner_without_raw_colon_authority() -> None:
+    slots = [_slot("17:00"), _slot("18:30"), _slot("20:00")]
+    options = build_availability_reference_options(
+        displayed_windows=[_compressed_window_for_slots(slots)],
+        verified_slots=slots,
+    )
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(),
+        selection=Selection(kind="ref", ref="opt_1"),
+        execution_intent="informational",
+        continues_previous=True,
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation]),
+        PlannerContext(
+            semantic_context=_semantic(),
+            active_task=None,
+            now=NOW,
+            explicit_user_time=None,
+            availability_reference_exact_time="18:30",
+            availability_reference_context={"availability_reference_options": options},
+        ),
+    ).steps[0]
+
+    assert step.disposition == "respond"
+    selected = step.facts["availability_reference_option"]
+    assert selected["start_time_24h"] == "18:30"
+
+
+def test_same_clock_multi_candidate_planner_preserves_time_and_asks_only_doctor() -> None:
+    first = _slot("20:00")
+    second = _slot("20:00")
+    second["doctor_id"] = "doctor-sara"
+    second["doctor_name"] = "Sara"
+    options = build_availability_reference_options(
+        displayed_windows=[
+            {
+                "start_local": first["start_local"],
+                "end_local": first["start_local"],
+                "start_time_24h": "20:00",
+                "end_time_24h": "20:00",
+                "laser_device_name": "Candela",
+            }
+        ],
+        verified_slots=[first, second],
+    )
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(),
+        selection=Selection(kind="ref", ref="opt_1"),
+        execution_intent="informational",
+        continues_previous=True,
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation]),
+        PlannerContext(
+            semantic_context=_semantic(),
+            active_task=None,
+            now=NOW,
+            explicit_user_time=None,
+            availability_reference_exact_time="20:00",
+            availability_reference_context={"availability_reference_options": options},
+        ),
+    ).steps[0]
+
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "doctor"
+    assert step.facts["availability_reference_pending_time"] == "20:00"
+
+
 def test_compressed_window_exposes_only_internal_unique_scope_authority() -> None:
     first = _slot("14:15", end="14:45")
     second = _slot("14:45", end="15:15")
@@ -261,10 +462,17 @@ def test_compressed_window_exposes_only_internal_unique_scope_authority() -> Non
     assert option["doctor_id"] == DOCTOR_ID
     assert option["device_key"] == DEVICE_KEY
     assert "slot" not in option
+    assert len(option["canonical_candidates"]) == 2
 
     safe = customer_safe_reference_option(option)
     assert "doctor_id" not in safe
     assert "device_key" not in safe
+    assert "canonical_candidates" not in safe
+    model_safe = presented_availability_semantic_view(
+        {"availability_reference_options": options},
+        context=_semantic(),
+    )
+    assert "canonical_candidates" not in model_safe["options"][0]
     assert safe["doctor_name"] == "يوسف"
     assert safe["laser_device_name"] == "Candela"
 

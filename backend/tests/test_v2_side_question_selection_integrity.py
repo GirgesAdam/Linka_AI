@@ -20,6 +20,7 @@ from app.services.agent_v2.orchestrator import (
     _verified_pending_reference_time,
 )
 from app.services.agent_v2.planner import PlannerContext, plan_turn
+from app.services.agent_v2.reference_resolution import build_availability_reference_options
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
@@ -231,6 +232,60 @@ def test_explicit_time_compressed_window_requires_unique_snapshot_slot() -> None
         explicit_user_time="16:00",
         now=NOW,
     ) is None
+
+
+
+def test_active_booking_same_clock_ambiguity_preserves_time_and_asks_only_doctor() -> None:
+    task = _task()
+    assert task.option_snapshot is not None
+    first = dict(task.option_snapshot.options[0].payload)
+    second = {
+        **first,
+        "doctor_id": "doctor-sara",
+        "doctor_name": "Sara",
+    }
+    task = task.model_copy(
+        update={
+            "option_snapshot": task.option_snapshot.model_copy(
+                update={
+                    "options": [
+                        task.option_snapshot.options[0],
+                        OptionChoice(ref="slot-sara", label="16:00 Sara", payload=second),
+                    ]
+                }
+            )
+        }
+    )
+    context = {
+        "availability_reference_options": build_availability_reference_options(
+            displayed_windows=[
+                {
+                    "start_local": first["start_local"],
+                    "end_local": first["start_local"],
+                    "start_time_24h": "16:00",
+                    "end_time_24h": "16:00",
+                    "laser_device_name": "Candela",
+                }
+            ],
+            verified_slots=[first, second],
+        )
+    }
+    semantic = SemanticContext(model_input={}, reference_map={}, server_metadata={})
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[_selection_operation()]),
+        PlannerContext(
+            semantic_context=semantic,
+            active_task=task,
+            now=NOW,
+            availability_reference_exact_time="16:00",
+            availability_reference_context=context,
+        ),
+    ).steps[0]
+
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "doctor"
+    assert step.write_intent is None
+    assert step.facts["availability_reference_pending_time"] == "16:00"
 
 
 def test_verified_option_ref_binds_canonical_doctor_time_and_slot_ref() -> None:

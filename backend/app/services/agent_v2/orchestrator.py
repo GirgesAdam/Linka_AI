@@ -2750,10 +2750,42 @@ def orchestrate_v2_turn(
             and selection_time is None
             else None
         )
+        ambiguous_current_reference = False
+        if (
+            initial_task is not None
+            and validated_reference_context is None
+            and selection_time is not None
+            and initial_task.option_snapshot is not None
+            and initial_task.option_snapshot.is_current(
+                task_version=initial_task.version,
+                now=local_now,
+            )
+        ):
+            unresolved = resolve_verified_availability_reference(
+                Selection(kind="ref", ref=decision.option_ref),
+                availability_reference_context,
+                explicit_user_time=selection_time,
+            )
+            raw_dimensions = unresolved.get("ambiguous_dimensions")
+            dimensions = (
+                [
+                    str(item)
+                    for item in raw_dimensions
+                    if str(item) in {"doctor", "device"}
+                ]
+                if isinstance(raw_dimensions, list)
+                else []
+            )
+            ambiguous_current_reference = (
+                unresolved.get("status") == "window_ambiguous"
+                and unresolved.get("exact_time") == selection_time
+                and bool(dimensions)
+            )
         stale_active_selection = (
             initial_task is not None
             and validated_reference_context is None
             and window_narrowing_facts is None
+            and not ambiguous_current_reference
         )
         if stale_active_selection:
             # A stale option reference is not enough to select a slot, but it should
@@ -3004,6 +3036,7 @@ def orchestrate_v2_turn(
             now=local_now,
             pending_choice=pending_choice,
             explicit_user_time=explicit_user_time,
+            availability_reference_exact_time=selection_time,
             recent_read_context=recent_read_context,
             availability_reference_context=availability_reference_context,
         ),
