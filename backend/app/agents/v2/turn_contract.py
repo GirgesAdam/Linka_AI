@@ -322,7 +322,16 @@ class TurnEntities(StrictContractModel):
     appointment: EntityReference | None = None
     package: EntityReference | None = None
     date: DateConstraint | None = None
-    time: TimeConstraint | None = None
+    time: TimeConstraint | None = Field(
+        default=None,
+        description=(
+            "Time constraint the latest customer meaning explicitly states or changes. On a continuation, "
+            "do not omit this field when the customer changes only the time relation: represent nearest, "
+            "before/earlier, or after/later with the existing TimeConstraint modes even when Python will "
+            "inherit the unchanged date/service/doctor/device or the exact comparison anchor from verified "
+            "context. Leave null only when the latest customer meaning does not change or state time."
+        ),
+    )
     package_sessions: int | None = Field(
         default=None,
         description=(
