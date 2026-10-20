@@ -386,6 +386,8 @@ def main() -> int:
         "end_time_ambiguity": "none",
     }
     cases = [
+        _run_option_case("A_presented_next", anchor=True),
+        _run_option_case("B_next_without_anchor", anchor=False),
         _run_search_case(
             "C_nearest",
             message="اختارلي أقرب ميعاد متاح",
