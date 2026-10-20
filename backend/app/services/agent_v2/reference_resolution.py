@@ -90,6 +90,31 @@ def _one_shared_value(
     return next(iter(values)) if len(values) == 1 else None
 
 
+def _candidate_ambiguity_dimensions(
+    rows: list[dict[str, object]],
+) -> list[str]:
+    dimensions: list[str] = []
+    doctor_values = {
+        str(row.get("doctor_id") or row.get("doctor_name"))
+        for row in rows
+        if (row.get("doctor_id") or row.get("doctor_name")) not in (None, "")
+    }
+    if len(doctor_values) > 1:
+        dimensions.append("doctor")
+    device_values = {
+        str(row.get("laser_device_key") or row.get("device_key") or row.get("laser_device_name"))
+        for row in rows
+        if (
+            row.get("laser_device_key")
+            or row.get("device_key")
+            or row.get("laser_device_name")
+        ) not in (None, "")
+    }
+    if len(device_values) > 1:
+        dimensions.append("device")
+    return dimensions
+
+
 def resolve_verified_availability_scope(
     *,
     option_ref: str,
@@ -174,6 +199,11 @@ def build_availability_reference_options(
             option["device_key"] = shared_device_key
         if concrete:
             option["slot"] = _safe_slot(exact[0])
+        elif candidates:
+            # Backend-only canonical evidence for narrowing a displayed window by an
+            # explicit exact clock. Semantic/model views intentionally whitelist
+            # presentation fields and never expose these candidate payloads.
+            option["canonical_candidates"] = [_safe_slot(slot) for slot in candidates]
         options.append({key: value for key, value in option.items() if value not in (None, "")})
     return options
 
@@ -232,11 +262,50 @@ def resolve_verified_availability_reference(
         option = options[target - 1]
 
     result: dict[str, object] = {"status": status, "index": target, "option": option}
+    explicit = str(explicit_user_time or "").strip()[:5]
     if option.get("concrete") is not True or not isinstance(option.get("slot"), dict):
+        if explicit:
+            raw_candidates = option.get("canonical_candidates")
+            candidates = (
+                [dict(item) for item in raw_candidates if isinstance(item, dict)]
+                if isinstance(raw_candidates, list)
+                else []
+            )
+            if candidates:
+                matches = [
+                    candidate
+                    for candidate in candidates
+                    if canonical_availability_slot_time(candidate) == explicit
+                ]
+                result["exact_time"] = explicit
+                result["matching_candidate_count"] = len(matches)
+                if not matches:
+                    result["status"] = "explicit_time_mismatch"
+                    return result
+                if len(matches) == 1:
+                    selected = _safe_slot(matches[0])
+                    materialized = dict(option)
+                    materialized.update(
+                        {
+                            "concrete": True,
+                            "slot": selected,
+                            "start_local": selected.get("start_local"),
+                            "end_local": selected.get("start_local"),
+                            "start_time_24h": canonical_availability_slot_time(selected),
+                            "end_time_24h": canonical_availability_slot_time(selected),
+                        }
+                    )
+                    result["option"] = {
+                        key: value
+                        for key, value in materialized.items()
+                        if value not in (None, "")
+                    }
+                    result["status"] = "resolved"
+                    return result
+                result["ambiguous_dimensions"] = _candidate_ambiguity_dimensions(matches)
         result["status"] = "window_ambiguous"
         return result
 
-    explicit = str(explicit_user_time or "").strip()[:5]
     if explicit:
         slot = option.get("slot")
         slot_time = canonical_availability_slot_time(slot) if isinstance(slot, dict) else None
