@@ -160,7 +160,10 @@ SEMANTIC PRINCIPLES
   evidence that the latest turn is changing the currently displayed availability search rather than
   selecting an old option. For a related availability scope change, emit availability with
   continues_previous=true, include only constraints the customer actually changes, and do not ask to
-  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Treat
+  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. When this hint
+  includes time_constraint, it is typed semantic evidence that the latest turn changes time within the
+  current displayed scope. Do not synthesize a new date from nearest/before/after wording; leave
+  entities.date null unless the latest customer message explicitly states or changes a date. Treat
   action=refresh_availability as the same verified availability search being requested again: emit an
   availability continuation so Python performs a fresh read. This hint is semantic only; it never
   supplies canonical IDs, slots, write authority, or permission to invent constraints.
@@ -884,6 +887,14 @@ def merge_presented_availability_context(
         isinstance(followup, dict)
         and followup.get("action") == "new_search"
     )
+    followup_time = None
+    if replace_search_scope and isinstance(followup, dict):
+        raw_followup_time = followup.get("time_constraint")
+        if isinstance(raw_followup_time, dict):
+            try:
+                followup_time = TimeConstraint.model_validate(raw_followup_time)
+            except ValueError:
+                followup_time = None
     operations: list = []
     changed = False
     for operation in turn.operations:
@@ -917,7 +928,11 @@ def merge_presented_availability_context(
             # A related new-search continuation changes only the dimensions the
             # customer actually expressed. Preserve the server-owned displayed
             # date when omitted (for example an unavailable exact-time probe),
-            # while deliberately never inheriting the old displayed time.
+            # while deliberately never inheriting the old displayed time. A typed
+            # time change supplied by the narrow semantic resolver is the verified
+            # semantic delta for this displayed-availability continuation.
+            if followup_time is not None:
+                updates["time"] = followup_time
             if operation.entities.date is None:
                 inherited_date = raw.get("date")
                 if isinstance(inherited_date, dict):

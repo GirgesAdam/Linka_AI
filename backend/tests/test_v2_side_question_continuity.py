@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.agents.v2.semantic_context import SemanticContext
 from app.agents.v2.turn_contract import (
     DateConstraint,
@@ -12,10 +14,13 @@ from app.agents.v2.turn_contract import (
 from app.agents.v2.turn_interpreter import merge_presented_availability_context
 
 
-def _context(*, action: str) -> SemanticContext:
+def _context(*, action: str, time_constraint: dict[str, object] | None = None) -> SemanticContext:
     return SemanticContext(
         model_input={
-            "availability_followup_intent": {"action": action},
+            "availability_followup_intent": {
+                "action": action,
+                "time_constraint": time_constraint,
+            },
             "presented_availability": {
                 "service_ref": "S19",
                 "doctor_ref": "D2",
@@ -125,3 +130,55 @@ def test_refresh_does_not_overwrite_explicit_semantic_corrections() -> None:
     assert operation.entities.date == explicit_date
     assert operation.entities.time == explicit_time
     assert operation.package_usage == "avoid_existing"
+
+
+@pytest.mark.parametrize(
+    ("mode", "start_time"),
+    [
+        ("nearest", None),
+        ("before", "18:00"),
+        ("after", "18:00"),
+    ],
+)
+def test_new_search_applies_typed_relative_time_delta_and_preserves_scope(
+    mode: str,
+    start_time: str | None,
+) -> None:
+    time_constraint = {
+        "mode": mode,
+        "start_time": start_time,
+        "end_time": None,
+        "start_time_ambiguity": "none",
+        "end_time_ambiguity": "none",
+    }
+    model_turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(),
+                execution_intent="informational",
+                continues_previous=True,
+            )
+        ]
+    )
+
+    result = merge_presented_availability_context(
+        model_turn,
+        _context(action="new_search", time_constraint=time_constraint),
+    )
+    operation = result.operations[0]
+
+    assert operation.continues_previous is True
+    assert operation.fresh_task is False
+    assert operation.entities.service == EntityReference(ref="S19")
+    assert operation.entities.doctor == EntityReference(ref="D2")
+    assert operation.entities.device == EntityReference(ref="V1")
+    assert operation.entities.date == DateConstraint(
+        mode="exact",
+        start_date="2026-10-12",
+    )
+    assert operation.entities.time == TimeConstraint(
+        mode=mode,
+        start_time=start_time,
+        start_time_ambiguity="none",
+    )
