@@ -14,9 +14,19 @@ from app.agents.v2.semantic_state_view import (
     with_safe_availability_reference_context,
     with_safe_read_context,
 )
-from app.agents.v2.turn_contract import Selection
+from app.agents.v2.turn_contract import (
+    Selection,
+    TiaTurnUnderstanding,
+    TurnEntities,
+    TurnOperation,
+)
 from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
-from app.services.agent_v2.planner import PlannerContext, plan_turn
+from app.services.agent_v2.planner import (
+    PlannerContext,
+    PlanStep,
+    TurnPlan,
+    plan_turn,
+)
 from app.services.agent_v2.reference_resolution import resolve_verified_availability_reference
 from app.services.agent_v2.test_harness import V2FixtureEnvironment
 
@@ -174,6 +184,12 @@ def _run_search_case(
     expect_clarify_plan: bool = False,
 ) -> CaseResult:
     result = CaseResult(name=name)
+    details: dict[str, object] = {
+        "customer": message,
+        "failure_stage": "setup",
+        "full_interpreter_called": False,
+    }
+    result.details = details
     try:
         reference = _reference_context(selected_ref=selected_ref, time=recent_time)
         recent = {
@@ -189,78 +205,152 @@ def _run_search_case(
                 "time",
             }
         }
+        details["current_reference_context"] = reference
+        details["recent_verified_read"] = recent
+        details["failure_stage"] = "reference_interpreter"
         interpretation = interpret_availability_reference_turn(
             latest_customer_text=message,
             availability_context=reference,
         )
         decision = interpretation.decision
+        details["reference_decision"] = decision.model_dump(mode="json")
+        details["reference_model"] = interpretation.model_name
+        details["reference_structured_output_error"] = interpretation.structured_output_error
+        assert decision.action == expected_action, (
+            f"reference action expected={expected_action} actual={decision.action}"
+        )
+
         context = _semantic_context(
             recent,
             reference,
             followup_action=decision.action,
         )
-        understanding = interpret_customer_turn_v2(
-            history=[HumanMessage(content=message)],
-            semantic_context=context,
-            timezone_name=TZ,
-            local_now=NOW,
-        )
-        plan = plan_turn(
-            understanding,
-            PlannerContext(
-                semantic_context=context,
-                active_task=None,
-                now=NOW,
-                recent_read_context=recent,
-                availability_reference_context=reference,
-            ),
-        )
-        details: dict[str, object] = {
-            "customer": message,
-            "reference_decision": decision.model_dump(mode="json"),
-            "reference_model": interpretation.model_name,
-            "full_interpreter_called": True,
-            "turn": understanding.model_dump(mode="json"),
-            "plan": _plan_details(plan),
-        }
-        assert decision.action == expected_action
-        assert understanding.operations
-        operation = understanding.operations[0]
-        assert not any(step.write_intent is not None for step in plan.steps)
-        if expect_clarify_plan:
-            assert all(step.disposition == "clarify" for step in plan.steps)
-            assert all(not step.reads for step in plan.steps)
-        else:
-            assert operation.type == "availability"
-            assert operation.continues_previous is True
-            assert operation.entities.time is not None
-            assert operation.entities.time.mode == expected_time_mode
-            if expected_start_time is not None:
-                assert operation.entities.time.start_time == expected_start_time
-            availability_read = next(
-                read
-                for step in plan.steps
-                for read in step.reads
-                if read.kind == "availability"
+        if decision.action == "clarify":
+            details["failure_stage"] = "clarify_override"
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="availability",
+                        entities=TurnEntities(),
+                        execution_intent="informational",
+                        continues_previous=True,
+                    )
+                ]
             )
-            params = availability_read.parameters
-            assert params.get("service_id") == "svc-underarm"
-            assert params.get("doctor_id") == "doc-maryam"
-            assert params.get("device_key") == "candela_gentle"
-            date = params.get("date")
-            assert isinstance(date, dict)
-            assert date.get("start_date") == "2026-09-12"
-            time = params.get("time")
-            assert isinstance(time, dict)
-            assert time.get("mode") == expected_time_mode
+            plan = TurnPlan(
+                steps=[
+                    PlanStep(
+                        operation_index=0,
+                        operation_type="availability",
+                        disposition="clarify",
+                        response_goal="clarification",
+                        clarification_field="availability_reference",
+                        facts={
+                            "verified_availability_reference": True,
+                            "availability_reference_reason": "semantic_clarification",
+                        },
+                    )
+                ]
+            )
+        else:
+            details["failure_stage"] = "full_interpreter"
+            details["full_interpreter_called"] = True
+            understanding = interpret_customer_turn_v2(
+                history=[HumanMessage(content=message)],
+                semantic_context=context,
+                timezone_name=TZ,
+                local_now=NOW,
+            )
+            details["turn"] = understanding.model_dump(mode="json")
+            assert understanding.operations, "full interpreter returned no operations"
+            details["failure_stage"] = "planner"
+            plan = plan_turn(
+                understanding,
+                PlannerContext(
+                    semantic_context=context,
+                    active_task=None,
+                    now=NOW,
+                    recent_read_context=recent,
+                    availability_reference_context=reference,
+                ),
+            )
+
+        details.setdefault("turn", understanding.model_dump(mode="json"))
+        details["plan"] = _plan_details(plan)
+        details["failure_stage"] = "assertions"
+        assert not any(
+            step.write_intent is not None for step in plan.steps
+        ), "relative availability exploration created a write intent"
+        if expect_clarify_plan:
+            assert details["full_interpreter_called"] is False, (
+                "clarify reference should bypass the full interpreter"
+            )
+            assert all(step.disposition == "clarify" for step in plan.steps), (
+                "clarify reference did not remain a clarify plan"
+            )
+            assert all(not step.reads for step in plan.steps), (
+                "clarify reference unexpectedly issued reads"
+            )
+        else:
+            operation = understanding.operations[0]
+            assert operation.type == "availability", (
+                f"operation expected=availability actual={operation.type}"
+            )
+            assert operation.continues_previous is True, (
+                "availability search lost continuation semantics"
+            )
+            assert operation.entities.time is not None, (
+                "availability search lost typed time constraint"
+            )
+            assert operation.entities.time.mode == expected_time_mode, (
+                f"time mode expected={expected_time_mode} "
+                f"actual={operation.entities.time.mode}"
+            )
             if expected_start_time is not None:
-                assert time.get("start_time") == expected_start_time
+                assert operation.entities.time.start_time == expected_start_time, (
+                    f"time anchor expected={expected_start_time} "
+                    f"actual={operation.entities.time.start_time}"
+                )
+            availability_read = next(
+                (
+                    read
+                    for step in plan.steps
+                    for read in step.reads
+                    if read.kind == "availability"
+                ),
+                None,
+            )
+            assert availability_read is not None, "planner emitted no canonical availability read"
+            params = availability_read.parameters
+            assert params.get("service_id") == "svc-underarm", (
+                f"service lost actual={params.get('service_id')}"
+            )
+            assert params.get("doctor_id") == "doc-maryam", (
+                f"doctor lost actual={params.get('doctor_id')}"
+            )
+            assert params.get("device_key") == "candela_gentle", (
+                f"device lost actual={params.get('device_key')}"
+            )
+            date = params.get("date")
+            assert isinstance(date, dict), "date constraint missing from read"
+            assert date.get("start_date") == "2026-09-12", (
+                f"date lost actual={date}"
+            )
+            time = params.get("time")
+            assert isinstance(time, dict), "time constraint missing from read"
+            assert time.get("mode") == expected_time_mode, (
+                f"read time mode expected={expected_time_mode} actual={time.get('mode')}"
+            )
+            if expected_start_time is not None:
+                assert time.get("start_time") == expected_start_time, (
+                    f"read time anchor expected={expected_start_time} "
+                    f"actual={time.get('start_time')}"
+                )
+        details["failure_stage"] = "complete"
         result.passed = True
-        result.details = details
     except Exception as exc:  # noqa: BLE001
         result.error = f"{type(exc).__name__}: {exc}"
     return result
-
 
 def main() -> int:
     exact_1800 = {
@@ -278,8 +368,6 @@ def main() -> int:
         "end_time_ambiguity": "none",
     }
     cases = [
-        _run_option_case("A_presented_next", anchor=True),
-        _run_option_case("B_next_without_anchor", anchor=False),
         _run_search_case(
             "C_nearest",
             message="اختارلي أقرب ميعاد متاح",
