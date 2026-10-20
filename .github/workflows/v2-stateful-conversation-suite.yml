@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - agent-core-v2-semantic-contract
+      - fix/pilot-relative-availability-routing-20261020
     paths:
       - .github/workflows/v2-stateful-conversation-suite.yml
       - backend/scripts/run_v2_stateful_conversation_suite.py
+      - backend/scripts/run_pilot05_relative_availability_live_review.py
       - backend/app/agents/v2/**
       - backend/app/services/agent_v2/**
   workflow_dispatch:
@@ -61,5 +63,16 @@ jobs:
         shell: bash
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
-      - name: Run V2 stateful conversation suite
+      - name: Run V2 stateful multi-turn suite
+        if: ${{ github.ref_name != 'fix/pilot-relative-availability-routing-20261020' }}
         run: python scripts/run_v2_stateful_conversation_suite.py
+      - name: Run PILOT-05 relative availability diagnostic
+        if: ${{ github.ref_name == 'fix/pilot-relative-availability-routing-20261020' }}
+        run: python scripts/run_pilot05_relative_availability_live_review.py
+      - name: Upload PILOT-05 diagnostic artifact
+        if: ${{ always() && github.ref_name == 'fix/pilot-relative-availability-routing-20261020' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot05-relative-availability-live-review
+          path: backend/artifacts/pilot05-relative-availability-live-review.json
+          if-no-files-found: error
