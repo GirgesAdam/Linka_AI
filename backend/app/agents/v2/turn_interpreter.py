@@ -162,9 +162,12 @@ SEMANTIC PRINCIPLES
   continues_previous=true, include the constraint the customer actually changes, and do not ask to
   reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Do not drop a
   changed time relation merely because the old displayed options already contain a candidate in that
-  direction: if the customer asks for the nearest available time, emit entities.time mode=nearest; if
-  they ask for availability earlier/before or later/after the authoritative exact time in
-  recent_verified_read, emit mode=before or mode=after and use that verified exact start_time as the
+  direction. A time-relative new_search changes the time constraint, not the verified date: when the
+  latest customer meaning changes only time, leave entities.date null so Python inherits the verified
+  date; never replace that date with next_available. The requested time relation itself MUST be emitted
+  in entities.time rather than omitted: if the customer asks for the nearest available time, use
+  mode=nearest; if they ask for availability earlier/before or later/after the authoritative exact time
+  in recent_verified_read, use mode=before or mode=after and copy that verified exact start_time as the
   anchor. The narrow resolver has already separated these availability-timeline searches from
   previous/next displayed-option navigation. Treat action=refresh_availability as the same verified
   availability search being requested again: emit an
