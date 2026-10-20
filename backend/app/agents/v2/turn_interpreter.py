@@ -160,7 +160,10 @@ SEMANTIC PRINCIPLES
   evidence that the latest turn is changing the currently displayed availability search rather than
   selecting an old option. For a related availability scope change, emit availability with
   continues_previous=true, include only constraints the customer actually changes, and do not ask to
-  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Treat
+  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. When this hint
+  includes time_constraint, it is typed semantic evidence that the latest turn changes time within the
+  current displayed scope. Do not synthesize a new date from nearest/before/after wording; leave
+  entities.date null unless the latest customer message explicitly states or changes a date. Treat
   action=refresh_availability as the same verified availability search being requested again: emit an
   availability continuation so Python performs a fresh read. This hint is semantic only; it never
   supplies canonical IDs, slots, write authority, or permission to invent constraints.
