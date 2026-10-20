@@ -191,6 +191,61 @@ def _merge_and_plan(
     return merged.operations[0], step
 
 
+def test_relative_time_followup_reuses_verified_scope_and_replaces_only_time() -> None:
+    for constraint in (
+        TimeConstraint(mode="nearest"),
+        TimeConstraint(mode="before", start_time="18:00"),
+        TimeConstraint(mode="after", start_time="18:00"),
+    ):
+        semantic, raw = _presented_context(old_time="18:00")
+        model_input = dict(semantic.model_input)
+        model_input["availability_followup_intent"] = {
+            "action": "new_search",
+            "time_constraint": constraint.model_dump(mode="json"),
+        }
+        semantic = SemanticContext(
+            model_input=model_input,
+            reference_map=semantic.reference_map,
+            server_metadata=semantic.server_metadata,
+        )
+        turn = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="availability",
+                    entities=TurnEntities(),
+                    execution_intent="informational",
+                    continues_previous=True,
+                )
+            ]
+        )
+
+        merged = merge_presented_availability_context(turn, semantic).operations[0]
+        step = plan_turn(
+            TiaTurnUnderstanding(operations=[merged]),
+            PlannerContext(
+                semantic_context=semantic,
+                active_task=None,
+                now=NOW,
+                availability_reference_context=raw,
+            ),
+        ).steps[0]
+
+        assert semantic.resolve(merged.entities.service.ref, expected_kind="service") == UNDERARM
+        assert semantic.resolve(merged.entities.doctor.ref, expected_kind="doctor") == DOCTOR
+        assert semantic.resolve(merged.entities.device.ref, expected_kind="device") == CANDELA
+        assert merged.entities.date == DateConstraint(mode="exact", start_date=TUESDAY)
+        assert merged.entities.time == constraint
+        assert step.disposition == "read"
+        assert step.write_intent is None
+        params = step.reads[0].parameters
+        assert params["service_id"] == UNDERARM
+        assert params["doctor_id"] == DOCTOR
+        assert params["device_key"] == CANDELA
+        assert params["date"]["start_date"] == TUESDAY
+        assert params["time"]["mode"] == constraint.mode
+        assert params["time"].get("start_time") == constraint.start_time
+
+
 def test_d1_original_ra6_rebinds_server_owned_scope_after_price_side_read() -> None:
     semantic, raw = _presented_context(recent_read_operation="pricing")
     operation, step = _merge_and_plan(

@@ -2623,7 +2623,14 @@ def orchestrate_v2_turn(
     decision = reference_interpretation.decision if reference_interpretation is not None else None
     if decision is not None and decision.action in {"new_search", "refresh_availability"}:
         model_input = dict(semantic_context.model_input)
-        model_input["availability_followup_intent"] = {"action": decision.action}
+        model_input["availability_followup_intent"] = {
+            "action": decision.action,
+            "time_constraint": (
+                decision.time_constraint.model_dump(mode="json")
+                if decision.time_constraint is not None
+                else None
+            ),
+        }
         semantic_context = SemanticContext(
             model_input=model_input,
             reference_map=semantic_context.reference_map,
