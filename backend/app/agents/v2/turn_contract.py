@@ -160,8 +160,8 @@ class TimeConstraint(StrictContractModel):
         default="none",
         exclude=True,
         description=(
-            "Clock disambiguation hint only. Use am/pm only for spoken 10/11-hour clocks when "
-            "the customer explicitly distinguishes the period; use midnight only for explicit "
+            "Clock disambiguation hint only. Use am/pm for a spoken 12-hour clock when the "
+            "customer explicitly distinguishes AM vs PM; use midnight only for explicit "
             "midnight at 12; use none otherwise. Python owns final resolution from clinic hours."
         ),
     )
@@ -214,8 +214,8 @@ class Selection(StrictContractModel):
         default="none",
         exclude=True,
         description=(
-            "Clock disambiguation hint only. Use am/pm for a spoken 10/11-hour clock when the "
-            "customer explicitly distinguishes the period, including a period-only answer to a "
+            "Clock disambiguation hint only. Use am/pm for a spoken 12-hour clock when the "
+            "customer explicitly distinguishes AM vs PM, including a period-only answer to a "
             "pending time clarification; use none otherwise. Python owns final resolution."
         ),
     )
