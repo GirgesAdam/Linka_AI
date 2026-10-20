@@ -159,18 +159,9 @@ SEMANTIC PRINCIPLES
   over the current server-owned displayed availability. Treat action=new_search as strong semantic
   evidence that the latest turn is changing the currently displayed availability search rather than
   selecting an old option. For a related availability scope change, emit availability with
-  continues_previous=true, include the constraint the customer actually changes, and do not ask to
-  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Do not drop a
-  changed time relation merely because the old displayed options already contain a candidate in that
-  direction. A time-relative new_search changes the time constraint, not the verified date: when the
-  latest customer meaning changes only time, leave entities.date null so Python inherits the verified
-  date; never replace that date with next_available. The requested time relation itself MUST be emitted
-  in entities.time rather than omitted: if the customer asks for the nearest available time, use
-  mode=nearest; if they ask for availability earlier/before or later/after the authoritative exact time
-  in recent_verified_read, use mode=before or mode=after and copy that verified exact start_time as the
-  anchor. The narrow resolver has already separated these availability-timeline searches from
-  previous/next displayed-option navigation. Treat action=refresh_availability as the same verified
-  availability search being requested again: emit an
+  continues_previous=true, include only constraints the customer actually changes, and do not ask to
+  reconfirm unchanged service/doctor/device/date facts merely because they are omitted. Treat
+  action=refresh_availability as the same verified availability search being requested again: emit an
   availability continuation so Python performs a fresh read. This hint is semantic only; it never
   supplies canonical IDs, slots, write authority, or permission to invent constraints.
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
