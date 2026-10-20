@@ -18,7 +18,11 @@ from app.services.agent_v2.orchestrator import (
     _prepare_booking_proposal,
     _verified_booking_selection_plan,
 )
-from app.services.agent_v2.planner import VerificationFacts, advance_step_after_verification
+from app.services.agent_v2.planner import (
+    PlanStep,
+    VerificationFacts,
+    advance_step_after_verification,
+)
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import (
     BookingTaskState,
@@ -28,6 +32,7 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import apply_step_state
+from app.services.agent_v2.state_persistence import _decode_flow_task, _task_namespace
 from app.services.agent_v2.test_harness import V2FixtureEnvironment
 
 NOW = datetime(2026, 9, 12, 15, 0, tzinfo=UTC)
@@ -378,11 +383,48 @@ def test_single_service_fresh_verification_builds_proposal_without_db_write_auth
         timezone_name="Africa/Cairo",
     )
     assert final.status == "awaiting_confirmation"
+    assert final.requested_service_ids == [A]
     assert final.proposal is not None
     assert final.proposal.service_ids == [A]
     assert final.derived.selected_slot_ref == "opt_1"
     assert final.constraints.time is not None and final.constraints.time.start_time == "20:00"
     assert final.write_authorization.authorized is False
+
+    reloaded = _decode_flow_task(
+        SimpleNamespace(
+            entity_state={"agent_core_v2": _task_namespace(final)},
+            flow_type="booking",
+        )
+    )
+    assert isinstance(reloaded, BookingTaskState)
+    assert reloaded.requested_service_ids == [A]
+    assert reloaded.proposal is not None
+    assert reloaded.proposal.service_ids == [A]
+
+    # Semantic cancel_active represents a customer declining the pending proposal.
+    decline_step = PlanStep(
+        operation_index=0,
+        operation_type="cancel_active",
+        disposition="state_update",
+        state_action="cancel_active",
+        response_goal="active_task_cancelled",
+    )
+    declined = apply_step_state(
+        reloaded,
+        step=decline_step,
+        operation=TurnOperation(
+            type="cancel_active",
+            execution_intent="informational",
+            entities=TurnEntities(),
+        ),
+        reads=None,
+        now=NOW,
+        turn_id="single-declined",
+        catalog=_catalog(grouped=False),
+    )
+    assert decline_step.write_intent is None
+    assert declined.changed is True
+    assert declined.active_task is None
 
 
 def test_stateful_h3_selection_reuses_production_boundary_and_reaches_proposal(
