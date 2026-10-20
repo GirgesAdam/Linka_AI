@@ -857,7 +857,17 @@ def merge_verified_read_context(
                 if durable_updates:
                     entities = entities.model_copy(update=durable_updates)
 
-        operations.append(operation.model_copy(update={"entities": entities}))
+        operation_updates: dict[str, object] = {"entities": entities}
+        if (
+            fallback_disproved
+            and operation.type == "availability"
+            and operation.execution_intent == "informational"
+        ):
+            # The conditional alternative is disproved by verified availability.
+            # The scope above has already been restored to the verified prior read;
+            # execute that safe read normally so a reply-required turn cannot vanish.
+            operation_updates["continuation_condition"] = "always"
+        operations.append(operation.model_copy(update=operation_updates))
     return turn.model_copy(update={"operations": operations})
 
 
