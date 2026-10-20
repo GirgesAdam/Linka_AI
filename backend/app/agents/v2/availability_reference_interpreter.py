@@ -107,16 +107,27 @@ selection may use it to finish selecting one current displayed window; a new exp
 Actions:
 - select_presented_option: the customer is selecting/correcting/referencing one displayed option and
   the intended option is unambiguous. Return that supplied option_ref. This includes references by
-  position, displayed clock time, doctor/device when they identify one displayed window, or relative wording.
+  position, displayed clock time, doctor/device when they identify one displayed window, or wording that is
+  explicitly relative to the presented-option sequence. A next/previous-one request may use
+  last_selected_option_ref as its anchor. Do not use this action merely because an availability-timeline
+  request could be satisfied by one of the currently displayed neighboring options.
   Set selection_scope=device only when the customer selected that option by its displayed device identity;
   set selection_scope=doctor only when they selected it by displayed doctor identity; otherwise use none.
   Do not infer a scope dimension merely because the displayed option happens to contain one.
   For a compressed window plus a customer clock, exact_time may carry the semantically understood 24-hour
   clock; Python validates it against the current server-owned exact slots.
 - refresh_availability: the customer wants Linka to check availability again / refresh the same search.
-- new_search: the customer changes or starts an availability search scope such as doctor/service/date/time. An explicit clock time that does not match any displayed option is a time change/new search, not an ambiguous displayed-option reference.
+- new_search: the customer changes or starts an availability search scope such as doctor/service/date/time.
+  This includes asking for the nearest available appointment/time and asking for availability earlier or later
+  than an authoritative exact time. These are availability-timeline searches, not previous/next displayed-option
+  navigation, even when a currently displayed option happens to satisfy the requested direction. An explicit
+  clock time that does not match any displayed option is a time change/new search, not an ambiguous
+  displayed-option reference.
 - clarify: the customer is referring to the displayed options but the intended option cannot be determined
-  safely, including a relative request with no usable anchor. If the customer explicitly expressed a clock and
+  safely, including a presented-option-relative request with no usable selected-option anchor. Also clarify an
+  earlier/later availability-timeline request when there is no authoritative exact clock anchor. A range/window
+  in current_time_constraint is not an exact anchor and must not be converted into one of its boundaries or a
+  displayed option. If the customer explicitly expressed a clock and
   multiple displayed options share that same clock, preserve that semantically understood 24-hour clock in
   exact_time while leaving option_ref null. Do not preserve a clock the customer did not express.
 - normal: the latest message is not merely resolving the displayed availability (for example a side question,
@@ -128,6 +139,9 @@ Safety:
   that window by doctor/device only, return its option_ref with exact_time=null so Python can narrow the
   current task without inventing a slot. If the customer also supplies a clock, return that option_ref and
   the semantically understood exact_time; Python must match it to exactly one current slot.
+- For availability-timeline earlier/later meaning, current_time_constraint may be used only when its mode is
+  exact and it carries start_time. A concrete last_selected_option_ref can also identify the exact displayed
+  time the customer is referring to. If neither gives an exact anchor, clarify rather than guessing one.
 - Natural 12-hour clock wording without a colon/explicit AM-PM marker is semantic, not 24-hour authority.
   If exactly one displayed option corresponds to that natural clock reading, select that supplied option_ref.
   If more than one displayed option could correspond to it (for example both 03:00 and 15:00), clarify rather
@@ -177,9 +191,18 @@ def _messages(
             }
             if safe.get("option_ref"):
                 options.append(safe)
+    raw_time = availability_context.get("time")
+    current_time_constraint = None
+    if isinstance(raw_time, dict):
+        current_time_constraint = {
+            key: raw_time.get(key)
+            for key in ("mode", "start_time", "end_time")
+            if raw_time.get(key) not in (None, "")
+        }
     payload = {
         "last_presented_availability_options": options,
         "last_selected_option_ref": availability_context.get("last_selected_option_ref"),
+        "current_time_constraint": current_time_constraint,
         "pending_exact_time": availability_context.get("pending_exact_time"),
         "latest_customer_message": latest_customer_text,
     }

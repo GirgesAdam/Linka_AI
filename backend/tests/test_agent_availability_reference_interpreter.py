@@ -117,12 +117,25 @@ def test_presented_option_ref_normalizes_only_redundant_provider_coordinates() -
 
 
 def test_model_input_contains_only_displayed_safe_options_and_opaque_refs() -> None:
+    context = _context(selected="opt_1")
+    context["time"] = {
+        "mode": "exact",
+        "start_time": "18:00",
+        "end_time": None,
+        "start_time_ambiguity": "none",
+        "internal_only": "must-never-reach-model",
+    }
     messages = resolver._messages(
-        latest_customer_text="التاني",
-        availability_context=_context(selected="opt_1"),
+        latest_customer_text="second option",
+        availability_context=context,
     )
     payload = json.loads(str(messages[-1].content))
     assert payload["last_selected_option_ref"] == "opt_1"
+    assert payload["current_time_constraint"] == {
+        "mode": "exact",
+        "start_time": "18:00",
+    }
+    assert "internal_only" not in payload["current_time_constraint"]
     assert [item["option_ref"] for item in payload["last_presented_availability_options"]] == [
         "opt_1",
         "opt_2",
