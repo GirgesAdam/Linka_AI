@@ -42,17 +42,24 @@ def test_cross_turn_conditional_fallback_uses_recent_verified_no_availability() 
     ) is True
 
 
-def test_cross_turn_conditional_fallback_fails_closed_without_verified_zero() -> None:
+def test_cross_turn_conditional_fallback_distinguishes_false_from_unverified() -> None:
     operation = contract.TurnOperation(
         type="availability",
         entities=contract.TurnEntities(),
         continues_previous=True,
         continuation_condition="if_previous_no_availability",
     )
+    assert runtime._continuation_condition_satisfied(
+        operation,
+        previous_reads=None,
+        recent_read_context={
+            "operation_type": "availability",
+            "availability_option_count": 1,
+        },
+    ) is False
     for recent in (
         None,
         {},
-        {"operation_type": "availability", "availability_option_count": 1},
         {"operation_type": "clinic_info", "availability_option_count": 0},
         {"operation_type": "availability", "availability_option_count": True},
     ):
@@ -60,7 +67,7 @@ def test_cross_turn_conditional_fallback_fails_closed_without_verified_zero() ->
             operation,
             previous_reads=None,
             recent_read_context=recent,
-        ) is False
+        ) is None
 
 
 def test_same_turn_availability_evidence_takes_priority_over_recent_context() -> None:
