@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.agents.structured_output import canonicalize_provider_json_schema
 from app.agents.v2.turn_contract import (
+    ActiveTaskRelativeDate,
     DateConstraint,
     Selection,
     TiaTurnUnderstanding,
@@ -179,3 +180,74 @@ def test_non_task_active_task_explicit_fields_are_discarded() -> None:
 
     assert operation.active_task_explicit_fields == []
     assert operation.entities.date == DateConstraint(mode="exact", start_date="2026-09-12")
+
+
+
+def test_active_reschedule_relative_date_contract_is_typed_and_fail_closed() -> None:
+    relation = ActiveTaskRelativeDate(relation="next_occurrence", weekday="saturday")
+    operation = TurnOperation(
+        type="reschedule",
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date"],
+        active_task_relative_date=relation,
+        entities=TurnEntities(),
+    )
+    assert operation.active_task_relative_date == relation
+    assert operation.entities.date is None
+    assert operation.active_task_explicit_fields == ["date"]
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="reschedule",
+            execution_intent="execute",
+            active_task_relationship="continue",
+            active_task_explicit_fields=["date"],
+            active_task_relative_date=relation,
+            entities=TurnEntities(
+                date=DateConstraint(mode="exact", start_date="2026-10-31")
+            ),
+        )
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="book",
+            execution_intent="execute",
+            active_task_relationship="continue",
+            active_task_explicit_fields=["date"],
+            active_task_relative_date=relation,
+            entities=TurnEntities(),
+        )
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="reschedule",
+            execution_intent="execute",
+            active_task_relationship="continue",
+            active_task_relative_date=relation,
+            entities=TurnEntities(),
+        )
+
+
+def test_calendar_relative_schema_does_not_change_date_modes_or_selection_relative_semantics() -> None:
+    schema = TiaTurnUnderstanding.model_json_schema()
+    date_modes = schema["$defs"]["DateConstraint"]["properties"]["mode"]["enum"]
+    assert set(date_modes) == {"exact", "range", "from_date", "next_available"}
+    relative = schema["$defs"]["ActiveTaskRelativeDate"]
+    assert relative["properties"]["relation"]["const"] == "next_occurrence"
+    assert set(relative["properties"]["weekday"]["enum"]) == {
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    }
+    selection_relative = schema["$defs"]["Selection"]["properties"]["relative"]
+    assert set(selection_relative["anyOf"][0]["enum"]) == {
+        "next",
+        "previous",
+        "first",
+        "last",
+    }
