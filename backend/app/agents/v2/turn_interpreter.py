@@ -696,9 +696,12 @@ def merge_verified_read_context(
     turn: TiaTurnUnderstanding,
     semantic_context: SemanticContext,
 ) -> TiaTurnUnderstanding:
-    """Merge explicitly-declared continuations with the previous verified read scope."""
-    raw = semantic_context.model_input.get("recent_verified_read")
-    if not isinstance(raw, dict) or not raw:
+    """Merge continuation scope using durable task authority before prior read evidence."""
+    raw_value = semantic_context.model_input.get("recent_verified_read")
+    raw = raw_value if isinstance(raw_value, dict) else {}
+    active_value = semantic_context.model_input.get("active_task")
+    active_task = active_value if isinstance(active_value, dict) else {}
+    if not raw and not active_task:
         return turn
 
     previous_date = None
@@ -803,6 +806,57 @@ def merge_verified_read_context(
             )
         if updates:
             entities = entities.model_copy(update=updates)
+
+        if (
+            operation.type == "availability"
+            and operation.execution_intent == "informational"
+            and operation.active_task_relationship == "continue"
+            and operation.continues_previous
+        ):
+            task_type = active_task.get("task_type")
+            durable = (
+                active_task.get("constraints")
+                if task_type == "booking"
+                else active_task.get("replacement")
+                if task_type == "reschedule"
+                else None
+            )
+            if isinstance(durable, dict):
+                durable_updates: dict[str, object] = {}
+                original = operation.entities
+                if original.service is None:
+                    requested_refs = active_task.get("requested_service_refs")
+                    requested_refs = requested_refs if task_type == "booking" else None
+                    service = None
+                    if isinstance(requested_refs, list) and len(requested_refs) == 1:
+                        service = EntityReference(ref=requested_refs[0])
+                    elif isinstance(requested_refs, list) and len(requested_refs) > 1:
+                        service = _reference_from_verified(
+                            {"requested_service_refs": requested_refs},
+                            single_key="service_ref",
+                            set_key="requested_service_refs",
+                        )
+                    else:
+                        service = _reference_from_verified(durable, single_key="service_ref")
+                    if service is not None:
+                        durable_updates["service"] = service
+
+                for field, key in (("doctor", "doctor_ref"), ("device", "device_ref")):
+                    if getattr(original, field) is None:
+                        inherited = _reference_from_verified(durable, single_key=key)
+                        if inherited is not None:
+                            durable_updates[field] = inherited
+
+                for field, schema in (("date", DateConstraint), ("time", TimeConstraint)):
+                    value = durable.get(field)
+                    if getattr(original, field) is None and isinstance(value, dict):
+                        try:
+                            durable_updates[field] = schema.model_validate(value)
+                        except ValueError:
+                            pass
+                if durable_updates:
+                    entities = entities.model_copy(update=durable_updates)
+
         operations.append(operation.model_copy(update={"entities": entities}))
     return turn.model_copy(update={"operations": operations})
 
