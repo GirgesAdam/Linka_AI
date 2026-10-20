@@ -1775,6 +1775,21 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
             succeeded=succeeded,
         )
         facts = _terminal_facts(goal, outcome)
+    elif goal == "social_ack":
+        # Keep prior-completion provenance in the acknowledgment fact while projecting
+        # its canonical success state into the existing server-owned action truth.
+        acknowledgment = outcome.facts.get("acknowledgment")
+        if (
+            isinstance(acknowledgment, dict)
+            and acknowledgment.get("already_completed") is True
+            and acknowledgment.get("action")
+            in {"booking", "reschedule", "cancel_appointment"}
+        ):
+            action_truth = ActionTruth(
+                action=acknowledgment["action"],
+                succeeded=True,
+            )
+        facts = _generic_facts(goal, outcome.facts)
     elif goal == "answer_price":
         facts = _service_price_facts(goal, outcome.facts)
     elif goal == "answer_doctor":
@@ -1817,14 +1832,14 @@ def build_customer_response_contract(
 def is_pure_supported_terminal_contract(
     contract: CustomerResponseContract,
 ) -> bool:
-    """Whether every unit is a completed terminal write supported by Phase 2."""
+    """Whether every unit has a terminal action truth supported by Phase 2."""
     if not contract.units:
         return False
     return all(
         unit.response_goal in SUPPORTED_TERMINAL_RESPONSE_GOALS
         and unit.status == "completed"
         and unit.action_truth is not None
-        and unit.action_truth.succeeded is True
+        and unit.action_truth.action == TERMINAL_ACTION_BY_GOAL[unit.response_goal]
         for unit in contract.units
     )
 
