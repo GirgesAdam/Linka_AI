@@ -161,6 +161,163 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     assert messages[4].content == "ليزر الإبط"
 
 
+
+def test_grounding_preserves_explicit_candidate_set_when_ref_repeats_one_member() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {"id": "svc-one", "name": "One"},
+                {"id": "svc-two", "name": "Two"},
+                {"id": "svc-underarm", "name": "Underarm"},
+                {"id": "svc-bikini", "name": "Bikini"},
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        text="\u0644\u064a\u0632\u0631 \u0625\u0628\u0637",
+                        ref="S3",
+                        candidate_refs=["S3", "S4"],
+                        candidate_mode="set",
+                    )
+                ),
+                selection=None,
+                package_usage="unspecified",
+            )
+        ],
+        safety_signals=[],
+    )
+
+    grounded = ground_turn_references(turn, context)
+    entity = grounded.operations[0].entities.service
+    assert entity is not None
+    assert entity.ref is None
+    assert entity.candidate_refs == ["S3", "S4"]
+    assert entity.candidate_mode == "set"
+
+
+def test_grounding_keeps_candidate_set_without_ref_unchanged() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {"id": "svc-one", "name": "One"},
+                {"id": "svc-two", "name": "Two"},
+                {"id": "svc-underarm", "name": "Underarm"},
+                {"id": "svc-bikini", "name": "Bikini"},
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[TurnOperation(type="book", entities=TurnEntities(service=EntityReference(candidate_refs=["S3", "S4"], candidate_mode="set")))],
+        safety_signals=[],
+    )
+    entity = ground_turn_references(turn, context).operations[0].entities.service
+    assert entity is not None
+    assert entity.ref is None
+    assert entity.candidate_refs == ["S3", "S4"]
+    assert entity.candidate_mode == "set"
+
+
+@pytest.mark.parametrize(
+    ("candidate_refs", "candidate_mode", "expected_candidates"),
+    [
+        ([], "ambiguous", []),
+        (["S3", "S4"], "ambiguous", []),
+    ],
+)
+def test_grounding_preserves_existing_single_identity_authority(
+    candidate_refs: list[str], candidate_mode: str, expected_candidates: list[str]
+) -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {"id": "svc-one", "name": "One"},
+                {"id": "svc-two", "name": "Two"},
+                {"id": "svc-underarm", "name": "Underarm"},
+                {"id": "svc-bikini", "name": "Bikini"},
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[TurnOperation(type="book", entities=TurnEntities(service=EntityReference(ref="S3", candidate_refs=candidate_refs, candidate_mode=candidate_mode)))],
+        safety_signals=[],
+    )
+    entity = ground_turn_references(turn, context).operations[0].entities.service
+    assert entity is not None
+    assert entity.ref == "S3"
+    assert entity.candidate_refs == expected_candidates
+    assert entity.candidate_mode == candidate_mode
+
+
+def test_grounding_filters_invalid_member_but_keeps_valid_explicit_set() -> None:
+    context = build_semantic_context(
+        {
+            "services": [
+                {"id": "svc-one", "name": "One"},
+                {"id": "svc-two", "name": "Two"},
+                {"id": "svc-underarm", "name": "Underarm"},
+                {"id": "svc-bikini", "name": "Bikini"},
+            ],
+            "doctors": [],
+            "appointments": [],
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[TurnOperation(type="book", entities=TurnEntities(service=EntityReference(candidate_refs=["S3", "S99", "S4"], candidate_mode="set")))],
+        safety_signals=[],
+    )
+    entity = ground_turn_references(turn, context).operations[0].entities.service
+    assert entity is not None
+    assert entity.ref is None
+    assert entity.candidate_refs == ["S3", "S4"]
+
+
+def test_grounding_preserves_single_member_explicit_set_as_set_authority() -> None:
+    context = build_semantic_context(
+        {"services": [{"id": "svc-underarm", "name": "Underarm"}], "doctors": [], "appointments": []}
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[TurnOperation(type="book", entities=TurnEntities(service=EntityReference(ref="S1", candidate_refs=["S1"], candidate_mode="set")))],
+        safety_signals=[],
+    )
+    entity = ground_turn_references(turn, context).operations[0].entities.service
+    assert entity is not None
+    assert entity.ref is None
+    assert entity.candidate_refs == ["S1"]
+    assert entity.candidate_mode == "set"
+
+
+def test_grounding_preserves_explicit_doctor_set_generically() -> None:
+    context = build_semantic_context(
+        {
+            "services": [{"id": "svc-underarm", "name": "Underarm"}],
+            "doctors": [
+                {"id": "doc-one", "name": "Doctor One", "service_ids": ["svc-underarm"]},
+                {"id": "doc-two", "name": "Doctor Two", "service_ids": ["svc-underarm"]},
+            ],
+            "appointments": [],
+        }
+    )
+    turn = TiaTurnUnderstanding(
+        operations=[TurnOperation(type="availability", execution_intent="informational", entities=TurnEntities(doctor=EntityReference(ref="D1", candidate_refs=["D1", "D2"], candidate_mode="set")))],
+        safety_signals=[],
+    )
+    entity = ground_turn_references(turn, context).operations[0].entities.doctor
+    assert entity is not None
+    assert entity.ref is None
+    assert entity.candidate_refs == ["D1", "D2"]
+    assert entity.candidate_mode == "set"
+
 def test_invented_or_wrong_kind_refs_are_removed_without_text_recovery() -> None:
     context = build_semantic_context(_catalog())
     turn = TiaTurnUnderstanding(

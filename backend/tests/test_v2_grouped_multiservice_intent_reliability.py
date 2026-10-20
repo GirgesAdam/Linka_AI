@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agents.v2.semantic_context import build_semantic_context
+from app.agents.v2.semantic_context import build_semantic_context, ground_turn_references
 from app.agents.v2.time_resolution import resolve_turn_times_by_clinic_hours
 from app.agents.v2.turn_contract import (
     DateConstraint,
@@ -1757,6 +1757,71 @@ def _rw7_candidate_from_turn(
     assert candidate is not None
     return candidate
 
+
+
+def test_ra_g7_redundant_member_ref_preserves_full_service_set_through_grounding_and_collapse() -> None:
+    catalog, context, _state, dermatology = _rw7_durable_continuation_fixture()
+    refs = _refs(context)
+    date = DateConstraint(mode="exact", start_date="2026-10-17")
+    raw = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        text="???? ???",
+                        ref=refs[A],
+                        candidate_refs=[refs[A], refs[B]],
+                        candidate_mode="set",
+                    ),
+                    date=date,
+                ),
+            ),
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                entities=TurnEntities(
+                    service=EntityReference(text="??? ?????", ref=refs[dermatology]),
+                    date=date,
+                ),
+            ),
+        ]
+    )
+
+    grounded = ground_turn_references(raw, context)
+    laser = grounded.operations[0].entities.service
+    assert laser is not None
+    assert laser.ref is None
+    assert laser.candidate_refs == [refs[A], refs[B]]
+
+    merged = merge_same_visit_booking_operations(grounded)
+    assert len(merged.operations) == 1
+    merged_service = merged.operations[0].entities.service
+    assert merged_service is not None
+    assert merged_service.ref is None
+    assert merged_service.candidate_refs == [refs[A], refs[B], refs[dermatology]]
+    assert merged_service.candidate_mode == "set"
+
+    collapsed, service_sets = collapse_booking_service_sets(
+        merged,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=None,
+    )
+    final_ids: list[str] = []
+    for index, operation in enumerate(collapsed.operations):
+        if index in service_sets:
+            final_ids.extend(service_sets[index])
+            continue
+        service = operation.entities.service
+        assert service is not None and service.ref is not None
+        canonical = context.resolve(service.ref, expected_kind="service")
+        assert canonical is not None
+        final_ids.append(canonical)
+
+    assert final_ids == [A, B, dermatology]
+    assert len(final_ids) == len(set(final_ids))
 
 def test_rw7_redundant_full_group_time_only_preserves_durable_date() -> None:
     catalog, context, state, dermatology = _rw7_durable_continuation_fixture()

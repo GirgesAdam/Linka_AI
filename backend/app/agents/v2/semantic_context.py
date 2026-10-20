@@ -402,7 +402,9 @@ def _ground_entity(
         for ref in entity.candidate_refs
         if context.resolve(ref, expected_kind=expected_kind) is not None
     ]
-    if grounded_ref is not None:
+    if entity.candidate_mode == "set" and grounded_candidates:
+        grounded_ref = None
+    elif grounded_ref is not None:
         grounded_candidates = []
     return entity.model_copy(
         update={
