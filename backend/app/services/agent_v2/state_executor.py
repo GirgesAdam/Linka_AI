@@ -792,6 +792,9 @@ def apply_step_state(
         )
         if current is None:
             return StateTransition(active_task=before, changed=False, reason="reschedule_target_unverified")
+    elif step.state_action == "select_active":
+        if isinstance(current, BookingTaskState):
+            current = _apply_booking_updates(current, step=step, operation=operation)
     elif step.state_action == "update_active":
         if isinstance(current, BookingTaskState):
             before_booking = current
