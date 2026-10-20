@@ -83,12 +83,8 @@ def _clock(turn: TiaTurnUnderstanding) -> str:
     ("model_clock", "text", "hint", "expected"),
     [
         ("01:00", "?????? 1", "none", "13:00"),
-        ('01:00', '?????? 1 ?????', 'am', '01:00'),
         ("03:00", "?????? 3", "none", "15:00"),
-        ('03:00', '?????? 3 ?????', 'am', '03:00'),
-        ('15:00', '?????? 3 ??????', 'pm', '15:00'),
         ("16:15", "?????? 4 ????", "none", "16:15"),
-        ('04:15', '?????? 4 ???? ?????', 'am', '04:15'),
         ("09:00", "?????? 9", "none", "21:00"),
     ],
 )
@@ -105,9 +101,7 @@ def test_spoken_1_to_9_respects_explicit_period_else_prefers_operational_pm(
     ("model_clock", "text", "hint", "expected"),
     [
         ("01:00", "?????? 1", "none", "01:00"),
-        ('13:00', '?????? 1 ??????', 'pm', '13:00'),
         ("03:00", "?????? 3", "none", "03:00"),
-        ('15:00', '?????? 3 ??????', 'pm', '15:00'),
         ('03:00', '?????? 3 ?????', 'am', '03:00'),
     ],
 )
@@ -152,9 +146,15 @@ def test_10_11_candidate_policy(
         assert _constraint(turn).start_time_ambiguity == "none"
 
 
-def test_11_pm_hint_remains_authoritative_when_pm_is_outside_hours() -> None:
-    turn, _ = _pipeline("23:00", text="11 ??????", hint="pm", start="09:00", end="21:00")
-    assert _clock(turn) == "23:00"
+def test_11_pm_infeasible_with_am_feasible_clarifies() -> None:
+    turn, context = _pipeline("23:00", text="11 ??????", hint="pm", start="09:00", end="21:00")
+    assert _clock(turn) == "11:00"
+    assert _constraint(turn).start_time_ambiguity == "twelve_hour"
+    assert _constraint(turn).spoken_period_hint == "pm"
+    step = plan_turn(turn, PlannerContext(semantic_context=context, active_task=None, now=NOW)).steps[0]
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "time"
+    assert step.write_intent is None
 
 
 def test_11_am_hint_remains_authoritative_when_am_is_outside_hours() -> None:
@@ -281,8 +281,8 @@ def test_structural_literal_neutralizes_provider_hint() -> None:
         ("00:00", "23:59", "none", "10:30", True),
         ("00:00", "23:59", "am", "10:30", False),
         ("00:00", "23:59", "pm", "22:30", False),
-        ("09:00", "21:00", "pm", "22:30", False),
-        ("20:00", "23:30", "am", "10:30", False),
+        ("09:00", "21:00", "pm", "10:30", True),
+        ("20:00", "23:30", "am", "10:30", True),
     ],
     ids=[
         "T1030-1-only-am",
@@ -325,12 +325,12 @@ def test_1130_uses_same_generic_candidate_policy() -> None:
 @pytest.mark.parametrize(
     ("model_clock", "hint", "clinic_start", "clinic_end", "expected"),
     [
-        ("09:00", "am", "10:00", "22:00", "09:00"),
+        ("09:00", "am", "09:00", "22:00", "09:00"),
         ("21:00", "pm", "00:00", "23:59", "21:00"),
-        ("15:00", "pm", "00:00", "05:00", "15:00"),
+        ("15:00", "pm", "10:00", "22:00", "15:00"),
     ],
 )
-def test_explicit_1_to_9_period_authority_outranks_clinic_hours(
+def test_explicit_1_to_9_period_authority_is_preserved_when_feasible(
     model_clock: str, hint: str, clinic_start: str, clinic_end: str, expected: str
 ) -> None:
     turn, _ = _pipeline(
@@ -346,7 +346,7 @@ def test_explicit_1_to_9_period_authority_outranks_clinic_hours(
     assert _constraint(turn).spoken_period_hint == "none"
 
 
-def test_explicit_period_outside_hours_keeps_exact_clock_until_availability_check() -> None:
+def test_explicit_period_outside_hours_with_plausible_opposite_clarifies_first() -> None:
     turn, context = _pipeline(
         "09:00",
         text="spoken clock with explicit morning period",
@@ -361,7 +361,10 @@ def test_explicit_period_outside_hours_keeps_exact_clock_until_availability_chec
     ).steps[0]
 
     assert _clock(turn) == "09:00"
-    assert step.disposition == "read"
+    assert _constraint(turn).start_time_ambiguity == "twelve_hour"
+    assert _constraint(turn).spoken_period_hint == "am"
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "time"
     assert step.write_intent is None
-    assert any(read.kind == "availability" for read in step.reads)
-    assert step.facts["time"]["start_time"] == "09:00"
+    assert all(read.kind != "availability" for read in step.reads)
+    assert step.facts["valid_operating_hour_candidates"] == ["21:00"]

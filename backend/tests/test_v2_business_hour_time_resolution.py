@@ -231,7 +231,7 @@ def _turn_without_date(time_constraint: TimeConstraint) -> TiaTurnUnderstanding:
     )
 
 
-def test_explicit_pm_resolves_without_date_before_clinic_context() -> None:
+def test_explicit_pm_without_date_preserves_period_pending_context() -> None:
     context = build_semantic_context(_catalog(start="09:00", end="21:00"))
     turn = _turn_without_date(
         TimeConstraint(
@@ -246,12 +246,12 @@ def test_explicit_pm_resolves_without_date_before_clinic_context() -> None:
 
     constraint = resolved.operations[0].entities.time
     assert constraint is not None
-    assert constraint.start_time == "22:30"
-    assert constraint.start_time_ambiguity == "none"
-    assert constraint.spoken_period_hint == "none"
+    assert constraint.start_time == "10:30"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    assert constraint.spoken_period_hint == "pm"
 
 
-def test_explicit_am_resolves_without_date_before_clinic_context() -> None:
+def test_explicit_am_without_date_preserves_period_pending_context() -> None:
     context = build_semantic_context(_catalog(start="20:00", end="23:59"))
     turn = _turn_without_date(
         TimeConstraint(
@@ -267,8 +267,8 @@ def test_explicit_am_resolves_without_date_before_clinic_context() -> None:
     constraint = resolved.operations[0].entities.time
     assert constraint is not None
     assert constraint.start_time == "10:30"
-    assert constraint.start_time_ambiguity == "none"
-    assert constraint.spoken_period_hint == "none"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    assert constraint.spoken_period_hint == "am"
 
 
 def test_explicit_pm_with_exact_date_resolves_to_pm_clock() -> None:
@@ -290,7 +290,7 @@ def test_explicit_pm_with_exact_date_resolves_to_pm_clock() -> None:
     assert constraint.start_time_ambiguity == "none"
 
 
-def test_explicit_pm_outside_clinic_hours_remains_pm() -> None:
+def test_explicit_pm_outside_hours_with_am_feasible_stays_unresolved_for_clarification() -> None:
     context = build_semantic_context(_catalog(start="09:00", end="21:00"))
     turn = _turn(
         TimeConstraint(
@@ -305,6 +305,9 @@ def test_explicit_pm_outside_clinic_hours_remains_pm() -> None:
 
     constraint = resolved.operations[0].entities.time
     assert constraint is not None
-    assert constraint.start_time == "22:30"
-    assert constraint.start_time_ambiguity == "none"
-    assert constraint.spoken_period_hint == "none"
+    assert constraint.start_time == "10:30"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    assert constraint.spoken_period_hint == "pm"
+    classified = classify_operation_bare_clock(resolved.operations[0], context)
+    assert classified.status == "clarify_period"
+    assert classified.valid_operating_hour_candidates == ("10:30",)

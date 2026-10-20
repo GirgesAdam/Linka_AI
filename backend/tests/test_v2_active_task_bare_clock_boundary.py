@@ -552,7 +552,7 @@ def test_p5_bare_both_valid_clarification_am_resolves_same_task() -> None:
 
 
 
-def test_explicit_pm_canonicalization_survives_date_only_continuation() -> None:
+def test_explicit_pm_without_date_stays_pending_then_clarifies_after_date() -> None:
     context = _context(start="09:00", end="21:00")
     resolution = resolve_bare_clock_constraint(
         _time("10:30", hint="pm"),
@@ -560,11 +560,11 @@ def test_explicit_pm_canonicalization_survives_date_only_continuation() -> None:
         context=context,
         branch_id=BRANCH,
     )
-    assert resolution.status == "resolved"
+    assert resolution.status == "needs_context"
     assert resolution.constraint is not None
-    assert resolution.constraint.start_time == "22:30"
-    assert resolution.constraint.start_time_ambiguity == "none"
-    assert resolution.constraint.spoken_period_hint == "none"
+    assert resolution.constraint.start_time == "10:30"
+    assert resolution.constraint.start_time_ambiguity == "twelve_hour"
+    assert resolution.constraint.spoken_period_hint == "pm"
 
     loaded = _booking(
         resolution.constraint.start_time,
@@ -602,19 +602,21 @@ def test_explicit_pm_canonicalization_survives_date_only_continuation() -> None:
     updated = transition.active_task
     assert isinstance(updated, BookingTaskState)
     assert updated.constraints.time is not None
-    assert updated.constraints.time.start_time == "22:30"
-    assert updated.constraints.time.start_time_ambiguity == "none"
-    assert updated.constraints.time.spoken_period_hint == "none"
+    assert updated.constraints.time.start_time == "10:30"
+    assert updated.constraints.time.start_time_ambiguity == "twelve_hour"
+    assert updated.constraints.time.spoken_period_hint == "pm"
 
     prepared, gate = prepare_active_task_clock_progress(
         updated,
         operation_index=0,
         context=context,
     )
-    assert gate is None
-    assert prepared.constraints.time is not None
-    assert prepared.constraints.time.start_time == "22:30"
-    assert prepared.constraints.time.start_time_ambiguity == "none"
+    assert prepared == updated
+    assert gate is not None
+    assert gate.disposition == "clarify"
+    assert gate.clarification_field == "time"
+    assert gate.write_intent is None
+    assert gate.facts["valid_operating_hour_candidates"] == ["10:30"]
 
 
 def test_p1_actual_date_only_pipeline_preserves_pm_until_clock_progression() -> None:
