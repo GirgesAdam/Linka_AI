@@ -251,3 +251,28 @@ def test_calendar_relative_schema_does_not_change_date_modes_or_selection_relati
         "first",
         "last",
     }
+
+
+def test_turn_mutation_policy_contract_is_two_value_turn_local_ceiling() -> None:
+    schema = TiaTurnUnderstanding.model_json_schema()
+    policy = schema["properties"]["turn_mutation_policy"]
+    assert set(policy["enum"]) == {"operation_local", "preview_only"}
+    assert policy["default"] == "operation_local"
+    description = str(policy.get("description") or "").lower()
+    assert "maximum mutation authority" in description
+    assert "never grants execution" in description
+
+
+def test_turn_mutation_policy_accepts_preview_only_without_rewriting_operation_intent() -> None:
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="buy_package",
+                entities=TurnEntities(),
+                execution_intent="execute",
+            )
+        ],
+        turn_mutation_policy="preview_only",
+    )
+    assert turn.turn_mutation_policy == "preview_only"
+    assert turn.operations[0].execution_intent == "execute"

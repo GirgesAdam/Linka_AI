@@ -72,6 +72,7 @@ CalendarWeekday = Literal[
 ]
 EntityCandidateMode = Literal["ambiguous", "set"]
 ExecutionIntent = Literal["informational", "execute"]
+TurnMutationPolicy = Literal["operation_local", "preview_only"]
 FinancialOwnership = Literal["none", "reception"]
 ContinuationCondition = Literal["always", "if_previous_no_availability"]
 VerifiedReadClearField = Literal["date", "time"]
@@ -787,6 +788,16 @@ class TiaTurnUnderstanding(StrictContractModel):
             "a package and book its first session, emit both buy_package and book. If the same turn "
             "also requests another appointment, emit that additional book operation too. Do not "
             "collapse purchase-plus-booking or multiple requested appointments into fewer actions."
+        ),
+    )
+    turn_mutation_policy: TurnMutationPolicy = Field(
+        default="operation_local",
+        description=(
+            "Turn-local maximum mutation authority for the latest customer message. Use preview_only "
+            "only when the customer globally withholds execution of every persistent customer-facing "
+            "mutation in this turn. Use operation_local when no global restriction exists or execution "
+            "permission differs between individual operations. This ceiling never grants execution: "
+            "each operation still requires its own execution_intent authority."
         ),
     )
     safety_signals: list[SafetySignal] = Field(default_factory=list)

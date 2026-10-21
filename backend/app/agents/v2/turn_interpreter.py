@@ -212,6 +212,14 @@ SEMANTIC PRINCIPLES
   visit, remains informational. For non-book actions, questions, comparisons, hypotheticals, "should I"
   choices, and requests to inspect consequences/options remain informational; mentions alone do not
   authorize cancellation, rescheduling, purchasing, or other mutations.
+- Set turn_mutation_policy=preview_only only when the latest customer turn globally withholds execution
+  of every persistent customer-facing mutation in that turn. This is a turn-wide maximum authority,
+  not an operation intent: individual operations still keep their own execution_intent semantics. Use
+  turn_mutation_policy=operation_local when there is no global restriction or when execution permission
+  differs between operations (for example, execute one action while only previewing another). A global
+  preview restriction must cap every persistent mutation even if an individual operation would otherwise
+  be executable. Booking workflow/proposal staging is not itself final Appointment mutation and remains
+  governed by the existing verified-proposal confirmation contract.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.

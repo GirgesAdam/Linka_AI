@@ -20,6 +20,7 @@ from app.services.agent_v2.planner import (
     plan_turn,
 )
 from app.services.agent_v2.state import (
+    BookingProposal,
     BookingTaskState,
     CustomerConstraints,
     DerivedBookingState,
@@ -848,3 +849,230 @@ def test_package_info_can_read_owned_and_offers_when_both_are_requested() -> Non
 
     assert step.write_intent is None
     assert [item.kind for item in step.reads] == ["customer_packages", "package_offers"]
+
+
+def _with_preview_only_policy(turn: TiaTurnUnderstanding) -> TiaTurnUnderstanding:
+    return turn.model_copy(update={"turn_mutation_policy": "preview_only"})
+
+
+def test_preview_only_package_turn_blocks_all_package_write_intents() -> None:
+    informational = TurnOperation(
+        type="buy_package",
+        entities=TurnEntities(service=EntityReference(ref="S1"), package_sessions=6),
+        execution_intent="informational",
+    )
+    execute = TurnOperation(
+        type="buy_package",
+        entities=TurnEntities(service=EntityReference(ref="S2"), package_sessions=6),
+        execution_intent="execute",
+    )
+    turn = _with_preview_only_policy(
+        TiaTurnUnderstanding(operations=[informational, execute], safety_signals=[])
+    )
+    plan = plan_turn(turn, _context())
+    assert len(plan.steps) == 2
+    assert all(step.write_intent is None for step in plan.steps)
+    assert [step.response_goal for step in plan.steps] == ["package_information", "package_information"]
+    advanced = [
+        advance_step_after_verification(step, VerificationFacts(package_offer_match_count=1))
+        for step in plan.steps
+    ]
+    assert all(step.write_intent is None for step in advanced)
+    assert all(step.disposition != "write_ready" for step in advanced)
+
+
+def test_preview_only_package_turn_blocks_multiple_execute_operations() -> None:
+    operations = [
+        TurnOperation(
+            type="buy_package",
+            entities=TurnEntities(service=EntityReference(ref=ref), package_sessions=6),
+            execution_intent="execute",
+        )
+        for ref in ("S1", "S2")
+    ]
+    plan = plan_turn(
+        _with_preview_only_policy(TiaTurnUnderstanding(operations=operations, safety_signals=[])),
+        _context(),
+    )
+    assert all(step.write_intent is None for step in plan.steps)
+
+
+def test_preview_only_reschedule_preserves_reads_and_state_without_write() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            appointment=EntityReference(ref="A1"),
+            service=EntityReference(ref="S1"),
+            date=DateConstraint(mode="exact", start_date="2026-09-19", end_date=None),
+            time=TimeConstraint(mode="exact", start_time="10:00", end_time=None),
+        ),
+        execution_intent="execute",
+    )
+    turn = _with_preview_only_policy(TiaTurnUnderstanding(operations=[operation], safety_signals=[]))
+    step = plan_turn(turn, _context()).steps[0]
+    assert step.write_intent is None
+    assert step.state_action == "start_reschedule"
+    assert [read.kind for read in step.reads] == ["appointments", "availability"]
+    assert step.response_goal == "present_availability"
+    advanced = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            exact_slot_match_count=1,
+            verified_parameters={"appointment_id": "appointment-1"},
+        ),
+    )
+    assert advanced.write_intent is None
+    assert advanced.disposition != "write_ready"
+
+
+def test_operation_local_mixed_authority_remains_per_operation() -> None:
+    execute = TurnOperation(
+        type="buy_package",
+        entities=TurnEntities(service=EntityReference(ref="S1"), package_sessions=6),
+        execution_intent="execute",
+    )
+    informational = TurnOperation(
+        type="buy_package",
+        entities=TurnEntities(service=EntityReference(ref="S2"), package_sessions=6),
+        execution_intent="informational",
+    )
+    plan = plan_turn(TiaTurnUnderstanding(operations=[execute, informational], safety_signals=[]), _context())
+    assert plan.steps[0].write_intent is not None
+    assert plan.steps[0].write_intent.kind == "buy_package"
+    assert plan.steps[1].write_intent is None
+
+
+def test_explicit_package_execute_still_reaches_write_ready_after_verification() -> None:
+    operation = TurnOperation(
+        type="buy_package",
+        entities=TurnEntities(service=EntityReference(ref="S1"), package_sessions=6),
+        execution_intent="execute",
+    )
+    step = plan_turn(TiaTurnUnderstanding(operations=[operation], safety_signals=[]), _context()).steps[0]
+    ready = advance_step_after_verification(step, VerificationFacts(package_offer_match_count=1))
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.kind == "buy_package"
+
+
+def test_preview_only_cancellation_is_read_only() -> None:
+    operation = TurnOperation(
+        type="cancel_appointment",
+        entities=TurnEntities(appointment=EntityReference(ref="A1")),
+        execution_intent="execute",
+    )
+    step = plan_turn(
+        _with_preview_only_policy(TiaTurnUnderstanding(operations=[operation], safety_signals=[])), _context()
+    ).steps[0]
+    assert step.write_intent is None
+    assert [read.kind for read in step.reads] == ["appointments"]
+
+
+def test_preview_only_pulse_purchase_is_read_only() -> None:
+    operation = TurnOperation(
+        type="buy_pulse_pack",
+        entities=TurnEntities(pulse_count=1000),
+        execution_intent="execute",
+    )
+    step = plan_turn(
+        _with_preview_only_policy(TiaTurnUnderstanding(operations=[operation], safety_signals=[])), _context()
+    ).steps[0]
+    assert step.write_intent is None
+    assert [read.kind for read in step.reads] == ["pulse_pack_offers"]
+
+def test_preview_only_booking_workflow_preserves_proposal_staging_intents() -> None:
+    operations = [
+        TurnOperation(
+            type="book",
+            entities=TurnEntities(
+                service=EntityReference(ref=ref),
+                date=DateConstraint(mode="exact", start_date="2026-09-19", end_date=None),
+                time=TimeConstraint(mode="exact", start_time="10:00", end_time=None),
+            ),
+            execution_intent="execute",
+        )
+        for ref in ("S1", "S2")
+    ]
+    plan = plan_turn(
+        _with_preview_only_policy(TiaTurnUnderstanding(operations=operations, safety_signals=[])),
+        _context(),
+    )
+
+    assert len(plan.steps) == 2
+    assert all(step.write_intent is not None for step in plan.steps)
+    assert all(step.write_intent.kind == "booking" for step in plan.steps if step.write_intent)
+    assert all(step.disposition == "read" for step in plan.steps)
+
+
+def test_preview_only_cannot_confirm_current_booking_proposal() -> None:
+    proposal = BookingProposal(
+        proposal_id="proposal-preview-1",
+        patient_id="patient-1",
+        service_ids=["service-underarm"],
+        main_service_id="service-underarm",
+        additional_service_ids=[],
+        branch_id="branch-1",
+        doctor_id="doctor-maryam",
+        start_at=NOW + timedelta(days=2),
+        end_at=NOW + timedelta(days=2, minutes=30),
+        created_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+    task = BookingTaskState(
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=True,
+            source_turn_id="turn-proposal",
+            granted_at=NOW,
+        ),
+        constraints=CustomerConstraints(
+            service_id="service-underarm",
+            branch_id="branch-1",
+            doctor_id="doctor-maryam",
+        ),
+        requested_service_ids=["service-underarm"],
+        proposal=proposal,
+    )
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+    )
+    step = plan_turn(
+        _with_preview_only_policy(TiaTurnUnderstanding(operations=[operation], safety_signals=[])),
+        _context(active_task=task),
+    ).steps[0]
+
+    assert step.disposition == "blocked"
+    assert step.write_intent is None
+    assert step.response_goal == "clarification"
+
+
+def test_reschedule_later_fresh_authorization_still_reaches_write_ready() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            appointment=EntityReference(ref="A1"),
+            service=EntityReference(ref="S1"),
+            date=DateConstraint(mode="exact", start_date="2026-09-19", end_date=None),
+            time=TimeConstraint(mode="exact", start_time="10:00", end_time=None),
+        ),
+        execution_intent="execute",
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _context(),
+    ).steps[0]
+    ready = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            exact_slot_match_count=1,
+            verified_parameters={"appointment_id": "appointment-1"},
+        ),
+    )
+
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.kind == "reschedule"
