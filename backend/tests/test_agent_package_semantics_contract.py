@@ -126,6 +126,20 @@ def test_history_package_impact_prompt_preserves_both_semantic_domains() -> None
     assert "package_info" in prompt
 
 
+def test_scope_correction_prompt_does_not_replay_completed_action() -> None:
+    prompt = _interpreter_system_prompt(
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 10, 22, 12, 0, tzinfo=UTC),
+    ).lower()
+
+    assert "narrows or corrects a prior multi-part request" in prompt
+    assert "do not replay that completed action" in prompt
+    assert "not fresh mutation authority" in prompt
+    assert "latest customer turn itself requests" in prompt
+    assert "new, additional, repeated" in prompt
+    assert "not phrase matching" in prompt
+
+
 def test_history_package_impact_plans_both_verified_reads_without_writes() -> None:
     turn = TiaTurnUnderstanding(
         operations=[

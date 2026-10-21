@@ -274,6 +274,13 @@ SEMANTIC PRINCIPLES
   and authorizes no action, with no new factual question, emit an informational social acknowledgement
   rather than replaying package discovery/offers. This no-action clarification is turn-local: a later
   explicit request to use a package, buy, or book is a new execute intent and must proceed normally.
+- When the latest customer turn narrows or corrects a prior multi-part request after one of its actions
+  has already completed, do not replay that completed action merely because the customer retains that
+  part while rejecting or removing another part. Retaining an already-completed action is a scope
+  correction, not fresh mutation authority. If the correction leaves no new factual question or action,
+  emit an informational social acknowledgement. Emit another purchase, booking, or other mutation only
+  when the latest customer turn itself requests a new, additional, repeated, or changed execution. Apply
+  this by conversational meaning, not phrase matching.
 - response_disposition is about whether this turn needs an outbound customer message, not about intent routing. Use no_reply only for a pure closing acknowledgement after the previous task/read is already complete and only when the supplied active_task and pending choice are empty, automation_context is not being acknowledged, there is no requested action/question, and there is no safety signal. A short acknowledgement while a task/question/choice is pending is reply, not no_reply. Never classify based on a phrase list; classify the conversational role in the supplied state.
 - automation_context is server-owned system-initiated conversational focus, not a verified read/action
   and never write authority. If it is present, a simple acknowledgement of that reminder/follow-up is
