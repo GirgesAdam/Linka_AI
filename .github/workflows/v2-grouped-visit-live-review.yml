@@ -127,7 +127,7 @@ jobs:
           assert any(op.execution_intent == "execute" for op in mixed.operations)
           assert any(op.execution_intent == "informational" for op in mixed.operations)
           PY
-      - name: Run realistic grouped-package scenario
+      - name: Run realistic grouped-visit scenarios
         shell: bash
         run: |
           python - <<'PY'
@@ -152,7 +152,7 @@ jobs:
                       kinds.append(kind)
               return kinds
 
-          names = ["two_packages_same_visit"]
+          names = ["two_services_same_visit", "two_packages_same_visit"]
           engine = create_engine(settings.database_url, pool_pre_ping=True)
           results = []
           for name in names:
@@ -180,7 +180,7 @@ jobs:
           path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
           assert not any(item.error for item in results), [item.error for item in results]
-          package_result = results[0]
+          package_result = next(item for item in results if item.name == "two_packages_same_visit")
           assert len(package_result.turns) >= 2
           turn1, turn2 = package_result.turns[0], package_result.turns[1]
           assert isinstance(turn1.understanding, dict)

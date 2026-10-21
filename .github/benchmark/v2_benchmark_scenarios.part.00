@@ -85,7 +85,7 @@ def _package_purchase(db: Session, workspace: Workspace) -> PreparedScenario:
         patient=patient,
         observations=["target_offer=" + json.dumps(jsonable(offer), ensure_ascii=False, separators=(",", ":"))],
         messages=[
-            "بكام باكيدج 6 جلسات ليزر إزالة شعر الإبط على جهاز Prime Lase؟ أنا بس بسأل الأول",
+            "بكام باكيدج 6 جلسات ليزر إزالة شعر الإبط على جهاز Prime Lase؟",
             "تمام، اشتريلي الباكيدج دي دلوقتي",
         ],
     )
@@ -96,7 +96,7 @@ def _session_vs_package_ambiguity(db: Session, workspace: Workspace) -> Prepared
         patient=patient_without_future(db, workspace),
         messages=[
             "عايز أعمل full body",
-            "أنا لسه محددتش Session ولا Package، قولي الاختيارات الأول ومتحجزش حاجة",
+            "أنا لسه محددتش Session ولا Package، إيه الاختيارات المتاحة؟",
         ],
         observations=["expected_write_delta=0"],
     )

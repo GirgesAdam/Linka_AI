@@ -1,4 +1,4 @@
-� نحجز",
+؟",
             f"تمام احجزلي مع {doctor_b['name']} الساعة {target_time}",
         ],
     )
@@ -24,7 +24,7 @@ def _doctor_discovery(db: Session, workspace: Workspace) -> PreparedScenario:
     service = service_by_name(db, workspace, "استشارة جلدية وليزر")
     return PreparedScenario(
         patient=patient_without_future(db, workspace),
-        messages=[f"مين كل الدكاترة اللي بيعملوا {service.name}؟", "مين منهم متاح أقرب؟ من غير حجز"],
+        messages=[f"مين كل الدكاترة اللي بيعملوا {service.name}؟", "مين منهم متاح أقرب؟"],
         observations=["expected_write_delta=0"],
     )
 
@@ -37,7 +37,7 @@ def _doctor_comparison(db: Session, workspace: Workspace) -> PreparedScenario:
         patient=patient_without_future(db, workspace),
         messages=[
             f"بالنسبة لـ{service['name']}، مين متاح أقرب: {doctor_a['name']} ولا {doctor_b['name']}؟",
-            "قارن المتاح بينهم بس، متحجزش حاجة",
+            "قارن المواعيد المتاحة بينهم",
         ],
         observations=["expected_write_delta=0"],
     )
@@ -84,7 +84,7 @@ def _service_price_comparison(db: Session, workspace: Workspace) -> PreparedScen
             f"{second.name}_price_minor={second.price_minor}",
             "expected_write_delta=0",
         ],
-        messages=[f"قارنلي بين {first.name} و{second.name}: السعر والمدة لكل واحدة، ومتحجزش"],
+        messages=[f"قارنلي بين {first.name} و{second.name}: السعر والمدة لكل واحدة"],
     )
 
 
@@ -103,7 +103,7 @@ def _package_comparison(db: Session, workspace: Workspace) -> PreparedScenario:
             "expected_write_delta=0",
         ],
         messages=[
-            "قارنلي باكيدج 6 جلسات إزالة شعر الإبط على Prime Lase وباكيدج 6 جلسات على Candela Gentle من ناحية السعر، أنا بس بقارن"
+            "قارنلي باكيدج 6 جلسات إزالة شعر الإبط على Prime Lase وباكيدج 6 جلسات على Candela Gentle من ناحية السعر"
         ],
     )
 
@@ -120,8 +120,7 @@ def _hypothetical_question(db: Session, workspace: Workspace) -> PreparedScenari
             "expected_write_delta=0",
         ],
         messages=[
-            f"لو عندي باكيدج {service_name} وبعدين حبيت أغير ميعاد جلسة أو أسأل عن إلغائها، إيه اللي يحصل؟ أنا بس بسأل ومش عايز أي تغيير دلوقتي",
-            "بالضبط، خليه سؤال افتراضي بس ومتنفذش حاجة",
+            f"لو عندي باكيدج {service_name} وبعدين حبيت أغير ميعاد جلسة أو ألغيها، إيه اللي بيحصل؟",
         ],
     )
 
