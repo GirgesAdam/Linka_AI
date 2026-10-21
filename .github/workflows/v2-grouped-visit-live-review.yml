@@ -63,6 +63,70 @@ jobs:
       - name: Assemble benchmark scenario module
         shell: bash
         run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
+      - name: Report sanitized runtime DB identity
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          def parse_db(name):
+              raw = os.environ.get(name, "")
+              parsed = urlparse(raw)
+              username = parsed.username or ""
+              if username == "postgres":
+                  project_ref = "NONE"
+                  username_shape = "direct-postgres"
+              elif username.startswith("postgres."):
+                  project_ref = username.split(".", 1)[1] or "NONE"
+                  username_shape = "pooler-postgres"
+              else:
+                  project_ref = "UNKNOWN"
+                  username_shape = "other"
+              try:
+                  port = parsed.port
+              except ValueError:
+                  port = "INVALID"
+              return {
+                  "raw": raw,
+                  "scheme": parsed.scheme or "NONE",
+                  "host": parsed.hostname or "NONE",
+                  "port": port if port is not None else "NONE",
+                  "database": parsed.path.lstrip("/") or "NONE",
+                  "project_ref": project_ref,
+                  "username_shape": username_shape,
+              }
+
+          def parse_supabase_ref():
+              host = urlparse(os.environ.get("SUPABASE_URL", "")).hostname or ""
+              if host.endswith(".supabase.co"):
+                  return host.removesuffix(".supabase.co") or "UNKNOWN"
+              return "UNKNOWN"
+
+          expected_project_ref = "ycuxjlkhnubztgqmhtom"
+          database = parse_db("DATABASE_URL")
+          migration = parse_db("MIGRATION_DATABASE_URL")
+          supabase_ref = parse_supabase_ref()
+
+          for label, parsed in (
+              ("DATABASE_URL", database),
+              ("MIGRATION_DATABASE_URL", migration),
+          ):
+              print(f"{label}:")
+              print(f"scheme: {parsed['scheme']}")
+              print(f"host: {parsed['host']}")
+              print(f"port: {parsed['port']}")
+              print(f"database: {parsed['database']}")
+              print(f"project_ref: {parsed['project_ref']}")
+              print(f"username_shape: {parsed['username_shape']}")
+
+          print("SUPABASE_URL:")
+          print(f"project_ref: {supabase_ref}")
+          print("DATABASE_URL == MIGRATION_DATABASE_URL:")
+          print(str(database["raw"] == migration["raw"]).lower())
+          print("database project ref == expected Supabase project ref:")
+          print(str(database["project_ref"] == expected_project_ref).lower())
+          PY
       - name: Run focused grouped-visit scenarios
         shell: bash
         run: |
