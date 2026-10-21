@@ -3598,6 +3598,7 @@ def orchestrate_v2_turn(
                 reads=reads if reads.results else None,
                 action_result=action_result,
                 active_task_summary=_task_dict(current_task),
+                timezone_name=timezone_name,
             )
             traces.append(
                 V2RuntimeStepTrace(
@@ -3684,6 +3685,7 @@ def orchestrate_v2_turn(
             reads=reads if reads.results else None,
             action_result=None,
             active_task_summary=None,
+            timezone_name=timezone_name,
         )
         if step_group_key is not None and active_group_key == step_group_key and active_group_tx is not None:
             rollback_group_savepoint(active_group_tx)

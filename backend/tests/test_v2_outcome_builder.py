@@ -1414,3 +1414,49 @@ def test_failed_booking_proposal_write_never_renders_success() -> None:
     assert outcome.status == "blocked"
     assert outcome.response_goal != "booking_completed"
     assert outcome.action_result.get("completed") is not True
+
+
+@pytest.mark.parametrize(
+    ("timezone_name", "start_at", "end_at", "expected_local"),
+    [
+        ("Africa/Cairo", "2026-10-23T11:00:00+00:00", "2026-10-23T11:30:00+00:00", "2026-10-23T14:00:00+03:00"),
+        ("Asia/Dubai", "2026-10-23T11:00:00+00:00", "2026-10-23T11:30:00+00:00", "2026-10-23T15:00:00+04:00"),
+        ("UTC", "2026-10-23T11:00:00+00:00", "2026-10-23T11:30:00+00:00", "2026-10-23T11:00:00+00:00"),
+        ("Asia/Dubai", "2026-10-23T22:30:00+00:00", "2026-10-23T23:00:00+00:00", "2026-10-24T02:30:00+04:00"),
+    ],
+)
+def test_pilot10b_confirmed_booking_uses_workspace_local_time(
+    timezone_name: str,
+    start_at: str,
+    end_at: str,
+    expected_local: str,
+) -> None:
+    proposal = _confirmed_proposal_payload()
+    proposal["start_at"] = start_at
+    proposal["end_at"] = end_at
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+    )
+    outcome = build_step_outcome(
+        _confirm_proposal_step(proposal),
+        turn=_turn(operation),
+        semantic_context=_booking_completion_context(),
+        action_result={
+            "ok": True,
+            "write_kind": "booking_proposal",
+            "proposal_id": "proposal-current",
+            "status": "confirmed",
+        },
+        active_task_summary={"status": "awaiting_confirmation", "proposal": proposal},
+        timezone_name=timezone_name,
+    )
+
+    assert outcome.facts["start_local"] == expected_local
+
+    if timezone_name == "Africa/Cairo":
+        contract = build_customer_response_contract([outcome])
+        text = deterministic_terminal_fallback(contract, arabic=False)
+        assert "2 PM" in text
+        assert "11 AM" not in text

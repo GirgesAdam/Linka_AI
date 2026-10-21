@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.agents.availability_presentation import availability_windows_from_slots
 from app.agents.v2.semantic_context import ReferenceKind, SemanticContext
@@ -961,6 +963,7 @@ def _confirmed_booking_proposal_facts(
     action_result: dict[str, object],
     active_task_summary: dict[str, object],
     semantic_context: SemanticContext,
+    timezone_name: str | None,
 ) -> dict[str, object]:
     """Project customer-visible details from the exact verified proposal that just succeeded."""
     intent = step.write_intent
@@ -985,7 +988,12 @@ def _confirmed_booking_proposal_facts(
 
     start_at = proposal.get("start_at")
     if isinstance(start_at, str) and start_at.strip():
-        shaped["start_local"] = start_at.strip()
+        visible_start = start_at.strip()
+        if timezone_name:
+            parsed_start = datetime.fromisoformat(visible_start)
+            if parsed_start.tzinfo is not None and parsed_start.utcoffset() is not None:
+                visible_start = parsed_start.astimezone(ZoneInfo(timezone_name)).isoformat()
+        shaped["start_local"] = visible_start
 
     doctor_name = _canonical_entity_name(
         semantic_context,
@@ -1336,6 +1344,7 @@ def build_step_outcome(
     reads: ReadExecutionBundle | None = None,
     action_result: dict[str, object] | None = None,
     active_task_summary: dict[str, object] | None = None,
+    timezone_name: str | None = None,
 ) -> TurnOutcome:
     """Convert deterministic planning/execution facts into one responder-safe outcome."""
     requested_details = _requested_service_details(step, turn)
@@ -1483,6 +1492,7 @@ def build_step_outcome(
             action_result=action_result,
             active_task_summary=dict(active_task_summary or {}),
             semantic_context=semantic_context,
+            timezone_name=timezone_name,
         )
         return TurnOutcome(
             status="completed",
