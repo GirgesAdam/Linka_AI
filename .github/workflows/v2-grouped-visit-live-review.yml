@@ -1,11 +1,6 @@
 name: V2 Grouped Visit Live Review
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
 
 permissions:
@@ -13,7 +8,7 @@ permissions:
 
 jobs:
   grouped-visit-live-review:
-    name: Recheck realistic package and authority flows
+    name: Diagnose mixed-authority recovery
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
@@ -22,7 +17,7 @@ jobs:
         working-directory: backend
     env:
       PYTHONUNBUFFERED: "1"
-      PYTHONPATH: ".:/tmp:../.github/benchmark"
+      PYTHONPATH: ".:../.github/benchmark"
       ENVIRONMENT: staging
       DEBUG: "false"
       DOCS_ENABLED: "false"
@@ -60,150 +55,218 @@ jobs:
         run: |
           test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
           test -n "$DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
-      - name: Assemble benchmark scenario module
-        shell: bash
-        run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
-      - name: Verify realistic semantic authority
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from datetime import UTC, datetime
-          from langchain_core.messages import HumanMessage
-          from app.agents.v2.semantic_context import build_semantic_context
-          from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
-
-          catalog = {
-              "services": [
-                  {
-                      "id": "service-underarm",
-                      "name": "ليزر إبط",
-                      "requires_laser_device": True,
-                      "laser_devices": [{"device_key": "prime_lase", "device_name": "Prime Lase"}],
-                  },
-                  {
-                      "id": "service-bikini",
-                      "name": "ليزر بكيني",
-                      "requires_laser_device": True,
-                      "laser_devices": [{"device_key": "prime_lase", "device_name": "Prime Lase"}],
-                  },
-              ],
-              "doctors": [],
-              "appointments": [],
-          }
-          context = build_semantic_context(catalog)
-          local_now = datetime(2026, 10, 21, 20, 0, tzinfo=UTC)
-
-          def interpret(text):
-              turn = interpret_customer_turn_v2(
-                  history=[HumanMessage(content=text)],
-                  semantic_context=context,
-                  timezone_name="Africa/Cairo",
-                  local_now=local_now,
-              )
-              print(json.dumps({
-                  "customer": text,
-                  "operations": [
-                      {"type": op.type, "execution_intent": op.execution_intent}
-                      for op in turn.operations
-                  ],
-              }, ensure_ascii=False), flush=True)
-              return turn
-
-          inquiry = interpret("ممكن أعرف أقرب ميعاد لليزر إبط على Prime Lase؟")
-          assert any(op.type == "availability" for op in inquiry.operations)
-          assert all(op.execution_intent == "informational" for op in inquiry.operations)
-
-          direct = interpret("اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase.")
-          assert any(
-              op.type == "buy_package" and op.execution_intent == "execute"
-              for op in direct.operations
-          )
-
-          mixed = interpret(
-              "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase، "
-              "وباكيدج 6 جلسات ليزر بكيني على نفس الجهاز بكام؟"
-          )
-          assert any(op.execution_intent == "execute" for op in mixed.operations)
-          assert any(op.execution_intent == "informational" for op in mixed.operations)
-          PY
-      - name: Run realistic grouped-visit scenarios
+      - name: Run full mixed-authority recovery scenario
         shell: bash
         run: |
           python - <<'PY'
           import json
           from dataclasses import asdict
           from pathlib import Path
-          from sqlalchemy import create_engine
+
+          from sqlalchemy import create_engine, select
+          from sqlalchemy.orm import Session
+
           from app.core.config import settings
-          from v2_benchmark_core import execute_one
-          from v2_benchmark_scenarios import TOPICS
+          from app.models.appointment import Appointment
+          from app.models.patient_package import PackageUsage, PatientPackage
+          from app.models.payment_transaction import PaymentTransaction
+          from app.models.workspace import Workspace
+          from v2_benchmark_core import WORKSPACE_SLUG, package_offer, patient_without_future, send
 
-          def completed_write_kinds(turn):
-              kinds = []
-              for outcome in turn.outcomes:
-                  if not isinstance(outcome, dict):
-                      continue
-                  action = outcome.get("action_result")
-                  if not isinstance(action, dict):
-                      continue
-                  kind = action.get("write_kind")
-                  if action.get("ok") is True and action.get("completed") is True and isinstance(kind, str):
-                      kinds.append(kind)
-              return kinds
-
-          names = ["two_services_same_visit", "two_packages_same_visit"]
           engine = create_engine(settings.database_url, pool_pre_ping=True)
-          results = []
-          for name in names:
-              print(f"running {name}", flush=True)
-              result = execute_one(engine, name, TOPICS[name])
-              results.append(result)
-              print(json.dumps({
-                  "name": result.name,
-                  "error": result.error,
-                  "db_delta": result.db_delta,
-                  "assistant": [turn.assistant for turn in result.turns],
-                  "understanding": [turn.understanding for turn in result.turns],
-                  "outcomes": [turn.outcomes for turn in result.turns],
-                  "state_after": [turn.state_after for turn in result.turns],
-              }, ensure_ascii=False), flush=True)
-          engine.dispose()
+          connection = engine.connect()
+          outer = connection.begin()
+          db = Session(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint")
 
-          payload = {
-              "scenario_names": names,
-              "database_writes_persisted": False,
-              "results": [asdict(item) for item in results],
-          }
-          path = Path("artifacts/v2-grouped-visit-live-review.json")
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+          try:
+              workspace = db.scalar(select(Workspace).where(Workspace.slug == WORKSPACE_SLUG))
+              if workspace is None:
+                  raise RuntimeError("Workspace tia not found")
+              patient = patient_without_future(db, workspace)
+              offer_a = package_offer(
+                  db,
+                  workspace,
+                  service_name="ليزر إزالة الشعر - إبط",
+                  sessions=6,
+                  device_key="prime_lase",
+              )
+              offer_b = package_offer(
+                  db,
+                  workspace,
+                  service_name="ليزر إزالة الشعر - بكيني",
+                  sessions=6,
+                  device_key="prime_lase",
+              )
+              underarm_service_id = str(offer_a["service_id"])
+              bikini_service_id = str(offer_b["service_id"])
 
-          assert not any(item.error for item in results), [item.error for item in results]
-          package_result = next(item for item in results if item.name == "two_packages_same_visit")
-          assert len(package_result.turns) >= 2
-          turn1, turn2 = package_result.turns[0], package_result.turns[1]
-          assert isinstance(turn1.understanding, dict)
-          assert isinstance(turn2.understanding, dict)
+              before_package_ids = set(
+                  db.scalars(
+                      select(PatientPackage.id).where(
+                          PatientPackage.workspace_id == workspace.id,
+                          PatientPackage.patient_id == patient.id,
+                      )
+                  ).all()
+              )
+              before_appointment_ids = set(
+                  db.scalars(
+                      select(Appointment.id).where(
+                          Appointment.workspace_id == workspace.id,
+                          Appointment.patient_id == patient.id,
+                      )
+                  ).all()
+              )
 
-          turn1_operations = turn1.understanding.get("operations") or []
-          assert turn1_operations
-          assert all(
-              isinstance(op, dict) and op.get("execution_intent") == "informational"
-              for op in turn1_operations
-          )
-          assert completed_write_kinds(turn1) == []
-          assert turn1.state_after.get("patient_packages") == package_result.db_before.get("patient_packages")
-          assert turn1.state_after.get("appointments") == package_result.db_before.get("appointments")
-          assert turn1.state_after.get("package_usages") == package_result.db_before.get("package_usages")
+              def snapshot():
+                  packages = list(
+                      db.scalars(
+                          select(PatientPackage).where(
+                              PatientPackage.workspace_id == workspace.id,
+                              PatientPackage.patient_id == patient.id,
+                              PatientPackage.id.notin_(before_package_ids),
+                          )
+                      ).all()
+                  )
+                  appointments = list(
+                      db.scalars(
+                          select(Appointment).where(
+                              Appointment.workspace_id == workspace.id,
+                              Appointment.patient_id == patient.id,
+                              Appointment.id.notin_(before_appointment_ids),
+                          )
+                      ).all()
+                  )
+                  bikini_packages = [row for row in packages if str(row.service_id) == bikini_service_id]
+                  underarm_packages = [row for row in packages if str(row.service_id) == underarm_service_id]
+                  bikini_ids = [row.id for row in bikini_packages]
+                  payments = (
+                      list(
+                          db.scalars(
+                              select(PaymentTransaction).where(
+                                  PaymentTransaction.workspace_id == workspace.id,
+                                  PaymentTransaction.patient_package_id.in_(bikini_ids),
+                              )
+                          ).all()
+                      )
+                      if bikini_ids
+                      else []
+                  )
+                  usages = (
+                      list(
+                          db.scalars(
+                              select(PackageUsage).where(
+                                  PackageUsage.workspace_id == workspace.id,
+                                  PackageUsage.patient_package_id.in_(bikini_ids),
+                              )
+                          ).all()
+                      )
+                      if bikini_ids
+                      else []
+                  )
+                  bikini_appointments = [
+                      row for row in appointments if str(row.service_id) == bikini_service_id
+                  ]
+                  underarm_appointments = [
+                      row for row in appointments if str(row.service_id) == underarm_service_id
+                  ]
+                  return {
+                      "underarm_package_count": len(underarm_packages),
+                      "underarm_active_package_count": sum(row.status == "active" for row in underarm_packages),
+                      "bikini_package_count": len(bikini_packages),
+                      "bikini_active_package_count": sum(row.status == "active" for row in bikini_packages),
+                      "bikini_package_statuses": [row.status for row in bikini_packages],
+                      "bikini_payment_count": len([row for row in payments if row.transaction_type == "payment"]),
+                      "bikini_refund_count": len([row for row in payments if row.transaction_type == "refund"]),
+                      "bikini_settlement_count": len(
+                          [
+                              row
+                              for row in payments
+                              if row.transaction_type == "payment"
+                              and "settlement" in str(row.reason or "").lower()
+                          ]
+                      ),
+                      "bikini_usage_count": len(usages),
+                      "bikini_usage_statuses": [row.status for row in usages],
+                      "new_appointment_count": len(appointments),
+                      "underarm_appointment_count": len(underarm_appointments),
+                      "bikini_appointment_count": len(bikini_appointments),
+                      "new_appointment_ids": [str(row.id) for row in appointments],
+                  }
 
-          turn2_operations = turn2.understanding.get("operations") or []
-          assert any(
-              isinstance(op, dict) and op.get("execution_intent") == "execute"
-              for op in turn2_operations
-          )
-          assert completed_write_kinds(turn2).count("buy_package") == 2
-          assert package_result.db_delta.get("patient_packages") == 2
+              messages = [
+                  "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase، وباكيدج 6 جلسات ليزر بكيني على نفس الجهاز بكام؟",
+                  "لا، البكيني مش عايزها. خلي الإبط بس.",
+                  "وريني أقرب ميعاد للإبط.",
+                  "تمام، احجزلي أقرب اختيار اللي وريتهولي.",
+              ]
+
+              conversation_id = None
+              turns = []
+              snapshots = []
+              for index, message in enumerate(messages, start=1):
+                  record, conversation_id = send(db, workspace, patient, message, conversation_id)
+                  turns.append(record)
+                  current = snapshot()
+                  snapshots.append(current)
+                  print(
+                      json.dumps(
+                          {
+                              "turn": index,
+                              "customer": record.customer,
+                              "assistant": record.assistant,
+                              "understanding": record.understanding,
+                              "outcomes": record.outcomes,
+                              "snapshot": current,
+                          },
+                          ensure_ascii=False,
+                      ),
+                      flush=True,
+                  )
+
+                  if index == 1:
+                      assert current["bikini_payment_count"] == 0, "P0: unauthorized Bikini payment"
+                      assert current["bikini_settlement_count"] == 0, "P0: unauthorized Bikini settlement"
+                      assert current["bikini_usage_count"] == 0, "P0: unauthorized Bikini usage"
+                      assert current["bikini_appointment_count"] == 0, "P0: unauthorized Bikini appointment"
+
+              turn2_state = snapshots[1]
+              turn3_state = snapshots[2]
+              final_state = snapshots[3]
+
+              assert turn3_state["new_appointment_ids"] == turn2_state["new_appointment_ids"], (
+                  "Turn 3 availability question created an appointment"
+              )
+              assert final_state["underarm_active_package_count"] == 1, (
+                  "Expected exactly one active Underarm package"
+              )
+              assert final_state["bikini_active_package_count"] == 0, (
+                  "Rejected Bikini package remained active"
+              )
+              assert final_state["bikini_payment_count"] == 0, "Bikini payment must remain zero"
+              assert final_state["bikini_settlement_count"] == 0, "Bikini settlement must remain zero"
+              assert final_state["bikini_usage_count"] == 0, "Bikini usage must remain zero"
+              assert final_state["bikini_appointment_count"] == 0, "Bikini appointment leakage detected"
+              assert final_state["underarm_appointment_count"] == 1, (
+                  "Expected exactly one intended Underarm appointment after confirmation"
+              )
+
+              payload = {
+                  "scenario": "mixed_authority_recovery",
+                  "database_writes_persisted": False,
+                  "turns": [asdict(turn) for turn in turns],
+                  "snapshots": snapshots,
+                  "final_state": final_state,
+              }
+              path = Path("artifacts/v2-grouped-visit-live-review.json")
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+              print("MIXED_AUTHORITY_RECOVERY=PASS", flush=True)
+          finally:
+              db.close()
+              if outer.is_active:
+                  outer.rollback()
+              connection.close()
+              engine.dispose()
           PY
       - name: Upload grouped-visit live review
         if: always()
