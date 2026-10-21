@@ -63,6 +63,87 @@ jobs:
       - name: Assemble benchmark scenario module
         shell: bash
         run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
+      - name: Verify semantic authority families
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import UTC, datetime
+          from langchain_core.messages import HumanMessage
+          from app.agents.v2.semantic_context import build_semantic_context
+          from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
+
+          catalog = {
+              "services": [
+                  {
+                      "id": "service-underarm",
+                      "name": "ليزر إبط",
+                      "requires_laser_device": True,
+                      "laser_devices": [{"device_key": "prime_lase", "device_name": "Prime Lase"}],
+                  },
+                  {
+                      "id": "service-bikini",
+                      "name": "ليزر بكيني",
+                      "requires_laser_device": True,
+                      "laser_devices": [{"device_key": "prime_lase", "device_name": "Prime Lase"}],
+                  },
+              ],
+              "doctors": [],
+              "appointments": [],
+          }
+          context = build_semantic_context(catalog)
+          local_now = datetime(2026, 10, 21, 20, 0, tzinfo=UTC)
+
+          def interpret(text):
+              turn = interpret_customer_turn_v2(
+                  history=[HumanMessage(content=text)],
+                  semantic_context=context,
+                  timezone_name="Africa/Cairo",
+                  local_now=local_now,
+              )
+              print(json.dumps({
+                  "customer": text,
+                  "turn_mutation_policy": turn.turn_mutation_policy,
+                  "operations": [
+                      {"type": op.type, "execution_intent": op.execution_intent}
+                      for op in turn.operations
+                  ],
+              }, ensure_ascii=False), flush=True)
+              return turn
+
+          inquiry = interpret(
+              "ممكن أعرف أقرب ميعاد لليزر إبط على Prime Lase؟ أنا بس بقارن المواعيد المتاحة."
+          )
+          assert inquiry.turn_mutation_policy == "operation_local"
+          assert any(op.type == "availability" for op in inquiry.operations)
+          assert all(op.execution_intent == "informational" for op in inquiry.operations)
+
+          preview = interpret(
+              "عايز أشتري باكيدج 6 جلسات ليزر إبط على Prime Lase وأحجز أول جلسة، "
+              "لكن دلوقتي خليني أشوف تفاصيل الباكيدج وأقرب ميعاد الأول قبل أي تنفيذ."
+          )
+          assert preview.turn_mutation_policy == "preview_only"
+          preview_actions = {op.type: op.execution_intent for op in preview.operations}
+          assert preview_actions.get("buy_package") == "execute"
+          assert preview_actions.get("book") == "execute"
+
+          direct = interpret(
+              "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase دلوقتي."
+          )
+          assert direct.turn_mutation_policy == "operation_local"
+          assert any(
+              op.type == "buy_package" and op.execution_intent == "execute"
+              for op in direct.operations
+          )
+
+          mixed = interpret(
+              "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase دلوقتي، "
+              "أما باكيدج 6 جلسات ليزر بكيني على Prime Lase فعايز أعرف تفاصيلها الأول."
+          )
+          assert mixed.turn_mutation_policy == "operation_local"
+          assert any(op.execution_intent == "execute" for op in mixed.operations)
+          assert any(op.execution_intent == "informational" for op in mixed.operations)
+          PY
       - name: Run focused grouped-visit scenarios
         shell: bash
         run: |
@@ -74,6 +155,19 @@ jobs:
           from app.core.config import settings
           from v2_benchmark_core import execute_one
           from v2_benchmark_scenarios import TOPICS
+
+          def completed_write_kinds(turn):
+              kinds = []
+              for outcome in turn.outcomes:
+                  if not isinstance(outcome, dict):
+                      continue
+                  action = outcome.get("action_result")
+                  if not isinstance(action, dict):
+                      continue
+                  kind = action.get("write_kind")
+                  if action.get("ok") is True and action.get("completed") is True and isinstance(kind, str):
+                      kinds.append(kind)
+              return kinds
 
           names = ["two_services_same_visit", "two_packages_same_visit"]
           engine = create_engine(settings.database_url, pool_pre_ping=True)
@@ -87,7 +181,9 @@ jobs:
                   "error": result.error,
                   "db_delta": result.db_delta,
                   "assistant": [turn.assistant for turn in result.turns],
+                  "understanding": [turn.understanding for turn in result.turns],
                   "outcomes": [turn.outcomes for turn in result.turns],
+                  "state_after": [turn.state_after for turn in result.turns],
               }, ensure_ascii=False), flush=True)
           engine.dispose()
           payload = {
@@ -98,8 +194,30 @@ jobs:
           path = Path("artifacts/v2-grouped-visit-live-review.json")
           path.parent.mkdir(parents=True, exist_ok=True)
           path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-          if any(item.error for item in results):
-              raise SystemExit(1)
+
+          assert not any(item.error for item in results), [item.error for item in results]
+          package_result = next(item for item in results if item.name == "two_packages_same_visit")
+          assert len(package_result.turns) >= 2
+          turn1, turn2 = package_result.turns[0], package_result.turns[1]
+          assert isinstance(turn1.understanding, dict)
+          assert isinstance(turn2.understanding, dict)
+
+          turn1_operations = turn1.understanding.get("operations") or []
+          turn1_package_ops = [
+              op for op in turn1_operations
+              if isinstance(op, dict) and op.get("type") == "buy_package"
+          ]
+          assert turn1.understanding.get("turn_mutation_policy") == "preview_only"
+          assert len(turn1_package_ops) == 2
+          assert all(op.get("execution_intent") == "execute" for op in turn1_package_ops)
+          assert completed_write_kinds(turn1) == []
+          assert turn1.state_after.get("patient_packages") == package_result.db_before.get("patient_packages")
+          assert turn1.state_after.get("appointments") == package_result.db_before.get("appointments")
+          assert turn1.state_after.get("package_usages") == package_result.db_before.get("package_usages")
+
+          assert turn2.understanding.get("turn_mutation_policy") == "operation_local"
+          assert completed_write_kinds(turn2).count("buy_package") == 2
+          assert package_result.db_delta.get("patient_packages") == 2
           PY
       - name: Upload grouped-visit live review
         if: always()

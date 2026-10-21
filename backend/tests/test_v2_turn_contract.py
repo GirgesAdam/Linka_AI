@@ -276,3 +276,20 @@ def test_turn_mutation_policy_accepts_preview_only_without_rewriting_operation_i
     )
     assert turn.turn_mutation_policy == "preview_only"
     assert turn.operations[0].execution_intent == "execute"
+
+
+def test_execution_authority_schema_distinguishes_inquiry_from_current_action() -> None:
+    schema = TiaTurnUnderstanding.model_json_schema()
+    operation = schema["$defs"]["TurnOperation"]["properties"]
+    execution_description = str(operation["execution_intent"].get("description") or "").lower()
+    policy_description = str(schema["properties"]["turn_mutation_policy"].get("description") or "").lower()
+
+    assert "per-operation authority" in execution_description
+    assert "information/discovery" in execution_description
+    assert "affirmatively wants this individual operation to proceed now" in execution_description
+    assert "preview_only" in execution_description
+    assert "ordinary information seeking" in policy_description
+    assert "permission differs between individual operations" in policy_description
+    assert "precedence" in policy_description
+    assert "never grants execution" in policy_description
+    assert "never rewrites execution_intent" in policy_description

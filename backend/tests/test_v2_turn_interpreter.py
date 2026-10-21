@@ -1068,3 +1068,19 @@ def test_turn_interpreter_prompt_defines_turn_global_preview_ceiling_without_phr
     assert "execution permission" in prompt
     assert "differs between operations" in prompt
     assert "booking workflow/proposal staging" in prompt
+
+
+def test_interpreter_prompt_resolves_customer_authority_before_operations() -> None:
+    prompt = interpreter._interpreter_system_prompt(
+        timezone_name="Africa/Cairo",
+        local_now=datetime.fromisoformat("2026-10-21T12:00:00+03:00"),
+    )
+
+    assert "Resolve customer authority BEFORE emitting operations" in prompt
+    assert "what the customer wants\n  to happen NOW" in prompt
+    assert "information/discovery versus actual execution authority" in prompt
+    assert "Mentioning, discussing, comparing, or asking about a possible action does\n  not authorize that action" in prompt
+    assert "Ordinary information-seeking needs no preview ceiling" in prompt
+    assert "execution permission\n  differs between operations" in prompt
+    assert "global preview restriction has precedence" in prompt
+    assert "verified-proposal confirmation contract" in prompt

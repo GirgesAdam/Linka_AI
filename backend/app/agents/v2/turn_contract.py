@@ -446,7 +446,18 @@ class TurnOperation(StrictContractModel):
     )
     # Required in provider schemas. The default preserves compatibility for direct
     # internal/test construction; production structured output always supplies it.
-    execution_intent: ExecutionIntent = "execute"
+    execution_intent: ExecutionIntent = Field(
+        default="execute",
+        description=(
+            "Per-operation authority for what the customer wants to happen now. Use informational "
+            "for information/discovery, comparisons, hypotheticals, possibility checks, or consequence "
+            "inspection even when a mutation is mentioned. Use execute only when the customer "
+            "affirmatively wants this individual operation to proceed now. If an eventual action is "
+            "requested but every persistent mutation is globally withheld pending review, preserve "
+            "the operation's own semantic intent and let turn_mutation_policy=preview_only impose the "
+            "turn-wide ceiling. This field never bypasses verified booking-proposal confirmation."
+        ),
+    )
     active_task_relationship: ActiveTaskRelationship = Field(
         default="unspecified",
         description=(
@@ -794,10 +805,12 @@ class TiaTurnUnderstanding(StrictContractModel):
         default="operation_local",
         description=(
             "Turn-local maximum mutation authority for the latest customer message. Use preview_only "
-            "only when the customer globally withholds execution of every persistent customer-facing "
-            "mutation in this turn. Use operation_local when no global restriction exists or execution "
-            "permission differs between individual operations. This ceiling never grants execution: "
-            "each operation still requires its own execution_intent authority."
+            "when the turn contains real eventual action requests but globally withholds every persistent "
+            "customer-facing mutation until the customer can inspect/review first. Ordinary information "
+            "seeking stays operation_local with informational operations because there is no mutation "
+            "authority to cap. Use operation_local when no global restriction exists or execution "
+            "permission differs between individual operations. A preview_only ceiling has precedence over "
+            "otherwise executable operations. It never grants execution and never rewrites execution_intent."
         ),
     )
     safety_signals: list[SafetySignal] = Field(default_factory=list)
