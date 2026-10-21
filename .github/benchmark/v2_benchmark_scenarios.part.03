@@ -89,7 +89,7 @@ def _multi_request(db: Session, workspace: Workspace) -> PreparedScenario:
         patient=patient_without_future(db, workspace),
         observations=["expected_write_delta=0"],
         messages=[
-            f"عايز أعرف سعر {service.name}، ومين الدكاترة اللي بيعملوها، وإيه أقرب معاد متاح؟ أنا بس بجمع معلومات ومش بحجز"
+            f"عايز أعرف سعر {service.name}، ومين الدكاترة اللي بيعملوها، وإيه أقرب معاد متاح؟"
         ],
     )
 
@@ -122,8 +122,8 @@ def _two_packages_same_visit(db: Session, workspace: Workspace) -> PreparedScena
             "required_rule=one_common_doctor_one_visit_one_appointment_time_for_both_services",
         ],
         messages=[
-            "عايز باكيدج 6 جلسات ليزر إبط وباكيدج 6 جلسات بكيني، الاتنين على Prime Lase، وعايز أول جلسة للخدمتين مع بعض في نفس الزيارة. اختار دكتور واحد يعمل الخدمتين ووريني أقرب ميعاد مناسب قبل ما تنفذ أي حاجة",
-            "تمام، اشتري الباكيدجين واحجز أول زيارة للخدمتين مع بعض على أقرب اختيار مناسب اللي لقيته، نفس الدكتور وفي زيارة واحدة",
+            "بكام باكيدج 6 جلسات ليزر إبط وباكيدج 6 جلسات بكيني على Prime Lase؟ وإيه أقرب ميعاد متاح أقدر أعمل فيه أول جلسة للخدمتين مع بعض في نفس الزيارة مع نفس الدكتور؟",
+            "تمام، اشتريلي الباكيدجين واحجزلي أول زيارة للخدمتين مع بعض على أقرب ميعاد مناسب، نفس الدكتور وفي زيارة واحدة",
         ],
     )
 

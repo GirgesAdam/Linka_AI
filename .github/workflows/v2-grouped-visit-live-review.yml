@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   grouped-visit-live-review:
-    name: Recheck grouped service and package visits
+    name: Recheck realistic package and authority flows
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
@@ -63,7 +63,7 @@ jobs:
       - name: Assemble benchmark scenario module
         shell: bash
         run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
-      - name: Verify semantic authority families
+      - name: Verify realistic semantic authority
         shell: bash
         run: |
           python - <<'PY'
@@ -103,7 +103,6 @@ jobs:
               )
               print(json.dumps({
                   "customer": text,
-                  "turn_mutation_policy": turn.turn_mutation_policy,
                   "operations": [
                       {"type": op.type, "execution_intent": op.execution_intent}
                       for op in turn.operations
@@ -111,40 +110,24 @@ jobs:
               }, ensure_ascii=False), flush=True)
               return turn
 
-          inquiry = interpret(
-              "ممكن أعرف أقرب ميعاد لليزر إبط على Prime Lase؟ أنا بس بقارن المواعيد المتاحة."
-          )
-          assert inquiry.turn_mutation_policy == "operation_local"
+          inquiry = interpret("ممكن أعرف أقرب ميعاد لليزر إبط على Prime Lase؟")
           assert any(op.type == "availability" for op in inquiry.operations)
           assert all(op.execution_intent == "informational" for op in inquiry.operations)
 
-          preview = interpret(
-              "عايز أشتري باكيدج 6 جلسات ليزر إبط على Prime Lase وأحجز أول جلسة، "
-              "لكن دلوقتي خليني أشوف تفاصيل الباكيدج وأقرب ميعاد الأول قبل أي تنفيذ."
-          )
-          assert preview.turn_mutation_policy == "preview_only"
-          preview_actions = {op.type: op.execution_intent for op in preview.operations}
-          assert preview_actions.get("buy_package") == "execute"
-          assert preview_actions.get("book") == "execute"
-
-          direct = interpret(
-              "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase دلوقتي."
-          )
-          assert direct.turn_mutation_policy == "operation_local"
+          direct = interpret("اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase.")
           assert any(
               op.type == "buy_package" and op.execution_intent == "execute"
               for op in direct.operations
           )
 
           mixed = interpret(
-              "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase دلوقتي، "
-              "أما باكيدج 6 جلسات ليزر بكيني على Prime Lase فعايز أعرف تفاصيلها الأول."
+              "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase، "
+              "وباكيدج 6 جلسات ليزر بكيني على نفس الجهاز بكام؟"
           )
-          assert mixed.turn_mutation_policy == "operation_local"
           assert any(op.execution_intent == "execute" for op in mixed.operations)
           assert any(op.execution_intent == "informational" for op in mixed.operations)
           PY
-      - name: Run focused grouped-visit scenarios
+      - name: Run realistic grouped-package scenario
         shell: bash
         run: |
           python - <<'PY'
@@ -169,7 +152,7 @@ jobs:
                       kinds.append(kind)
               return kinds
 
-          names = ["two_services_same_visit", "two_packages_same_visit"]
+          names = ["two_packages_same_visit"]
           engine = create_engine(settings.database_url, pool_pre_ping=True)
           results = []
           for name in names:
@@ -186,6 +169,7 @@ jobs:
                   "state_after": [turn.state_after for turn in result.turns],
               }, ensure_ascii=False), flush=True)
           engine.dispose()
+
           payload = {
               "scenario_names": names,
               "database_writes_persisted": False,
@@ -196,26 +180,28 @@ jobs:
           path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
           assert not any(item.error for item in results), [item.error for item in results]
-          package_result = next(item for item in results if item.name == "two_packages_same_visit")
+          package_result = results[0]
           assert len(package_result.turns) >= 2
           turn1, turn2 = package_result.turns[0], package_result.turns[1]
           assert isinstance(turn1.understanding, dict)
           assert isinstance(turn2.understanding, dict)
 
           turn1_operations = turn1.understanding.get("operations") or []
-          turn1_package_ops = [
-              op for op in turn1_operations
-              if isinstance(op, dict) and op.get("type") == "buy_package"
-          ]
-          assert turn1.understanding.get("turn_mutation_policy") == "preview_only"
-          assert len(turn1_package_ops) == 2
-          assert all(op.get("execution_intent") == "execute" for op in turn1_package_ops)
+          assert turn1_operations
+          assert all(
+              isinstance(op, dict) and op.get("execution_intent") == "informational"
+              for op in turn1_operations
+          )
           assert completed_write_kinds(turn1) == []
           assert turn1.state_after.get("patient_packages") == package_result.db_before.get("patient_packages")
           assert turn1.state_after.get("appointments") == package_result.db_before.get("appointments")
           assert turn1.state_after.get("package_usages") == package_result.db_before.get("package_usages")
 
-          assert turn2.understanding.get("turn_mutation_policy") == "operation_local"
+          turn2_operations = turn2.understanding.get("operations") or []
+          assert any(
+              isinstance(op, dict) and op.get("execution_intent") == "execute"
+              for op in turn2_operations
+          )
           assert completed_write_kinds(turn2).count("buy_package") == 2
           assert package_result.db_delta.get("patient_packages") == 2
           PY

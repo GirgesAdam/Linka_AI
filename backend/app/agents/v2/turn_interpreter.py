@@ -201,40 +201,17 @@ SEMANTIC PRINCIPLES
   Set continuation_condition=if_previous_no_availability only when the operation is
   explicitly conditional on the immediately previous verified availability having no options; use
   continuation_condition=always for ordinary continuations and unconditional nearest requests.
-- Resolve customer authority BEFORE emitting operations. Read the complete latest customer turn jointly,
-  then determine in order: (1) the customer's current conversational goal, (2) what the customer wants
-  to happen NOW, (3) which concerns are information/discovery versus actual execution authority, and
-  (4) whether any execution restriction is turn-global or operation-local. Only then choose operation
-  types and execution_intent. Mentioning, discussing, comparing, or asking about a possible action does
-  not authorize that action. If execution authority is genuinely uncertain, fail closed to informational
-  or clarification rather than inventing execution authority.
-- `execution_intent` is per-operation authority for what may happen now. Use informational when the
-  customer only wants to know, inspect, check, compare, or understand availability/options/consequences,
-  including hypotheticals that mention a mutation. Use execute when the customer affirmatively wants
-  that individual operation to proceed now. A direct clear mutation request remains execute without an
-  extra confirmation step. When a turn requests an action as the eventual goal but globally withholds
-  all persistent execution pending review, preserve that operation's own semantic intent and use the
-  turn-wide preview ceiling below; do not misclassify an ordinary information request as an eventual
-  mutation merely because the action is discussed.
 - Separate booking-workflow intent from final appointment-write authorization. `book` means the
   customer wants to start or continue arranging a new appointment; `execution_intent=execute` means
   start that workflow now. When the customer wants a visit and asks to review its details before
   confirming, still use `book` with `execution_intent=execute`: the backend verifies availability and
   presents a server-owned proposal, but must not create an Appointment until that exact proposal is
-  explicitly confirmed. Use `availability` with `execution_intent=informational` when the customer only
-  wants to inspect possible times without starting a booking task. A hypothetical about whether booking
-  would be possible, without intent to arrange the visit, remains informational.
-- Set turn_mutation_policy=preview_only only when the latest customer turn contains real eventual action
-  requests but globally withholds execution of every persistent customer-facing mutation until the
-  customer can inspect/review first. Ordinary information-seeking needs no preview ceiling because it
-  has no mutation authority to cap. This policy is a turn-wide maximum authority, not an operation
-  intent: individual operations keep their own execution_intent semantics. Use
-  turn_mutation_policy=operation_local when there is no global restriction or when execution permission
-  differs between operations (for example, execute
-  one action now while only inspecting another). A global preview restriction has precedence over
-  individual mutation verbs and must cap every persistent mutation even when an operation is otherwise
-  executable. Booking workflow/proposal staging is not itself final Appointment mutation and remains
-  governed by the existing verified-proposal confirmation contract.
+  explicitly confirmed. Use `availability` with `execution_intent=informational` only when the customer
+  wants to inspect possible times without starting a booking task, or explicitly says not to start
+  booking now. A hypothetical about whether booking would be possible, without intent to arrange the
+  visit, remains informational. For non-book actions, questions, comparisons, hypotheticals, "should I"
+  choices, and requests to inspect consequences/options remain informational; mentions alone do not
+  authorize cancellation, rescheduling, purchasing, or other mutations.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
   only once.

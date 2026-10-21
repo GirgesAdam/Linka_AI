@@ -1677,29 +1677,14 @@ def plan_turn(turn: TiaTurnUnderstanding, context: PlannerContext) -> TurnPlan:
     }
     compound_booking = len(executable_book_indexes) >= 2
     for index, operation in enumerate(turn.operations):
-        effective_operation = operation
-        if (
-            turn.turn_mutation_policy == "preview_only"
-            and operation.type not in {"book", "reschedule"}
-        ):
-            effective_operation = operation.model_copy(update={"execution_intent": "informational"})
-
-        step = _plan_operation(
-            index,
-            effective_operation,
-            context,
-            compound_book=compound_booking and index in executable_book_indexes,
+        steps.append(
+            _plan_operation(
+                index,
+                operation,
+                context,
+                compound_book=compound_booking and index in executable_book_indexes,
+            )
         )
-        if (
-            turn.turn_mutation_policy == "preview_only"
-            and step.write_intent is not None
-            and step.write_intent.kind != "booking"
-        ):
-            update: dict[str, object] = {"write_intent": None}
-            if step.disposition == "write_ready":
-                update.update({"disposition": "blocked", "response_goal": "clarification"})
-            step = step.model_copy(update=update)
-        steps.append(step)
 
     handoff_steps = [step for step in steps if step.disposition == "handoff"]
     if not handoff_steps:
