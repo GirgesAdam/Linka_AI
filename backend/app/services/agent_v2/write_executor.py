@@ -44,7 +44,11 @@ from app.services.appointment_operations import (
 )
 from app.services.crm_tasks import CRMTaskError, create_crm_task
 from app.services.package_offers import PackageOfferError, purchase_package_offer
-from app.services.patient_packages import PackageOperationError
+from app.services.patient_packages import (
+    PackageOperationError,
+    cancel_patient_package_with_refund,
+    list_patient_packages,
+)
 from app.services.pulse_billing import (
     PulseBillingError,
     purchase_pulse_pack_offer,
@@ -427,6 +431,60 @@ def execute_write_ready_step(
                     "status": package.status,
                     "amount_paid_minor": 0,
                 }
+            elif intent.kind == "cancel_package":
+                service_id = _uuid(parameters, "service_id")
+                candidates = [
+                    item
+                    for item in list_patient_packages(
+                        db,
+                        workspace_id=workspace.id,
+                        patient_id=patient.id,
+                        service_id=service_id,
+                        include_financials=True,
+                    )
+                    if item.effective_status == "active"
+                    and item.amount_paid_minor == 0
+                    and item.amount_refunded_minor == 0
+                    and item.sessions_reserved == 0
+                    and item.sessions_consumed == 0
+                    and (
+                        parameters.get("package_sessions") in (None, item.sessions_purchased)
+                    )
+                    and (
+                        parameters.get("device_key") in (None, "", item.laser_device_key)
+                    )
+                ]
+                if len(candidates) > 1:
+                    raise WriteExecutionError(
+                        "Package correction matched multiple reversible packages; refusing to guess."
+                    )
+                if not candidates:
+                    result = {
+                        "ok": True,
+                        "completed": False,
+                        "write_kind": intent.kind,
+                        "reason": "no_matching_reversible_package",
+                    }
+                else:
+                    cancelled = cancel_patient_package_with_refund(
+                        db,
+                        workspace_id=workspace.id,
+                        package_id=candidates[0].id,
+                        reason="Customer corrected package selection",
+                        created_by_user_id=None,
+                        settlement_target_minor=0,
+                        idempotency_key=idempotency_key,
+                        actor_type="ai",
+                        require_reversible_unpaid=True,
+                    )[0]
+                    result = {
+                        "ok": True,
+                        "completed": True,
+                        "write_kind": intent.kind,
+                        "patient_package_id": str(cancelled.id),
+                        "status": cancelled.status,
+                        "amount_paid_minor": 0,
+                    }
             elif intent.kind == "buy_pulse_pack":
                 pack = purchase_pulse_pack_offer(
                     db,

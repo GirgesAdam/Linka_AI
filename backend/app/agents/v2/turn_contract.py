@@ -24,6 +24,7 @@ OperationType = Literal[
     "package_info",
     "package_compare",
     "buy_package",
+    "cancel_package",
     "pulse_info",
     "buy_pulse_pack",
     "refund_quote",

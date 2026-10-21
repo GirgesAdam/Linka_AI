@@ -433,7 +433,7 @@ SEMANTIC PRINCIPLES
 - For appointment_list, broad category wording such as asking for "my next laser appointment" must
   not force a service choice from the catalog. Unless one specific service is clearly named, leave
   the service entity null so Python can read the customer's actual appointments first.
-- package_info and refund_quote are reads. buy_package is a purchase request. For package_info,
+- package_info and refund_quote are reads. buy_package is a purchase request. cancel_package is only for an explicit latest-turn correction that retracts a package action already completed earlier in this same conversation; it never means a general cancellation/refund request for a pre-existing package. Deterministic execution must still prove the target is uniquely matched, unpaid, unused, unreserved, and reversible before changing state. For package_info,
   requested_package_details controls the exact read scope: owned means the customer's existing package
   or remaining-session state; offers means session-package options currently available to purchase; use
   both only when both concerns are explicitly requested. Set requested_package_details to exactly what
@@ -496,8 +496,8 @@ SEMANTIC PRINCIPLES
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
   package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
-  customer is actually asking Linka to carry out cancellation/refund/termination now, interpret it as
-  human_support because the agent must not execute purchased-package cancellation.
+  customer is actually asking Linka to cancel/refund/terminate a pre-existing purchased package, interpret it as
+  human_support. The narrow exception is a latest-turn correction retracting a package action that this same conversation just completed: emit cancel_package for that package/service and let deterministic Python fail closed unless it is uniquely matched, unpaid, unused, unreserved, and reversible.
 - clinic_info covers clinic-wide operational/informational questions such as location, contact details,
   working hours, non-payment policies, and comparisons between clinic devices when the question is not
   about one specific service. requested_clinic_details controls field-level disclosure: name for the

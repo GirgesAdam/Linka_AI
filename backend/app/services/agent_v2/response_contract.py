@@ -25,6 +25,7 @@ TerminalAction = Literal[
     "cancel_appointment",
     "confirm_appointment",
     "buy_package",
+    "cancel_package",
     "buy_pulse_pack",
     "follow_up",
     "marketing_update",
@@ -266,7 +267,7 @@ class CustomerResponseContract(StrictResponseContractModel):
 
 _TERMINAL_GOALS = frozenset({
     "booking_completed", "reschedule_completed", "cancellation_completed",
-    "appointment_confirmed", "package_purchased", "pulse_pack_purchased",
+    "appointment_confirmed", "package_purchased", "package_cancelled", "pulse_pack_purchased",
     "follow_up_created", "marketing_updated",
 })
 _AVAILABILITY_GOALS = frozenset({
@@ -323,6 +324,7 @@ TERMINAL_ACTION_BY_GOAL: dict[ResponseGoal, TerminalAction] = {
     "cancellation_completed": "cancel_appointment",
     "appointment_confirmed": "confirm_appointment",
     "package_purchased": "buy_package",
+    "package_cancelled": "cancel_package",
     "pulse_pack_purchased": "buy_pulse_pack",
     "follow_up_created": "follow_up",
     "marketing_updated": "marketing_update",

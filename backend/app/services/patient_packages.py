@@ -532,11 +532,13 @@ def cancel_patient_package_with_refund(
     workspace_id: UUID,
     package_id: UUID,
     reason: str,
-    created_by_user_id: UUID,
+    created_by_user_id: UUID | None,
     standalone_session_price_minor_at_purchase: int | None = None,
     settlement_target_minor: int | None = None,
     payment_method: str = "cash",
     idempotency_key: str | None = None,
+    actor_type: ActivityActorType = "staff",
+    require_reversible_unpaid: bool = False,
 ) -> tuple[PatientPackage, int, int, int, int, int, int, list[PaymentTransaction]]:
     """Cancel a package and settle the consumed value before refunding unused value.
 
@@ -607,6 +609,16 @@ def cancel_patient_package_with_refund(
     payments, refunds = _package_financial_rows(
         db, workspace_id=workspace_id, package=package, for_update=True
     )
+    if require_reversible_unpaid and (
+        package.status != "active"
+        or reserved != 0
+        or consumed != 0
+        or payments
+        or refunds
+    ):
+        raise PackageOperationError(
+            "AI recovery can only cancel a reversible unpaid, unused, unreserved active package."
+        )
     collected_minor = sum(int(row.amount_minor) for row in payments)
     previously_refunded_minor = sum(int(row.amount_minor) for row in refunds)
     settlement_target = (
@@ -821,7 +833,7 @@ def cancel_patient_package_with_refund(
     record_activity_event(
         db,
         workspace_id=workspace_id,
-        actor_type="staff",
+        actor_type=actor_type,
         actor_user_id=created_by_user_id,
         action="package.cancelled_refund",
         entity_type="patient_package",

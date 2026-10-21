@@ -3,7 +3,7 @@ name: V2 Grouped Visit Live Review
 on:
   push:
     branches:
-      - main
+      - diag/pilot10a-recovery-fix-20261022
     paths:
       - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
