@@ -1,6 +1,11 @@
 name: V2 Grouped Visit Live Review
 
 on:
+  push:
+    branches:
+      - diag/pilot10a-mixed-recovery-20261022
+    paths:
+      - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
 
 permissions:
@@ -163,12 +168,8 @@ jobs:
                       if bikini_ids
                       else []
                   )
-                  bikini_appointments = [
-                      row for row in appointments if str(row.service_id) == bikini_service_id
-                  ]
-                  underarm_appointments = [
-                      row for row in appointments if str(row.service_id) == underarm_service_id
-                  ]
+                  bikini_appointments = [row for row in appointments if str(row.service_id) == bikini_service_id]
+                  underarm_appointments = [row for row in appointments if str(row.service_id) == underarm_service_id]
                   return {
                       "underarm_package_count": len(underarm_packages),
                       "underarm_active_package_count": sum(row.status == "active" for row in underarm_packages),
@@ -177,14 +178,12 @@ jobs:
                       "bikini_package_statuses": [row.status for row in bikini_packages],
                       "bikini_payment_count": len([row for row in payments if row.transaction_type == "payment"]),
                       "bikini_refund_count": len([row for row in payments if row.transaction_type == "refund"]),
-                      "bikini_settlement_count": len(
-                          [
-                              row
-                              for row in payments
-                              if row.transaction_type == "payment"
-                              and "settlement" in str(row.reason or "").lower()
-                          ]
-                      ),
+                      "bikini_settlement_count": len([
+                          row
+                          for row in payments
+                          if row.transaction_type == "payment"
+                          and "settlement" in str(row.reason or "").lower()
+                      ]),
                       "bikini_usage_count": len(usages),
                       "bikini_usage_statuses": [row.status for row in usages],
                       "new_appointment_count": len(appointments),
