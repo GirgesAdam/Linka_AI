@@ -634,3 +634,229 @@ def test_completed_standard_appointment_ignores_released_historical_package_usag
     )
     assert result.status == "completed"
     assert result.completed_at is not None
+
+
+def test_reversible_ai_package_cancellation_creates_no_financial_transaction(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(db)
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Underarm sessions",
+            sessions_purchased=6,
+            sale_price_minor=295_000,
+            amount_paid_minor=0,
+            payment_method="unknown",
+            created_by_user_id=None,
+            actor_type="ai",
+            idempotency_key="ai-unpaid-package",
+        )
+        db.flush()
+        assert db.scalar(select(func.count(PaymentTransaction.id))) == 0
+
+        monkeypatch.setattr(
+            package_service,
+            "require_tia_workspace_domain_write",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("strict zero-financial recovery must not request payment authority")
+            ),
+        )
+        cancelled, collected, consumed_value, settlement_target, _, collected_now, refunded_now, refunds = (
+            package_service.cancel_patient_package_with_refund(
+                db,
+                workspace_id=workspace_id,
+                package_id=package.id,
+                reason="Immediate customer correction",
+                created_by_user_id=None,
+                settlement_target_minor=0,
+                actor_type="ai",
+                require_reversible_unpaid=True,
+                expected_patient_id=patient_id,
+                idempotency_key="ai-recovery-cancel",
+            )
+        )
+
+        assert cancelled.status == "cancelled"
+        assert collected == 0
+        assert consumed_value == 0
+        assert settlement_target == 0
+        assert collected_now == 0
+        assert refunded_now == 0
+        assert refunds == []
+        assert db.scalar(select(func.count(PaymentTransaction.id))) == 0
+
+
+def test_reversible_ai_package_cancellation_rejects_paid_package(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(db)
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Bikini sessions",
+            sessions_purchased=6,
+            sale_price_minor=380_000,
+            amount_paid_minor=100_000,
+            payment_method="card",
+            created_by_user_id=None,
+            actor_type="ai",
+            idempotency_key="ai-paid-package",
+        )
+        db.flush()
+
+        with pytest.raises(PackageOperationError, match="unpaid, unused, unreserved"):
+            package_service.cancel_patient_package_with_refund(
+                db,
+                workspace_id=workspace_id,
+                package_id=package.id,
+                reason="Immediate customer correction",
+                created_by_user_id=None,
+                settlement_target_minor=0,
+                actor_type="ai",
+                require_reversible_unpaid=True,
+                expected_patient_id=patient_id,
+            )
+
+        assert package.status == "active"
+
+
+def test_reversible_ai_package_cancellation_rejects_any_usage(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(db)
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Bikini sessions",
+            sessions_purchased=6,
+            sale_price_minor=380_000,
+            amount_paid_minor=0,
+            payment_method="unknown",
+            created_by_user_id=None,
+            actor_type="ai",
+            idempotency_key="ai-used-package",
+        )
+        appointment = _appointment(
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+        )
+        package_service.reserve_package_usage(db, appointment=appointment, package=package)
+        db.flush()
+
+        with pytest.raises(PackageOperationError, match="unpaid, unused, unreserved"):
+            package_service.cancel_patient_package_with_refund(
+                db,
+                workspace_id=workspace_id,
+                package_id=package.id,
+                reason="Immediate customer correction",
+                created_by_user_id=None,
+                settlement_target_minor=0,
+                actor_type="ai",
+                require_reversible_unpaid=True,
+                expected_patient_id=patient_id,
+            )
+
+        assert package.status == "active"
+        assert db.scalar(
+            select(func.count(PackageUsage.id)).where(PackageUsage.patient_package_id == package.id)
+        ) == 1
+
+
+def test_reversible_ai_package_cancellation_rejects_settlement_only_financial_row(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(db)
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Bikini sessions",
+            sessions_purchased=6,
+            sale_price_minor=380_000,
+            amount_paid_minor=0,
+            payment_method="unknown",
+            created_by_user_id=None,
+            actor_type="ai",
+            idempotency_key="ai-settlement-package",
+        )
+        db.add(
+            PaymentTransaction(
+                workspace_id=workspace_id,
+                patient_id=patient_id,
+                patient_package_id=package.id,
+                transaction_type="payment",
+                amount_minor=1,
+                currency="EGP",
+                payment_method="cash",
+                source="system",
+                reason="package_cancellation_settlement",
+                idempotency_key="unexpected-settlement-row",
+            )
+        )
+        db.flush()
+        assert package.purchase_transaction_id is None
+
+        with pytest.raises(PackageOperationError, match="unpaid, unused, unreserved"):
+            package_service.cancel_patient_package_with_refund(
+                db,
+                workspace_id=workspace_id,
+                package_id=package.id,
+                reason="Immediate customer correction",
+                created_by_user_id=None,
+                settlement_target_minor=0,
+                actor_type="ai",
+                require_reversible_unpaid=True,
+                expected_patient_id=patient_id,
+            )
+
+        assert package.status == "active"
+
+
+def test_reversible_ai_package_cancellation_rejects_patient_mismatch(monkeypatch) -> None:
+    _allow_package_writes(monkeypatch)
+    engine = _engine()
+    with Session(engine) as db:
+        workspace_id, patient_id, service_id = _seed_patient_service(db)
+        package = package_service.create_patient_package(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_id,
+            name="6 Bikini sessions",
+            sessions_purchased=6,
+            sale_price_minor=380_000,
+            amount_paid_minor=0,
+            payment_method="unknown",
+            created_by_user_id=None,
+            actor_type="ai",
+            idempotency_key="ai-patient-mismatch-package",
+        )
+        db.flush()
+
+        with pytest.raises(PackageOperationError, match="unpaid, unused, unreserved"):
+            package_service.cancel_patient_package_with_refund(
+                db,
+                workspace_id=workspace_id,
+                package_id=package.id,
+                reason="Immediate customer correction",
+                created_by_user_id=None,
+                settlement_target_minor=0,
+                actor_type="ai",
+                require_reversible_unpaid=True,
+                expected_patient_id=uuid4(),
+            )
+
+        assert package.status == "active"

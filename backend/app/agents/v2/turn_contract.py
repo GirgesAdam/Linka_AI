@@ -24,6 +24,7 @@ OperationType = Literal[
     "package_info",
     "package_compare",
     "buy_package",
+    "cancel_package",
     "pulse_info",
     "buy_pulse_pack",
     "refund_quote",
@@ -365,7 +366,12 @@ class TurnOperation(StrictContractModel):
             "possible appointment options without requesting creation of a new appointment. Buying "
             "a package and creating an appointment are separate actions: a request to buy a package "
             "and book its first session requires a buy_package operation plus a separate book "
-            "operation; never encode the appointment only inside buy_package. Use pricing for service "
+            "operation; never encode the appointment only inside buy_package. Use cancel_package only "
+            "when the latest customer turn explicitly rejects/removes a package from the immediately "
+            "preceding package discussion; set continues_previous=true. Python will bind cancellation only "
+            "to an exact recent_verified_action package write when one exists, otherwise the correction is "
+            "a no-op. General or historical purchased-package cancellation/refund requests remain "
+            "human_support. Use pricing for service "
             "costs and session-package offer pricing. A prepaid Pulse-pack price is pulse_info with "
             "requested_pulse_details=[offers], not generic service pricing. When a multi-session "
             "package price is asked and its session count is explicit, preserve that count in "

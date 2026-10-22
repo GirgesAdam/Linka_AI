@@ -5,6 +5,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.agents.v2.semantic_context import SemanticContext, SemanticReferenceTarget
+from app.agents.v2.semantic_state_view import verified_action_semantic_view
 from app.agents.v2.turn_contract import TiaTurnUnderstanding, TurnEntities, TurnOperation
 from app.services.agent_v2 import orchestrator, write_executor
 from app.services.agent_v2.outcome import TurnOutcome
@@ -268,3 +270,608 @@ def test_compound_live_writes_stop_before_next_write_after_failure(monkeypatch) 
     assert len(result.outcomes) == 1
     assert result.outcomes[0].status == "blocked"
     assert result.pending_write is None
+
+
+def _package_step(
+    *,
+    operation_index: int,
+    operation_type: str,
+    service_id: str,
+    offer_id: str | None = None,
+) -> PlanStep:
+    params: dict[str, object] = {
+        "service_id": service_id,
+        "device_key": "prime_lase",
+        "package_sessions": 6,
+        "package_usage": "unspecified",
+    }
+    if offer_id is not None:
+        params["package_offer_id"] = offer_id
+    return PlanStep(
+        operation_index=operation_index,
+        operation_type=operation_type,
+        disposition="write_ready",
+        write_intent=WriteIntent(
+            kind=operation_type,
+            authorized=True,
+            requires_verification=False,
+            parameters=params,
+        ),
+        response_goal=(
+            "package_purchased" if operation_type == "buy_package" else "package_cancelled"
+        ),
+        facts=params,
+    )
+
+
+def _recent_package_action(
+    *,
+    package_id: str,
+    offer_id: str,
+    service_id: str,
+) -> dict[str, object]:
+    return {
+        "patient_package_id": package_id,
+        "package_offer_id": offer_id,
+        "amount_paid_minor": 0,
+        "service_id": service_id,
+        "device_key": "prime_lase",
+        "package_sessions": 6,
+    }
+
+
+def _package_row(
+    *,
+    package_id: str,
+    offer_id: str,
+    paid: int = 0,
+    reserved: int = 0,
+    consumed: int = 0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=package_id,
+        package_offer_id=offer_id,
+        effective_status="active",
+        purchase_transaction_id=("payment-1" if paid else None),
+        amount_paid_minor=paid,
+        amount_refunded_minor=0,
+        sessions_reserved=reserved,
+        sessions_consumed=consumed,
+    )
+
+
+def _patch_package_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    plan: TurnPlan,
+    understanding: TiaTurnUnderstanding,
+    rows: list[SimpleNamespace],
+) -> None:
+    _patch_compound_runtime(monkeypatch, plan=plan, understanding=understanding)
+    monkeypatch.setattr(
+        orchestrator,
+        "with_safe_action_context",
+        lambda context, *, action_context: context,
+    )
+    monkeypatch.setattr(orchestrator, "list_patient_packages", lambda *args, **kwargs: rows)
+
+    def outcome(step: PlanStep, **kwargs) -> TurnOutcome:
+        action = kwargs.get("action_result")
+        if isinstance(action, dict) and action.get("ok") is True:
+            goal = (
+                "package_cancelled"
+                if step.write_intent is not None and step.write_intent.kind == "cancel_package"
+                else "package_purchased"
+            )
+            return TurnOutcome(status="completed", response_goal=goal, action_result=action)
+        return TurnOutcome(status="answered", response_goal=step.response_goal or "social_ack")
+
+    monkeypatch.setattr(orchestrator, "build_step_outcome", outcome)
+
+
+def test_package_completed_action_context_retains_server_owned_identity() -> None:
+    step = _package_step(
+        operation_index=0,
+        operation_type="buy_package",
+        service_id="service-a",
+        offer_id="offer-a",
+    )
+
+    context = orchestrator._completed_action_context(
+        step,
+        {
+            "ok": True,
+            "write_kind": "buy_package",
+            "patient_package_id": "package-a",
+            "amount_paid_minor": 0,
+        },
+    )
+
+    assert context == {
+        "operation_type": "buy_package",
+        "package_actions": [
+            {
+                "patient_package_id": "package-a",
+                "package_offer_id": "offer-a",
+                "amount_paid_minor": 0,
+                "service_id": "service-a",
+                "device_key": "prime_lase",
+                "package_sessions": 6,
+            }
+        ],
+    }
+
+
+def test_run18_shape_cancels_recent_b_and_does_not_replay_a(monkeypatch) -> None:
+    recent = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-a", offer_id="offer-a", service_id="service-a"),
+            _recent_package_action(package_id="package-b", offer_id="offer-b", service_id="service-b"),
+        ],
+    }
+    plan = TurnPlan(
+        steps=[
+            _package_step(
+                operation_index=0,
+                operation_type="buy_package",
+                service_id="service-a",
+                offer_id="offer-a",
+            ),
+            _package_step(
+                operation_index=1,
+                operation_type="cancel_package",
+                service_id="service-b",
+            ),
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(type="buy_package", entities=TurnEntities(), execution_intent="execute"),
+            TurnOperation(
+                type="cancel_package",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+            ),
+        ]
+    )
+    _patch_package_runtime(
+        monkeypatch,
+        plan=plan,
+        understanding=understanding,
+        rows=[
+            _package_row(package_id="package-a", offer_id="offer-a"),
+            _package_row(package_id="package-b", offer_id="offer-b"),
+        ],
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def execute(step: PlanStep) -> dict[str, object]:
+        assert step.write_intent is not None
+        calls.append((step.write_intent.kind, dict(step.write_intent.parameters)))
+        return {
+            "ok": True,
+            "write_kind": step.write_intent.kind,
+            "patient_package_id": str(step.write_intent.parameters.get("package_id") or "package-new"),
+            "status": "cancelled",
+            "amount_paid_minor": 0,
+        }
+
+    result = orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=execute,
+        recent_action_context=recent,
+    )
+
+    assert [kind for kind, _ in calls] == ["cancel_package"]
+    assert calls[0][1]["package_id"] == "package-b"
+    assert calls[0][1]["_recent_package_recovery_verified"] is True
+    assert result.pending_write is None
+
+
+def test_run16_shape_noops_missing_b_and_does_not_replay_a(monkeypatch) -> None:
+    recent = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-a", offer_id="offer-a", service_id="service-a")
+        ],
+    }
+    plan = TurnPlan(
+        steps=[
+            _package_step(
+                operation_index=0,
+                operation_type="buy_package",
+                service_id="service-a",
+                offer_id="offer-a",
+            ),
+            _package_step(
+                operation_index=1,
+                operation_type="cancel_package",
+                service_id="service-b",
+            ),
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(type="buy_package", entities=TurnEntities(), execution_intent="execute"),
+            TurnOperation(
+                type="cancel_package",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+            ),
+        ]
+    )
+    _patch_package_runtime(
+        monkeypatch,
+        plan=plan,
+        understanding=understanding,
+        rows=[_package_row(package_id="package-a", offer_id="offer-a")],
+    )
+    calls: list[str] = []
+
+    result = orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=lambda step: calls.append(step.write_intent.kind) or {"ok": True},
+        recent_action_context=recent,
+    )
+
+    assert calls == []
+    assert result.pending_write is None
+
+
+def test_immediate_package_replay_is_suppressed_after_canonical_validation(monkeypatch) -> None:
+    recent = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-a", offer_id="offer-a", service_id="service-a")
+        ],
+    }
+    plan = TurnPlan(
+        steps=[
+            _package_step(
+                operation_index=0,
+                operation_type="buy_package",
+                service_id="service-a",
+                offer_id="offer-a",
+            )
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="buy_package",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ]
+    )
+    _patch_package_runtime(
+        monkeypatch,
+        plan=plan,
+        understanding=understanding,
+        rows=[_package_row(package_id="package-a", offer_id="offer-a")],
+    )
+    calls: list[str] = []
+
+    orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=lambda step: calls.append(step.write_intent.kind) or {"ok": True},
+        recent_action_context=recent,
+    )
+
+    assert calls == []
+
+
+def test_unrelated_turn_does_not_cancel_recent_packages(monkeypatch) -> None:
+    recent = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-a", offer_id="offer-a", service_id="service-a"),
+            _recent_package_action(package_id="package-b", offer_id="offer-b", service_id="service-b"),
+        ],
+    }
+    plan = TurnPlan(
+        steps=[
+            PlanStep(
+                operation_index=0,
+                operation_type="social",
+                disposition="respond",
+                response_goal="social_ack",
+            )
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[TurnOperation(type="social", entities=TurnEntities(), execution_intent="informational")]
+    )
+    _patch_package_runtime(
+        monkeypatch,
+        plan=plan,
+        understanding=understanding,
+        rows=[
+            _package_row(package_id="package-a", offer_id="offer-a"),
+            _package_row(package_id="package-b", offer_id="offer-b"),
+        ],
+    )
+    calls: list[str] = []
+
+    orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=lambda step: calls.append(step.write_intent.kind) or {"ok": True},
+        recent_action_context=recent,
+    )
+
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("paid", "reserved", "consumed"),
+    [(100, 0, 0), (0, 1, 0), (0, 0, 1)],
+)
+def test_recent_package_recovery_fails_closed_on_financial_or_usage_impact(
+    monkeypatch,
+    paid: int,
+    reserved: int,
+    consumed: int,
+) -> None:
+    recent = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-b", offer_id="offer-b", service_id="service-b")
+        ],
+    }
+    plan = TurnPlan(
+        steps=[
+            _package_step(
+                operation_index=0,
+                operation_type="cancel_package",
+                service_id="service-b",
+            )
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="cancel_package",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ]
+    )
+    _patch_package_runtime(
+        monkeypatch,
+        plan=plan,
+        understanding=understanding,
+        rows=[
+            _package_row(
+                package_id="package-b",
+                offer_id="offer-b",
+                paid=paid,
+                reserved=reserved,
+                consumed=consumed,
+            )
+        ],
+    )
+    calls: list[str] = []
+
+    result = orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=lambda step: calls.append(step.write_intent.kind) or {"ok": True},
+        recent_action_context=recent,
+    )
+
+    assert calls == []
+    assert any(trace.disposition_after == "clarify" for trace in result.traces)
+
+
+def test_later_explicit_package_purchase_remains_allowed(monkeypatch) -> None:
+    recent = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-a", offer_id="offer-a", service_id="service-a")
+        ],
+    }
+    plan = TurnPlan(
+        steps=[
+            _package_step(
+                operation_index=0,
+                operation_type="buy_package",
+                service_id="service-b",
+                offer_id="offer-b",
+            )
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="buy_package",
+                entities=TurnEntities(),
+                execution_intent="execute",
+                continues_previous=False,
+            )
+        ]
+    )
+    _patch_package_runtime(
+        monkeypatch,
+        plan=plan,
+        understanding=understanding,
+        rows=[_package_row(package_id="package-a", offer_id="offer-a")],
+    )
+    calls: list[str] = []
+
+    orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=lambda step: calls.append(step.write_intent.kind)
+        or {
+            "ok": True,
+            "write_kind": "buy_package",
+            "patient_package_id": "package-b",
+            "amount_paid_minor": 0,
+        },
+        recent_action_context=recent,
+    )
+
+    assert calls == ["buy_package"]
+
+
+def test_two_successful_package_writes_share_one_recent_action_container(monkeypatch) -> None:
+    plan = TurnPlan(
+        steps=[
+            _package_step(
+                operation_index=0,
+                operation_type="buy_package",
+                service_id="service-a",
+                offer_id="offer-a",
+            ),
+            _package_step(
+                operation_index=1,
+                operation_type="buy_package",
+                service_id="service-b",
+                offer_id="offer-b",
+            ),
+        ]
+    )
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(type="buy_package", entities=TurnEntities(), execution_intent="execute"),
+            TurnOperation(type="buy_package", entities=TurnEntities(), execution_intent="execute"),
+        ]
+    )
+    _patch_package_runtime(monkeypatch, plan=plan, understanding=understanding, rows=[])
+
+    def execute(step: PlanStep) -> dict[str, object]:
+        assert step.write_intent is not None
+        suffix = "a" if step.operation_index == 0 else "b"
+        return {
+            "ok": True,
+            "write_kind": "buy_package",
+            "patient_package_id": f"package-{suffix}",
+            "amount_paid_minor": 0,
+        }
+
+    result = orchestrator.orchestrate_v2_turn(
+        **_compound_args(),
+        write_executor=execute,
+    )
+
+    assert result.verified_action_context is not None
+    assert result.verified_action_context["operation_type"] == "buy_package"
+    assert [
+        item["patient_package_id"]
+        for item in result.verified_action_context["package_actions"]
+    ] == ["package-a", "package-b"]
+
+
+def test_recent_package_semantic_view_exposes_only_opaque_refs() -> None:
+    context = SemanticContext(
+        model_input={},
+        reference_map={
+            "P1": SemanticReferenceTarget(kind="package", canonical_id="package-a"),
+            "P2": SemanticReferenceTarget(kind="package", canonical_id="package-b"),
+            "S1": SemanticReferenceTarget(kind="service", canonical_id="service-a"),
+            "S2": SemanticReferenceTarget(kind="service", canonical_id="service-b"),
+            "V1": SemanticReferenceTarget(kind="device", canonical_id="prime_lase"),
+        },
+    )
+    action_context = {
+        "operation_type": "buy_package",
+        "package_actions": [
+            _recent_package_action(package_id="package-a", offer_id="offer-secret-a", service_id="service-a"),
+            _recent_package_action(package_id="package-b", offer_id="offer-secret-b", service_id="service-b"),
+        ],
+    }
+
+    view = verified_action_semantic_view(action_context, context=context)
+
+    assert view == {
+        "operation_type": "buy_package",
+        "package_actions": [
+            {
+                "package_ref": "P1",
+                "service_ref": "S1",
+                "device_ref": "V1",
+                "package_sessions": 6,
+            },
+            {
+                "package_ref": "P2",
+                "service_ref": "S2",
+                "device_ref": "V1",
+                "package_sessions": 6,
+            },
+        ],
+    }
+    assert "offer-secret" not in repr(view)
+    assert "package-a" not in repr(view)
+    assert "package-b" not in repr(view)
+
+
+def test_cancel_package_write_executor_requires_exact_verified_recent_identity(monkeypatch) -> None:
+    db = MagicMock()
+    savepoint = MagicMock()
+    db.begin_nested.return_value = savepoint
+    workspace = SimpleNamespace(id=uuid4())
+    patient = SimpleNamespace(id=uuid4(), status="active")
+    package_id = uuid4()
+    cancelled = SimpleNamespace(id=package_id, status="cancelled")
+    lifecycle = MagicMock(
+        return_value=(cancelled, 0, 0, 0, 0, 0, 0, [])
+    )
+    monkeypatch.setattr(write_executor, "cancel_patient_package_with_refund", lifecycle)
+
+    unverified = PlanStep(
+        operation_index=0,
+        operation_type="cancel_package",
+        disposition="write_ready",
+        write_intent=WriteIntent(
+            kind="cancel_package",
+            authorized=True,
+            requires_verification=False,
+            parameters={"package_id": str(package_id)},
+        ),
+        response_goal="package_cancelled",
+    )
+    blocked = write_executor.execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=unverified,
+        idempotency_key="cancel-unverified",
+        commit=False,
+    )
+    assert blocked["ok"] is False
+    assert blocked["error_code"] == "package_recovery_unverified"
+    lifecycle.assert_not_called()
+
+    verified = unverified.model_copy(
+        update={
+            "write_intent": unverified.write_intent.model_copy(
+                update={
+                    "parameters": {
+                        "package_id": str(package_id),
+                        "_recent_package_recovery_verified": True,
+                    }
+                }
+            )
+        }
+    )
+    result = write_executor.execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=verified,
+        idempotency_key="cancel-verified",
+        commit=False,
+    )
+
+    assert result["ok"] is True
+    assert result["write_kind"] == "cancel_package"
+    lifecycle.assert_called_once()
+    kwargs = lifecycle.call_args.kwargs
+    assert kwargs["package_id"] == package_id
+    assert kwargs["expected_patient_id"] == patient.id
+    assert kwargs["require_reversible_unpaid"] is True
+    assert kwargs["settlement_target_minor"] == 0
+    assert kwargs["actor_type"] == "ai"

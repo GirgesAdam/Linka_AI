@@ -60,6 +60,7 @@ WriteKind = Literal[
     "cancel_appointment",
     "reschedule",
     "buy_package",
+    "cancel_package",
     "buy_pulse_pack",
     "follow_up",
     "marketing_update",
@@ -858,6 +859,15 @@ def _informational_write_read(
             response_goal="package_information",
             facts=params,
         )
+    if operation.type == "cancel_package":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="customer_packages", parameters=params)],
+            response_goal="package_information",
+            facts=params,
+        )
     if operation.type == "buy_pulse_pack":
         return PlanStep(
             operation_index=index,
@@ -1594,6 +1604,21 @@ def _plan_operation(
             reads=[ReadRequest(kind="package_offers", parameters=params)],
             write_intent=WriteIntent(kind="buy_package", authorized=True, parameters=params),
             response_goal="package_purchased",
+            facts=params,
+        )
+
+    if operation.type == "cancel_package":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="write_ready",
+            write_intent=WriteIntent(
+                kind="cancel_package",
+                authorized=True,
+                parameters=params,
+                requires_verification=False,
+            ),
+            response_goal="package_cancelled",
             facts=params,
         )
 

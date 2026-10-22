@@ -318,10 +318,16 @@ def verified_action_semantic_view(
     if not isinstance(action_context, dict):
         return {}
     operation_type = action_context.get("operation_type")
-    if operation_type not in {"buy_pulse_pack", "book", "cancel_appointment"}:
+    supported_operation = operation_type in {
+        "buy_pulse_pack", "buy_package", "book", "cancel_appointment"
+    }
+    raw_package_actions = action_context.get("package_actions")
+    if not supported_operation and not isinstance(raw_package_actions, list):
         return {}
 
-    safe: dict[str, object] = {"operation_type": operation_type}
+    safe: dict[str, object] = (
+        {"operation_type": operation_type} if supported_operation else {}
+    )
     if action_context.get("status") not in (None, ""):
         safe["status"] = action_context["status"]
 
@@ -333,9 +339,36 @@ def verified_action_semantic_view(
         )
         if appointment_ref is not None:
             safe["appointment_ref"] = appointment_ref
-        return safe
 
     safe.update(_safe_constraints(action_context, context))
+    if isinstance(raw_package_actions, list):
+        package_actions: list[dict[str, object]] = []
+        for raw in raw_package_actions:
+            if not isinstance(raw, dict):
+                continue
+            item: dict[str, object] = {}
+            package_ref = _entity_ref(
+                raw.get("patient_package_id"), kind="package", context=context
+            )
+            service_ref = _entity_ref(
+                raw.get("service_id"), kind="service", context=context
+            )
+            device_ref = _entity_ref(
+                raw.get("device_key"), kind="device", context=context
+            )
+            if package_ref is not None:
+                item["package_ref"] = package_ref
+            if service_ref is not None:
+                item["service_ref"] = service_ref
+            if device_ref is not None:
+                item["device_ref"] = device_ref
+            sessions = raw.get("package_sessions")
+            if isinstance(sessions, int) and not isinstance(sessions, bool) and sessions > 0:
+                item["package_sessions"] = sessions
+            if item:
+                package_actions.append(item)
+        if package_actions:
+            safe["package_actions"] = package_actions
     if operation_type == "book":
         appointment_ref = _entity_ref(
             action_context.get("appointment_id"),
@@ -412,6 +445,7 @@ _STATE_ID_KINDS: dict[str, ReferenceKind] = {
     "device_key": "device",
     "appointment_id": "appointment",
     "package_id": "package",
+    "patient_package_id": "package",
 }
 
 

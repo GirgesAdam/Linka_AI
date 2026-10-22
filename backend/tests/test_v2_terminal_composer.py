@@ -103,6 +103,27 @@ def _fact_map(unit: CustomerResponseUnit) -> dict[str, ResponseFact]:
     return {fact.key: fact for fact in unit.facts}
 
 
+@pytest.mark.parametrize("action", ["buy_package", "cancel_package"])
+def test_package_recent_action_acknowledgment_has_deterministic_copy(action: str) -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="social_ack",
+        facts={
+            "acknowledgment": {
+                "action": action,
+                "already_completed": True,
+            }
+        },
+    )
+    contract = build_customer_response_contract([outcome])
+
+    assert contract.units[0].action_truth is not None
+    assert contract.units[0].action_truth.action == action
+    assert contract.units[0].action_truth.succeeded is True
+    assert deterministic_terminal_fallback(contract, arabic=True)
+    assert deterministic_terminal_fallback(contract, arabic=False)
+
+
 @pytest.mark.parametrize(
     ("goal", "expected_action"),
     [
@@ -111,6 +132,7 @@ def _fact_map(unit: CustomerResponseUnit) -> dict[str, ResponseFact]:
         ("cancellation_completed", "cancel_appointment"),
         ("appointment_confirmed", "confirm_appointment"),
         ("package_purchased", "buy_package"),
+        ("package_cancelled", "cancel_package"),
         ("pulse_pack_purchased", "buy_pulse_pack"),
         ("follow_up_created", "follow_up"),
         ("marketing_updated", "marketing_update"),

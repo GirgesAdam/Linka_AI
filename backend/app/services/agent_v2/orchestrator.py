@@ -142,6 +142,7 @@ from app.services.agent_v2.turn_normalization import (
     tag_booking_service_sets,
 )
 from app.services.agent_v2.write_policy import advance_step_with_write_policies
+from app.services.patient_packages import list_patient_packages
 
 V2WriteExecutor = Callable[[PlanStep], dict[str, object]]
 
@@ -1781,6 +1782,24 @@ def _completed_action_context(
         return None
 
     parameters = dict(intent.parameters)
+    if intent.kind == "buy_package":
+        package_id = action_result.get("patient_package_id")
+        package_offer_id = parameters.get("package_offer_id")
+        if package_id in (None, "") or package_offer_id in (None, ""):
+            return None
+        package_action: dict[str, object] = {
+            "patient_package_id": str(package_id),
+            "package_offer_id": str(package_offer_id),
+            "amount_paid_minor": int(action_result.get("amount_paid_minor") or 0),
+        }
+        for key in ("service_id", "device_key", "package_sessions"):
+            if parameters.get(key) not in (None, ""):
+                package_action[key] = parameters[key]
+        return {
+            "operation_type": "buy_package",
+            "package_actions": [package_action],
+        }
+
     if intent.kind == "buy_pulse_pack":
         device_key = parameters.get("device_key")
         if device_key in (None, ""):
@@ -2416,13 +2435,118 @@ def _normalize_recent_action_acknowledgments(
     *,
     recent_action: dict[str, object] | None,
     timezone_name: str,
+    recent_package_rows: dict[str, object] | None = None,
 ) -> TurnPlan:
     if not isinstance(recent_action, dict):
         return plan
+    recent_package_actions = (
+        [dict(item) for item in recent_action.get("package_actions", []) if isinstance(item, dict)]
+        if isinstance(recent_action.get("package_actions"), list)
+        else []
+    )
+    package_rows = recent_package_rows or {}
+    package_correction_turn = any(
+        operation.type == "cancel_package" for operation in understanding.operations
+    )
     normalized: list[PlanStep] = []
     changed = False
     for step in plan.steps:
         operation = _operation_for_step(understanding, step)
+
+        if recent_package_actions and operation.type in {"buy_package", "cancel_package"}:
+            current_package_id = step.facts.get("package_id")
+            current_service_id = step.facts.get("service_id")
+            current_device_key = step.facts.get("device_key")
+            current_sessions = step.facts.get("package_sessions")
+            matching_recent: list[dict[str, object]] = []
+            for recent_package in recent_package_actions:
+                if current_package_id not in (None, "") and str(current_package_id) != str(recent_package.get("patient_package_id")):
+                    continue
+                if current_service_id not in (None, "") and recent_package.get("service_id") not in (None, "") and str(current_service_id) != str(recent_package.get("service_id")):
+                    continue
+                if current_device_key not in (None, "") and recent_package.get("device_key") not in (None, "") and str(current_device_key) != str(recent_package.get("device_key")):
+                    continue
+                if current_sessions not in (None, "") and recent_package.get("package_sessions") not in (None, "") and int(current_sessions) != int(recent_package.get("package_sessions")):
+                    continue
+                matching_recent.append(recent_package)
+
+            if operation.type == "buy_package" and (operation.continues_previous or package_correction_turn):
+                current_rows = [package_rows.get(str(item.get("patient_package_id"))) for item in matching_recent]
+                current_rows = [
+                    row for row in current_rows
+                    if row is not None
+                    and getattr(row, "effective_status", None) == "active"
+                    and any(
+                        str(getattr(row, "package_offer_id", None)) == str(item.get("package_offer_id"))
+                        for item in matching_recent
+                        if str(item.get("patient_package_id")) == str(getattr(row, "id", ""))
+                    )
+                ]
+                if len(current_rows) == 1:
+                    normalized.append(step.model_copy(update={
+                        "disposition": "respond", "reads": [], "write_intent": None,
+                        "state_action": "none", "response_goal": "social_ack",
+                        "clarification_field": None, "facts": _acknowledgment_facts("buy_package"),
+                    }))
+                    changed = True
+                    continue
+
+            if operation.type == "cancel_package":
+                if not matching_recent:
+                    normalized.append(step.model_copy(update={
+                        "disposition": "respond", "reads": [], "write_intent": None,
+                        "state_action": "none", "response_goal": "social_ack",
+                        "clarification_field": None, "facts": _acknowledgment_facts("cancel_package"),
+                    }))
+                    changed = True
+                    continue
+                if len(matching_recent) != 1:
+                    normalized.append(step.model_copy(update={
+                        "disposition": "clarify", "reads": [], "write_intent": None,
+                        "response_goal": "clarification", "clarification_field": "package",
+                        "facts": {"recent_package_recovery_ambiguous": True},
+                    }))
+                    changed = True
+                    continue
+                recent_package = matching_recent[0]
+                package_id = str(recent_package.get("patient_package_id") or "")
+                row = package_rows.get(package_id)
+                if row is None or getattr(row, "effective_status", None) != "active":
+                    normalized.append(step.model_copy(update={
+                        "disposition": "respond", "reads": [], "write_intent": None,
+                        "state_action": "none", "response_goal": "social_ack",
+                        "clarification_field": None, "facts": _acknowledgment_facts("cancel_package"),
+                    }))
+                    changed = True
+                    continue
+                safe_recovery = (
+                    str(getattr(row, "package_offer_id", None)) == str(recent_package.get("package_offer_id"))
+                    and getattr(row, "purchase_transaction_id", None) is None
+                    and int(getattr(row, "amount_paid_minor", 0) or 0) == 0
+                    and int(getattr(row, "amount_refunded_minor", 0) or 0) == 0
+                    and int(getattr(row, "sessions_reserved", 0) or 0) == 0
+                    and int(getattr(row, "sessions_consumed", 0) or 0) == 0
+                )
+                if not safe_recovery:
+                    normalized.append(step.model_copy(update={
+                        "disposition": "clarify", "reads": [], "write_intent": None,
+                        "response_goal": "clarification", "clarification_field": "package",
+                        "facts": {"recent_package_recovery_requires_human": True},
+                    }))
+                    changed = True
+                    continue
+                write_intent = step.write_intent
+                if write_intent is not None:
+                    normalized.append(step.model_copy(update={
+                        "disposition": "write_ready", "reads": [],
+                        "write_intent": write_intent.model_copy(update={
+                            "parameters": {**write_intent.parameters, "package_id": package_id, "_recent_package_recovery_verified": True},
+                            "requires_verification": False,
+                        }),
+                    }))
+                    changed = True
+                    continue
+
         ack_facts: dict[str, object] | None = None
         # Booking acknowledgments are resolved later, after a targeted canonical
         # appointment read. Recent action context is continuity evidence, not
@@ -2436,19 +2560,11 @@ def _normalize_recent_action_acknowledgments(
         if ack_facts is None:
             normalized.append(step)
             continue
-        normalized.append(
-            step.model_copy(
-                update={
-                    "disposition": "respond",
-                    "reads": [],
-                    "write_intent": None,
-                    "state_action": "none",
-                    "response_goal": "social_ack",
-                    "clarification_field": None,
-                    "facts": ack_facts,
-                }
-            )
-        )
+        normalized.append(step.model_copy(update={
+            "disposition": "respond", "reads": [], "write_intent": None,
+            "state_action": "none", "response_goal": "social_ack",
+            "clarification_field": None, "facts": ack_facts,
+        }))
         changed = True
     return plan.model_copy(update={"steps": normalized}) if changed else plan
 
@@ -3086,11 +3202,30 @@ def orchestrate_v2_turn(
         operation_visit_groups=semantic_visit_groups,
     )
     plan = guard_multiple_booking_writes(plan)
+    recent_package_actions = (
+        [dict(item) for item in recent_action_context.get("package_actions", []) if isinstance(item, dict)]
+        if isinstance(recent_action_context, dict)
+        and isinstance(recent_action_context.get("package_actions"), list)
+        else []
+    )
+    recent_package_ids = {
+        str(item.get("patient_package_id"))
+        for item in recent_package_actions
+        if item.get("patient_package_id") not in (None, "")
+    }
+    recent_package_rows = (
+        {str(row.id): row for row in list_patient_packages(
+            db, workspace_id=workspace.id, patient_id=patient.id, usable_only=False, include_financials=True
+        ) if str(row.id) in recent_package_ids}
+        if recent_package_ids
+        else {}
+    )
     plan = _normalize_recent_action_acknowledgments(
         plan,
         understanding,
         recent_action=recent_action_context,
         timezone_name=timezone_name,
+        recent_package_rows=recent_package_rows,
     )
 
     if _terminal_handoff_plan(plan):
@@ -3617,7 +3752,29 @@ def orchestrate_v2_turn(
             if outcome.status == "completed":
                 action_context = _completed_action_context(advanced, action_result)
                 if action_context is not None:
-                    completed_action_context = action_context
+                    previous_packages = (
+                        list(completed_action_context.get("package_actions", []))
+                        if isinstance(completed_action_context, dict)
+                        and isinstance(completed_action_context.get("package_actions"), list)
+                        else []
+                    )
+                    new_packages = (
+                        list(action_context.get("package_actions", []))
+                        if isinstance(action_context.get("package_actions"), list)
+                        else []
+                    )
+                    if previous_packages:
+                        completed_action_context = {
+                            **action_context,
+                            "package_actions": [*previous_packages, *new_packages],
+                        }
+                    elif completed_action_context is not None and new_packages:
+                        completed_action_context = {
+                            **completed_action_context,
+                            "package_actions": new_packages,
+                        }
+                    else:
+                        completed_action_context = action_context
                 if (
                     step_group_key is not None
                     and active_group_key == step_group_key

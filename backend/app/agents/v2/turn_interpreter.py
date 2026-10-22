@@ -274,13 +274,6 @@ SEMANTIC PRINCIPLES
   and authorizes no action, with no new factual question, emit an informational social acknowledgement
   rather than replaying package discovery/offers. This no-action clarification is turn-local: a later
   explicit request to use a package, buy, or book is a new execute intent and must proceed normally.
-- When the latest customer turn narrows or corrects a prior multi-part request after one of its actions
-  has already completed, do not replay that completed action merely because the customer retains that
-  part while rejecting or removing another part. Retaining an already-completed action is a scope
-  correction, not fresh mutation authority. If the correction leaves no new factual question or action,
-  emit an informational social acknowledgement. Emit another purchase, booking, or other mutation only
-  when the latest customer turn itself requests a new, additional, repeated, or changed execution. Apply
-  this by conversational meaning, not phrase matching.
 - response_disposition is about whether this turn needs an outbound customer message, not about intent routing. Use no_reply only for a pure closing acknowledgement after the previous task/read is already complete and only when the supplied active_task and pending choice are empty, automation_context is not being acknowledged, there is no requested action/question, and there is no safety signal. A short acknowledgement while a task/question/choice is pending is reply, not no_reply. Never classify based on a phrase list; classify the conversational role in the supplied state.
 - automation_context is server-owned system-initiated conversational focus, not a verified read/action
   and never write authority. If it is present, a simple acknowledgement of that reminder/follow-up is
@@ -495,9 +488,12 @@ SEMANTIC PRINCIPLES
   for a payment dispute: that remains a payment_dispute safety signal.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
-  package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
-  customer is actually asking Linka to carry out cancellation/refund/termination now, interpret it as
-  human_support because the agent must not execute purchased-package cancellation.
+  package were cancelled, without authorizing cancellation now, interpret it as refund_quote. Use
+  cancel_package only when the latest customer turn explicitly rejects/removes a package from the
+  immediately preceding package discussion, and set continues_previous=true. Python will reconcile it
+  only against exact recent_verified_action package writes; if that package was never written, the
+  correction is a no-op. Any general/historical purchased-package cancellation, refund, or termination
+  request remains human_support; the Agent may not execute it.
 - clinic_info covers clinic-wide operational/informational questions such as location, contact details,
   working hours, non-payment policies, and comparisons between clinic devices when the question is not
   about one specific service. requested_clinic_details controls field-level disclosure: name for the
