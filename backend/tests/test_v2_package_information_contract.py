@@ -378,6 +378,7 @@ def test_a1_existing_package_availability_filters_to_bound_device_and_shows_peri
         {
             "booking_commercial_basis_step": True,
             "exact_time_requested": False,
+            "date": {"mode": "exact", "start_date": "2026-10-23"},
             "availability": {
                 "available_option_count": 58,
                 "availability_windows": [
@@ -410,6 +411,9 @@ def test_a1_existing_package_availability_filters_to_bound_device_and_shows_peri
     assert "Candela Gentle" not in text
     assert "2 \u0645" in text
     assert "9 \u0645" in text
+    assert "23 " in text and "2026-10-23" not in text
+    assert "\u0627\u0644\u062c\u0647\u0627\u0632 \u0648\u0627\u0644\u0648\u0642\u062a" not in text
+    assert "\u0623\u0646\u0647\u064a \u0648\u0642\u062a" in text
 
 
 def test_a2_existing_package_availability_shows_multiple_compatible_periods() -> None:
@@ -474,6 +478,41 @@ def test_a3_existing_package_ignores_other_device_availability_and_reports_none(
 
     assert "Candela Gentle" not in text
     assert "no availability on the requested day" in text
+
+
+def test_d3_unresolved_package_device_keeps_device_choice_prompt() -> None:
+    outcome = _package_outcome(owned=[_owned(device=None)])
+    outcome.facts.update(
+        {
+            "booking_commercial_basis_step": True,
+            "exact_time_requested": False,
+            "date": {"mode": "exact", "start_date": "2026-10-23"},
+            "availability": {
+                "available_option_count": 2,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Prime Lase",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                    },
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                    },
+                ],
+            },
+        }
+    )
+    text = deterministic_package_contract_reply(
+        build_customer_response_contract([outcome]), arabic=True
+    )
+
+    assert "Prime Lase" in text
+    assert "Candela Gentle" in text
+    assert "\u0627\u0644\u062c\u0647\u0627\u0632 \u0648\u0627\u0644\u0648\u0642\u062a" in text
 
 
 def test_a4_multiple_usable_packages_do_not_claim_device_specific_availability() -> None:

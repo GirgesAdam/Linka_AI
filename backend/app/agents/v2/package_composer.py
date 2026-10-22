@@ -248,7 +248,11 @@ def deterministic_package_contract_reply(
                 )
             else:
                 availability_text = format_availability_windows_reply(
-                    {"ok": True, "availability_windows": windows},
+                    {
+                        "ok": True,
+                        "availability_windows": windows,
+                        "date": facts.get("date"),
+                    },
                     booking_authorized=False,
                 )
                 rendered += (
@@ -257,6 +261,13 @@ def deterministic_package_contract_reply(
                     else "\nThis session will use your current package."
                 )
                 if availability_text:
+                    if package_device and "\n" in availability_text:
+                        availability_text = availability_text.rsplit("\n", 1)[0]
+                        availability_text += (
+                            "\n\u0623\u0646\u0647\u064a \u0648\u0642\u062a \u0645\u0646\u0627\u0633\u0628 \u0644\u0643\u061f"
+                            if arabic
+                            else "\nWhich time works for you?"
+                        )
                     rendered += "\n" + availability_text
         else:
             rendered += (
