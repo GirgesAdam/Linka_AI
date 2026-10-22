@@ -484,16 +484,29 @@ def bind_verified_booking_package(
 
 
 def invalidate_booking_package_selection(state: BookingTaskState) -> BookingTaskState:
-    """Clear stale package authority while preserving package_usage intent."""
-    if state.derived.selected_package_id is None and not state.derived.package_validated:
+    """Clear stale package authority while preserving unrelated booking state."""
+    package_snapshot = (
+        state.option_snapshot is not None and state.option_snapshot.purpose == "package"
+    )
+    if (
+        state.derived.selected_package_id is None
+        and not state.derived.package_validated
+        and not package_snapshot
+    ):
         return state
+    next_version = state.version + 1
+    preserved_snapshot = (
+        state.option_snapshot.model_copy(update={"task_version": next_version})
+        if state.option_snapshot is not None and not package_snapshot
+        else None
+    )
     return state.model_copy(
         update={
             "status": "collecting",
             "derived": _booking_derived(state, clear_package=True),
             "proposal": None,
-            "option_snapshot": None,
-            "version": state.version + 1,
+            "option_snapshot": preserved_snapshot,
+            "version": next_version,
         }
     )
 

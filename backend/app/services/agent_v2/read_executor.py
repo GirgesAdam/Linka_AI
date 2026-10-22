@@ -1445,7 +1445,7 @@ def _read_customer_packages(request: ReadRequest, context: ReadExecutionContext)
         workspace_id=context.workspace.id,
         patient_id=context.patient.id,
         service_id=service_id,
-        usable_only=False,
+        usable_only=request.parameters.get("usable_only") is True,
         include_financials=False,
     )
     if package_id is not None:

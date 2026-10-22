@@ -530,96 +530,6 @@ def _apply_reschedule_updates(
     return updated
 
 
-def _customer_package_rows(reads: ReadExecutionBundle | None) -> list[dict[str, object]] | None:
-    if reads is None:
-        return None
-    for result in reads.results:
-        if result.kind != "customer_packages" or not result.ok:
-            continue
-        rows = result.payload.get("packages")
-        if isinstance(rows, list):
-            return [dict(row) for row in rows if isinstance(row, dict)]
-    return None
-
-
-def _usable_matching_package_rows(
-    state: BookingTaskState,
-    reads: ReadExecutionBundle | None,
-) -> list[dict[str, object]] | None:
-    rows = _customer_package_rows(reads)
-    if rows is None or state.constraints.package_usage != "use_existing":
-        return None
-    service_id = state.constraints.service_id
-    device_key = state.constraints.device_key
-    eligible: list[dict[str, object]] = []
-    for row in rows:
-        package_id = row.get("id") or row.get("package_id")
-        row_service_id = row.get("service_id")
-        row_device_key = row.get("laser_device_key") or row.get("device_key")
-        remaining = row.get("sessions_remaining")
-        if package_id in (None, "") or row.get("effective_status") != "active":
-            continue
-        if not isinstance(remaining, int) or isinstance(remaining, bool) or remaining <= 0:
-            continue
-        if service_id is not None and str(row_service_id or "") != str(service_id):
-            continue
-        if device_key is not None and str(row_device_key or "") != str(device_key):
-            continue
-        eligible.append(row)
-    return eligible
-
-
-def _reconcile_verified_booking_package(
-    state: BookingTaskState,
-    *,
-    reads: ReadExecutionBundle | None,
-    now: datetime,
-    turn_id: str,
-    operation_index: int,
-) -> BookingTaskState:
-    candidates = _usable_matching_package_rows(state, reads)
-    if candidates is None:
-        return state
-    if len(candidates) == 1:
-        row = candidates[0]
-        package_id = str(row.get("id") or row.get("package_id") or "")
-        device_key = row.get("laser_device_key") or row.get("device_key")
-        return bind_verified_booking_package(
-            state,
-            package_id=package_id,
-            device_key=str(device_key) if device_key not in (None, "") else None,
-        )
-
-    state = invalidate_booking_package_selection(state)
-    if len(candidates) <= 1:
-        return state
-    choices = [
-        OptionChoice(
-            ref=f"package-{index}",
-            label=str(row.get("name") or f"Package {index}"),
-            payload={
-                "package_id": str(row.get("id") or row.get("package_id")),
-                "service_id": str(row.get("service_id")),
-                **(
-                    {"device_key": str(row.get("laser_device_key") or row.get("device_key"))}
-                    if (row.get("laser_device_key") or row.get("device_key")) not in (None, "")
-                    else {}
-                ),
-            },
-        )
-        for index, row in enumerate(candidates, start=1)
-    ]
-    selected = attach_option_snapshot(
-        state,
-        snapshot_id=f"{turn_id}:{operation_index}:package:{state.version + 1}",
-        purpose="package",
-        choices=choices,
-        created_at=now,
-        expires_at=now + _OPTION_TTL,
-    )
-    return selected if isinstance(selected, BookingTaskState) else state
-
-
 def _availability_slots(reads: ReadExecutionBundle | None) -> list[dict[str, object]]:
     if reads is None:
         return []
@@ -980,14 +890,83 @@ def apply_step_state(
                 for row in rows
             )
 
-    if isinstance(current, BookingTaskState):
-        current = _reconcile_verified_booking_package(
-            current,
-            reads=reads,
-            now=now,
-            turn_id=turn_id,
-            operation_index=step.operation_index,
+    if (
+        isinstance(current, BookingTaskState)
+        and current.constraints.package_usage == "use_existing"
+        and step.facts.get("booking_commercial_basis_step") is True
+        and reads is not None
+    ):
+        package_result = next(
+            (
+                result
+                for result in reads.results
+                if result.kind == "customer_packages" and result.ok
+            ),
+            None,
         )
+        if package_result is not None:
+            rows = package_result.payload.get("packages")
+            candidates = (
+                [
+                    dict(row)
+                    for row in rows
+                    if isinstance(row, dict)
+                    and (row.get("id") or row.get("package_id")) not in (None, "")
+                ]
+                if isinstance(rows, list)
+                else []
+            )
+            if len(candidates) == 1:
+                row = candidates[0]
+                package_id = str(row.get("id") or row.get("package_id"))
+                device_key = row.get("laser_device_key") or row.get("device_key")
+                current = bind_verified_booking_package(
+                    current,
+                    package_id=package_id,
+                    device_key=(
+                        str(device_key) if device_key not in (None, "") else None
+                    ),
+                )
+            else:
+                current = invalidate_booking_package_selection(current)
+                if len(candidates) > 1:
+                    choices = [
+                        OptionChoice(
+                            ref=f"package-{index}",
+                            label=str(row.get("name") or f"Package {index}"),
+                            payload={
+                                "package_id": str(row.get("id") or row.get("package_id")),
+                                "service_id": str(row.get("service_id")),
+                                **(
+                                    {
+                                        "device_key": str(
+                                            row.get("laser_device_key")
+                                            or row.get("device_key")
+                                        )
+                                    }
+                                    if (
+                                        row.get("laser_device_key")
+                                        or row.get("device_key")
+                                    )
+                                    not in (None, "")
+                                    else {}
+                                ),
+                            },
+                        )
+                        for index, row in enumerate(candidates, start=1)
+                    ]
+                    selected = attach_option_snapshot(
+                        current,
+                        snapshot_id=(
+                            f"{turn_id}:{step.operation_index}:package:{current.version + 1}"
+                        ),
+                        purpose="package",
+                        choices=choices,
+                        created_at=now,
+                        expires_at=now + _OPTION_TTL,
+                    )
+                    if isinstance(selected, BookingTaskState):
+                        current = selected
 
     if isinstance(current, BookingTaskState) and commercial_read_verified:
         commercial_key = step.facts.get("commercial_basis_key")

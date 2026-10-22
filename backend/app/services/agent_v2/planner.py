@@ -690,12 +690,19 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
                                 else "service_catalog"
                             ),
                             parameters={
-                                key: value
-                                for key, value in {
-                                    "service_id": state.constraints.service_id,
-                                    "device_key": state.constraints.device_key,
-                                }.items()
-                                if value not in (None, "")
+                                **{
+                                    key: value
+                                    for key, value in {
+                                        "service_id": state.constraints.service_id,
+                                        "device_key": state.constraints.device_key,
+                                    }.items()
+                                    if value not in (None, "")
+                                },
+                                **(
+                                    {"usable_only": True}
+                                    if state.constraints.package_usage == "use_existing"
+                                    else {}
+                                ),
                             },
                         )
                     ],
@@ -1327,9 +1334,16 @@ def _plan_operation(
                         else "service_catalog"
                     ),
                     parameters={
-                        key: params[key]
-                        for key in ("service_id", "device_key")
-                        if key in params
+                        **{
+                            key: params[key]
+                            for key in ("service_id", "device_key")
+                            if key in params
+                        },
+                        **(
+                            {"usable_only": True}
+                            if operation.package_usage == "use_existing"
+                            else {}
+                        ),
                     },
                 )
             ]
