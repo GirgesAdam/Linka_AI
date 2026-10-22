@@ -262,7 +262,16 @@ SEMANTIC PRINCIPLES
   of the same service, emit one package_compare operation for that service with
   execution_intent=informational. package_compare is read-only and grounds both the customer's owned
   package state and the single-session service price; do not emit package offers, booking, or purchase
-  merely because those actions are mentioned as alternatives.
+  merely because those actions are mentioned as alternatives. This operation is specifically for
+  owned-entitlement-vs-standalone comparison, not comparison between clinic package offers.
+- When the customer inspects or compares two or more session-package offers currently available from
+  the clinic, emit package_info with requested_package_details=[offers] and execution_intent=informational.
+  Preserve the canonical service when supplied, preserve package_sessions when the customer states a
+  session count, and preserve explicitly named offer devices as a candidate_mode=set when every named
+  device is grounded to supplied refs. Do not use package_compare or customer_packages for clinic-offer
+  comparison. If any explicitly named offer/service/device cannot be grounded, do not silently drop it,
+  substitute an owned package, or fabricate a ref; keep the explicit entity unresolved so Python can
+  clarify or report that the requested offer is unavailable.
 - When a request asks both about a past appointment outcome and its effect on the customer's
   owned-package balance or current owned-package state, preserve both concerns as separate semantic
   operations: customer_history for the historical event and package_info for current package state.
@@ -428,10 +437,12 @@ SEMANTIC PRINCIPLES
   the service entity null so Python can read the customer's actual appointments first.
 - package_info and refund_quote are reads. buy_package is a purchase request. For package_info,
   requested_package_details controls the exact read scope: owned means the customer's existing package
-  or remaining-session state; offers means session-package options currently available to purchase; use
-  both only when both concerns are explicitly requested. Set requested_package_details to exactly what
-  was requested. package_usage describes whether an appointment should consume an existing session
-  package, avoid an existing package, or leaves that question unspecified.
+  or remaining-session state; offers means session-package options currently available to purchase,
+  including comparing their canonical device/session/price facts; use both only when both concerns are
+  explicitly requested. Set requested_package_details to exactly what was requested. An offer-discovery
+  or offer-comparison question never implies customer ownership. package_usage describes whether an
+  appointment should consume an existing session package, avoid an existing package, or leaves that
+  question unspecified.
 - payment_info is a read-only general clinic payment-policy surface: how payment works, which payment
   methods the clinic accepts (for example cash/card/instant transfer when actually configured), when
   payment happens, and whether payment is required while making the booking. These are informational

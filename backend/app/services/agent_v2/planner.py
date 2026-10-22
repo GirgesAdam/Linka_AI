@@ -1582,6 +1582,17 @@ def _plan_operation(
 
     if operation.type == "package_info":
         details = set(operation.requested_package_details) or {"owned"}
+        if "offers" in details:
+            for field, set_key in (("service", "service_ids"), ("device", "device_keys")):
+                entity = getattr(operation.entities, field)
+                if entity is None or not (entity.text or "").strip():
+                    continue
+                if entity.ref is None and not entity.candidate_refs:
+                    return _clarify(index=index, operation=operation, field=field)
+                if entity.candidate_mode == "set":
+                    resolved_set = params.get(set_key)
+                    if not isinstance(resolved_set, list) or len(resolved_set) < 2:
+                        return _clarify(index=index, operation=operation, field=field)
         reads: list[ReadRequest] = []
         if "owned" in details:
             reads.append(ReadRequest(kind="customer_packages", parameters=params))

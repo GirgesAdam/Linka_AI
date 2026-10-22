@@ -115,6 +115,8 @@ class PackageOfferInfo(StrictResponseContractModel):
     service_name: str
     device_name: str | None = None
     sessions_count: int
+    price: str | None = None
+    currency: str | None = None
 
 
 class PackageTruth(StrictResponseContractModel):
@@ -124,6 +126,7 @@ class PackageTruth(StrictResponseContractModel):
     package_offers: tuple[PackageOfferInfo, ...] = ()
     owned_complete_set: bool = False
     offers_complete_set: bool = False
+    requested_offer_scope_complete: bool = True
 
 
 class PulseBalanceInfo(StrictResponseContractModel):
@@ -973,10 +976,16 @@ def _package_offer_info(raw: object) -> PackageOfferInfo | None:
     if sessions_count <= 0:
         return None
     device_name = str(safe.get("device_name") or "").strip() or None
+    price = str(safe.get("price") or "").strip() or None
+    currency = str(safe.get("currency") or "").strip().upper() or None
+    if (price is None) is not (currency is None):
+        return None
     return PackageOfferInfo(
         service_name=service_name,
         device_name=device_name,
         sessions_count=sessions_count,
+        price=price,
+        currency=currency,
     )
 
 
@@ -1024,6 +1033,11 @@ def _package_truth(outcome: TurnOutcome) -> PackageTruth | None:
         package_offers=tuple(offers),
         owned_complete_set=owned_requested,
         offers_complete_set=offers_requested,
+        requested_offer_scope_complete=(
+            outcome.facts.get("package_offers", {}).get("requested_scope_complete") is not False
+            if isinstance(outcome.facts.get("package_offers"), dict)
+            else True
+        ),
     )
 
 

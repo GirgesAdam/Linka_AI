@@ -101,7 +101,7 @@ def test_owned_package_truth_preserves_exact_identity_sessions_device_status_and
     assert is_pure_supported_package_contract(contract) is True
 
 
-def test_package_offer_truth_preserves_service_device_sessions_without_commercial_price() -> None:
+def test_package_offer_truth_preserves_service_device_sessions_and_canonical_price() -> None:
     outcome = _package_outcome(offers=[_offer()])
     contract = build_customer_response_contract([outcome])
     truth = contract.units[0].package_truth
@@ -113,11 +113,13 @@ def test_package_offer_truth_preserves_service_device_sessions_without_commercia
     assert offer.service_name == "Laser Underarm"
     assert offer.device_name == "Prime Lase"
     assert offer.sessions_count == 6
+    assert offer.price == "3000.00 EGP"
+    assert offer.currency == "EGP"
 
     payload = truth.model_dump_json()
-    assert "3000" not in payload
-    assert "EGP" not in payload
-    assert "price" not in payload
+    assert "3000" in payload
+    assert "EGP" in payload
+    assert "price" in payload
     assert "savings" not in payload
 
 
@@ -154,8 +156,7 @@ def test_deterministic_renderer_keeps_owned_vs_offer_language_separate() -> None
     assert "المتبقي: 3" in text
     assert "عروض الباكدجات المتاحة للشراء" in text
     assert "8 جلسة" in text
-    assert "3000" not in text
-    assert "EGP" not in text
+    assert "3000.00 EGP" in text
 
 
 def test_existing_package_booking_truth_confirms_coverage_and_verified_time_without_cash_price() -> None:
@@ -324,7 +325,7 @@ def test_mixed_package_and_unsupported_family_preserves_verified_package(
     assert "Laser 6 Sessions" in text
     assert "3" in text
 
-def test_package_information_response_facts_remove_phase3b_commercial_fields() -> None:
+def test_package_information_response_facts_keep_offer_price_but_remove_unrelated_commercial_fields() -> None:
     shaped = _package_information_response_facts(
         {
             "package_offers": {
@@ -349,5 +350,8 @@ def test_package_information_response_facts_remove_phase3b_commercial_fields() -
         "service_name": "Laser Underarm",
         "device_name": "Prime Lase",
         "sessions_count": 6,
+        "price": "3000.00 EGP",
+        "currency": "EGP",
         "is_active": True,
     }
+    assert shaped["package_offers"]["requested_scope_complete"] is True

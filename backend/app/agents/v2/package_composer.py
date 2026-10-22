@@ -111,10 +111,14 @@ def _offer_line(item: PackageOfferInfo, *, arabic: bool) -> str:
         text = f"باكدج {item.sessions_count} جلسة لخدمة {item.service_name}"
         if item.device_name:
             text += f" على {item.device_name}"
+        if item.price:
+            text += f" - السعر {item.price}"
         return text + "."
     text = f"{item.sessions_count}-session package for {item.service_name}"
     if item.device_name:
         text += f" on {item.device_name}"
+    if item.price:
+        text += f" - price {item.price}"
     return text + "."
 
 
@@ -181,6 +185,17 @@ def deterministic_package_contract_reply(
                     else "No matching package offers are currently verified as available."
                 )
             else:
+                if not truth.requested_offer_scope_complete:
+                    chunks.append(
+
+                            "بعض عروض الباكدجات المطلوبة مش متاحة حاليًا؛ دي العروض المطابقة المؤكدة."
+                            if arabic
+                            else (
+                                "Some requested package offers are not currently available; "
+                                "these are the verified matching offers."
+                            )
+
+                    )
                 header = (
                     "عروض الباكدجات المتاحة للشراء:"
                     if arabic
