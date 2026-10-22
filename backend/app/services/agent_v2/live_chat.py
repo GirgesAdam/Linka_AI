@@ -519,6 +519,14 @@ def _displayed_booking_availability_context_from_outcome(
         count = availability.get("available_option_count")
         if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
             context["availability_option_count"] = count
+        checked_dates = availability.get("checked_dates")
+        if isinstance(checked_dates, list) and checked_dates:
+            context["availability_checked_dates"] = [
+                str(value) for value in checked_dates if isinstance(value, str) and value
+            ]
+        search_truncated = availability.get("search_truncated")
+        if isinstance(search_truncated, bool):
+            context["availability_search_truncated"] = search_truncated
     return context
 
 
@@ -721,6 +729,18 @@ def _verified_read_context_from_turn(
             )
             outcome = matching_trace.outcome if matching_trace is not None else None
             if outcome is not None:
+                availability_facts = outcome.facts.get("availability")
+                if isinstance(availability_facts, dict):
+                    checked_dates = availability_facts.get("checked_dates")
+                    if isinstance(checked_dates, list) and checked_dates:
+                        context["availability_checked_dates"] = [
+                            str(value)
+                            for value in checked_dates
+                            if isinstance(value, str) and value
+                        ]
+                    search_truncated = availability_facts.get("search_truncated")
+                    if isinstance(search_truncated, bool):
+                        context["availability_search_truncated"] = search_truncated
                 service_name, windows = availability_windows_from_outcome_facts(
                     outcome.facts
                 )
@@ -836,6 +856,14 @@ def _availability_reference_context_from_turn(
             has_more = verified_read_context.get("availability_presentation_has_more")
             if isinstance(has_more, bool):
                 context["availability_presentation_has_more"] = has_more
+            checked_dates = verified_read_context.get("availability_checked_dates")
+            if isinstance(checked_dates, list) and checked_dates:
+                context["availability_checked_dates"] = [
+                    str(value) for value in checked_dates if isinstance(value, str) and value
+                ]
+            search_truncated = verified_read_context.get("availability_search_truncated")
+            if isinstance(search_truncated, bool):
+                context["availability_search_truncated"] = search_truncated
             return context
 
     for step in reversed(turn.plan.steps):
@@ -895,6 +923,14 @@ def _availability_reference_context_from_turn(
         has_more = verified_read_context.get("availability_presentation_has_more")
         if isinstance(has_more, bool):
             context["availability_presentation_has_more"] = has_more
+        checked_dates = verified_read_context.get("availability_checked_dates")
+        if isinstance(checked_dates, list) and checked_dates:
+            context["availability_checked_dates"] = [
+                str(value) for value in checked_dates if isinstance(value, str) and value
+            ]
+        search_truncated = verified_read_context.get("availability_search_truncated")
+        if isinstance(search_truncated, bool):
+            context["availability_search_truncated"] = search_truncated
         return context
 
     if (

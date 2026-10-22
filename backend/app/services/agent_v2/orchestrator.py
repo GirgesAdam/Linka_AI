@@ -14,6 +14,7 @@ from app.agents.clinic_grounding import build_clinic_catalog
 from app.agents.explicit_time import extract_single_explicit_hhmm
 from app.agents.structured_output import StructuredOutputError
 from app.agents.v2.availability_reference_interpreter import (
+    ReferenceDecision,
     ReferenceInterpretation,
     interpret_availability_reference_turn,
 )
@@ -1633,6 +1634,82 @@ def _availability_shown_window_keys(
     return {str(value) for value in raw if isinstance(value, str) and value}
 
 
+def _normalize_availability_search_continuation(
+    understanding: TiaTurnUnderstanding,
+    *,
+    decision: ReferenceDecision | None,
+    availability_reference_context: dict[str, Any] | None,
+) -> TiaTurnUnderstanding:
+    """Advance an exhausted displayed-page continuation using only verified search facts."""
+    if (
+        decision is None
+        or decision.action != "refresh_availability"
+        or decision.relative_direction != "next"
+        or not isinstance(availability_reference_context, dict)
+    ):
+        return understanding
+    last_selected = availability_reference_context.get("last_selected_option_ref")
+    if isinstance(last_selected, str) and last_selected:
+        return understanding
+    if availability_reference_context.get("availability_presentation_has_more") is not False:
+        return understanding
+    if availability_reference_context.get("availability_search_truncated") is not True:
+        return understanding
+
+    raw_dates = availability_reference_context.get("availability_checked_dates")
+    if not isinstance(raw_dates, list) or not raw_dates:
+        return understanding
+    checked_dates = []
+    for value in raw_dates:
+        if not isinstance(value, str) or not value:
+            continue
+        try:
+            checked_dates.append(datetime.fromisoformat(value[:10]).date())
+        except ValueError:
+            continue
+    if not checked_dates:
+        return understanding
+
+    raw_scope = availability_reference_context.get("date")
+    if not isinstance(raw_scope, dict):
+        return understanding
+    mode = str(raw_scope.get("mode") or "")
+    next_date = max(checked_dates) + timedelta(days=1)
+    next_constraint: DateConstraint | None = None
+    if mode in {"next_available", "from_date"}:
+        next_constraint = DateConstraint(mode="from_date", start_date=next_date.isoformat())
+    elif mode == "range":
+        raw_end = raw_scope.get("end_date")
+        if not isinstance(raw_end, str) or not raw_end:
+            return understanding
+        try:
+            end_date = datetime.fromisoformat(raw_end[:10]).date()
+        except ValueError:
+            return understanding
+        if next_date > end_date:
+            return understanding
+        next_constraint = DateConstraint(
+            mode="range",
+            start_date=next_date.isoformat(),
+            end_date=end_date.isoformat(),
+        )
+    else:
+        return understanding
+
+    operations: list[TurnOperation] = []
+    changed = False
+    for operation in understanding.operations:
+        if (
+            operation.type in {"availability", "continue_active", "book", "reschedule"}
+            and operation.continues_previous
+        ):
+            entities = operation.entities.model_copy(update={"date": next_constraint})
+            operation = operation.model_copy(update={"entities": entities})
+            changed = True
+        operations.append(operation)
+    return understanding.model_copy(update={"operations": operations}) if changed else understanding
+
+
 def _verified_recent_no_availability(
     recent_read_context: dict[str, Any] | None,
 ) -> bool:
@@ -3109,6 +3186,11 @@ def orchestrate_v2_turn(
             raise V2TurnInterpretationStructuredOutputError(
                 "V2 turn semantic interpretation exhausted structured attempts."
             ) from exc
+    understanding = _normalize_availability_search_continuation(
+        understanding,
+        decision=decision,
+        availability_reference_context=availability_reference_context,
+    )
     typed_period_hints: set[str] = set()
     for operation in understanding.operations:
         time_entity = getattr(operation.entities, "time", None)

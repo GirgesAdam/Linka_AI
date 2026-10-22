@@ -904,6 +904,17 @@ def test_availability_reference_context_carries_server_owned_presentation_has_mo
     )
     assert verified is not None
     assert verified["availability_presentation_has_more"] is True
+    availability = turn.outcomes[0].facts["availability"]
+    availability["checked_dates"] = ["2026-10-10"]
+    availability["search_truncated"] = True
+    verified = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=turn,
+    )
+    assert verified is not None
+    assert verified["availability_checked_dates"] == ["2026-10-10"]
+    assert verified["availability_search_truncated"] is True
 
     reference = _availability_reference_context_from_turn(
         turn,
@@ -912,6 +923,8 @@ def test_availability_reference_context_carries_server_owned_presentation_has_mo
     )
     assert reference is not None
     assert reference["availability_presentation_has_more"] is True
+    assert reference["availability_checked_dates"] == ["2026-10-10"]
+    assert reference["availability_search_truncated"] is True
     assert "last_selected_option_ref" not in reference
 
 
