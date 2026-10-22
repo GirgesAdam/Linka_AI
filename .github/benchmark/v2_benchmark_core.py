@@ -181,6 +181,34 @@ def state(db: Session, workspace: Workspace, patient: Patient) -> dict[str, int]
         )
         or 0
     )
+    active_appointments = int(
+        db.scalar(
+            select(func.count(Appointment.id)).where(
+                Appointment.workspace_id == workspace.id,
+                Appointment.patient_id == patient.id,
+                Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            )
+        )
+        or 0
+    )
+    usage_by_status = {}
+    for status in ("reserved", "consumed", "released"):
+        usage_by_status[status] = int(
+            db.scalar(
+                select(func.count(PackageUsage.id))
+                .join(
+                    PatientPackage,
+                    (PatientPackage.workspace_id == PackageUsage.workspace_id)
+                    & (PatientPackage.id == PackageUsage.patient_package_id),
+                )
+                .where(
+                    PackageUsage.workspace_id == workspace.id,
+                    PatientPackage.patient_id == patient.id,
+                    PackageUsage.status == status,
+                )
+            )
+            or 0
+        )
     active_packages = int(
         db.scalar(
             select(func.count(PatientPackage.id)).where(
@@ -248,10 +276,14 @@ def state(db: Session, workspace: Workspace, patient: Patient) -> dict[str, int]
     )
     return {
         "appointments": appointments,
+        "appointments_active": active_appointments,
         "patient_packages": packages,
         "patient_packages_active": active_packages,
         "patient_packages_cancelled": cancelled_packages,
         "package_usages": usages,
+        "package_usages_reserved": usage_by_status["reserved"],
+        "package_usages_consumed": usage_by_status["consumed"],
+        "package_usages_released": usage_by_status["released"],
         "payments": payments,
         "refunds": refunds,
         "settlement_transactions": settlement_transactions,

@@ -5,13 +5,13 @@ on:
     branches:
       - main
     tags:
-      - full-evidence-audit-pr278
+      - core-evidence-audit-pr278
     paths:
       - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
     inputs:
       audit_mode:
-        description: Select the existing strict gate or the Full Evidence Audit
+        description: Select the existing strict gate or the Core Evidence Audit
         required: false
         type: choice
         options:
@@ -419,8 +419,8 @@ jobs:
 
 
   full-evidence-audit:
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'full-evidence') || (github.event_name == 'push' && github.ref == 'refs/tags/full-evidence-audit-pr278') }}
-    name: Full real-Agent evidence audit
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'full-evidence') || (github.event_name == 'push' && github.ref == 'refs/tags/core-evidence-audit-pr278') }}
+    name: Full real-Agent core evidence audit
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: staging
@@ -507,20 +507,20 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          python scripts/run_full_agent_evidence_audit.py --inventory-only | tee artifacts/full-agent-evidence-audit-inventory.json
-      - name: Run full real-Agent evidence audit
+          python scripts/run_full_agent_evidence_audit.py --inventory-only | tee artifacts/core-agent-evidence-audit-inventory.json
+      - name: Run full real-Agent core evidence audit
         shell: bash
         run: |
           set -o pipefail
-          python scripts/run_full_agent_evidence_audit.py 2>&1 | tee artifacts/full-agent-evidence-audit.log
-      - name: Upload Full Evidence Audit artifact
+          python scripts/run_full_agent_evidence_audit.py 2>&1 | tee artifacts/core-agent-evidence-audit.log
+      - name: Upload Core Evidence Audit artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-agent-evidence-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          name: core-agent-evidence-audit-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            backend/artifacts/full-agent-evidence-audit.json
-            backend/artifacts/full-agent-evidence-audit.log
-            backend/artifacts/full-agent-evidence-audit-inventory.json
+            backend/artifacts/core-agent-evidence-audit.json
+            backend/artifacts/core-agent-evidence-audit.log
+            backend/artifacts/core-agent-evidence-audit-inventory.json
           if-no-files-found: warn
           retention-days: 14

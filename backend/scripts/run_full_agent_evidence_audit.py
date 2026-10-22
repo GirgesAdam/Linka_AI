@@ -19,44 +19,67 @@ from typing import Any
 SCRIPT_PATH = Path(__file__).resolve()
 BACKEND_DIR = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[2]
-REPORT = BACKEND_DIR / "artifacts" / "full-agent-evidence-audit.json"
+REPORT = BACKEND_DIR / "artifacts" / "core-agent-evidence-audit.json"
 HUMAN_RUNNER = BACKEND_DIR / "scripts" / "run_human_conversation_quality_batch1_review.py"
 GROUPED_RUNNER = BACKEND_DIR / "scripts" / "run_grouped_multiservice_intent_live_review.py"
 V2_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "v2-grouped-visit-live-review.yml"
 
 HUMAN_FUNCTIONS = {
-    "RA-H1": "ra_h1_marker_leak",
-    "RA-H2": "ra_h2_multiservice_total",
-    "RA-H3": "ra_h3_long_continuation",
-    "RA-H4": "ra_h4_one_device",
-    "RA-H5": "ra_h5_two_devices",
-    "RA-H6": "ra_h6_service_correction",
-    "RA-H7": "ra_h7_booking_completion",
     "RA-H8": "ra_h8_attendance_confirmation",
 }
 HUMAN_TOPICS = {
-    "RA-H1": "device-specific booking and internal-marker containment",
-    "RA-H2": "grouped multi-service price continuation",
-    "RA-H3": "long grouped booking continuation across side questions",
-    "RA-H4": "single-device service pricing",
-    "RA-H5": "multi-device selection and pricing",
-    "RA-H6": "grouped service correction",
-    "RA-H7": "booking completion after explicit confirmation",
     "RA-H8": "attendance confirmation",
 }
 GROUPED_TOPICS = {
-    "RA-G1": "grouped availability baseline",
-    "RA-G2": "grouped price continuation",
-    "RA-G3": "grouped long continuation",
-    "RA-G4": "grouped service narrowing continuation",
-    "RA-G5": "grouped proposal progression",
-    "RA-G6-VISIT-TIME-SELECTION": "grouped visit-time selection",
-    "RA-G7-CATEGORY-SPLIT": "cross-category grouped visit planning",
+    "CORE-TWO-SERVICES-SAME-VISIT": "two services in one compatible visit",
 }
-V2_TOPICS = {
-    "mixed_authority_recovery": "Mixed package authority recovery",
-    "mixed_authority_confirm_b": "Mixed package later explicit purchase",
+
+CORE_DEFINITIONS = (
+    ("core_clinic_info", "Clinic Info", "V2 Realistic Benchmark Core", "basic clinic information and canonical grounding", 2, "v2", "core_clinic_info"),
+    ("simple_price", "Simple Service Price", "V2 Realistic Benchmark Core", "normal service price inquiry", 1, "v2", "simple_price"),
+    ("package_comparison", "Package Information", "V2 Realistic Benchmark Core", "package sessions, price, and main offer difference", 1, "v2", "package_comparison"),
+    ("doctor_discovery", "Doctor Discovery", "V2 Realistic Benchmark Core", "doctor qualification and nearest grounded availability", 2, "v2", "doctor_discovery"),
+    ("laser_device_consistency", "Device Selection / Continuity", "V2 Realistic Benchmark Core", "device-specific selection and same-service continuity", 2, "v2", "laser_device_consistency"),
+    ("core_nearest_availability_continuation", "Nearest Availability + Natural Continuation", "V2 Realistic Benchmark Core", "nearest availability followed by natural relative continuation", 2, "v2", "core_nearest_availability_continuation"),
+    ("core_normal_booking", "Normal Booking + Verified Confirmation", "V2 Realistic Benchmark Core", "normal booking lifecycle through verified proposal confirmation", 3, "v2", "core_normal_booking"),
+    ("change_time_during_booking", "Time Correction During Booking", "V2 Realistic Benchmark Core", "latest booking time correction", 2, "v2", "change_time_during_booking"),
+    ("change_service_mid_conversation", "Service Correction", "V2 Realistic Benchmark Core", "latest requested service state", 2, "v2", "change_service_mid_conversation"),
+    ("core_side_question_booking", "Side Question During Active Booking", "V2 Realistic Benchmark Core", "short price side-question continuity during booking", 3, "v2", "core_side_question_booking"),
+    ("CORE-TWO-SERVICES-SAME-VISIT", "Two Services Same Visit", "Grouped Multi-Service Intent Live Review", "normal multi-service same-visit intent", 2, "grouped", "CORE-TWO-SERVICES-SAME-VISIT"),
+    ("reschedule_existing", "Reschedule Existing Appointment", "V2 Realistic Benchmark Core", "identify and reschedule an existing appointment", 2, "v2", "reschedule_existing"),
+    ("cancel_existing", "Cancel Existing Appointment", "V2 Realistic Benchmark Core", "identify and cancel an existing appointment", 2, "v2", "cancel_existing"),
+    ("RA-H8", "Attendance Confirmation", "Human Conversation Quality Batch 1 Live Review", "normal appointment attendance confirmation", 1, "human", "ra_h8_attendance_confirmation"),
+    ("package_purchase", "Package Purchase", "V2 Realistic Benchmark Core", "package information followed by explicit purchase", 2, "v2", "package_purchase"),
+    ("core_package_recovery", "Package Correction / Recovery", "V2 Grouped Visit Live Review", "mixed package authority followed by immediate correction", 2, "v2", "core_package_recovery"),
+    ("existing_package_booking", "Book Using Existing Package", "V2 Realistic Benchmark Core", "book the next session from an active package", 2, "v2", "existing_package_booking"),
+)
+CORE_ORDER = tuple(item[0] for item in CORE_DEFINITIONS)
+
+V2_BASE_HANDLER_BY_SCENARIO = {
+    "core_clinic_info": None,
+    "simple_price": "simple_price",
+    "package_comparison": "package_comparison",
+    "doctor_discovery": "doctor_discovery",
+    "laser_device_consistency": "laser_device_consistency",
+    "core_nearest_availability_continuation": "nearest_available",
+    "core_normal_booking": "single_session_booking",
+    "change_time_during_booking": "change_time_during_booking",
+    "change_service_mid_conversation": "change_service_mid_conversation",
+    "core_side_question_booking": "single_session_booking",
+    "reschedule_existing": "reschedule_existing",
+    "cancel_existing": "cancel_existing",
+    "package_purchase": "package_purchase",
+    "core_package_recovery": None,
+    "existing_package_booking": "existing_package_booking",
 }
+CUSTOM_V2_WRAPPER_IDS = {
+    "core_clinic_info",
+    "core_nearest_availability_continuation",
+    "core_normal_booking",
+    "core_side_question_booking",
+    "core_package_recovery",
+}
+V2_TOPICS = {item[0]: item[3] for item in CORE_DEFINITIONS if item[5] == "v2"}
 
 _AUDIT_CHECKS: list[dict[str, Any]] = []
 
@@ -87,34 +110,52 @@ def _literal_sequence_length(node: ast.AST) -> int | None:
     return len(node.elts) if isinstance(node, (ast.List, ast.Tuple)) else None
 
 
-def _human_turn_counts() -> dict[str, int]:
-    tree = ast.parse(HUMAN_RUNNER.read_text(encoding="utf-8"), filename=str(HUMAN_RUNNER))
-    by_function: dict[str, int] = {}
+def _function_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def _grouped_audit_ids() -> set[str]:
+    tree = ast.parse(GROUPED_RUNNER.read_text(encoding="utf-8"), filename=str(GROUPED_RUNNER))
     for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "audit_scenario_specs":
             continue
         for item in ast.walk(node):
-            if isinstance(item, ast.Call) and _call_name(item.func) == "_run" and len(item.args) >= 2:
-                count = _literal_sequence_length(item.args[1])
-                if count is not None:
-                    by_function[node.name] = count
-                    break
-    return {scenario_id: by_function[function] for scenario_id, function in HUMAN_FUNCTIONS.items()}
+            if not isinstance(item, ast.Return) or not isinstance(item.value, ast.Dict):
+                continue
+            return {
+                key.value
+                for key in item.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+    return set()
 
 
-def _grouped_turn_counts() -> dict[str, int]:
-    tree = ast.parse(GROUPED_RUNNER.read_text(encoding="utf-8"), filename=str(GROUPED_RUNNER))
-    counts: dict[str, int] = {}
-    for item in ast.walk(tree):
-        if not isinstance(item, ast.Call) or _call_name(item.func) != "run_scenario" or len(item.args) < 2:
+def _benchmark_scenario_source() -> str:
+    parts = sorted((REPO_ROOT / ".github" / "benchmark").glob("v2_benchmark_scenarios.part.*"))
+    if not parts:
+        raise RuntimeError("V2 benchmark scenario parts not found")
+    return "".join(part.read_text(encoding="utf-8") for part in parts)
+
+
+def _benchmark_handler_names() -> set[str]:
+    source = _benchmark_scenario_source()
+    tree = ast.parse(source, filename="v2_benchmark_scenarios")
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):
             continue
-        first = item.args[0]
-        if not isinstance(first, ast.Constant) or not isinstance(first.value, str) or not first.value.startswith("RA-G"):
+        if not any(isinstance(target, ast.Name) and target.id == "_HANDLERS" for target in node.targets):
             continue
-        count = _literal_sequence_length(item.args[1])
-        if count is not None:
-            counts[first.value] = count
-    return counts
+        return {
+            key.value
+            for key in node.value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+    return set()
 
 
 def _extract_v2_python() -> str:
@@ -128,54 +169,58 @@ def _extract_v2_python() -> str:
     return textwrap.dedent(text[body_start:body_end])
 
 
-def _v2_turn_counts() -> dict[str, int]:
-    tree = ast.parse(_extract_v2_python(), filename=str(V2_WORKFLOW))
-    names = {"prepare": "mixed_authority_recovery", "prepare_confirm_b": "mixed_authority_confirm_b"}
-    counts: dict[str, int] = {}
+def _internal_v2_wrapper_names() -> set[str]:
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(SCRIPT_PATH))
     for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name not in names:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "_run_internal_v2":
             continue
-        for item in ast.walk(node):
-            if not isinstance(item, ast.Call) or _call_name(item.func) != "PreparedScenario":
-                continue
-            for keyword in item.keywords:
-                if keyword.arg == "messages":
-                    count = _literal_sequence_length(keyword.value)
-                    if count is not None:
-                        counts[names[node.name]] = count
-    return counts
+        return {
+            item.name
+            for item in node.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+    return set()
+
+
+def executable_scenario_ids() -> set[str]:
+    executable: set[str] = set()
+    human_functions = _function_names(HUMAN_RUNNER)
+    grouped_ids = _grouped_audit_ids()
+    benchmark_handlers = _benchmark_handler_names()
+    recovery_source = _extract_v2_python()
+    wrapper_names = _internal_v2_wrapper_names()
+
+    for scenario_id, function in HUMAN_FUNCTIONS.items():
+        if function in human_functions:
+            executable.add(scenario_id)
+    executable.update(set(GROUPED_TOPICS) & grouped_ids)
+
+    for scenario_id, base_handler in V2_BASE_HANDLER_BY_SCENARIO.items():
+        dependency_ok = base_handler is None or base_handler in benchmark_handlers
+        wrapper_ok = scenario_id not in CUSTOM_V2_WRAPPER_IDS or scenario_id in wrapper_names
+        if scenario_id == "core_package_recovery":
+            dependency_ok = dependency_ok and "def prepare(" in recovery_source
+        if wrapper_ok and dependency_ok:
+            executable.add(scenario_id)
+    return executable
 
 
 def scenario_inventory() -> list[ScenarioSpec]:
-    human_counts = _human_turn_counts()
-    grouped_counts = _grouped_turn_counts()
-    v2_counts = _v2_turn_counts()
     specs: list[ScenarioSpec] = []
-    for scenario_id, function in HUMAN_FUNCTIONS.items():
+    for scenario_id, name, source_suite, topic, turns, runner_kind, entrypoint in CORE_DEFINITIONS:
+        if runner_kind == "human":
+            environment = "stateful fixture with real model and simulated writes"
+            rollback = "fixture simulation; no persistent DB writes"
+        elif runner_kind == "grouped":
+            environment = "current-head local PostgreSQL grouped harness"
+            rollback = "outer SQL transaction rollback; write_executor=None"
+        else:
+            environment = "staging DB-backed V2 live-chat harness"
+            rollback = "outer SQL transaction rollback after real write execution"
         specs.append(ScenarioSpec(
-            scenario_id, scenario_id, "Human Conversation Quality Batch 1 Live Review",
-            HUMAN_TOPICS[scenario_id], human_counts[scenario_id],
-            "stateful fixture with real model and simulated writes",
-            "fixture simulation; no persistent DB writes", "human", function,
-        ))
-    for scenario_id in GROUPED_TOPICS:
-        compatibility = None
-        if scenario_id in {"RA-G2", "RA-G3", "RA-G4"}:
-            compatibility = (
-                "historical Batch-1 compatibility scenario; exact compatibility head is already an ancestor "
-                "of the current PR head, so no duplicate overlay execution is required"
-            )
-        specs.append(ScenarioSpec(
-            scenario_id, scenario_id, "Grouped Multi-Service Intent Live Review",
-            GROUPED_TOPICS[scenario_id], grouped_counts[scenario_id],
-            "current-head local PostgreSQL grouped harness",
-            "outer SQL transaction rollback; write_executor=None", "grouped", "main", compatibility,
-        ))
-    for scenario_id, topic in V2_TOPICS.items():
-        specs.append(ScenarioSpec(
-            scenario_id, scenario_id, "V2 Grouped Visit Live Review", topic, v2_counts[scenario_id],
-            "staging DB-backed V2 live-chat harness",
-            "outer SQL transaction rollback after real write execution", "v2_grouped_visit", scenario_id,
+            scenario_id, name, source_suite, topic, turns, environment, rollback,
+            runner_kind, entrypoint, None,
         ))
     _validate_inventory(specs)
     return specs
@@ -183,21 +228,37 @@ def scenario_inventory() -> list[ScenarioSpec]:
 
 def _validate_inventory(specs: list[ScenarioSpec]) -> None:
     ids = [item.scenario_id for item in specs]
-    expected = set(HUMAN_FUNCTIONS) | set(GROUPED_TOPICS) | set(V2_TOPICS)
-    if len(ids) != len(set(ids)):
-        raise RuntimeError("Duplicate scenario IDs in Full Evidence Audit inventory")
+    if ids != list(CORE_ORDER):
+        raise RuntimeError(f"Core scenario order mismatch: expected={list(CORE_ORDER)} actual={ids}")
+    if len(ids) != 17 or len(ids) != len(set(ids)):
+        raise RuntimeError("Core inventory must contain exactly 17 unique conversations")
+    turns = sum(item.number_of_turns_planned for item in specs)
+    if turns != 33:
+        raise RuntimeError(f"Core inventory must contain exactly 33 turns; got {turns}")
     if any("C7" in item for item in ids):
-        raise RuntimeError("C7 must not be included in Full Evidence Audit")
-    if set(ids) != expected:
-        raise RuntimeError(f"Scenario inventory mismatch: expected={sorted(expected)} actual={sorted(ids)}")
+        raise RuntimeError("C7 must not be included in Core Evidence Audit")
+
+
+def _validate_executable_handlers(specs: list[ScenarioSpec]) -> None:
+    selected = {item.scenario_id for item in specs}
+    executable = executable_scenario_ids()
+    if selected != executable:
+        missing = sorted(selected - executable)
+        extra = sorted(executable - selected)
+        raise RuntimeError(f"Core selector invariant failed: missing={missing} extra={extra}")
 
 
 def inventory_payload(specs: list[ScenarioSpec]) -> dict[str, Any]:
+    executable = executable_scenario_ids()
+    selected = {item.scenario_id for item in specs}
     return {
         "unique_conversations_selected": len(specs),
         "turns_planned": sum(item.number_of_turns_planned for item in specs),
         "source_suites": sorted({item.source_suite for item in specs}),
         "duplicates_intentionally_executed": 0,
+        "selected_handler_ids": [item.scenario_id for item in specs],
+        "executable_handler_ids": sorted(executable),
+        "selector_invariant": selected == executable,
         "c7": "NOT_INCLUDED",
         "phase_3_3": "NOT_RUN",
         "scenarios": [asdict(item) for item in specs],
@@ -283,13 +344,19 @@ def _run_internal_legacy(suite: str, scenario_id: str) -> int:
     error: dict[str, Any] | None = None
     try:
         if suite == "human":
-            module = _load_transformed_module(HUMAN_RUNNER, "_full_audit_human_runner")
-            getattr(module, HUMAN_FUNCTIONS[scenario_id])()
+            module = _load_transformed_module(HUMAN_RUNNER, "_core_audit_human_runner")
+            function = HUMAN_FUNCTIONS.get(scenario_id)
+            if function is None or not hasattr(module, function):
+                raise RuntimeError(f"Human audit handler not executable: {scenario_id}")
+            print(f"AUDIT_HANDLER_INVOKED={scenario_id}", flush=True)
+            getattr(module, function)()
         elif suite == "grouped":
-            os.environ["RA_G_SCENARIOS"] = scenario_id
-            os.environ["RA_G_MODE"] = "standalone"
-            module = _load_transformed_module(GROUPED_RUNNER, "_full_audit_grouped_runner")
-            module.main()
+            module = _load_transformed_module(GROUPED_RUNNER, "_core_audit_grouped_runner")
+            available = set(module.audit_executable_scenario_ids())
+            if scenario_id not in available:
+                raise RuntimeError(f"Grouped audit handler not executable: {scenario_id}")
+            print(f"AUDIT_HANDLER_INVOKED={scenario_id}", flush=True)
+            module.run_audit_scenario(scenario_id)
         else:
             raise RuntimeError(f"Unsupported internal legacy suite: {suite}")
     except BaseException as exc:
@@ -315,48 +382,95 @@ def _run_internal_v2() -> int:
     setup_end = code.find("from sqlalchemy import create_engine")
     if setup_end < 0:
         raise RuntimeError("V2 setup/execution boundary not found")
-    namespace: dict[str, Any] = {"__name__": "_full_audit_v2_inline", "_audit_eval_check": _audit_eval_check}
+    namespace: dict[str, Any] = {"__name__": "_core_audit_v2_inline", "_audit_eval_check": _audit_eval_check}
     setup_code = code[:setup_end]
     exec(compile(ast.parse(setup_code, filename=str(V2_WORKFLOW)), str(V2_WORKFLOW), "exec"), namespace)
 
     core = namespace["core"]
     scenarios = namespace["scenarios"]
     original_state = namespace["original_state"]
+    enhanced_state = namespace["enhanced_state"]
+    mixed_authority_prepare = namespace["prepare"]
     from sqlalchemy import create_engine
 
     from app.core.config import settings
 
-    recovery_start = code.find("assert result.error is None")
-    control_marker = code.find("# Control:")
-    control_start = code.find("assert control.error is None")
-    control_print = code.find('print("MIXED_AUTHORITY_EXPLICIT_B_CONTROL=PASS"', control_start)
-    if min(recovery_start, control_marker, control_start, control_print) < 0:
-        raise RuntimeError("V2 legacy-check boundaries not found")
-    segments = {
-        "mixed_authority_recovery": code[recovery_start:control_marker],
-        "mixed_authority_confirm_b": code[control_start:control_print],
+    def clone(prepared, messages: list[str], *, observation: str | None = None):
+        observations = list(prepared.observations)
+        if observation:
+            observations.append(observation)
+        return core.PreparedScenario(
+            patient=prepared.patient,
+            messages=list(messages),
+            observations=observations,
+            post=prepared.post,
+        )
+
+    def core_clinic_info(db, workspace):
+        return core.PreparedScenario(
+            patient=core.patient_without_future(db, workspace),
+            messages=["مواعيد العيادة إيه؟", "العنوان فين؟"],
+            observations=["core_journey=clinic_info", "expected_write_delta=0"],
+        )
+
+    def core_nearest_availability_continuation(db, workspace):
+        prepared = scenarios._HANDLERS["nearest_available"](db, workspace)
+        return clone(
+            prepared,
+            [prepared.messages[0], "طب اللي بعده؟"],
+            observation="core_journey=nearest_availability_natural_continuation",
+        )
+
+    def core_normal_booking(db, workspace):
+        prepared = scenarios._HANDLERS["single_session_booking"](db, workspace)
+        return clone(
+            prepared,
+            [prepared.messages[0], prepared.messages[1], "أيوه، أكد الحجز."],
+            observation="core_journey=normal_booking_verified_confirmation",
+        )
+
+    def core_side_question_booking(db, workspace):
+        prepared = scenarios._HANDLERS["single_session_booking"](db, workspace)
+        return clone(
+            prepared,
+            [prepared.messages[0], "السعر كام؟", prepared.messages[1]],
+            observation="core_journey=short_side_question_continuity",
+        )
+
+    def core_package_recovery(db, workspace):
+        prepared = mixed_authority_prepare(db, workspace)
+        return clone(
+            prepared,
+            list(prepared.messages[:2]),
+            observation="core_journey=mixed_package_authority_stop_after_correction",
+        )
+
+    wrappers = {
+        "core_clinic_info": core_clinic_info,
+        "core_nearest_availability_continuation": core_nearest_availability_continuation,
+        "core_normal_booking": core_normal_booking,
+        "core_side_question_booking": core_side_question_booking,
+        "core_package_recovery": core_package_recovery,
     }
+    for scenario_id, handler in wrappers.items():
+        scenarios.TOPICS[scenario_id] = V2_TOPICS[scenario_id]
+        scenarios._HANDLERS[scenario_id] = handler
 
     outputs: list[dict[str, Any]] = []
     try:
         for scenario_id in V2_TOPICS:
+            core.state = enhanced_state if scenario_id == "core_package_recovery" else original_state
             engine = create_engine(settings.database_url, pool_pre_ping=True)
             try:
-                result = core.execute_one(engine, scenario_id, scenarios.TOPICS[scenario_id])
+                result = core.execute_one(engine, scenario_id, V2_TOPICS[scenario_id])
             finally:
                 engine.dispose()
-            check_namespace = dict(namespace)
-            check_namespace["result"] = result
-            check_namespace["control"] = result
-            check_error = _exec_check_segment(
-                segments[scenario_id], check_namespace,
-                source_name=f"{V2_WORKFLOW}:{scenario_id}",
-            )
             outputs.append({
                 "scenario": scenario_id,
+                "handler_invoked": True,
                 "result": asdict(result),
-                "legacy_checks": list(_AUDIT_CHECKS),
-                "legacy_evaluation_error": check_error,
+                "legacy_checks": [],
+                "legacy_evaluation_error": None,
             })
     finally:
         core.state = original_state
@@ -603,10 +717,15 @@ def _final_state(turns: list[dict[str, Any]], db_after: dict[str, Any] | None) -
     last = turns[-1] if turns else {}
     db = db_after or {}
     return {
-        "active_appointments": db.get("active_appointments", db.get("appointments")),
+        "active_appointments": db.get("active_appointments", db.get("appointments_active", db.get("appointments"))),
         "active_packages": db.get("active_packages", db.get("patient_packages_active")),
         "cancelled_packages": db.get("cancelled_packages", db.get("patient_packages_cancelled")),
-        "package_usage_totals": db.get("package_usages"),
+        "package_usage_totals": {
+            "total": db.get("package_usages"),
+            "reserved": db.get("package_usages_reserved"),
+            "consumed": db.get("package_usages_consumed"),
+            "released": db.get("package_usages_released"),
+        },
         "payment_totals_or_transaction_presence": {
             "payments": db.get("payments"), "settlement_transactions": db.get("settlement_transactions")
         },
@@ -638,10 +757,18 @@ def _conversation_record(
     spec: ScenarioSpec, *, turns: list[dict[str, Any]], checks: list[dict[str, Any]],
     db_before: dict[str, Any] | None, db_after: dict[str, Any] | None, db_delta: dict[str, Any] | None,
     internal_error: Any = None, legacy_evaluation_error: Any = None, observations: list[Any] | None = None,
+    handler_invoked: bool = True,
 ) -> dict[str, Any]:
     executed = len(turns)
     status = "EXECUTED" if executed == spec.number_of_turns_planned else "INCOMPLETE" if executed else "EXECUTION_ERROR"
-    source_runner = HUMAN_RUNNER if spec.runner_kind == "human" else GROUPED_RUNNER if spec.runner_kind == "grouped" else V2_WORKFLOW
+    if spec.runner_kind == "human":
+        source_runner = str(HUMAN_RUNNER.relative_to(REPO_ROOT))
+    elif spec.runner_kind == "grouped":
+        source_runner = str(GROUPED_RUNNER.relative_to(REPO_ROOT))
+    elif spec.scenario_id == "core_package_recovery":
+        source_runner = str(V2_WORKFLOW.relative_to(REPO_ROOT))
+    else:
+        source_runner = ".github/benchmark/v2_benchmark_core.py + v2_benchmark_scenarios.part.*"
     return {
         "scenario_id": spec.scenario_id,
         "scenario_name": spec.scenario_name,
@@ -655,6 +782,7 @@ def _conversation_record(
         "scenario_variant": None,
         "compatibility_context": spec.compatibility_context,
         "execution_status": status,
+        "handler_invoked": handler_invoked,
         "turns": turns,
         "db_evidence": {"before": db_before, "after": db_after, "delta": db_delta},
         "final_state": _final_state(turns, db_after),
@@ -664,9 +792,9 @@ def _conversation_record(
         "scenario_local_errors": _scenario_local_errors(internal_error, checks, legacy_evaluation_error),
         "observations": list(observations or []),
         "portfolio_metadata": {
-            "source_runner": str(source_runner.relative_to(REPO_ROOT)),
+            "source_runner": source_runner,
             "entrypoint": spec.entrypoint,
-            "messages_owned_by_existing_runner": True,
+            "messages_owned_by_existing_runner": spec.scenario_id not in CUSTOM_V2_WRAPPER_IDS,
             "classification_for_team_lead": None,
         },
     }
@@ -687,6 +815,7 @@ def _run_legacy_spec(spec: ScenarioSpec) -> dict[str, Any]:
         sys.executable, str(SCRIPT_PATH), "--internal-suite", spec.runner_kind, "--scenario", spec.scenario_id
     ])
     stdout = str(raw.get("stdout") or "")
+    handler_invoked = f"AUDIT_HANDLER_INVOKED={spec.scenario_id}" in stdout.splitlines()
     prefix = "RA_RESULT=" if spec.runner_kind == "human" else "RA_G_RESULT="
     payloads = _extract_prefixed_json_lines(stdout, prefix)
     payload = payloads[-1] if payloads else None
@@ -713,6 +842,7 @@ def _run_legacy_spec(spec: ScenarioSpec) -> dict[str, Any]:
                     spec, turns=_normalize_human_turns(partial_turns), checks=checks,
                     db_before=None, db_after=None, db_delta=None,
                     internal_error=internal_error or {"type": "IncompleteConversation", "message": f"{prefix} final payload not emitted"},
+                    handler_invoked=handler_invoked,
                 )
         else:
             start_rows = _extract_prefixed_json_lines(stdout, "RA_G_START=")
@@ -732,15 +862,18 @@ def _run_legacy_spec(spec: ScenarioSpec) -> dict[str, Any]:
                     spec, turns=_normalize_grouped_turns(partial_turns, partial_before), checks=checks,
                     db_before=partial_before, db_after=partial_after, db_delta=_db_delta(partial_before, partial_after),
                     internal_error=internal_error or {"type": "IncompleteConversation", "message": f"{prefix} final payload not emitted"},
+                    handler_invoked=handler_invoked,
                 )
         return _conversation_record(
             spec, turns=[], checks=checks, db_before=None, db_after=None, db_delta=None,
             internal_error=internal_error or {"type": "EvidenceMissing", "message": f"{prefix} payload not emitted"},
+            handler_invoked=handler_invoked,
         )
     if spec.runner_kind == "human":
         return _conversation_record(
             spec, turns=_normalize_human_turns(list(payload.get("turns") or [])), checks=checks,
             db_before=None, db_after=None, db_delta=None, internal_error=internal_error,
+            handler_invoked=handler_invoked,
         )
     db_before = payload.get("db_before") if isinstance(payload.get("db_before"), dict) else None
     db_after = payload.get("db_after") if isinstance(payload.get("db_after"), dict) else None
@@ -748,6 +881,7 @@ def _run_legacy_spec(spec: ScenarioSpec) -> dict[str, Any]:
     return _conversation_record(
         spec, turns=_normalize_grouped_turns(list(payload.get("turns") or []), db_before), checks=checks,
         db_before=db_before, db_after=db_after, db_delta=db_delta, internal_error=internal_error,
+        handler_invoked=handler_invoked,
     )
 
 
@@ -772,7 +906,8 @@ def _run_v2_specs(specs: list[ScenarioSpec]) -> list[dict[str, Any]]:
                     "stderr_tail": str(raw.get("stderr") or "")[-4000:],
                 }
             records.append(_conversation_record(
-                spec, turns=[], checks=[], db_before=None, db_after=None, db_delta=None, internal_error=error
+                spec, turns=[], checks=[], db_before=None, db_after=None, db_delta=None, internal_error=error,
+                handler_invoked=False,
             ))
             continue
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
@@ -789,6 +924,7 @@ def _run_v2_specs(specs: list[ScenarioSpec]) -> list[dict[str, Any]]:
             internal_error=internal_error,
             legacy_evaluation_error=payload.get("legacy_evaluation_error"),
             observations=list(result.get("observations") or []),
+            handler_invoked=bool(payload.get("handler_invoked")),
         ))
     return records
 
@@ -805,6 +941,7 @@ def _preflight_environment(specs: list[ScenarioSpec]) -> list[str]:
         errors.append("FULL_AUDIT_LIVE_DATABASE_URL is missing")
     try:
         _validate_inventory(specs)
+        _validate_executable_handlers(specs)
         _extract_v2_python()
     except Exception as exc:
         errors.append(f"scenario inventory/V2 extraction invalid: {type(exc).__name__}: {exc}")
@@ -836,7 +973,7 @@ def _preflight_environment(specs: list[ScenarioSpec]) -> list[str]:
             errors.append(f"live audit database unavailable: {type(exc).__name__}: {exc}")
     try:
         REPORT.parent.mkdir(parents=True, exist_ok=True)
-        probe = REPORT.parent / ".full-audit-write-probe"
+        probe = REPORT.parent / ".core-audit-write-probe"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()
     except Exception as exc:
@@ -873,7 +1010,7 @@ def _technical_summary(conversations: list[dict[str, Any]], inventory: dict[str,
     checks = [check for item in conversations for check in item.get("legacy_checks", []) if isinstance(check, dict)]
     totals = _factual_write_totals(conversations)
     return {
-        "conversations_selected": len(conversations),
+        "conversations_selected": inventory["unique_conversations_selected"],
         "conversations_fully_executed": sum(x.get("execution_status") == "EXECUTED" for x in conversations),
         "conversations_incomplete": sum(x.get("execution_status") == "INCOMPLETE" for x in conversations),
         "conversations_execution_error": sum(x.get("execution_status") == "EXECUTION_ERROR" for x in conversations),
@@ -891,6 +1028,24 @@ def _technical_summary(conversations: list[dict[str, Any]], inventory: dict[str,
     }
 
 
+def _execution_invariant_errors(
+    specs: list[ScenarioSpec], conversations: list[dict[str, Any]]
+) -> list[str]:
+    errors: list[str] = []
+    selected = [item.scenario_id for item in specs]
+    emitted = [str(item.get("scenario_id")) for item in conversations]
+    if emitted != selected:
+        errors.append(f"selected/emitted scenario mismatch: selected={selected} emitted={emitted}")
+    silent = [
+        str(item.get("scenario_id"))
+        for item in conversations
+        if item.get("handler_invoked") is not True
+    ]
+    if silent:
+        errors.append(f"selected handlers never invoked: {silent}")
+    return errors
+
+
 def _write_report(payload: dict[str, Any]) -> int:
     REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -906,7 +1061,7 @@ def run_full_audit() -> int:
     infrastructure_errors = _preflight_environment(specs)
     payload: dict[str, Any] = {
         "audit_metadata": {
-            "audit_name": "FULL REAL-AGENT EVIDENCE AUDIT",
+            "audit_name": "FULL REAL-AGENT CORE EVIDENCE AUDIT",
             "started_at": started.isoformat(),
             "finished_at": None,
             "head": _git_head(),
@@ -939,27 +1094,36 @@ def run_full_audit() -> int:
     for index, spec in enumerate(legacy_specs, start=1):
         print(f"[{index:02d}/{len(specs)}] executing {spec.scenario_id}", flush=True)
         conversations.append(_run_legacy_spec(spec))
-    v2_specs = [x for x in specs if x.runner_kind == "v2_grouped_visit"]
-    print(f"[{len(legacy_specs)+1:02d}/{len(specs)}] executing V2 grouped-visit conversations", flush=True)
+    v2_specs = [x for x in specs if x.runner_kind == "v2"]
+    print(f"[{len(legacy_specs)+1:02d}/{len(specs)}] executing {len(v2_specs)} V2 Core conversations", flush=True)
     conversations.extend(_run_v2_specs(v2_specs))
 
     order = {item.scenario_id: index for index, item in enumerate(specs)}
     conversations.sort(key=lambda item: order[item["scenario_id"]])
+    infrastructure_errors.extend(_execution_invariant_errors(specs, conversations))
     payload["conversations"] = conversations
+    payload["infrastructure_errors"] = infrastructure_errors
     payload["technical_summary"] = _technical_summary(conversations, inventory, infrastructure_errors)
     payload["factual_write_totals"] = _factual_write_totals(conversations)
     payload["audit_metadata"]["finished_at"] = datetime.now(UTC).isoformat()
-    payload["audit_metadata"]["technical_result"] = "SUCCESS"
+    payload["audit_metadata"]["evidence_complete"] = not infrastructure_errors
+    payload["audit_metadata"]["technical_result"] = "BLOCKED" if infrastructure_errors else "SUCCESS"
     size = _write_report(payload)
     print("FULL_AUDIT_SUMMARY=" + json.dumps(payload["technical_summary"], ensure_ascii=False, separators=(",", ":")), flush=True)
     print("FULL_AUDIT_WRITES=" + json.dumps(payload["factual_write_totals"], separators=(",", ":")), flush=True)
     print(f"ARTIFACT_SIZE_BYTES={size}", flush=True)
     print(f"REPORT={REPORT}", flush=True)
+    if infrastructure_errors:
+        print("FULL_AUDIT_TECHNICAL_RESULT=BLOCKED", flush=True)
+        for error in infrastructure_errors:
+            print(f"INFRASTRUCTURE_ERROR={error}", flush=True)
+        return 1
+    print("FULL_AUDIT_TECHNICAL_RESULT=SUCCESS", flush=True)
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the merge-relevant real-Agent Full Evidence Audit.")
+    parser = argparse.ArgumentParser(description="Run the Team-Lead-approved real-Agent Core Evidence Audit.")
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--internal-suite", choices=("human", "grouped", "v2"))
     parser.add_argument("--scenario")

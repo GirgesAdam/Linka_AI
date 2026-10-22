@@ -52,6 +52,7 @@ ORIGINAL = (
     "اختار دكتور واحد يعمل الاتنين ووريني أقرب ميعاد مناسب قبل ما تحجز"
 )
 TOTAL = "السعر الإجمالي كام؟"
+CORE_SAME_VISIT_CONTINUE = "تمام، كمّلي على نفس الزيارة."
 MODE = os.environ.get("RA_G_MODE", "standalone").strip().lower()
 C7_INITIAL = "\u0639\u0627\u064a\u0632\u0629 \u0623\u062d\u062c\u0632 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u0648\u0625\u0628\u0637 \u0645\u0639 \u0628\u0639\u0636 \u0639\u0644\u0649 Candela Gentle \u064a\u0648\u0645 \u0627\u0644\u0633\u0628\u062a 17 \u0623\u0643\u062a\u0648\u0628\u0631"
 C7_REPLACEMENT = "\u0628\u062f\u0644 \u0644\u064a\u0632\u0631 \u0628\u0643\u064a\u0646\u064a \u062e\u0644\u064a\u0647\u0627 Full Arms \u0648\u062e\u0644\u064a \u0644\u064a\u0632\u0631 \u0627\u0644\u0625\u0628\u0637 \u0632\u064a \u0645\u0627 \u0647\u0648"
@@ -849,6 +850,29 @@ def validate_g7_category_split(records, ids):
     )
     assert ordered[0][0].astimezone(CAIRO).strftime("%H:%M") == "18:00"
     assert ordered[1][0] >= ordered[0][1]
+
+
+def audit_scenario_specs():
+    """Audit-only explicit selectors; strict main() behavior remains unchanged."""
+    return {
+        "CORE-TWO-SERVICES-SAME-VISIT": (
+            [ORIGINAL, CORE_SAME_VISIT_CONTINUE],
+            validate_g1,
+        ),
+    }
+
+
+def audit_executable_scenario_ids() -> tuple[str, ...]:
+    return tuple(audit_scenario_specs())
+
+
+def run_audit_scenario(name: str) -> None:
+    spec = audit_scenario_specs().get(name)
+    if spec is None:
+        raise KeyError(f"Unknown grouped audit scenario: {name}")
+    messages, validator = spec
+    os.environ["RA_G_SCENARIOS"] = name
+    run_scenario(name, messages, validator)
 
 def main() -> int:
     if MODE not in {"standalone", "batch1-overlay"}:
