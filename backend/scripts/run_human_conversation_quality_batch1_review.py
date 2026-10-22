@@ -49,6 +49,11 @@ def _task_evidence(task: ActiveTaskState | None) -> dict[str, object] | None:
 
 def _turn_evidence(result) -> dict[str, object]:
     return {
+        "structured_understanding": result.understanding.model_dump(mode="json"),
+        "plan": result.plan.model_dump(mode="json"),
+        "outcomes": [outcome.model_dump(mode="json") for outcome in result.outcomes],
+        "recent_read_context": result.recent_read_context,
+        "availability_reference_context": result.availability_reference_context,
         "operations": [operation.type for operation in result.understanding.operations],
         "operation_details": [
             {
@@ -121,6 +126,16 @@ def _run(
                 "model": result.responder_model,
                 "canonical": _turn_evidence(result),
             }
+        )
+        print(
+            "RA_H_TURN="
+            + json.dumps(
+                {"scenario": name, "turn_number": index, "turn": transcript[-1]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            ),
+            flush=True,
         )
         history.append(AIMessage(content=result.reply))
         active_task = result.active_task

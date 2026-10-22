@@ -37,6 +37,8 @@ from app.services.agent_v2.state_rules import (
     apply_reschedule_service_change,
     apply_reschedule_time_change,
     attach_option_snapshot,
+    bind_verified_booking_package,
+    invalidate_booking_package_selection,
     invalidate_booking_slot_selection,
     preserve_task_for_side_read,
     record_booking_commercial_basis_presented,
@@ -711,6 +713,31 @@ def _mark_selected_or_ready(state: ActiveTaskState, step: PlanStep) -> ActiveTas
         return state
     selected_ref = step.facts.get("selected_option_ref")
     if isinstance(state, BookingTaskState):
+        if step.facts.get("choice_purpose") == "package":
+            selected_option = step.facts.get("selected_option")
+            payload = selected_option.get("payload") if isinstance(selected_option, dict) else None
+            if not isinstance(payload, dict):
+                return state
+            package_id = payload.get("package_id")
+            service_id = payload.get("service_id")
+            device_key = payload.get("device_key")
+            if package_id in (None, ""):
+                return state
+            if (
+                state.constraints.service_id is not None
+                and str(service_id or "") != str(state.constraints.service_id)
+            ):
+                return state
+            if (
+                state.constraints.device_key is not None
+                and str(device_key or "") != str(state.constraints.device_key)
+            ):
+                return state
+            return bind_verified_booking_package(
+                state,
+                package_id=str(package_id),
+                device_key=str(device_key) if device_key not in (None, "") else None,
+            )
         if selected_ref in (None, ""):
             return state
         if (
@@ -863,12 +890,95 @@ def apply_step_state(
                 for row in rows
             )
 
+    if (
+        isinstance(current, BookingTaskState)
+        and current.constraints.package_usage == "use_existing"
+        and step.facts.get("booking_commercial_basis_step") is True
+        and reads is not None
+    ):
+        package_result = next(
+            (
+                result
+                for result in reads.results
+                if result.kind == "customer_packages" and result.ok
+            ),
+            None,
+        )
+        if package_result is not None:
+            rows = package_result.payload.get("packages")
+            candidates = (
+                [
+                    dict(row)
+                    for row in rows
+                    if isinstance(row, dict)
+                    and (row.get("id") or row.get("package_id")) not in (None, "")
+                ]
+                if isinstance(rows, list)
+                else []
+            )
+            if len(candidates) == 1:
+                row = candidates[0]
+                package_id = str(row.get("id") or row.get("package_id"))
+                device_key = row.get("laser_device_key") or row.get("device_key")
+                current = bind_verified_booking_package(
+                    current,
+                    package_id=package_id,
+                    device_key=(
+                        str(device_key) if device_key not in (None, "") else None
+                    ),
+                )
+            else:
+                current = invalidate_booking_package_selection(current)
+                if len(candidates) > 1:
+                    choices = [
+                        OptionChoice(
+                            ref=f"package-{index}",
+                            label=str(row.get("name") or f"Package {index}"),
+                            payload={
+                                "package_id": str(row.get("id") or row.get("package_id")),
+                                "service_id": str(row.get("service_id")),
+                                **(
+                                    {
+                                        "device_key": str(
+                                            row.get("laser_device_key")
+                                            or row.get("device_key")
+                                        )
+                                    }
+                                    if (
+                                        row.get("laser_device_key")
+                                        or row.get("device_key")
+                                    )
+                                    not in (None, "")
+                                    else {}
+                                ),
+                            },
+                        )
+                        for index, row in enumerate(candidates, start=1)
+                    ]
+                    selected = attach_option_snapshot(
+                        current,
+                        snapshot_id=(
+                            f"{turn_id}:{step.operation_index}:package:{current.version + 1}"
+                        ),
+                        purpose="package",
+                        choices=choices,
+                        created_at=now,
+                        expires_at=now + _OPTION_TTL,
+                    )
+                    if isinstance(selected, BookingTaskState):
+                        current = selected
+
     if isinstance(current, BookingTaskState) and commercial_read_verified:
         commercial_key = step.facts.get("commercial_basis_key")
-        if not isinstance(commercial_key, str) or not commercial_key:
-            path = "package" if current.constraints.package_usage == "use_existing" else "standalone"
+        if current.constraints.package_usage == "use_existing":
             commercial_key = (
-                f"{current.constraints.service_id}|{current.constraints.device_key or 'none'}|{path}"
+                f"{current.constraints.service_id}|{current.constraints.device_key or 'none'}|package"
+                if current.constraints.service_id is not None
+                else None
+            )
+        elif not isinstance(commercial_key, str) or not commercial_key:
+            commercial_key = (
+                f"{current.constraints.service_id}|{current.constraints.device_key or 'none'}|standalone"
                 if current.constraints.service_id is not None
                 else None
             )

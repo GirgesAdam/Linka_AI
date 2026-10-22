@@ -532,11 +532,14 @@ def cancel_patient_package_with_refund(
     workspace_id: UUID,
     package_id: UUID,
     reason: str,
-    created_by_user_id: UUID,
+    created_by_user_id: UUID | None,
     standalone_session_price_minor_at_purchase: int | None = None,
     settlement_target_minor: int | None = None,
     payment_method: str = "cash",
     idempotency_key: str | None = None,
+    actor_type: ActivityActorType = "staff",
+    require_reversible_unpaid: bool = False,
+    expected_patient_id: UUID | None = None,
 ) -> tuple[PatientPackage, int, int, int, int, int, int, list[PaymentTransaction]]:
     """Cancel a package and settle the consumed value before refunding unused value.
 
@@ -549,13 +552,42 @@ def cancel_patient_package_with_refund(
     reason = reason.strip()
     if not reason:
         raise PackageOperationError("Refund reason cannot be empty.")
-    try:
-        require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
-    except ClinicIntegrationAuthorityError as exc:
-        raise PackageOperationError(str(exc)) from exc
-
     package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
     reserved, consumed = _usage_totals(db, workspace_id=workspace_id, package_id=package.id)
+    if require_reversible_unpaid:
+        payments, refunds = _package_financial_rows(
+            db, workspace_id=workspace_id, package=package, for_update=True
+        )
+        any_usage = db.scalar(
+            select(PackageUsage.id)
+            .where(
+                PackageUsage.workspace_id == workspace_id,
+                PackageUsage.patient_package_id == package.id,
+            )
+            .limit(1)
+        )
+        if (
+            (expected_patient_id is not None and package.patient_id != expected_patient_id)
+            or _effective_status(package) != "active"
+            or package.purchase_transaction_id is not None
+            or package.origin_appointment_id is not None
+            or reserved != 0
+            or consumed != 0
+            or any_usage is not None
+            or payments
+            or refunds
+            or settlement_target_minor not in (None, 0)
+        ):
+            raise PackageOperationError(
+                "AI recovery can only cancel the exact recent active package when it is unpaid, "
+                "unused, unreserved, and has no appointment/service effect."
+            )
+        settlement_target_minor = 0
+    else:
+        try:
+            require_tia_workspace_domain_write(db, workspace_id=workspace_id, domain="payments")
+        except ClinicIntegrationAuthorityError as exc:
+            raise PackageOperationError(str(exc)) from exc
     if package.opening_sessions_remaining is not None:
         if not package.sessions_total_known:
             raise PackageOperationError(
@@ -821,12 +853,16 @@ def cancel_patient_package_with_refund(
     record_activity_event(
         db,
         workspace_id=workspace_id,
-        actor_type="staff",
+        actor_type=actor_type,
         actor_user_id=created_by_user_id,
         action="package.cancelled_refund",
         entity_type="patient_package",
         entity_id=package.id,
-        summary="Package cancelled and unused value refunded",
+        summary=(
+            "Package cancelled after reversible AI correction"
+            if require_reversible_unpaid
+            else "Package cancelled and unused value refunded"
+        ),
         metadata={
             "consumed_sessions": consumed,
             "released_reservations": reserved,

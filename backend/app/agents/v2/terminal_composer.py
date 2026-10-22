@@ -102,6 +102,7 @@ _DEFAULT_FACT_KEYS_BY_GOAL: dict[str, tuple[str, ...]] = {
         "doctor_name",
     ),
     "package_purchased": ("package_name",),
+    "package_cancelled": (),
     "pulse_pack_purchased": ("pulses_count", "device_name"),
     "follow_up_created": ("follow_up_at",),
     "marketing_updated": ("marketing_consent",),
@@ -132,6 +133,11 @@ _ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
         "plain": "تمت إضافة الباكدج لحسابك",
         "warm": "الباكدج اتضافت لحسابك",
         "friendly": "ضفنالك الباكدج على حسابك",
+    },
+    "package_cancelled": {
+        "plain": "تم إلغاء الباكدج",
+        "warm": "الباكدج اتلغت",
+        "friendly": "لغينالك الباكدج",
     },
     "pulse_pack_purchased": {
         "plain": "تمت إضافة باقة الـPulses لحسابك",
@@ -192,6 +198,16 @@ _ALREADY_COMPLETED_ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
         "warm": "ميعادك ملغي بالفعل",
         "friendly": "ميعادك متلغي بالفعل",
     },
+    "buy_package": {
+        "plain": "الباكدج مضافة لحسابك بالفعل",
+        "warm": "الباكدج موجودة على حسابك بالفعل",
+        "friendly": "الباكدج متضافة عندك بالفعل",
+    },
+    "cancel_package": {
+        "plain": "الباكدج ملغاة بالفعل",
+        "warm": "الباكدج اتلغت بالفعل",
+        "friendly": "الباكدج متلغية بالفعل",
+    },
 }
 
 _ALREADY_COMPLETED_ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
@@ -210,6 +226,16 @@ _ALREADY_COMPLETED_ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
         "warm": "Your appointment is already cancelled",
         "friendly": "Your appointment was already cancelled",
     },
+    "buy_package": {
+        "plain": "The package is already on your account",
+        "warm": "Your package is already on your account",
+        "friendly": "The package is already in place",
+    },
+    "cancel_package": {
+        "plain": "The package is already cancelled",
+        "warm": "Your package is already cancelled",
+        "friendly": "The package was already cancelled",
+    },
 }
 
 _FAILED_ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
@@ -220,6 +246,7 @@ _FAILED_ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
         "cancellation_completed": "لم يتم إلغاء الموعد",
         "appointment_confirmed": "لم يتم تأكيد الموعد",
         "package_purchased": "لم تتم إضافة الباكدج للحساب",
+        "package_cancelled": "لم يتم إلغاء الباكدج",
         "pulse_pack_purchased": "لم تتم إضافة باقة الـPulses للحساب",
         "follow_up_created": "لم يتم تسجيل المتابعة",
         "marketing_updated": "لم يتم تحديث تفضيلات التواصل التسويقي",
@@ -234,6 +261,7 @@ _FAILED_ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
         "cancellation_completed": "The cancellation was not completed",
         "appointment_confirmed": "The appointment confirmation was not completed",
         "package_purchased": "The package purchase was not completed",
+        "package_cancelled": "The package cancellation was not completed",
         "pulse_pack_purchased": "The Pulse pack purchase was not completed",
         "follow_up_created": "The follow-up was not scheduled",
         "marketing_updated": "The marketing preference update was not completed",
@@ -265,6 +293,11 @@ _ACTION_PHRASES_EN: dict[str, dict[ComposerStyle, str]] = {
         "plain": "The package has been added to your account",
         "warm": "Your package is now on your account",
         "friendly": "I’ve added the package to your account",
+    },
+    "package_cancelled": {
+        "plain": "The package has been cancelled",
+        "warm": "Your package is cancelled",
+        "friendly": "I’ve cancelled the package",
     },
     "pulse_pack_purchased": {
         "plain": "The Pulse pack has been added to your account",
@@ -732,7 +765,7 @@ def _action_phrase(
             if status == "confirmed":
                 phrase = phrases[unit.response_goal][style]
             else:
-                status_key = "pending" if status == "pending" else "neutral"
+                status_key = "neutral"
                 booking_phrases = (
                     _BOOKING_PHRASES_AR_BY_STATUS
                     if arabic

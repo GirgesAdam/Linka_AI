@@ -262,7 +262,16 @@ SEMANTIC PRINCIPLES
   of the same service, emit one package_compare operation for that service with
   execution_intent=informational. package_compare is read-only and grounds both the customer's owned
   package state and the single-session service price; do not emit package offers, booking, or purchase
-  merely because those actions are mentioned as alternatives.
+  merely because those actions are mentioned as alternatives. This operation is specifically for
+  owned-entitlement-vs-standalone comparison, not comparison between clinic package offers.
+- When the customer inspects or compares two or more session-package offers currently available from
+  the clinic, emit package_info with requested_package_details=[offers] and execution_intent=informational.
+  Preserve the canonical service when supplied, preserve package_sessions when the customer states a
+  session count, and preserve explicitly named offer devices as a candidate_mode=set when every named
+  device is grounded to supplied refs. Do not use package_compare or customer_packages for clinic-offer
+  comparison. If any explicitly named offer/service/device cannot be grounded, do not silently drop it,
+  substitute an owned package, or fabricate a ref; keep the explicit entity unresolved so Python can
+  clarify or report that the requested offer is unavailable.
 - When a request asks both about a past appointment outcome and its effect on the customer's
   owned-package balance or current owned-package state, preserve both concerns as separate semantic
   operations: customer_history for the historical event and package_info for current package state.
@@ -428,10 +437,12 @@ SEMANTIC PRINCIPLES
   the service entity null so Python can read the customer's actual appointments first.
 - package_info and refund_quote are reads. buy_package is a purchase request. For package_info,
   requested_package_details controls the exact read scope: owned means the customer's existing package
-  or remaining-session state; offers means session-package options currently available to purchase; use
-  both only when both concerns are explicitly requested. Set requested_package_details to exactly what
-  was requested. package_usage describes whether an appointment should consume an existing session
-  package, avoid an existing package, or leaves that question unspecified.
+  or remaining-session state; offers means session-package options currently available to purchase,
+  including comparing their canonical device/session/price facts; use both only when both concerns are
+  explicitly requested. Set requested_package_details to exactly what was requested. An offer-discovery
+  or offer-comparison question never implies customer ownership. package_usage describes whether an
+  appointment should consume an existing session package, avoid an existing package, or leaves that
+  question unspecified.
 - payment_info is a read-only general clinic payment-policy surface: how payment works, which payment
   methods the clinic accepts (for example cash/card/instant transfer when actually configured), when
   payment happens, and whether payment is required while making the booking. These are informational
@@ -488,9 +499,12 @@ SEMANTIC PRINCIPLES
   for a payment dispute: that remains a payment_dispute safety signal.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
-  package were cancelled, without authorizing cancellation now, interpret it as refund_quote. If the
-  customer is actually asking Linka to carry out cancellation/refund/termination now, interpret it as
-  human_support because the agent must not execute purchased-package cancellation.
+  package were cancelled, without authorizing cancellation now, interpret it as refund_quote. Use
+  cancel_package only when the latest customer turn explicitly rejects/removes a package from the
+  immediately preceding package discussion, and set continues_previous=true. Python will reconcile it
+  only against exact recent_verified_action package writes; if that package was never written, the
+  correction is a no-op. Any general/historical purchased-package cancellation, refund, or termination
+  request remains human_support; the Agent may not execute it.
 - clinic_info covers clinic-wide operational/informational questions such as location, contact details,
   working hours, non-payment policies, and comparisons between clinic devices when the question is not
   about one specific service. requested_clinic_details controls field-level disclosure: name for the
@@ -720,7 +734,19 @@ def merge_verified_read_context(
     operations = []
     presented = semantic_context.model_input.get("presented_availability")
     for operation in turn.operations:
-        if not operation.continues_previous:
+        verified_service_ref = raw.get("service_ref")
+        current_service = operation.entities.service
+        implicit_verified_booking_continuation = bool(
+            operation.type == "book"
+            and raw.get("operation_type") in {"availability", "book"}
+            and isinstance(verified_service_ref, str)
+            and verified_service_ref
+            and (
+                current_service is None
+                or current_service.ref == verified_service_ref
+            )
+        )
+        if not operation.continues_previous and not implicit_verified_booking_continuation:
             operations.append(operation)
             continue
         selection = operation.selection
@@ -763,6 +789,7 @@ def merge_verified_read_context(
                     set_key="doctor_refs",
                 ),
             ),
+            ("branch", _reference_from_verified(raw, single_key="branch_ref")),
             ("device", _reference_from_verified(raw, single_key="device_ref")),
         )
         for field, value in inherited:
@@ -1486,6 +1513,58 @@ def merge_verified_action_context(
         )
         for operation in turn.operations:
             if (
+                operation.continues_previous
+                and operation.type == "book"
+                and recent_appointment is not None
+                and not operation.fresh_task
+                and operation.active_task_relationship != "replace"
+                and operation.selection is None
+                and operation.entities.appointment is None
+                and isinstance(raw.get("time"), dict)
+                and raw["time"].get("mode") == "exact"
+                and operation.entities.time is not None
+                and operation.entities.time.mode == "exact"
+                and operation.entities.time.start_time not in (None, "")
+                and operation.entities.time.start_time != raw["time"].get("start_time")
+                and (
+                    operation.entities.date is None
+                    or not isinstance(raw.get("date"), dict)
+                    or (
+                        operation.entities.date.mode == raw["date"].get("mode") == "exact"
+                        and operation.entities.date.start_date == raw["date"].get("start_date")
+                    )
+                )
+                and (
+                    operation.entities.service is None
+                    or operation.entities.service.ref in (None, raw.get("service_ref"))
+                )
+                and (
+                    operation.entities.doctor is None
+                    or operation.entities.doctor.ref in (None, raw.get("doctor_ref"))
+                )
+                and (
+                    operation.entities.device is None
+                    or operation.entities.device.ref in (None, raw.get("device_ref"))
+                )
+                and str(operation.package_usage or "unspecified")
+                == str(raw.get("package_usage") or "unspecified")
+            ):
+                entities = operation.entities
+                if entities.date is None and isinstance(raw.get("date"), dict):
+                    entities = entities.model_copy(
+                        update={"date": DateConstraint.model_validate(raw["date"])}
+                    )
+                operation = operation.model_copy(
+                    update={
+                        "type": "reschedule",
+                        "entities": entities,
+                        "source_appointment": AppointmentSelector(
+                            appointment=recent_appointment
+                        ),
+                    }
+                )
+                changed = True
+            elif (
                 operation.continues_previous
                 and operation.type == "cancel_appointment"
                 and recent_appointment is not None

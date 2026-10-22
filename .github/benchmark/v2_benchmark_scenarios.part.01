@@ -23,7 +23,7 @@ def _two_services_same_visit(db: Session, workspace: Workspace) -> PreparedScena
             "required_rule=one_common_doctor_one_visit_one_appointment_time",
         ],
         messages=[
-            f"عايز أحجز {service_a.name} و{service_b.name} مع بعض في نفس الزيارة، اختار دكتور واحد يعمل الاتنين ووريني أقرب ميعاد مناسب قبل ما تحجز",
+            f"إيه أقرب ميعاد متاح أقدر أعمل فيه {service_a.name} و{service_b.name} مع بعض في نفس الزيارة مع دكتور واحد يعمل الاتنين؟",
             "تمام، احجز الخدمتين مع بعض في أقرب اختيار مناسب اللي لقيته، نفس الدكتور وفي زيارة واحدة",
         ],
     )
@@ -35,8 +35,7 @@ def _exact_time_availability(db: Session, workspace: Workspace) -> PreparedScena
     return PreparedScenario(
         patient=patient,
         messages=[
-            f"هل {service['name']} مع {doctor['name']} يوم {day.isoformat()} الساعة {when} متاح؟ أنا بس بسأل",
-            "تمام، متحجزش حاجة",
+            f"هل {service['name']} مع {doctor['name']} يوم {day.isoformat()} الساعة {when} متاح؟",
         ],
         observations=["expected_write_delta=0"],
     )
@@ -50,8 +49,7 @@ def _time_window_availability(db: Session, workspace: Workspace) -> PreparedScen
     return PreparedScenario(
         patient=patient,
         messages=[
-            f"عايز مواعيد {service['name']} مع {doctor['name']} يوم {day.isoformat()} من الساعة {start} لحد {end}",
-            "وريني الاختيارات جوه الفترة دي بس ومتحجزش",
+            f"إيه المواعيد المتاحة لـ{service['name']} مع {doctor['name']} يوم {day.isoformat()} من الساعة {start} لحد {end}؟",
         ],
         observations=["expected_write_delta=0"],
     )
@@ -80,8 +78,7 @@ def _nearest_available(db: Session, workspace: Workspace) -> PreparedScenario:
     return PreparedScenario(
         patient=patient_without_future(db, workspace),
         messages=[
-            f"إيه أقرب معاد متاح لـ{service.name}؟ أنا مش محدد يوم",
-            "قولي أقرب اختيار بس، من غير حجز",
+            f"إيه أقرب معاد متاح لـ{service.name}؟",
         ],
         observations=["expected_write_delta=0"],
     )
@@ -98,8 +95,8 @@ def _change_time_during_booking(db: Session, workspace: Workspace) -> PreparedSc
         patient=patient,
         observations=[f"initial_time={first_time}", f"changed_time={second_time}"],
         messages=[
-            f"أنا بفكر أحجز {service['name']} مع {doctor['name']} يوم {day.isoformat()} الساعة {first_time}، متحجزش لسه",
-            f"غيرت رأيي، خليها الساعة {second_time} بدل {first_time} واحجزها دلوقتي",
+            f"عايز أحجز {service['name']} مع {doctor['name']} يوم {day.isoformat()} الساعة {first_time}",
+            f"لا، خليها الساعة {second_time} بدل {first_time}",
         ],
     )
 
@@ -116,4 +113,4 @@ def _change_doctor_during_booking(db: Session, workspace: Workspace) -> Prepared
         observations=[f"doctor_a={doctor_a['name']}", f"doctor_b={doctor_b['name']}"],
         messages=[
             f"عايز أحجز {service['name']} مع {doctor_a['name']} يوم {day.isoformat()}، إيه المتاح؟",
-            f"غير الدكتور وخليه {doctor_b['name']} في نفس اليوم، وريني مواعيده قبل م�
+            f"غير الدكتور وخليه {doctor_b['name']} في نفس اليوم، إيه مواعيده المتاحة

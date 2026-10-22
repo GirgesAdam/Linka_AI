@@ -103,6 +103,57 @@ def _fact_map(unit: CustomerResponseUnit) -> dict[str, ResponseFact]:
     return {fact.key: fact for fact in unit.facts}
 
 
+def test_package_correction_noop_is_deterministic_without_cancellation_success(monkeypatch) -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="social_ack",
+        facts={
+            "package_correction_noop": True,
+            "rejected_package_was_not_created": True,
+        },
+    )
+    contract = build_customer_response_contract([outcome])
+
+    assert contract.units[0].action_truth is None
+    monkeypatch.setattr(
+        responder,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("no-op correction must stay deterministic")),
+    )
+    text, source = compose_v2_customer_reply(
+        clinic_name="Linka Test Clinic",
+        timezone_name="Africa/Cairo",
+        local_now=NOW,
+        history=[HumanMessage(content="No, keep only the package that was actually registered.")],
+        outcomes=[outcome],
+    )
+
+    assert source == "deterministic:mixed-typed-contract"
+    assert text == "Okay, we'll keep only the packages that were actually registered."
+    assert "cancel" not in text.lower()
+
+
+@pytest.mark.parametrize("action", ["buy_package", "cancel_package"])
+def test_package_recent_action_acknowledgment_has_deterministic_copy(action: str) -> None:
+    outcome = TurnOutcome(
+        status="answered",
+        response_goal="social_ack",
+        facts={
+            "acknowledgment": {
+                "action": action,
+                "already_completed": True,
+            }
+        },
+    )
+    contract = build_customer_response_contract([outcome])
+
+    assert contract.units[0].action_truth is not None
+    assert contract.units[0].action_truth.action == action
+    assert contract.units[0].action_truth.succeeded is True
+    assert deterministic_terminal_fallback(contract, arabic=True)
+    assert deterministic_terminal_fallback(contract, arabic=False)
+
+
 @pytest.mark.parametrize(
     ("goal", "expected_action"),
     [
@@ -111,6 +162,7 @@ def _fact_map(unit: CustomerResponseUnit) -> dict[str, ResponseFact]:
         ("cancellation_completed", "cancel_appointment"),
         ("appointment_confirmed", "confirm_appointment"),
         ("package_purchased", "buy_package"),
+        ("package_cancelled", "cancel_package"),
         ("pulse_pack_purchased", "buy_pulse_pack"),
         ("follow_up_created", "follow_up"),
         ("marketing_updated", "marketing_update"),

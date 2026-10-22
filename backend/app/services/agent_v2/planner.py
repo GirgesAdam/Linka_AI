@@ -60,6 +60,7 @@ WriteKind = Literal[
     "cancel_appointment",
     "reschedule",
     "buy_package",
+    "cancel_package",
     "buy_pulse_pack",
     "follow_up",
     "marketing_update",
@@ -689,12 +690,19 @@ def _plan_select_active(index: int, operation: TurnOperation, context: PlannerCo
                                 else "service_catalog"
                             ),
                             parameters={
-                                key: value
-                                for key, value in {
-                                    "service_id": state.constraints.service_id,
-                                    "device_key": state.constraints.device_key,
-                                }.items()
-                                if value not in (None, "")
+                                **{
+                                    key: value
+                                    for key, value in {
+                                        "service_id": state.constraints.service_id,
+                                        "device_key": state.constraints.device_key,
+                                    }.items()
+                                    if value not in (None, "")
+                                },
+                                **(
+                                    {"usable_only": True}
+                                    if state.constraints.package_usage == "use_existing"
+                                    else {}
+                                ),
                             },
                         )
                     ],
@@ -855,6 +863,15 @@ def _informational_write_read(
             operation_type=operation.type,
             disposition="read",
             reads=[ReadRequest(kind="package_offers", parameters=params)],
+            response_goal="package_information",
+            facts=params,
+        )
+    if operation.type == "cancel_package":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="read",
+            reads=[ReadRequest(kind="customer_packages", parameters=params)],
             response_goal="package_information",
             facts=params,
         )
@@ -1317,9 +1334,16 @@ def _plan_operation(
                         else "service_catalog"
                     ),
                     parameters={
-                        key: params[key]
-                        for key in ("service_id", "device_key")
-                        if key in params
+                        **{
+                            key: params[key]
+                            for key in ("service_id", "device_key")
+                            if key in params
+                        },
+                        **(
+                            {"usable_only": True}
+                            if operation.package_usage == "use_existing"
+                            else {}
+                        ),
                     },
                 )
             ]
@@ -1572,6 +1596,17 @@ def _plan_operation(
 
     if operation.type == "package_info":
         details = set(operation.requested_package_details) or {"owned"}
+        if "offers" in details:
+            for field, set_key in (("service", "service_ids"), ("device", "device_keys")):
+                entity = getattr(operation.entities, field)
+                if entity is None or not (entity.text or "").strip():
+                    continue
+                if entity.ref is None and not entity.candidate_refs:
+                    return _clarify(index=index, operation=operation, field=field)
+                if entity.candidate_mode == "set":
+                    resolved_set = params.get(set_key)
+                    if not isinstance(resolved_set, list) or len(resolved_set) < 2:
+                        return _clarify(index=index, operation=operation, field=field)
         reads: list[ReadRequest] = []
         if "owned" in details:
             reads.append(ReadRequest(kind="customer_packages", parameters=params))
@@ -1594,6 +1629,21 @@ def _plan_operation(
             reads=[ReadRequest(kind="package_offers", parameters=params)],
             write_intent=WriteIntent(kind="buy_package", authorized=True, parameters=params),
             response_goal="package_purchased",
+            facts=params,
+        )
+
+    if operation.type == "cancel_package":
+        return PlanStep(
+            operation_index=index,
+            operation_type=operation.type,
+            disposition="write_ready",
+            write_intent=WriteIntent(
+                kind="cancel_package",
+                authorized=True,
+                parameters=params,
+                requires_verification=False,
+            ),
+            response_goal="package_cancelled",
             facts=params,
         )
 

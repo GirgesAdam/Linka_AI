@@ -305,6 +305,11 @@ def record_booking_commercial_basis_presented(
     if state.derived.commercial_basis_presented_key == commercial_key:
         return state
     legacy_device = state.constraints.device_key
+    preserved_package_snapshot = (
+        state.option_snapshot.model_copy(update={"task_version": state.version + 1})
+        if state.option_snapshot is not None and state.option_snapshot.purpose == "package"
+        else None
+    )
     return state.model_copy(
         update={
             "status": "collecting",
@@ -316,7 +321,7 @@ def record_booking_commercial_basis_presented(
             ),
             "version": state.version + 1,
             "proposal": None,
-            "option_snapshot": None,
+            "option_snapshot": preserved_package_snapshot,
         }
     )
 
@@ -435,6 +440,73 @@ def apply_verified_booking_slot_selection(
                 }
             ),
             "version": state.version + 1,
+        }
+    )
+
+
+def bind_verified_booking_package(
+    state: BookingTaskState,
+    *,
+    package_id: str,
+    device_key: str | None,
+) -> BookingTaskState:
+    """Bind one exact server-verified patient package to the booking task."""
+    if state.constraints.package_usage != "use_existing" or not package_id:
+        return state
+    if (
+        state.constraints.device_key is not None
+        and device_key is not None
+        and state.constraints.device_key != device_key
+    ):
+        return state
+    current = state
+    if current.constraints.device_key is None and device_key is not None:
+        current = apply_booking_device_change(current, device_key=device_key)
+    if (
+        current.derived.selected_package_id == package_id
+        and current.derived.package_validated
+    ):
+        return current
+    return current.model_copy(
+        update={
+            "status": "collecting",
+            "derived": current.derived.model_copy(
+                update={
+                    "selected_package_id": package_id,
+                    "package_validated": True,
+                }
+            ),
+            "proposal": None,
+            "option_snapshot": None,
+            "version": state.version + 1,
+        }
+    )
+
+
+def invalidate_booking_package_selection(state: BookingTaskState) -> BookingTaskState:
+    """Clear stale package authority while preserving unrelated booking state."""
+    package_snapshot = (
+        state.option_snapshot is not None and state.option_snapshot.purpose == "package"
+    )
+    if (
+        state.derived.selected_package_id is None
+        and not state.derived.package_validated
+        and not package_snapshot
+    ):
+        return state
+    next_version = state.version + 1
+    preserved_snapshot = (
+        state.option_snapshot.model_copy(update={"task_version": next_version})
+        if state.option_snapshot is not None and not package_snapshot
+        else None
+    )
+    return state.model_copy(
+        update={
+            "status": "collecting",
+            "derived": _booking_derived(state, clear_package=True),
+            "proposal": None,
+            "option_snapshot": preserved_snapshot,
+            "version": next_version,
         }
     )
 

@@ -14,7 +14,7 @@ from app.agents.v2.turn_contract import Selection, TimeConstraint
 from app.core.config import settings
 
 
-def _context(*, selected: str | None = None) -> dict[str, object]:
+def _context(*, selected: str | None = None, has_more: bool | None = None) -> dict[str, object]:
     value: dict[str, object] = {
         "availability_reference_options": [
             {
@@ -48,6 +48,8 @@ def _context(*, selected: str | None = None) -> dict[str, object]:
     }
     if selected is not None:
         value["last_selected_option_ref"] = selected
+    if has_more is not None:
+        value["availability_presentation_has_more"] = has_more
     return value
 
 
@@ -129,7 +131,7 @@ def test_presented_option_ref_normalizes_only_redundant_provider_coordinates() -
 
 
 def test_model_input_contains_only_displayed_safe_options_and_opaque_refs() -> None:
-    context = _context(selected="opt_1")
+    context = _context(selected="opt_1", has_more=True)
     context["time"] = {
         "mode": "exact",
         "start_time": "18:00",
@@ -143,6 +145,7 @@ def test_model_input_contains_only_displayed_safe_options_and_opaque_refs() -> N
     )
     payload = json.loads(str(messages[-1].content))
     assert payload["last_selected_option_ref"] == "opt_1"
+    assert payload["availability_presentation_has_more"] is True
     assert payload["current_time_constraint"] == {
         "mode": "exact",
         "start_time": "18:00",
@@ -250,3 +253,147 @@ def test_primary_schema_failure_can_recover_on_fallback_model(
     assert result.decision.option_ref == "opt_2"
     assert result.model_name == "fallback-test"
     assert result.structured_output_error is True
+
+
+def test_more_availability_contract_does_not_require_selected_option_anchor() -> None:
+    assert "request for more availability does" in resolver._SYSTEM_PROMPT
+    assert "not require last_selected_option_ref" in resolver._SYSTEM_PROMPT
+    assert "that meaning is refresh_availability" in resolver._SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("customer_text", ["?? ???? ?????", "??? ????? ??? ????"])
+def test_more_availability_paraphrases_can_route_to_refresh_without_anchor(
+    monkeypatch: pytest.MonkeyPatch, customer_text: str
+) -> None:
+    monkeypatch.setattr(settings, "openai_model", "primary-test")
+    monkeypatch.setattr(settings, "openai_fallback_model", "")
+    monkeypatch.setattr(resolver, "build_realtime_interpreter_model", lambda: object())
+    monkeypatch.setattr(resolver, "build_realtime_interpreter_fallback_model", lambda: None)
+    monkeypatch.setattr(
+        resolver,
+        "invoke_typed_structured_output",
+        lambda **_kwargs: ReferenceDecision(action="refresh_availability", option_ref=None),
+    )
+
+    result = interpret_availability_reference_turn(
+        latest_customer_text=customer_text,
+        availability_context=_context(selected=None),
+    )
+
+    assert result.decision == ReferenceDecision(action="refresh_availability", option_ref=None)
+
+
+def _interpret_mocked_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    decision: ReferenceDecision,
+    context: dict[str, object],
+    customer_text: str,
+):
+    monkeypatch.setattr(settings, "openai_model", "primary-test")
+    monkeypatch.setattr(settings, "openai_fallback_model", "")
+    monkeypatch.setattr(resolver, "build_realtime_interpreter_model", lambda: object())
+    monkeypatch.setattr(resolver, "build_realtime_interpreter_fallback_model", lambda: None)
+    monkeypatch.setattr(
+        resolver,
+        "invoke_typed_structured_output",
+        lambda **_kwargs: decision,
+    )
+    return interpret_availability_reference_turn(
+        latest_customer_text=customer_text,
+        availability_context=context,
+    )
+
+
+def test_d1_relative_next_without_anchor_and_more_results_normalizes_to_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _interpret_mocked_decision(
+        monkeypatch,
+        decision=ReferenceDecision(
+            action="clarify",
+            option_ref=None,
+            relative_direction="next",
+        ),
+        context=_context(has_more=True),
+        customer_text="show the following availability results",
+    )
+
+    assert result.decision.action == "refresh_availability"
+    assert result.decision.relative_direction == "next"
+    assert result.decision.option_ref is None
+
+
+def test_d2_semantic_next_paraphrase_cannot_guess_displayed_option_without_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _interpret_mocked_decision(
+        monkeypatch,
+        decision=ReferenceDecision(
+            action="select_presented_option",
+            option_ref="opt_2",
+            relative_direction="next",
+        ),
+        context=_context(has_more=True),
+        customer_text="what availability comes after these",
+    )
+
+    assert result.decision.action == "refresh_availability"
+    assert result.decision.option_ref is None
+    assert result.decision.selection_scope == "none"
+
+
+def test_d3_relative_next_with_selected_anchor_preserves_relative_option_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _interpret_mocked_decision(
+        monkeypatch,
+        decision=ReferenceDecision(
+            action="select_presented_option",
+            option_ref="opt_2",
+            relative_direction="next",
+        ),
+        context=_context(selected="opt_1", has_more=True),
+        customer_text="the one after my selected option",
+    )
+
+    assert result.decision.action == "select_presented_option"
+    assert result.decision.option_ref == "opt_2"
+    assert result.decision.relative_direction == "next"
+
+
+def test_d4_relative_next_without_anchor_and_no_more_results_uses_exhausted_refresh_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _interpret_mocked_decision(
+        monkeypatch,
+        decision=ReferenceDecision(
+            action="clarify",
+            option_ref=None,
+            relative_direction="next",
+        ),
+        context=_context(has_more=False),
+        customer_text="show whatever comes after the displayed results",
+    )
+
+    assert result.decision.action == "refresh_availability"
+    assert result.decision.relative_direction == "next"
+    assert result.decision.option_ref is None
+
+
+def test_d5_genuine_clarification_without_relative_navigation_remains_clarification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _interpret_mocked_decision(
+        monkeypatch,
+        decision=ReferenceDecision(
+            action="clarify",
+            option_ref=None,
+            relative_direction="none",
+        ),
+        context=_context(has_more=True),
+        customer_text="ambiguous displayed option reference",
+    )
+
+    assert result.decision.action == "clarify"
+    assert result.decision.relative_direction == "none"

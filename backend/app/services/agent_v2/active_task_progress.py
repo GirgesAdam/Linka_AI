@@ -743,11 +743,19 @@ def _constraint_parameters(state: BookingTaskState | RescheduleTaskState) -> dic
     dumped = constraints.model_dump(mode="json")
     dumped.pop("pulse_usage", None)
     dumped.pop("time_clock_source", None)
-    return {
+    params = {
         key: value
         for key, value in dumped.items()
         if value not in (None, "", {}, [])
     }
+    if (
+        isinstance(state, BookingTaskState)
+        and state.constraints.package_usage == "use_existing"
+        and state.derived.selected_package_id is not None
+        and state.derived.package_validated
+    ):
+        params["package_id"] = state.derived.selected_package_id
+    return params
 
 
 def _clock_resolution_facts(
@@ -1299,9 +1307,16 @@ def _booking_progress(
                     else "service_catalog"
                 ),
                 parameters={
-                    key: params[key]
-                    for key in ("service_id", "device_key")
-                    if key in params and (key != "device_key" or main_requires_device)
+                    **{
+                        key: params[key]
+                        for key in ("service_id", "device_key")
+                        if key in params and (key != "device_key" or main_requires_device)
+                    },
+                    **(
+                        {"usable_only": True}
+                        if state.constraints.package_usage == "use_existing"
+                        else {}
+                    ),
                 },
             )
         reads = [commercial_read]

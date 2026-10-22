@@ -24,6 +24,7 @@ ReferenceAction = Literal[
     "normal",
 ]
 ReferenceSelectionScope = Literal["none", "doctor", "device"]
+ReferenceRelativeDirection = Literal["none", "next", "previous"]
 
 
 def _require_all_schema_fields(schema: dict) -> None:
@@ -41,6 +42,13 @@ class ReferenceDecision(BaseModel):
     )
 
     action: ReferenceAction
+    relative_direction: ReferenceRelativeDirection = Field(
+        default="none",
+        description=(
+            "Semantic next/previous relation over the currently presented availability navigation only. "
+            "Use none when there is no such relation. This is not an option identity or write authority."
+        ),
+    )
     option_ref: str | None = Field(
         default=None,
         description=(
@@ -111,7 +119,10 @@ _SYSTEM_PROMPT = """You are Linka's narrow semantic resolver for the latest avai
 Return only the required structured schema. Do not answer the customer and do not perform any write.
 
 You receive the exact availability items Linka most recently displayed, each with an opaque option_ref,
-and an optional last_selected_option_ref. Understand the customer's latest message semantically.
+an optional last_selected_option_ref, and availability_presentation_has_more from server-owned presentation state.
+Understand the customer's latest message semantically. Always set relative_direction=next or previous when the
+latest turn semantically navigates relative to the presented availability sequence/results; otherwise set none.
+Calendar/date wording such as changing to another week is a search-scope change, not relative_direction.
 Do not use keyword matching rules and never invent an option_ref. If pending_exact_time is supplied, it is a
 server-validated clock explicitly expressed on the immediately unresolved selection path. A later doctor/device
 selection may use it to finish selecting one current displayed window; a new explicit clock overrides it.
@@ -128,7 +139,10 @@ Actions:
   Do not infer a scope dimension merely because the displayed option happens to contain one.
   For a compressed window plus a customer clock, exact_time may carry the semantically understood 24-hour
   clock; Python validates it against the current server-owned exact slots.
-- refresh_availability: the customer wants Linka to check availability again / refresh the same search.
+- refresh_availability: the customer wants Linka to check availability again / refresh the same search, OR asks
+  for additional/next availability results beyond the items already displayed. A request for more availability does
+  not require last_selected_option_ref; it continues the verified search scope and lets existing pagination exclude
+  already-presented windows. This is different from selecting the next displayed option relative to a chosen anchor.
 - new_search: the customer changes or starts an availability search scope such as doctor/service/date/time.
   This includes asking for the nearest available appointment/time and asking for availability earlier or later
   than an authoritative exact time. These are availability-timeline searches, not previous/next displayed-option
@@ -138,8 +152,10 @@ Actions:
   not change time, use time_constraint=null. An explicit
   clock time that does not match any displayed option is a time change/new search, not an ambiguous
   displayed-option reference.
-- clarify: the customer is referring to the displayed options but the intended option cannot be determined
-  safely, including a presented-option-relative request with no usable selected-option anchor. Also clarify an
+- clarify: the customer is referring to one of the displayed options but the intended option cannot be determined
+  safely, including a relative option-selection request with no usable selected-option anchor. Do not use clarify
+  merely because a request for additional availability has no selected anchor; that meaning is refresh_availability.
+  Also clarify an
   earlier/later availability-timeline request when there is no authoritative exact clock anchor. A range/window
   in current_time_constraint is not an exact anchor and must not be converted into one of its boundaries or a
   displayed option. If the customer explicitly expressed a clock and
@@ -218,6 +234,11 @@ def _messages(
     payload = {
         "last_presented_availability_options": options,
         "last_selected_option_ref": availability_context.get("last_selected_option_ref"),
+        "availability_presentation_has_more": (
+            availability_context.get("availability_presentation_has_more")
+            if isinstance(availability_context.get("availability_presentation_has_more"), bool)
+            else None
+        ),
         "current_time_constraint": current_time_constraint,
         "pending_exact_time": availability_context.get("pending_exact_time"),
         "latest_customer_message": latest_customer_text,
@@ -270,6 +291,27 @@ def interpret_availability_reference_turn(
     for model_name, model in attempts:
         try:
             decision = _invoke_twice(model, messages)
+            last_selected = availability_context.get("last_selected_option_ref")
+            has_more = availability_context.get("availability_presentation_has_more")
+            if (
+                decision.relative_direction == "next"
+                and decision.action in {
+                    "select_presented_option",
+                    "refresh_availability",
+                    "clarify",
+                }
+                and not (isinstance(last_selected, str) and last_selected)
+                and isinstance(has_more, bool)
+            ):
+                decision = decision.model_copy(
+                    update={
+                        "action": "refresh_availability",
+                        "option_ref": None,
+                        "exact_time": None,
+                        "time_constraint": None,
+                        "selection_scope": "none",
+                    }
+                )
         except StructuredOutputError:
             saw_structured_error = True
             continue

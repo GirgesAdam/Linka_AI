@@ -211,3 +211,83 @@ def test_no_previous_verified_availability_cannot_continue_cursor() -> None:
         plan,
         None,
     )
+
+
+def test_contextless_show_more_shape_still_requires_scope_clarification() -> None:
+    context = _base_context()
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(),
+                continues_previous=True,
+            )
+        ]
+    )
+    merged = merge_verified_read_context(understanding, context)
+    plan = plan_turn(merged, PlannerContext(semantic_context=context, active_task=None, now=NOW))
+
+    assert plan.steps[0].disposition == "clarify"
+    assert plan.steps[0].clarification_field == "service"
+
+
+def test_d1_refresh_reuses_verified_scope_and_excludes_previously_presented_windows() -> None:
+    contract = build_customer_response_contract([_outcome()])
+    first_page, first_keys, first_more = _paged_contract(
+        contract,
+        shown_window_keys=set(),
+    )
+    assert first_keys
+    assert first_more == {0: True}
+
+    understanding, plan = _same_scope_plan()
+    previous = {
+        AVAILABILITY_PRESENTATION_SCOPE_KEY: availability_scope_key(PARAMETERS),
+        "availability_presented_window_keys": sorted(first_keys),
+    }
+    assert plan.steps[0].reads[0].kind == "availability"
+    assert plan.steps[0].reads[0].parameters == PARAMETERS
+    assert _availability_presentation_continuation(understanding, plan, previous)
+
+    second_page, second_keys, _second_more = _paged_contract(
+        contract,
+        shown_window_keys=set(first_keys),
+    )
+    first_windows = next(
+        fact.value for fact in first_page.units[0].facts if fact.key == "availability_windows"
+    )
+    second_windows = next(
+        fact.value for fact in second_page.units[0].facts if fact.key == "availability_windows"
+    )
+    assert set(first_keys).isdisjoint(second_keys)
+    assert {row["start_local"] for row in first_windows}.isdisjoint(
+        {row["start_local"] for row in second_windows}
+    )
+
+
+def test_d4_exhausted_refresh_cursor_does_not_repeat_or_fabricate_slots() -> None:
+    contract = build_customer_response_contract([_outcome()])
+    shown: set[str] = set()
+    for _ in range(3):
+        _page, keys, _has_more = _paged_contract(
+            contract,
+            shown_window_keys=shown,
+        )
+        assert keys
+        shown.update(keys)
+
+    exhausted, exhausted_keys, exhausted_more = _paged_contract(
+        contract,
+        shown_window_keys=shown,
+    )
+    text = deterministic_availability_fallback(
+        exhausted,
+        arabic=False,
+        has_more_by_unit=exhausted_more,
+        continuation=True,
+    )
+
+    assert exhausted_keys == []
+    assert exhausted_more == {0: False}
+    assert "There are no more available times on these dates." in text
+    assert all(f"{hour:02d}:00" not in text for hour in range(9, 21))

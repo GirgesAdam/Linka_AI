@@ -44,7 +44,10 @@ from app.services.appointment_operations import (
 )
 from app.services.crm_tasks import CRMTaskError, create_crm_task
 from app.services.package_offers import PackageOfferError, purchase_package_offer
-from app.services.patient_packages import PackageOperationError
+from app.services.patient_packages import (
+    PackageOperationError,
+    cancel_patient_package_with_refund,
+)
 from app.services.pulse_billing import (
     PulseBillingError,
     purchase_pulse_pack_offer,
@@ -425,6 +428,33 @@ def execute_write_ready_step(
                     "write_kind": intent.kind,
                     "patient_package_id": str(package.id),
                     "status": package.status,
+                    "amount_paid_minor": 0,
+                }
+            elif intent.kind == "cancel_package":
+                if parameters.get("_recent_package_recovery_verified") is not True:
+                    return _failure(
+                        write_kind=intent.kind,
+                        code="package_recovery_unverified",
+                        detail="Package recovery requires exact immediately recent verified package identity.",
+                        requires_human=True,
+                    )
+                cancelled = cancel_patient_package_with_refund(
+                    db,
+                    workspace_id=workspace.id,
+                    package_id=_uuid(parameters, "package_id"),
+                    reason="recent_verified_package_correction",
+                    created_by_user_id=None,
+                    settlement_target_minor=0,
+                    idempotency_key=idempotency_key,
+                    actor_type="ai",
+                    require_reversible_unpaid=True,
+                    expected_patient_id=patient.id,
+                )[0]
+                result = {
+                    "ok": True,
+                    "write_kind": intent.kind,
+                    "patient_package_id": str(cancelled.id),
+                    "status": cancelled.status,
                     "amount_paid_minor": 0,
                 }
             elif intent.kind == "buy_pulse_pack":

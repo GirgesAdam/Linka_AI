@@ -9,12 +9,8 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from langchain_openai import ChatOpenAI
-from sqlalchemy import create_engine, exists, func, select, text
-from sqlalchemy.orm import Session
-
-import scripts.run_live_agent_ux_review as base
 import app.services.agent_v2.live_chat as live_chat
+import scripts.run_live_agent_ux_review as base
 from app.agents.clinic_grounding import build_clinic_catalog
 from app.core.config import settings
 from app.integrations.clinic.base import AvailabilityRequest
@@ -22,9 +18,14 @@ from app.integrations.clinic.registry import get_clinic_adapter
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
+from app.models.payment_transaction import PaymentTransaction
+from app.models.pulse_billing import AppointmentPulseSettlement
 from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.patient_packages import list_patient_packages
+from langchain_openai import ChatOpenAI
+from sqlalchemy import create_engine, exists, func, select, text
+from sqlalchemy.orm import Session
 
 WORKSPACE_SLUG = "tia"
 REPORT = Path("artifacts/v2-realistic-benchmark.json")
@@ -42,6 +43,10 @@ class TurnRecord:
     traces: list[dict[str, Any]]
     outcomes: list[dict[str, Any]]
     state_after: dict[str, Any]
+    active_task: dict[str, Any] | None = None
+    pending_write: dict[str, Any] | None = None
+    verified_action_context: dict[str, Any] | None = None
+    pending_choice: dict[str, Any] | None = None
 
 
 @dataclass
@@ -176,7 +181,114 @@ def state(db: Session, workspace: Workspace, patient: Patient) -> dict[str, int]
         )
         or 0
     )
-    return {"appointments": appointments, "patient_packages": packages, "package_usages": usages}
+    active_appointments = int(
+        db.scalar(
+            select(func.count(Appointment.id)).where(
+                Appointment.workspace_id == workspace.id,
+                Appointment.patient_id == patient.id,
+                Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            )
+        )
+        or 0
+    )
+    usage_by_status = {}
+    for status in ("reserved", "consumed", "released"):
+        usage_by_status[status] = int(
+            db.scalar(
+                select(func.count(PackageUsage.id))
+                .join(
+                    PatientPackage,
+                    (PatientPackage.workspace_id == PackageUsage.workspace_id)
+                    & (PatientPackage.id == PackageUsage.patient_package_id),
+                )
+                .where(
+                    PackageUsage.workspace_id == workspace.id,
+                    PatientPackage.patient_id == patient.id,
+                    PackageUsage.status == status,
+                )
+            )
+            or 0
+        )
+    active_packages = int(
+        db.scalar(
+            select(func.count(PatientPackage.id)).where(
+                PatientPackage.workspace_id == workspace.id,
+                PatientPackage.patient_id == patient.id,
+                PatientPackage.status == "active",
+            )
+        )
+        or 0
+    )
+    cancelled_packages = int(
+        db.scalar(
+            select(func.count(PatientPackage.id)).where(
+                PatientPackage.workspace_id == workspace.id,
+                PatientPackage.patient_id == patient.id,
+                PatientPackage.status == "cancelled",
+            )
+        )
+        or 0
+    )
+    payments = int(
+        db.scalar(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_id == patient.id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        )
+        or 0
+    )
+    refunds = int(
+        db.scalar(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_id == patient.id,
+                PaymentTransaction.transaction_type == "refund",
+            )
+        )
+        or 0
+    )
+    settlement_transactions = int(
+        db.scalar(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_id == patient.id,
+                PaymentTransaction.reason.ilike("%settlement%"),
+            )
+        )
+        or 0
+    )
+    pulse_settlements = int(
+        db.scalar(
+            select(func.count(AppointmentPulseSettlement.id))
+            .join(
+                Appointment,
+                (Appointment.workspace_id == AppointmentPulseSettlement.workspace_id)
+                & (Appointment.id == AppointmentPulseSettlement.appointment_id),
+            )
+            .where(
+                AppointmentPulseSettlement.workspace_id == workspace.id,
+                Appointment.patient_id == patient.id,
+            )
+        )
+        or 0
+    )
+    return {
+        "appointments": appointments,
+        "appointments_active": active_appointments,
+        "patient_packages": packages,
+        "patient_packages_active": active_packages,
+        "patient_packages_cancelled": cancelled_packages,
+        "package_usages": usages,
+        "package_usages_reserved": usage_by_status["reserved"],
+        "package_usages_consumed": usage_by_status["consumed"],
+        "package_usages_released": usage_by_status["released"],
+        "payments": payments,
+        "refunds": refunds,
+        "settlement_transactions": settlement_transactions,
+        "settlements": pulse_settlements,
+    }
 
 
 def delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
@@ -207,6 +319,12 @@ def send(db: Session, workspace: Workspace, patient: Patient, message: str, conv
         traces=traces if isinstance(traces, list) else [],
         outcomes=outcomes if isinstance(outcomes, list) else [],
         state_after=state(db, workspace, patient),
+        active_task=jsonable(getattr(turn, "active_task", None)) if turn is not None else None,
+        pending_write=jsonable(getattr(turn, "pending_write", None)) if turn is not None else None,
+        verified_action_context=(
+            jsonable(getattr(turn, "verified_action_context", None)) if turn is not None else None
+        ),
+        pending_choice=jsonable(getattr(turn, "pending_choice", None)) if turn is not None else None,
     )
     return record, response.conversation_id
 
@@ -511,6 +629,12 @@ def execute_one(engine, name: str, topic: str) -> ScenarioResult:
     connection = engine.connect()
     outer = connection.begin()
     db = Session(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint")
+    result = ScenarioResult(name=name, topic=topic)
+    workspace: Workspace | None = None
+    prepared: PreparedScenario | None = None
+    before: dict[str, Any] = {}
+    before_appointments: set[UUID] = set()
+    before_packages: set[UUID] = set()
     try:
         workspace = db.scalar(select(Workspace).where(Workspace.slug == WORKSPACE_SLUG))
         if workspace is None:
@@ -519,31 +643,43 @@ def execute_one(engine, name: str, topic: str) -> ScenarioResult:
         before = state(db, workspace, prepared.patient)
         before_appointments = appointment_ids(db, workspace, prepared.patient)
         before_packages = package_ids(db, workspace, prepared.patient)
-        result = ScenarioResult(name=name, topic=topic, db_before=dict(before))
-        result.turns = run_messages(db, workspace, prepared.patient, prepared.messages)
+        result.db_before = dict(before)
+        conversation_id: UUID | None = None
+        for message in prepared.messages:
+            record, conversation_id = send(db, workspace, prepared.patient, message, conversation_id)
+            result.turns.append(record)
         if prepared.post is not None:
             prepared.post()
-        after = state(db, workspace, prepared.patient)
-        result.db_after = dict(after)
-        result.db_delta = delta(before, after)
-        observations = list(prepared.observations)
-        append_new_rows(
-            db,
-            workspace,
-            prepared.patient,
-            before_appointments,
-            before_packages,
-            observations,
-        )
-        result.observations = observations
-        return result
     except Exception as exc:
-        return ScenarioResult(name=name, topic=topic, error=f"{type(exc).__name__}: {exc}")
+        result.error = f"{type(exc).__name__}: {exc}"
     finally:
+        if workspace is not None and prepared is not None:
+            try:
+                after = state(db, workspace, prepared.patient)
+                result.db_after = dict(after)
+                result.db_delta = delta(before, after)
+                observations = list(prepared.observations)
+                append_new_rows(
+                    db,
+                    workspace,
+                    prepared.patient,
+                    before_appointments,
+                    before_packages,
+                    observations,
+                )
+                result.observations = observations
+            except Exception as evidence_exc:
+                if result.error is None:
+                    result.error = f"{type(evidence_exc).__name__}: {evidence_exc}"
+                else:
+                    result.observations.append(
+                        f"evidence_capture_error={type(evidence_exc).__name__}: {evidence_exc}"
+                    )
         db.close()
         if outer.is_active:
             outer.rollback()
         connection.close()
+    return result
 
 
 def main() -> int:

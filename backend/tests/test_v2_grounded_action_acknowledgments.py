@@ -753,6 +753,67 @@ def test_context_inferred_appointment_ref_does_not_authorize_repeat_confirmation
     )
 
 
+def test_bare_proposal_confirmation_variance_after_completed_booking_uses_recent_booking_read() -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type="confirm_booking_proposal",
+        disposition="clarify",
+        reads=[],
+        write_intent=None,
+        response_goal="clarification",
+        clarification_field="intent",
+        facts={},
+    )
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        continues_previous=True,
+    )
+
+    request = _recent_booking_confirmation_ack_validation_request(
+        step,
+        operation,
+        _recent_booking(status="pending"),
+    )
+
+    assert request == ReadRequest(
+        kind="appointments",
+        parameters={"appointment_id": "appointment-1"},
+    )
+
+
+def test_actionable_booking_proposal_confirmation_is_never_collapsed_to_recent_booking_ack() -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type="confirm_booking_proposal",
+        disposition="write_ready",
+        reads=[],
+        write_intent=WriteIntent(
+            kind="booking_proposal",
+            authorized=True,
+            parameters={"proposal": {"proposal_id": "proposal-1"}},
+        ),
+        response_goal="booking_completed",
+        facts={},
+    )
+    operation = TurnOperation(
+        type="confirm_booking_proposal",
+        entities=TurnEntities(),
+        execution_intent="execute",
+        continues_previous=True,
+    )
+
+    assert (
+        _recent_booking_confirmation_ack_validation_request(
+            step,
+            operation,
+            _recent_booking(status="pending"),
+        )
+        is None
+    )
+
+
 def test_bare_repeat_confirmation_after_recent_booking_requires_canonical_read() -> None:
     request = _recent_booking_confirmation_ack_validation_request(
         _repeat_confirmation_step(),

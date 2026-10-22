@@ -633,6 +633,87 @@ def test_recent_completed_booking_revocation_binds_verified_appointment_target()
     assert selector.appointment.ref == "A1"
 
 
+def test_recent_completed_booking_time_correction_normalizes_model_book_to_reschedule() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1"),
+                    doctor=EntityReference(ref="D1"),
+                    date=DateConstraint(mode="exact", start_date="2026-09-17"),
+                    time=TimeConstraint(mode="exact", start_time="19:15"),
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+                fresh_task=False,
+            )
+        ],
+        safety_signals=[],
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    operation = merged.operations[0]
+    assert operation.type == "reschedule"
+    assert operation.entities.time is not None
+    assert operation.entities.time.start_time == "19:15"
+    assert operation.source_appointment is not None
+    assert operation.source_appointment.appointment is not None
+    assert operation.source_appointment.appointment.ref == "A1"
+
+
+def test_recent_completed_booking_same_time_repeat_stays_book_for_duplicate_guard() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1"),
+                    doctor=EntityReference(ref="D1"),
+                    date=DateConstraint(mode="exact", start_date="2026-09-17"),
+                    time=TimeConstraint(mode="exact", start_time="19:00"),
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+            )
+        ]
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    assert merged.operations[0].type == "book"
+    assert merged.operations[0].source_appointment is None
+
+
+def test_explicit_fresh_booking_after_recent_booking_is_not_converted_to_reschedule() -> None:
+    context = _context_with_recent_verified_booking()
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                entities=TurnEntities(
+                    service=EntityReference(ref="S1"),
+                    doctor=EntityReference(ref="D1"),
+                    date=DateConstraint(mode="exact", start_date="2026-09-17"),
+                    time=TimeConstraint(mode="exact", start_time="19:15"),
+                ),
+                execution_intent="execute",
+                continues_previous=True,
+                fresh_task=True,
+                fresh_task_explicit_fields=["time"],
+            )
+        ]
+    )
+
+    merged = merge_verified_action_context(turn, context)
+
+    assert merged.operations[0].type == "book"
+    assert merged.operations[0].source_appointment is None
+
+
 def test_recent_booking_context_does_not_create_cancellation_for_informational_followup() -> None:
     context = _context_with_recent_verified_booking()
     turn = TiaTurnUnderstanding(

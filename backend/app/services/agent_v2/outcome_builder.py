@@ -38,6 +38,7 @@ _INTERNAL_KEYS = frozenset(
         "package_external_id",
         "laser_device_key",
         "device_key",
+        "device_keys",
         "pulse_usage",
         "doctor_ids",
         "service_ids",
@@ -52,6 +53,7 @@ _COMPLETED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
     "cancel_appointment": "cancellation_completed",
     "reschedule": "reschedule_completed",
     "buy_package": "package_purchased",
+    "cancel_package": "package_cancelled",
     "buy_pulse_pack": "pulse_pack_purchased",
     "follow_up": "follow_up_created",
     "marketing_update": "marketing_updated",
@@ -64,6 +66,7 @@ _FAILED_GOAL_BY_WRITE_KIND: dict[str, ResponseGoal] = {
     "cancel_appointment": "clarification",
     "reschedule": "clarification",
     "buy_package": "package_information",
+    "cancel_package": "clarification",
     "buy_pulse_pack": "pulse_information",
     "follow_up": "clarification",
     "marketing_update": "clarification",
@@ -430,6 +433,8 @@ def _read_facts(
     *,
     requested_service_details: set[str],
     selected_device_key: str | None = None,
+    requested_offer_service_ids: set[str] | None = None,
+    requested_offer_device_keys: set[str] | None = None,
 ) -> dict[str, object]:
     if result.kind == "availability":
         compatibility_failure = result.payload.get("compatibility_failure")
@@ -448,6 +453,47 @@ def _read_facts(
                 requested_service_details,
                 selected_device_key=selected_device_key,
             )
+        }
+    if result.kind == "package_offers":
+        raw_offers = result.payload.get("offers")
+        if not isinstance(raw_offers, list):
+            return {
+                "package_offers": {
+                    "offers": [],
+                    "requested_scope_complete": False,
+                }
+            }
+        service_scope = set(requested_offer_service_ids or ())
+        device_scope = set(requested_offer_device_keys or ())
+        visible_offers: list[dict[str, object]] = []
+        matched_services: set[str] = set()
+        matched_devices: set[str] = set()
+        for raw in raw_offers:
+            if not isinstance(raw, dict):
+                continue
+            service_id = str(raw.get("service_id") or "")
+            device_key = str(raw.get("device_key") or "")
+            if service_scope and service_id not in service_scope:
+                continue
+            if device_scope and device_key not in device_scope:
+                continue
+            visible = _visible_dict(raw)
+            if not visible:
+                continue
+            visible_offers.append(visible)
+            if service_id:
+                matched_services.add(service_id)
+            if device_key:
+                matched_devices.add(device_key)
+        requested_scope_complete = (
+            (not service_scope or service_scope.issubset(matched_services))
+            and (not device_scope or device_scope.issubset(matched_devices))
+        )
+        return {
+            "package_offers": {
+                "offers": visible_offers,
+                "requested_scope_complete": requested_scope_complete,
+            }
         }
     if result.kind == "service_catalog_set":
         raw_variants = result.payload.get("variants")
@@ -512,6 +558,8 @@ def _facts_from_reads(
     *,
     requested_service_details: set[str],
     selected_device_key: str | None = None,
+    requested_offer_service_ids: set[str] | None = None,
+    requested_offer_device_keys: set[str] | None = None,
 ) -> dict[str, object]:
     if bundle is None:
         return {}
@@ -521,6 +569,8 @@ def _facts_from_reads(
             result,
             requested_service_details=requested_service_details,
             selected_device_key=selected_device_key,
+            requested_offer_service_ids=requested_offer_service_ids,
+            requested_offer_device_keys=requested_offer_device_keys,
         )
         for key, value in current.items():
             if key not in facts:
@@ -762,6 +812,8 @@ def _package_information_response_facts(
                             "service_name",
                             "device_name",
                             "sessions_count",
+                            "price",
+                            "currency",
                             "is_active",
                         )
                         if isinstance(row, dict)
@@ -769,7 +821,8 @@ def _package_information_response_facts(
                     }
                     for row in rows
                     if isinstance(row, dict)
-                ]
+                ],
+                "requested_scope_complete": offers.get("requested_scope_complete") is not False,
             }
 
     return shaped
@@ -1355,10 +1408,22 @@ def build_step_outcome(
         if step.facts.get("device_key") not in (None, "")
         else None
     )
+    requested_offer_service_ids = {
+        str(value)
+        for value in step.facts.get("service_ids", [])
+        if value not in (None, "")
+    } if isinstance(step.facts.get("service_ids"), list) else set()
+    requested_offer_device_keys = {
+        str(value)
+        for value in step.facts.get("device_keys", [])
+        if value not in (None, "")
+    } if isinstance(step.facts.get("device_keys"), list) else set()
     read_facts = _facts_from_reads(
         reads,
         requested_service_details=requested_details,
         selected_device_key=selected_device_key,
+        requested_offer_service_ids=requested_offer_service_ids,
+        requested_offer_device_keys=requested_offer_device_keys,
     )
     _scope_visit_price_facts(
         read_facts,

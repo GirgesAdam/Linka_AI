@@ -1091,11 +1091,7 @@ def _deterministic_same_booking_ack_reply(
     if statuses == {"confirmed"}:
         return "\u0627\u0644\u062d\u062c\u0632 \u0645\u062a\u0623\u0643\u062f \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already confirmed."
     if statuses == {"pending"}:
-        return (
-            "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0648\u062d\u0627\u0644\u062a\u0647 \u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631."
-            if arabic
-            else "The booking is already registered and is pending."
-        )
+        return "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already registered."
     return "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already registered."
 
 
@@ -1119,6 +1115,17 @@ def _deterministic_typed_unit_reply(
     booking_ack_reply = _deterministic_same_booking_ack_reply(unit, arabic=arabic)
     if booking_ack_reply is not None:
         return booking_ack_reply
+    if (
+        unit.response_goal == "social_ack"
+        and unit.action_truth is None
+        and _fact_value(unit, "package_correction_noop") is True
+        and _fact_value(unit, "rejected_package_was_not_created") is True
+    ):
+        return (
+            "تمام، هنخلي الباكدجات اللي اتسجلت بس."
+            if arabic
+            else "Okay, we'll keep only the packages that were actually registered."
+        )
     if unit.response_goal == "social_ack" and unit.action_truth is not None:
         return deterministic_terminal_fallback(contract, arabic=arabic)
     if is_pure_supported_terminal_contract(contract):

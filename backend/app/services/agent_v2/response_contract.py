@@ -25,6 +25,7 @@ TerminalAction = Literal[
     "cancel_appointment",
     "confirm_appointment",
     "buy_package",
+    "cancel_package",
     "buy_pulse_pack",
     "follow_up",
     "marketing_update",
@@ -114,6 +115,8 @@ class PackageOfferInfo(StrictResponseContractModel):
     service_name: str
     device_name: str | None = None
     sessions_count: int
+    price: str | None = None
+    currency: str | None = None
 
 
 class PackageTruth(StrictResponseContractModel):
@@ -123,6 +126,7 @@ class PackageTruth(StrictResponseContractModel):
     package_offers: tuple[PackageOfferInfo, ...] = ()
     owned_complete_set: bool = False
     offers_complete_set: bool = False
+    requested_offer_scope_complete: bool = True
 
 
 class PulseBalanceInfo(StrictResponseContractModel):
@@ -266,7 +270,7 @@ class CustomerResponseContract(StrictResponseContractModel):
 
 _TERMINAL_GOALS = frozenset({
     "booking_completed", "reschedule_completed", "cancellation_completed",
-    "appointment_confirmed", "package_purchased", "pulse_pack_purchased",
+    "appointment_confirmed", "package_purchased", "package_cancelled", "pulse_pack_purchased",
     "follow_up_created", "marketing_updated",
 })
 _AVAILABILITY_GOALS = frozenset({
@@ -323,6 +327,7 @@ TERMINAL_ACTION_BY_GOAL: dict[ResponseGoal, TerminalAction] = {
     "cancellation_completed": "cancel_appointment",
     "appointment_confirmed": "confirm_appointment",
     "package_purchased": "buy_package",
+    "package_cancelled": "cancel_package",
     "pulse_pack_purchased": "buy_pulse_pack",
     "follow_up_created": "follow_up",
     "marketing_updated": "marketing_update",
@@ -971,10 +976,16 @@ def _package_offer_info(raw: object) -> PackageOfferInfo | None:
     if sessions_count <= 0:
         return None
     device_name = str(safe.get("device_name") or "").strip() or None
+    price = str(safe.get("price") or "").strip() or None
+    currency = str(safe.get("currency") or "").strip().upper() or None
+    if (price is None) is not (currency is None):
+        return None
     return PackageOfferInfo(
         service_name=service_name,
         device_name=device_name,
         sessions_count=sessions_count,
+        price=price,
+        currency=currency,
     )
 
 
@@ -1022,6 +1033,11 @@ def _package_truth(outcome: TurnOutcome) -> PackageTruth | None:
         package_offers=tuple(offers),
         owned_complete_set=owned_requested,
         offers_complete_set=offers_requested,
+        requested_offer_scope_complete=(
+            outcome.facts.get("package_offers", {}).get("requested_scope_complete") is not False
+            if isinstance(outcome.facts.get("package_offers"), dict)
+            else True
+        ),
     )
 
 
@@ -1783,7 +1799,7 @@ def _unit_from_outcome(outcome: TurnOutcome) -> CustomerResponseUnit:
             isinstance(acknowledgment, dict)
             and acknowledgment.get("already_completed") is True
             and acknowledgment.get("action")
-            in {"booking", "reschedule", "cancel_appointment"}
+            in {"booking", "reschedule", "cancel_appointment", "buy_package", "cancel_package"}
         ):
             action_truth = ActionTruth(
                 action=acknowledgment["action"],

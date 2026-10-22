@@ -892,6 +892,42 @@ def test_live_read_context_persists_only_displayed_verified_concrete_options() -
     assert [item["slot"]["start_time_24h"] for item in options] == ["12:00", "14:00", "15:30"]
 
 
+def test_availability_reference_context_carries_server_owned_presentation_has_more() -> None:
+    turn = _availability_turn_for_context(
+        date_value="2026-10-10",
+        times=["09:00", "10:00", "11:00", "12:00", "13:00", "14:00"],
+    )
+    verified = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=turn,
+    )
+    assert verified is not None
+    assert verified["availability_presentation_has_more"] is True
+    availability = turn.outcomes[0].facts["availability"]
+    availability["checked_dates"] = ["2026-10-10"]
+    availability["search_truncated"] = True
+    verified = _verified_read_context_from_turn(
+        None,
+        workspace=SimpleNamespace(id="workspace"),
+        turn=turn,
+    )
+    assert verified is not None
+    assert verified["availability_checked_dates"] == ["2026-10-10"]
+    assert verified["availability_search_truncated"] is True
+
+    reference = _availability_reference_context_from_turn(
+        turn,
+        previous_context=None,
+        verified_read_context=verified,
+    )
+    assert reference is not None
+    assert reference["availability_presentation_has_more"] is True
+    assert reference["availability_checked_dates"] == ["2026-10-10"]
+    assert reference["availability_search_truncated"] is True
+    assert "last_selected_option_ref" not in reference
+
+
 def test_reference_only_turn_carries_snapshot_and_updates_anchor_without_read() -> None:
     previous = _reference_context()
     step = PlanStep(

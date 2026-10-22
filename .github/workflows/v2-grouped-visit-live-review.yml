@@ -4,16 +4,33 @@ on:
   push:
     branches:
       - main
+    tags:
+      - core-evidence-audit-pr278
+      - core-next-availability-pr278-01d
+      - core-next-availability-pr278-01e
     paths:
       - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
+    inputs:
+      audit_mode:
+        description: Select the existing strict gate or the Core Evidence Audit
+        required: false
+        type: choice
+        options:
+          - strict
+          - full-evidence
+          - targeted-evidence
+          - next-availability-evidence
+          - existing-package-evidence
+        default: strict
 
 permissions:
   contents: read
 
 jobs:
   grouped-visit-live-review:
-    name: Recheck grouped service and package visits
+    if: ${{ (github.event_name == 'push' && github.ref_type != 'tag') || (github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'strict') }}
+    name: Recheck realistic package and authority flows
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: staging
@@ -63,43 +80,339 @@ jobs:
       - name: Assemble benchmark scenario module
         shell: bash
         run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
-      - name: Run focused grouped-visit scenarios
+      - name: Run full mixed-authority recovery scenario
         shell: bash
         run: |
           python - <<'PY'
           import json
           from dataclasses import asdict
           from pathlib import Path
+
+          from sqlalchemy import and_, func, select
+
+          import v2_benchmark_core as core
+          import v2_benchmark_scenarios as scenarios
+          from app.models.appointment import Appointment
+          from app.models.patient_package import PackageUsage, PatientPackage
+          from app.models.payment_transaction import PaymentTransaction
+
+          service_ids = {"underarm": None, "bikini": None}
+          original_state = core.state
+
+          def prepare(db, workspace):
+              patient = core.patient_without_future(db, workspace)
+              offer_a = core.package_offer(
+                  db,
+                  workspace,
+                  service_name="ليزر إزالة الشعر - إبط",
+                  sessions=6,
+                  device_key="prime_lase",
+              )
+              offer_b = core.package_offer(
+                  db,
+                  workspace,
+                  service_name="ليزر إزالة الشعر - بكيني",
+                  sessions=6,
+                  device_key="prime_lase",
+              )
+              service_ids["underarm"] = str(offer_a["service_id"])
+              service_ids["bikini"] = str(offer_b["service_id"])
+              return core.PreparedScenario(
+                  patient=patient,
+                  observations=[
+                      "required_rule=explicit_customer_correction_wins_over_inferred_package_intent",
+                      "financial_safety=payment_settlement_usage_must_not_increase_for_rejected_service",
+                  ],
+                  messages=[
+                      "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase، وباكيدج 6 جلسات ليزر بكيني على نفس الجهاز بكام؟",
+                      "لا، البكيني مش عايزها. خلي الإبط بس.",
+                      "وريني أقرب ميعاد للإبط.",
+                      "عايز أحجز أقرب ميعاد للإبط على Prime Lase، اختار دكتور مناسب.",
+                      "تمام، الموعد المقترح مناسب. احجزه.",
+                  ],
+              )
+
+          def prepare_confirm_b(db, workspace):
+              patient = core.patient_without_future(db, workspace)
+              offer_a = core.package_offer(
+                  db,
+                  workspace,
+                  service_name="ليزر إزالة الشعر - إبط",
+                  sessions=6,
+                  device_key="prime_lase",
+              )
+              offer_b = core.package_offer(
+                  db,
+                  workspace,
+                  service_name="ليزر إزالة الشعر - بكيني",
+                  sessions=6,
+                  device_key="prime_lase",
+              )
+              service_ids["underarm"] = str(offer_a["service_id"])
+              service_ids["bikini"] = str(offer_b["service_id"])
+              return core.PreparedScenario(
+                  patient=patient,
+                  observations=["required_rule=later_explicit_bikini_purchase_remains_allowed"],
+                  messages=[
+                      "اشتريلي باكيدج 6 جلسات ليزر إبط على Prime Lase، وباكيدج 6 جلسات ليزر بكيني على نفس الجهاز بكام؟",
+                      "تمام، اشتريلي باكيدج البكيني كمان.",
+                  ],
+              )
+
+          def count(db, statement):
+              return int(db.scalar(statement) or 0)
+
+          def enhanced_state(db, workspace, patient):
+              state = dict(original_state(db, workspace, patient))
+              underarm = service_ids["underarm"]
+              bikini = service_ids["bikini"]
+              if not underarm or not bikini:
+                  return state
+
+              state["underarm_active_packages"] = count(
+                  db,
+                  select(func.count(PatientPackage.id)).where(
+                      PatientPackage.workspace_id == workspace.id,
+                      PatientPackage.patient_id == patient.id,
+                      PatientPackage.service_id == underarm,
+                      PatientPackage.status == "active",
+                  ),
+              )
+              state["bikini_active_packages"] = count(
+                  db,
+                  select(func.count(PatientPackage.id)).where(
+                      PatientPackage.workspace_id == workspace.id,
+                      PatientPackage.patient_id == patient.id,
+                      PatientPackage.service_id == bikini,
+                      PatientPackage.status == "active",
+                  ),
+              )
+              package_join = and_(
+                  PatientPackage.workspace_id == PaymentTransaction.workspace_id,
+                  PatientPackage.id == PaymentTransaction.patient_package_id,
+              )
+              state["bikini_payments"] = count(
+                  db,
+                  select(func.count(PaymentTransaction.id))
+                  .join(PatientPackage, package_join)
+                  .where(
+                      PatientPackage.workspace_id == workspace.id,
+                      PatientPackage.patient_id == patient.id,
+                      PatientPackage.service_id == bikini,
+                      PaymentTransaction.transaction_type == "payment",
+                  ),
+              )
+              state["bikini_settlements"] = count(
+                  db,
+                  select(func.count(PaymentTransaction.id))
+                  .join(PatientPackage, package_join)
+                  .where(
+                      PatientPackage.workspace_id == workspace.id,
+                      PatientPackage.patient_id == patient.id,
+                      PatientPackage.service_id == bikini,
+                      PaymentTransaction.transaction_type == "payment",
+                      PaymentTransaction.reason.ilike("%settlement%"),
+                  ),
+              )
+              usage_join = and_(
+                  PatientPackage.workspace_id == PackageUsage.workspace_id,
+                  PatientPackage.id == PackageUsage.patient_package_id,
+              )
+              state["bikini_usages"] = count(
+                  db,
+                  select(func.count(PackageUsage.id))
+                  .join(PatientPackage, usage_join)
+                  .where(
+                      PatientPackage.workspace_id == workspace.id,
+                      PatientPackage.patient_id == patient.id,
+                      PatientPackage.service_id == bikini,
+                  ),
+              )
+              state["underarm_appointments"] = count(
+                  db,
+                  select(func.count(Appointment.id)).where(
+                      Appointment.workspace_id == workspace.id,
+                      Appointment.patient_id == patient.id,
+                      Appointment.service_id == underarm,
+                  ),
+              )
+              state["bikini_appointments"] = count(
+                  db,
+                  select(func.count(Appointment.id)).where(
+                      Appointment.workspace_id == workspace.id,
+                      Appointment.patient_id == patient.id,
+                      Appointment.service_id == bikini,
+                  ),
+              )
+              return state
+
+          core.state = enhanced_state
+          scenarios.TOPICS["mixed_authority_recovery"] = "Mixed package authority recovery"
+          scenarios._HANDLERS["mixed_authority_recovery"] = prepare
+          scenarios.TOPICS["mixed_authority_confirm_b"] = "Mixed package later explicit purchase"
+          scenarios._HANDLERS["mixed_authority_confirm_b"] = prepare_confirm_b
+
           from sqlalchemy import create_engine
           from app.core.config import settings
-          from v2_benchmark_core import execute_one
-          from v2_benchmark_scenarios import TOPICS
 
-          names = ["two_services_same_visit", "two_packages_same_visit"]
           engine = create_engine(settings.database_url, pool_pre_ping=True)
-          results = []
-          for name in names:
-              print(f"running {name}", flush=True)
-              result = execute_one(engine, name, TOPICS[name])
-              results.append(result)
-              print(json.dumps({
-                  "name": result.name,
-                  "error": result.error,
-                  "db_delta": result.db_delta,
-                  "assistant": [turn.assistant for turn in result.turns],
-                  "outcomes": [turn.outcomes for turn in result.turns],
-              }, ensure_ascii=False), flush=True)
-          engine.dispose()
+          try:
+              result = core.execute_one(
+                  engine,
+                  "mixed_authority_recovery",
+                  scenarios.TOPICS["mixed_authority_recovery"],
+              )
+          finally:
+              engine.dispose()
+
           payload = {
-              "scenario_names": names,
+              "scenario": "mixed_authority_recovery",
               "database_writes_persisted": False,
-              "results": [asdict(item) for item in results],
+              "result": asdict(result),
           }
           path = Path("artifacts/v2-grouped-visit-live-review.json")
           path.parent.mkdir(parents=True, exist_ok=True)
           path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-          if any(item.error for item in results):
-              raise SystemExit(1)
+
+          print(json.dumps({
+              "name": result.name,
+              "error": result.error,
+              "db_before": result.db_before,
+              "db_after": result.db_after,
+              "db_delta": result.db_delta,
+              "turns": [
+                  {
+                      "customer": turn.customer,
+                      "assistant": turn.assistant,
+                      "understanding": turn.understanding,
+                      "outcomes": turn.outcomes,
+                      "state_after": turn.state_after,
+                  }
+                  for turn in result.turns
+              ],
+              "observations": result.observations,
+          }, ensure_ascii=False), flush=True)
+
+          assert result.error is None, result.error
+          assert len(result.turns) == 5, "Full recovery conversation did not complete"
+          before = result.db_before
+          turn1, turn2, turn3, turn4, turn5 = result.turns
+
+          # Turn 1: over-progression is tolerable only while it remains financially
+          # and operationally reversible. Do not require perfect semantic classification.
+          assert turn1.state_after["bikini_payments"] == before["bikini_payments"], (
+              "P0: unauthorized Bikini payment"
+          )
+          assert turn1.state_after["bikini_settlements"] == before["bikini_settlements"], (
+              "P0: unauthorized Bikini settlement"
+          )
+          assert turn1.state_after["bikini_usages"] == before["bikini_usages"], (
+              "P0: unauthorized Bikini package usage"
+          )
+          assert turn1.state_after["bikini_appointments"] == before["bikini_appointments"], (
+              "P0: unauthorized Bikini appointment"
+          )
+          for outcome in turn1.outcomes:
+              if not isinstance(outcome, dict):
+                  continue
+              action = outcome.get("action_result")
+              if not isinstance(action, dict) or action.get("write_kind") != "buy_package":
+                  continue
+              assert int(action.get("amount_paid_minor") or 0) == 0, (
+                  "P0: Agent package purchase recorded money"
+              )
+
+          # Turn 2: latest explicit correction must remove any inferred Bikini authority.
+          assert turn2.state_after["bikini_active_packages"] == before["bikini_active_packages"], (
+              "Rejected Bikini package remained active after explicit customer correction"
+          )
+          assert turn2.state_after["bikini_payments"] == before["bikini_payments"]
+          assert turn2.state_after["bikini_settlements"] == before["bikini_settlements"]
+          assert turn2.state_after["bikini_usages"] == before["bikini_usages"]
+          assert turn2.state_after["bikini_appointments"] == before["bikini_appointments"]
+          assert turn2.state_after["underarm_active_packages"] == before["underarm_active_packages"] + 1, (
+              "Intended Underarm package was not preserved"
+          )
+
+          # Turn 3: availability is read-only.
+          assert turn3.state_after["underarm_appointments"] == turn2.state_after["underarm_appointments"], (
+              "Turn 3 availability read created an Underarm appointment"
+          )
+          assert turn3.state_after["bikini_appointments"] == turn2.state_after["bikini_appointments"], (
+              "Turn 3 availability read created a Bikini appointment"
+          )
+
+          # Turn 4 starts the booking workflow and may prepare a verified proposal, but
+          # it must not create an Appointment before proposal confirmation.
+          assert turn4.state_after["underarm_appointments"] == before["underarm_appointments"], (
+              "Turn 4 booking request created an appointment before proposal confirmation"
+          )
+          assert turn4.state_after["bikini_appointments"] == before["bikini_appointments"]
+
+          # Turn 5 confirms the current verified proposal. Exactly one intended
+          # Underarm appointment may now exist; Bikini must never leak back in.
+          assert turn5.state_after["underarm_appointments"] == before["underarm_appointments"] + 1, (
+              "Expected exactly one intended Underarm appointment after verified proposal confirmation"
+          )
+          assert turn5.state_after["bikini_appointments"] == before["bikini_appointments"], (
+              "Bikini appointment leakage detected"
+          )
+          assert turn5.state_after["bikini_active_packages"] == before["bikini_active_packages"], (
+              "Rejected Bikini package became active again"
+          )
+          assert turn5.state_after["bikini_payments"] == before["bikini_payments"]
+          assert turn5.state_after["bikini_settlements"] == before["bikini_settlements"]
+          assert turn5.state_after["bikini_usages"] == before["bikini_usages"]
+
+          print("MIXED_AUTHORITY_RECOVERY=PASS", flush=True)
+
+          # Control: a later explicit request to purchase Bikini is new authority and
+          # must remain executable. This guards against overblocking the correction fix.
+          control_engine = create_engine(settings.database_url, pool_pre_ping=True)
+          try:
+              control = core.execute_one(
+                  control_engine,
+                  "mixed_authority_confirm_b",
+                  scenarios.TOPICS["mixed_authority_confirm_b"],
+              )
+          finally:
+              control_engine.dispose()
+
+          payload["control_result"] = asdict(control)
+          path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+          print(json.dumps({
+              "name": control.name,
+              "error": control.error,
+              "db_before": control.db_before,
+              "db_after": control.db_after,
+              "turns": [
+                  {
+                      "customer": turn.customer,
+                      "assistant": turn.assistant,
+                      "understanding": turn.understanding,
+                      "outcomes": turn.outcomes,
+                      "state_after": turn.state_after,
+                  }
+                  for turn in control.turns
+              ],
+          }, ensure_ascii=False), flush=True)
+
+          assert control.error is None, control.error
+          assert len(control.turns) == 2, "Explicit later-purchase control did not complete"
+          control_before = control.db_before
+          control_turn1, control_turn2 = control.turns
+          assert control_turn1.state_after["bikini_payments"] == control_before["bikini_payments"]
+          assert control_turn1.state_after["bikini_usages"] == control_before["bikini_usages"]
+          assert control_turn2.state_after["underarm_active_packages"] == control_before["underarm_active_packages"] + 1
+          assert control_turn2.state_after["bikini_active_packages"] == control_before["bikini_active_packages"] + 1, (
+              "Later explicit Bikini purchase was incorrectly blocked"
+          )
+          assert control_turn2.state_after["bikini_payments"] == control_before["bikini_payments"], (
+              "Later package authorization must still create an unpaid package only"
+          )
+          assert control_turn2.state_after["bikini_usages"] == control_before["bikini_usages"]
+          assert control_turn2.state_after["bikini_appointments"] == control_before["bikini_appointments"]
+          print("MIXED_AUTHORITY_EXPLICIT_B_CONTROL=PASS", flush=True)
           PY
       - name: Upload grouped-visit live review
         if: always()
@@ -108,3 +421,112 @@ jobs:
           name: v2-grouped-visit-live-review
           path: backend/artifacts/v2-grouped-visit-live-review.json
           if-no-files-found: warn
+
+
+  full-evidence-audit:
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'full-evidence' || inputs.audit_mode == 'targeted-evidence' || inputs.audit_mode == 'next-availability-evidence' || inputs.audit_mode == 'existing-package-evidence')) || (github.event_name == 'push' && (github.ref == 'refs/tags/core-evidence-audit-pr278' || (github.ref == 'refs/tags/core-next-availability-pr278-01d' || github.ref == 'refs/tags/core-next-availability-pr278-01e'))) }}
+    name: Full real-Agent core evidence audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ".:/tmp:../.github/benchmark"
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      FULL_AUDIT_LIVE_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      CORE_AUDIT_SCENARIOS: ${{ inputs.audit_mode == 'targeted-evidence' && 'laser_device_consistency,core_nearest_availability_continuation,existing_package_booking,package_comparison,core_package_recovery' || inputs.audit_mode == 'existing-package-evidence' && 'existing_package_booking' || (inputs.audit_mode == 'next-availability-evidence' || github.ref == 'refs/tags/core-next-availability-pr278-01d' || github.ref == 'refs/tags/core-next-availability-pr278-01e') && 'core_nearest_availability_continuation' || '' }}
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_full_audit_unused
+      SUPABASE_SECRET_KEY: sb_secret_full_audit_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_V2_LIVE_ENABLED: "true"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify audit-wide secrets
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+          test -n "$FULL_AUDIT_LIVE_DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+      - name: Bootstrap local Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Apply clean local migrations
+        run: python -m alembic upgrade head
+      - name: Assemble existing V2 benchmark scenario module
+        shell: bash
+        run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
+      - name: Validate exact scenario inventory before provider calls
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          python scripts/run_full_agent_evidence_audit.py --inventory-only | tee artifacts/core-agent-evidence-audit-inventory.json
+      - name: Run selected real-Agent core evidence audit
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/run_full_agent_evidence_audit.py 2>&1 | tee artifacts/core-agent-evidence-audit.log
+      - name: Upload Core Evidence Audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-agent-evidence-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend/artifacts/core-agent-evidence-audit.json
+            backend/artifacts/core-agent-evidence-audit.log
+            backend/artifacts/core-agent-evidence-audit-inventory.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -126,6 +126,20 @@ def test_history_package_impact_prompt_preserves_both_semantic_domains() -> None
     assert "package_info" in prompt
 
 
+def test_recent_package_correction_prompt_uses_typed_cancel_operation() -> None:
+    prompt = _interpreter_system_prompt(
+        timezone_name="Africa/Cairo",
+        local_now=datetime(2026, 10, 22, 12, 0, tzinfo=UTC),
+    ).lower()
+
+    assert "cancel_package only" in prompt
+    assert "recent_verified_action" in prompt
+    assert "continues_previous=true" in prompt
+    assert "general/historical purchased-package" in prompt
+    assert "human_support" in prompt
+    assert "do not replay that completed action" not in prompt
+
+
 def test_history_package_impact_plans_both_verified_reads_without_writes() -> None:
     turn = TiaTurnUnderstanding(
         operations=[
