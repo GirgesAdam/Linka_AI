@@ -21,7 +21,7 @@ import app.agents.v2.turn_interpreter as turn_interpreter
 import app.services.agent_v2.orchestrator as orchestrator_module
 from app.agents.structured_output import StructuredOutputError
 from app.core.config import settings
-from app.models.appointment import Appointment
+from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.clinic_integration import ClinicIntegration
@@ -31,6 +31,9 @@ from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
 from app.models.patient import Patient
+from app.models.patient_package import PackageUsage, PatientPackage
+from app.models.payment_transaction import PaymentTransaction
+from app.models.pulse_billing import AppointmentPulseSettlement
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
@@ -422,6 +425,92 @@ def appointment_count(db: Session, workspace_id: UUID) -> int:
     )
 
 
+def audit_db_state(db: Session, *, workspace_id: UUID, patient_id: UUID) -> dict[str, int]:
+    def count(statement) -> int:
+        return int(db.scalar(statement) or 0)
+
+    return {
+        "appointments": count(
+            select(func.count(Appointment.id)).where(
+                Appointment.workspace_id == workspace_id,
+                Appointment.patient_id == patient_id,
+            )
+        ),
+        "active_appointments": count(
+            select(func.count(Appointment.id)).where(
+                Appointment.workspace_id == workspace_id,
+                Appointment.patient_id == patient_id,
+                Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+            )
+        ),
+        "patient_packages": count(
+            select(func.count(PatientPackage.id)).where(
+                PatientPackage.workspace_id == workspace_id,
+                PatientPackage.patient_id == patient_id,
+            )
+        ),
+        "active_packages": count(
+            select(func.count(PatientPackage.id)).where(
+                PatientPackage.workspace_id == workspace_id,
+                PatientPackage.patient_id == patient_id,
+                PatientPackage.status == "active",
+            )
+        ),
+        "cancelled_packages": count(
+            select(func.count(PatientPackage.id)).where(
+                PatientPackage.workspace_id == workspace_id,
+                PatientPackage.patient_id == patient_id,
+                PatientPackage.status == "cancelled",
+            )
+        ),
+        "package_usages": count(
+            select(func.count(PackageUsage.id))
+            .join(
+                PatientPackage,
+                (PatientPackage.workspace_id == PackageUsage.workspace_id)
+                & (PatientPackage.id == PackageUsage.patient_package_id),
+            )
+            .where(
+                PackageUsage.workspace_id == workspace_id,
+                PatientPackage.patient_id == patient_id,
+            )
+        ),
+        "payments": count(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.patient_id == patient_id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        ),
+        "refunds": count(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.patient_id == patient_id,
+                PaymentTransaction.transaction_type == "refund",
+            )
+        ),
+        "settlement_transactions": count(
+            select(func.count(PaymentTransaction.id)).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.patient_id == patient_id,
+                PaymentTransaction.reason.ilike("%settlement%"),
+            )
+        ),
+        "settlements": count(
+            select(func.count(AppointmentPulseSettlement.id))
+            .join(
+                Appointment,
+                (Appointment.workspace_id == AppointmentPulseSettlement.workspace_id)
+                & (Appointment.id == AppointmentPulseSettlement.appointment_id),
+            )
+            .where(
+                AppointmentPulseSettlement.workspace_id == workspace_id,
+                Appointment.patient_id == patient_id,
+            )
+        ),
+    }
+
+
 def turn_record(
     turn: V2OrchestratedTurn,
     *,
@@ -447,6 +536,8 @@ def turn_record(
         "doctor_id": task.constraints.doctor_id if isinstance(task, BookingTaskState) else None,
         "proposal": dump(task.proposal) if isinstance(task, BookingTaskState) else None,
         "pending_write": dump(turn.pending_write),
+        "verified_action_context": dump(getattr(turn, "verified_action_context", None)),
+        "pending_choice": dump(getattr(turn, "pending_choice", None)),
         "availability_reference_context": availability_reference_context,
         "reply": turn.reply,
         "responder_model": turn.responder_model,
@@ -496,6 +587,12 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
         db.flush()
         history = []
         before = appointment_count(db, workspace.id)
+        db_before = audit_db_state(db, workspace_id=workspace.id, patient_id=patient.id)
+        print(
+            "RA_G_START="
+            + json.dumps({"scenario": name, "db_before": db_before}, separators=(",", ":")),
+            flush=True,
+        )
         records: list[dict[str, object]] = []
         previous_task = None
         recent_read_context: dict[str, object] | None = None
@@ -530,26 +627,43 @@ def run_scenario(name: str, messages: list[str], validator) -> None:
                 previous_context=availability_reference_context,
                 verified_read_context=recent_read_context,
             )
-            records.append(
-                turn_record(
-                    result,
-                    customer=customer,
-                    raw=list(RAW),
-                    stages=list(STAGES),
-                    active_task_before=previous_task,
-                    availability_reference_context=availability_reference_context,
-                )
+            record = turn_record(
+                result,
+                customer=customer,
+                raw=list(RAW),
+                stages=list(STAGES),
+                active_task_before=previous_task,
+                availability_reference_context=availability_reference_context,
+            )
+            record["db_state_after"] = audit_db_state(
+                db, workspace_id=workspace.id, patient_id=patient.id
+            )
+            records.append(record)
+            print(
+                "RA_G_TURN="
+                + json.dumps(
+                    {"scenario": name, "turn_number": index, "turn": record},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+                flush=True,
             )
             previous_task = result.active_task
             if result.reply:
                 history.append(AIMessage(content=result.reply))
         after = appointment_count(db, workspace.id)
+        db_after = audit_db_state(db, workspace_id=workspace.id, patient_id=patient.id)
+        db_delta = {key: db_after.get(key, 0) - db_before.get(key, 0) for key in set(db_before) | set(db_after)}
         payload = {
             "scenario": name,
             "mode": MODE,
             "ids": ids,
             "appointment_count_before": before,
             "appointment_count_after": after,
+            "db_before": db_before,
+            "db_after": db_after,
+            "db_delta": db_delta,
             "turns": records,
         }
         print("RA_G_RESULT=" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str), flush=True)

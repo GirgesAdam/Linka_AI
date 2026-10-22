@@ -7,12 +7,22 @@ on:
     paths:
       - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
+    inputs:
+      audit_mode:
+        description: Select the existing strict gate or the Full Evidence Audit
+        required: false
+        type: choice
+        options:
+          - strict
+          - full-evidence
+        default: strict
 
 permissions:
   contents: read
 
 jobs:
   grouped-visit-live-review:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.audit_mode == 'strict' }}
     name: Recheck realistic package and authority flows
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -404,3 +414,111 @@ jobs:
           name: v2-grouped-visit-live-review
           path: backend/artifacts/v2-grouped-visit-live-review.json
           if-no-files-found: warn
+
+
+  full-evidence-audit:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'full-evidence' }}
+    name: Full real-Agent evidence audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: staging
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ".:/tmp:../.github/benchmark"
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      FULL_AUDIT_LIVE_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: sb_publishable_full_audit_unused
+      SUPABASE_SECRET_KEY: sb_secret_full_audit_unused
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_PROVIDER: openai
+      OPENAI_MODEL: gpt-6-luna
+      OPENAI_FALLBACK_MODEL: gpt-5-mini
+      OPENAI_REASONING_EFFORT: low
+      OPENAI_FALLBACK_REASONING_EFFORT: low
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MAX_RETRIES: "1"
+      LLM_REALTIME_MAX_RETRIES: "0"
+      AGENT_V2_LIVE_ENABLED: "true"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Verify audit-wide secrets
+        shell: bash
+        run: |
+          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
+          test -n "$FULL_AUDIT_LIVE_DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+      - name: Bootstrap local Supabase compatibility roles
+        env:
+          PGPASSWORD: ci_password
+        run: |
+          psql -h localhost -U ci_user -d ci_db -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+          END
+          $$;
+          SQL
+      - name: Apply clean local migrations
+        run: python -m alembic upgrade head
+      - name: Assemble existing V2 benchmark scenario module
+        shell: bash
+        run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
+      - name: Validate exact scenario inventory before provider calls
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          python scripts/run_full_agent_evidence_audit.py --inventory-only | tee artifacts/full-agent-evidence-audit-inventory.json
+      - name: Run full real-Agent evidence audit
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/run_full_agent_evidence_audit.py 2>&1 | tee artifacts/full-agent-evidence-audit.log
+      - name: Upload Full Evidence Audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-agent-evidence-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend/artifacts/full-agent-evidence-audit.json
+            backend/artifacts/full-agent-evidence-audit.log
+            backend/artifacts/full-agent-evidence-audit-inventory.json
+          if-no-files-found: warn
+          retention-days: 14
