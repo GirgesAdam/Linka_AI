@@ -54,6 +54,14 @@ CORE_DEFINITIONS = (
     ("existing_package_booking", "Book Using Existing Package", "V2 Realistic Benchmark Core", "book the next session from an active package", 2, "v2", "existing_package_booking"),
 )
 CORE_ORDER = tuple(item[0] for item in CORE_DEFINITIONS)
+TARGETED_REPAIR_ORDER = (
+    "laser_device_consistency",
+    "core_nearest_availability_continuation",
+    "existing_package_booking",
+    "package_comparison",
+    "core_package_recovery",
+)
+AUDIT_SELECTION_ENV = "CORE_AUDIT_SCENARIOS"
 
 V2_BASE_HANDLER_BY_SCENARIO = {
     "core_clinic_info": None,
@@ -206,9 +214,24 @@ def executable_scenario_ids() -> set[str]:
     return executable
 
 
+def _requested_scenario_ids() -> list[str]:
+    raw = os.environ.get(AUDIT_SELECTION_ENV, "").strip()
+    if not raw:
+        return list(CORE_ORDER)
+    requested = [item.strip() for item in raw.split(",") if item.strip()]
+    if len(requested) != len(set(requested)):
+        raise RuntimeError(f"Targeted Core selector contains duplicates: {requested}")
+    unknown = [item for item in requested if item not in CORE_ORDER]
+    if unknown:
+        raise RuntimeError(f"Targeted Core selector contains unknown scenarios: {unknown}")
+    return requested
+
+
 def scenario_inventory() -> list[ScenarioSpec]:
     specs: list[ScenarioSpec] = []
-    for scenario_id, name, source_suite, topic, turns, runner_kind, entrypoint in CORE_DEFINITIONS:
+    definitions = {item[0]: item for item in CORE_DEFINITIONS}
+    for selected_id in _requested_scenario_ids():
+        scenario_id, name, source_suite, topic, turns, runner_kind, entrypoint = definitions[selected_id]
         if runner_kind == "human":
             environment = "stateful fixture with real model and simulated writes"
             rollback = "fixture simulation; no persistent DB writes"
@@ -228,13 +251,17 @@ def scenario_inventory() -> list[ScenarioSpec]:
 
 def _validate_inventory(specs: list[ScenarioSpec]) -> None:
     ids = [item.scenario_id for item in specs]
-    if ids != list(CORE_ORDER):
-        raise RuntimeError(f"Core scenario order mismatch: expected={list(CORE_ORDER)} actual={ids}")
-    if len(ids) != 17 or len(ids) != len(set(ids)):
-        raise RuntimeError("Core inventory must contain exactly 17 unique conversations")
+    expected = _requested_scenario_ids()
+    if ids != expected:
+        raise RuntimeError(f"Core scenario order mismatch: expected={expected} actual={ids}")
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("Core inventory must contain unique conversations")
     turns = sum(item.number_of_turns_planned for item in specs)
-    if turns != 33:
-        raise RuntimeError(f"Core inventory must contain exactly 33 turns; got {turns}")
+    if not os.environ.get(AUDIT_SELECTION_ENV):
+        if len(ids) != 17:
+            raise RuntimeError("Core inventory must contain exactly 17 unique conversations")
+        if turns != 33:
+            raise RuntimeError(f"Core inventory must contain exactly 33 turns; got {turns}")
     if any("C7" in item for item in ids):
         raise RuntimeError("C7 must not be included in Core Evidence Audit")
 
@@ -242,23 +269,27 @@ def _validate_inventory(specs: list[ScenarioSpec]) -> None:
 def _validate_executable_handlers(specs: list[ScenarioSpec]) -> None:
     selected = {item.scenario_id for item in specs}
     executable = executable_scenario_ids()
-    if selected != executable:
-        missing = sorted(selected - executable)
-        extra = sorted(executable - selected)
+    missing = sorted(selected - executable)
+    extra = sorted(executable - selected) if not os.environ.get(AUDIT_SELECTION_ENV) else []
+    if missing or extra:
         raise RuntimeError(f"Core selector invariant failed: missing={missing} extra={extra}")
 
 
 def inventory_payload(specs: list[ScenarioSpec]) -> dict[str, Any]:
     executable = executable_scenario_ids()
-    selected = {item.scenario_id for item in specs}
+    selected_ids = [item.scenario_id for item in specs]
+    selected = set(selected_ids)
+    scoped_executable = [item for item in selected_ids if item in executable]
+    full_mode = not bool(os.environ.get(AUDIT_SELECTION_ENV))
     return {
         "unique_conversations_selected": len(specs),
         "turns_planned": sum(item.number_of_turns_planned for item in specs),
         "source_suites": sorted({item.source_suite for item in specs}),
         "duplicates_intentionally_executed": 0,
-        "selected_handler_ids": [item.scenario_id for item in specs],
-        "executable_handler_ids": sorted(executable),
-        "selector_invariant": selected == executable,
+        "selected_handler_ids": selected_ids,
+        "executable_handler_ids": scoped_executable,
+        "selector_invariant": selected.issubset(executable) and (not full_mode or selected == executable),
+        "portfolio_mode": "full" if full_mode else "targeted",
         "c7": "NOT_INCLUDED",
         "phase_3_3": "NOT_RUN",
         "scenarios": [asdict(item) for item in specs],
@@ -457,8 +488,11 @@ def _run_internal_v2() -> int:
         scenarios._HANDLERS[scenario_id] = handler
 
     outputs: list[dict[str, Any]] = []
+    selected_ids = set(_requested_scenario_ids())
     try:
         for scenario_id in V2_TOPICS:
+            if scenario_id not in selected_ids:
+                continue
             core.state = enhanced_state if scenario_id == "core_package_recovery" else original_state
             engine = create_engine(settings.database_url, pool_pre_ping=True)
             try:
@@ -1061,7 +1095,11 @@ def run_full_audit() -> int:
     infrastructure_errors = _preflight_environment(specs)
     payload: dict[str, Any] = {
         "audit_metadata": {
-            "audit_name": "FULL REAL-AGENT CORE EVIDENCE AUDIT",
+            "audit_name": (
+                "TARGETED REAL-AGENT CORE EVIDENCE AUDIT"
+                if os.environ.get(AUDIT_SELECTION_ENV)
+                else "FULL REAL-AGENT CORE EVIDENCE AUDIT"
+            ),
             "started_at": started.isoformat(),
             "finished_at": None,
             "head": _git_head(),

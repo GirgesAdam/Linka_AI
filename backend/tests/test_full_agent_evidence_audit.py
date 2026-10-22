@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import scripts.run_full_agent_evidence_audit as audit
 import scripts.run_grouped_multiservice_intent_live_review as grouped
@@ -126,3 +127,28 @@ def test_quality_flags_are_factual_only():
     assert flags["duplicate_identical_response_sections"] is True
     assert flags["empty_reply"] is False
     assert flags["internal_marker_leakage"] is False
+
+
+def test_targeted_repair_inventory_is_exact_five_conversations_nine_turns(monkeypatch):
+    monkeypatch.setenv(
+        audit.AUDIT_SELECTION_ENV,
+        ",".join(audit.TARGETED_REPAIR_ORDER),
+    )
+
+    specs = audit.scenario_inventory()
+    payload = audit.inventory_payload(specs)
+
+    assert [item.scenario_id for item in specs] == list(audit.TARGETED_REPAIR_ORDER)
+    assert payload["unique_conversations_selected"] == 5
+    assert payload["turns_planned"] == 9
+    assert payload["portfolio_mode"] == "targeted"
+    assert payload["selector_invariant"] is True
+    assert payload["selected_handler_ids"] == list(audit.TARGETED_REPAIR_ORDER)
+    assert payload["executable_handler_ids"] == list(audit.TARGETED_REPAIR_ORDER)
+
+
+def test_internal_v2_execution_is_scoped_by_targeted_selector():
+    source = Path(audit.SCRIPT_PATH).read_text(encoding="utf-8")
+    assert "selected_ids = set(_requested_scenario_ids())" in source
+    assert "if scenario_id not in selected_ids:" in source
+    assert "continue" in source[source.index("if scenario_id not in selected_ids:"):][:120]
