@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - full-evidence-audit-pr278
     paths:
       - .github/workflows/v2-grouped-visit-live-review.yml
   workflow_dispatch:
@@ -22,7 +24,7 @@ permissions:
 
 jobs:
   grouped-visit-live-review:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.audit_mode == 'strict' }}
+    if: ${{ (github.event_name == 'push' && github.ref_type != 'tag') || (github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'strict') }}
     name: Recheck realistic package and authority flows
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -417,7 +419,7 @@ jobs:
 
 
   full-evidence-audit:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'full-evidence' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'full-evidence') || (github.event_name == 'push' && github.ref == 'refs/tags/full-evidence-audit-pr278') }}
     name: Full real-Agent evidence audit
     runs-on: ubuntu-latest
     timeout-minutes: 90
