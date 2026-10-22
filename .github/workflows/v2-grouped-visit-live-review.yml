@@ -18,6 +18,7 @@ on:
           - strict
           - full-evidence
           - targeted-evidence
+          - next-availability-evidence
         default: strict
 
 permissions:
@@ -420,7 +421,7 @@ jobs:
 
 
   full-evidence-audit:
-    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'full-evidence' || inputs.audit_mode == 'targeted-evidence')) || (github.event_name == 'push' && github.ref == 'refs/tags/core-evidence-audit-pr278') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'full-evidence' || inputs.audit_mode == 'targeted-evidence' || inputs.audit_mode == 'next-availability-evidence')) || (github.event_name == 'push' && github.ref == 'refs/tags/core-evidence-audit-pr278') }}
     name: Full real-Agent core evidence audit
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -451,7 +452,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       FULL_AUDIT_LIVE_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      CORE_AUDIT_SCENARIOS: ${{ inputs.audit_mode == 'targeted-evidence' && 'laser_device_consistency,core_nearest_availability_continuation,existing_package_booking,package_comparison,core_package_recovery' || '' }}
+      CORE_AUDIT_SCENARIOS: ${{ inputs.audit_mode == 'targeted-evidence' && 'laser_device_consistency,core_nearest_availability_continuation,existing_package_booking,package_comparison,core_package_recovery' || inputs.audit_mode == 'next-availability-evidence' && 'core_nearest_availability_continuation' || '' }}
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_full_audit_unused
       SUPABASE_SECRET_KEY: sb_secret_full_audit_unused
