@@ -765,7 +765,7 @@ def _action_phrase(
             if status == "confirmed":
                 phrase = phrases[unit.response_goal][style]
             else:
-                status_key = "pending" if status == "pending" else "neutral"
+                status_key = "neutral"
                 booking_phrases = (
                     _BOOKING_PHRASES_AR_BY_STATUS
                     if arabic

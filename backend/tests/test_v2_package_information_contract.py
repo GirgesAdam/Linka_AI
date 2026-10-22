@@ -165,7 +165,19 @@ def test_existing_package_booking_truth_confirms_coverage_and_verified_time_with
         {
             "booking_commercial_basis_step": True,
             "exact_time_requested": True,
-            "availability": {"available_option_count": 1},
+            "availability": {
+                "available_option_count": 1,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                        "start_time_24h": "14:00",
+                        "end_time_24h": "21:00",
+                    }
+                ],
+            },
         }
     )
     contract = build_customer_response_contract([outcome])
@@ -355,3 +367,144 @@ def test_package_information_response_facts_keep_offer_price_but_remove_unrelate
         "is_active": True,
     }
     assert shaped["package_offers"]["requested_scope_complete"] is True
+
+
+
+def test_a1_existing_package_availability_filters_to_bound_device_and_shows_period() -> None:
+    outcome = _package_outcome(
+        owned=[_owned(name="Underarm Prime", remaining=9, status="active", device="Prime Lase")]
+    )
+    outcome.facts.update(
+        {
+            "booking_commercial_basis_step": True,
+            "exact_time_requested": False,
+            "availability": {
+                "available_option_count": 58,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                        "start_time_24h": "14:00",
+                        "end_time_24h": "21:00",
+                    },
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Prime Lase",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                        "start_time_24h": "14:00",
+                        "end_time_24h": "21:00",
+                    },
+                ],
+            },
+        }
+    )
+    text = deterministic_package_contract_reply(
+        build_customer_response_contract([outcome]), arabic=True
+    )
+
+    assert "Prime Lase" in text
+    assert "Ahmed Mahmoud" in text
+    assert "Candela Gentle" not in text
+    assert "2 \u0645" in text
+    assert "9 \u0645" in text
+
+
+def test_a2_existing_package_availability_shows_multiple_compatible_periods() -> None:
+    outcome = _package_outcome(owned=[_owned(device="Prime Lase")])
+    outcome.facts.update(
+        {
+            "booking_commercial_basis_step": True,
+            "exact_time_requested": False,
+            "availability": {
+                "available_option_count": 8,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Prime Lase",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T16:00:00+03:00",
+                        "start_time_24h": "14:00",
+                        "end_time_24h": "16:00",
+                    },
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Prime Lase",
+                        "start_local": "2026-10-23T18:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                        "start_time_24h": "18:00",
+                        "end_time_24h": "21:00",
+                    },
+                ],
+            },
+        }
+    )
+    text = deterministic_package_contract_reply(
+        build_customer_response_contract([outcome]), arabic=True
+    )
+
+    assert "2 \u0645" in text and "4 \u0645" in text
+    assert "6 \u0645" in text and "9 \u0645" in text
+
+
+def test_a3_existing_package_ignores_other_device_availability_and_reports_none() -> None:
+    outcome = _package_outcome(owned=[_owned(device="Prime Lase")])
+    outcome.facts.update(
+        {
+            "booking_commercial_basis_step": True,
+            "exact_time_requested": False,
+            "availability": {
+                "available_option_count": 29,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Candela Gentle",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                    }
+                ],
+            },
+        }
+    )
+    text = deterministic_package_contract_reply(
+        build_customer_response_contract([outcome]), arabic=False
+    )
+
+    assert "Candela Gentle" not in text
+    assert "no availability on the requested day" in text
+
+
+def test_a4_multiple_usable_packages_do_not_claim_device_specific_availability() -> None:
+    outcome = _package_outcome(
+        owned=[
+            _owned(name="Prime Package", device="Prime Lase"),
+            _owned(name="Candela Package", device="Candela Gentle"),
+        ]
+    )
+    outcome.facts.update(
+        {
+            "booking_commercial_basis_step": True,
+            "exact_time_requested": False,
+            "availability": {
+                "available_option_count": 58,
+                "availability_windows": [
+                    {
+                        "doctor_name": "Ahmed Mahmoud",
+                        "laser_device_name": "Prime Lase",
+                        "start_local": "2026-10-23T14:00:00+03:00",
+                        "end_local": "2026-10-23T21:00:00+03:00",
+                    }
+                ],
+            },
+        }
+    )
+    text = deterministic_package_contract_reply(
+        build_customer_response_contract([outcome]), arabic=False
+    )
+
+    assert "Prime Package" in text
+    assert "Candela Package" in text
+    assert "Ahmed Mahmoud" not in text
+    assert "This session will use your current package" not in text

@@ -4,6 +4,7 @@ from datetime import date
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
+from app.agents.availability_presentation import format_availability_windows_reply
 from app.services.agent_v2.response_contract import (
     CustomerResponseContract,
     OwnedPackageInfo,
@@ -210,10 +211,14 @@ def deterministic_package_contract_reply(
     rendered = "\n".join(chunks).strip()
     for unit in contract.units:
         truth = unit.package_truth
-        if truth is None or not any(
-            package.effective_status == "active" and package.sessions_remaining > 0
+        if truth is None:
+            continue
+        usable_packages = [
+            package
             for package in truth.owned_packages
-        ):
+            if package.effective_status == "active" and package.sessions_remaining > 0
+        ]
+        if len(usable_packages) != 1:
             continue
         facts = {fact.key: fact.value for fact in unit.facts}
         if facts.get("booking_commercial_basis_step") is not True:
@@ -221,9 +226,20 @@ def deterministic_package_contract_reply(
         availability = facts.get("availability")
         if not isinstance(availability, dict):
             continue
-        count = availability.get("available_option_count")
+        package_device = usable_packages[0].device_name
+        raw_windows = availability.get("availability_windows")
+        windows = [
+            dict(window)
+            for window in raw_windows
+            if isinstance(window, dict)
+            and (
+                package_device is None
+                or str(window.get("laser_device_name") or "").casefold()
+                == package_device.casefold()
+            )
+        ] if isinstance(raw_windows, list) else []
         exact_time = facts.get("exact_time_requested") is True
-        if isinstance(count, int) and count > 0:
+        if windows:
             if exact_time:
                 rendered += (
                     "\nالجلسة هتتحسب من الباكدج الحالية، والوقت المطلوب متاح. تحب أحجز؟"
@@ -231,12 +247,18 @@ def deterministic_package_contract_reply(
                     else "\nThis session will use your current package, and the requested time is available. Shall I book it?"
                 )
             else:
-                rendered += (
-                    "\nالجلسة هتتحسب من الباكدج الحالية، وفي مواعيد متاحة في اليوم المطلوب."
-                    if arabic
-                    else "\nThis session will use your current package, and there is verified availability on the requested day."
+                availability_text = format_availability_windows_reply(
+                    {"ok": True, "availability_windows": windows},
+                    booking_authorized=False,
                 )
-        elif count == 0:
+                rendered += (
+                    "\nالجلسة هتتحسب من الباكدج الحالية."
+                    if arabic
+                    else "\nThis session will use your current package."
+                )
+                if availability_text:
+                    rendered += "\n" + availability_text
+        else:
             rendered += (
                 "\nالباكدج الحالية تغطي الجلسة، لكن الوقت المطلوب مش متاح."
                 if arabic and exact_time

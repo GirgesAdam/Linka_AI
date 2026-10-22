@@ -79,7 +79,7 @@ def _assert_no_en_confirmation(text: str) -> None:
 
 def test_s1_pending_booking_creation_uses_pending_truth_arabic() -> None:
     text = deterministic_terminal_fallback(_booking_contract("pending"), arabic=True)
-    assert AR_AWAITING_ATTENDANCE in text
+    assert AR_AWAITING_ATTENDANCE not in text
     assert AR_REGISTERED in text or AR_REGISTERED_COLLOQUIAL in text
     _assert_no_ar_confirmation(text)
 
@@ -126,27 +126,27 @@ def test_s5_proposal_confirmation_is_not_existing_appointment_confirmation() -> 
 
 def test_s6_arabic_deterministic_fallback_never_confirms_pending_booking() -> None:
     text = deterministic_terminal_fallback(_booking_contract("pending"), arabic=True)
-    assert AR_AWAITING_ATTENDANCE in text
+    assert AR_AWAITING_ATTENDANCE not in text
     _assert_no_ar_confirmation(text)
 
 
 def test_s7_arabic_terminal_composer_draft_never_confirms_pending_booking() -> None:
     contract = _booking_contract("pending")
     text = resolve_terminal_composer_draft(contract, _draft(), arabic=True)
-    assert AR_AWAITING_ATTENDANCE in text
+    assert AR_AWAITING_ATTENDANCE not in text
     _assert_no_ar_confirmation(text)
 
 
 def test_s8_english_deterministic_fallback_never_confirms_pending_booking() -> None:
     text = deterministic_terminal_fallback(_booking_contract("pending"), arabic=False)
-    assert EN_AWAITING_ATTENDANCE in text.lower()
+    assert EN_AWAITING_ATTENDANCE not in text.lower()
     _assert_no_en_confirmation(text)
 
 
 def test_s9_english_terminal_composer_draft_never_confirms_pending_booking() -> None:
     contract = _booking_contract("pending")
     text = resolve_terminal_composer_draft(contract, _draft(), arabic=False)
-    assert EN_AWAITING_ATTENDANCE in text.lower()
+    assert EN_AWAITING_ATTENDANCE not in text.lower()
     _assert_no_en_confirmation(text)
 
 
@@ -162,7 +162,7 @@ def test_s10_multiservice_single_appointment_pending_truth_is_stated_once() -> N
     )
     contract = build_customer_response_contract([outcome])
     text = deterministic_terminal_fallback(contract, arabic=False)
-    assert text.lower().count(EN_AWAITING_ATTENDANCE) == 1
+    assert text.lower().count(EN_AWAITING_ATTENDANCE) == 0
     _assert_no_en_confirmation(text)
 
 
@@ -175,7 +175,7 @@ def test_s11_package_backed_pending_booking_keeps_package_truth_without_confirma
         arabic=False,
     )
     assert "package_used" in fact_keys
-    assert EN_AWAITING_ATTENDANCE in text.lower()
+    assert EN_AWAITING_ATTENDANCE not in text.lower()
     assert "6 Sessions" in text
     _assert_no_en_confirmation(text)
 
