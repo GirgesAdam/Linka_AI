@@ -211,3 +211,21 @@ def test_no_previous_verified_availability_cannot_continue_cursor() -> None:
         plan,
         None,
     )
+
+
+def test_contextless_show_more_shape_still_requires_scope_clarification() -> None:
+    context = _base_context()
+    understanding = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="availability",
+                entities=TurnEntities(),
+                continues_previous=True,
+            )
+        ]
+    )
+    merged = merge_verified_read_context(understanding, context)
+    plan = plan_turn(merged, PlannerContext(semantic_context=context, active_task=None, now=NOW))
+
+    assert plan.steps[0].disposition == "clarify"
+    assert plan.steps[0].clarification_field == "service"

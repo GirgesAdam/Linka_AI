@@ -1460,6 +1460,9 @@ def _read_customer_packages(request: ReadRequest, context: ReadExecutionContext)
                 row.model_dump(
                     mode="json",
                     include={
+                        "id",
+                        "service_id",
+                        "laser_device_key",
                         "name",
                         "sessions_purchased",
                         "sessions_reserved",

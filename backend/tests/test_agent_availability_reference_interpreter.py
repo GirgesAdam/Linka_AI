@@ -250,3 +250,31 @@ def test_primary_schema_failure_can_recover_on_fallback_model(
     assert result.decision.option_ref == "opt_2"
     assert result.model_name == "fallback-test"
     assert result.structured_output_error is True
+
+
+def test_more_availability_contract_does_not_require_selected_option_anchor() -> None:
+    assert "request for more availability does" in resolver._SYSTEM_PROMPT
+    assert "not require last_selected_option_ref" in resolver._SYSTEM_PROMPT
+    assert "that meaning is refresh_availability" in resolver._SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("customer_text", ["?? ???? ?????", "??? ????? ??? ????"])
+def test_more_availability_paraphrases_can_route_to_refresh_without_anchor(
+    monkeypatch: pytest.MonkeyPatch, customer_text: str
+) -> None:
+    monkeypatch.setattr(settings, "openai_model", "primary-test")
+    monkeypatch.setattr(settings, "openai_fallback_model", "")
+    monkeypatch.setattr(resolver, "build_realtime_interpreter_model", lambda: object())
+    monkeypatch.setattr(resolver, "build_realtime_interpreter_fallback_model", lambda: None)
+    monkeypatch.setattr(
+        resolver,
+        "invoke_typed_structured_output",
+        lambda **_kwargs: ReferenceDecision(action="refresh_availability", option_ref=None),
+    )
+
+    result = interpret_availability_reference_turn(
+        latest_customer_text=customer_text,
+        availability_context=_context(selected=None),
+    )
+
+    assert result.decision == ReferenceDecision(action="refresh_availability", option_ref=None)

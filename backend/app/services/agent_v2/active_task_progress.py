@@ -743,11 +743,14 @@ def _constraint_parameters(state: BookingTaskState | RescheduleTaskState) -> dic
     dumped = constraints.model_dump(mode="json")
     dumped.pop("pulse_usage", None)
     dumped.pop("time_clock_source", None)
-    return {
+    params = {
         key: value
         for key, value in dumped.items()
         if value not in (None, "", {}, [])
     }
+    if isinstance(state, BookingTaskState) and state.derived.selected_package_id is not None:
+        params["package_id"] = state.derived.selected_package_id
+    return params
 
 
 def _clock_resolution_facts(

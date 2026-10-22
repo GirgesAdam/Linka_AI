@@ -723,7 +723,19 @@ def merge_verified_read_context(
     operations = []
     presented = semantic_context.model_input.get("presented_availability")
     for operation in turn.operations:
-        if not operation.continues_previous:
+        verified_service_ref = raw.get("service_ref")
+        current_service = operation.entities.service
+        implicit_verified_booking_continuation = bool(
+            operation.type == "book"
+            and raw.get("operation_type") in {"availability", "book"}
+            and isinstance(verified_service_ref, str)
+            and verified_service_ref
+            and (
+                current_service is None
+                or current_service.ref == verified_service_ref
+            )
+        )
+        if not operation.continues_previous and not implicit_verified_booking_continuation:
             operations.append(operation)
             continue
         selection = operation.selection
@@ -766,6 +778,7 @@ def merge_verified_read_context(
                     set_key="doctor_refs",
                 ),
             ),
+            ("branch", _reference_from_verified(raw, single_key="branch_ref")),
             ("device", _reference_from_verified(raw, single_key="device_ref")),
         )
         for field, value in inherited:

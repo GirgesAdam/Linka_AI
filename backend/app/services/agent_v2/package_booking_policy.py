@@ -135,6 +135,11 @@ def resolve_booking_package(
             usage_mode=usage_mode,
         )
 
+    if usage_mode == "use_existing" and len(eligible) > 1:
+        raise BookingPackagePolicyError(
+            "Multiple usable packages match this booking; an exact package selection is required."
+        )
+
     selected = min(eligible, key=_selection_key)
     return BookingPackageResolution(
         package_id=selected.id,

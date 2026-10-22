@@ -128,7 +128,10 @@ Actions:
   Do not infer a scope dimension merely because the displayed option happens to contain one.
   For a compressed window plus a customer clock, exact_time may carry the semantically understood 24-hour
   clock; Python validates it against the current server-owned exact slots.
-- refresh_availability: the customer wants Linka to check availability again / refresh the same search.
+- refresh_availability: the customer wants Linka to check availability again / refresh the same search, OR asks
+  for additional/next availability results beyond the items already displayed. A request for more availability does
+  not require last_selected_option_ref; it continues the verified search scope and lets existing pagination exclude
+  already-presented windows. This is different from selecting the next displayed option relative to a chosen anchor.
 - new_search: the customer changes or starts an availability search scope such as doctor/service/date/time.
   This includes asking for the nearest available appointment/time and asking for availability earlier or later
   than an authoritative exact time. These are availability-timeline searches, not previous/next displayed-option
@@ -138,8 +141,10 @@ Actions:
   not change time, use time_constraint=null. An explicit
   clock time that does not match any displayed option is a time change/new search, not an ambiguous
   displayed-option reference.
-- clarify: the customer is referring to the displayed options but the intended option cannot be determined
-  safely, including a presented-option-relative request with no usable selected-option anchor. Also clarify an
+- clarify: the customer is referring to one of the displayed options but the intended option cannot be determined
+  safely, including a relative option-selection request with no usable selected-option anchor. Do not use clarify
+  merely because a request for additional availability has no selected anchor; that meaning is refresh_availability.
+  Also clarify an
   earlier/later availability-timeline request when there is no authoritative exact clock anchor. A range/window
   in current_time_constraint is not an exact anchor and must not be converted into one of its boundaries or a
   displayed option. If the customer explicitly expressed a clock and
