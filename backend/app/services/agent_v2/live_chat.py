@@ -833,6 +833,9 @@ def _availability_reference_context_from_turn(
                 value = verified_read_context.get(key)
                 if value not in (None, "", [], {}):
                     context[key] = value
+            has_more = verified_read_context.get("availability_presentation_has_more")
+            if isinstance(has_more, bool):
+                context["availability_presentation_has_more"] = has_more
             return context
 
     for step in reversed(turn.plan.steps):
@@ -889,6 +892,9 @@ def _availability_reference_context_from_turn(
             value = verified_read_context.get(key)
             if value not in (None, "", [], {}):
                 context[key] = value
+        has_more = verified_read_context.get("availability_presentation_has_more")
+        if isinstance(has_more, bool):
+            context["availability_presentation_has_more"] = has_more
         return context
 
     if (
