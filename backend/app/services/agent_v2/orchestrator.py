@@ -2496,7 +2496,11 @@ def _normalize_recent_action_acknowledgments(
                     normalized.append(step.model_copy(update={
                         "disposition": "respond", "reads": [], "write_intent": None,
                         "state_action": "none", "response_goal": "social_ack",
-                        "clarification_field": None, "facts": _acknowledgment_facts("cancel_package"),
+                        "clarification_field": None,
+                        "facts": {
+                            "package_correction_noop": True,
+                            "rejected_package_was_not_created": True,
+                        },
                     }))
                     changed = True
                     continue
@@ -2511,12 +2515,27 @@ def _normalize_recent_action_acknowledgments(
                 recent_package = matching_recent[0]
                 package_id = str(recent_package.get("patient_package_id") or "")
                 row = package_rows.get(package_id)
-                if row is None or getattr(row, "effective_status", None) != "active":
+                if row is None:
                     normalized.append(step.model_copy(update={
-                        "disposition": "respond", "reads": [], "write_intent": None,
-                        "state_action": "none", "response_goal": "social_ack",
-                        "clarification_field": None, "facts": _acknowledgment_facts("cancel_package"),
+                        "disposition": "clarify", "reads": [], "write_intent": None,
+                        "response_goal": "clarification", "clarification_field": "package",
+                        "facts": {"recent_package_recovery_requires_human": True},
                     }))
+                    changed = True
+                    continue
+                if getattr(row, "effective_status", None) != "active":
+                    if str(getattr(row, "effective_status", "")).lower() == "cancelled":
+                        normalized.append(step.model_copy(update={
+                            "disposition": "respond", "reads": [], "write_intent": None,
+                            "state_action": "none", "response_goal": "social_ack",
+                            "clarification_field": None, "facts": _acknowledgment_facts("cancel_package"),
+                        }))
+                    else:
+                        normalized.append(step.model_copy(update={
+                            "disposition": "clarify", "reads": [], "write_intent": None,
+                            "response_goal": "clarification", "clarification_field": "package",
+                            "facts": {"recent_package_recovery_requires_human": True},
+                        }))
                     changed = True
                     continue
                 safe_recovery = (

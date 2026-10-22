@@ -467,6 +467,9 @@ def test_run18_shape_cancels_recent_b_and_does_not_replay_a(monkeypatch) -> None
     assert [kind for kind, _ in calls] == ["cancel_package"]
     assert calls[0][1]["package_id"] == "package-b"
     assert calls[0][1]["_recent_package_recovery_verified"] is True
+    assert result.plan.steps[1].write_intent is not None
+    assert result.plan.steps[1].write_intent.parameters["package_id"] == "package-b"
+    assert result.outcomes[-1].response_goal == "package_cancelled"
     assert result.pending_write is None
 
 
@@ -519,6 +522,15 @@ def test_run16_shape_noops_missing_b_and_does_not_replay_a(monkeypatch) -> None:
 
     assert calls == []
     assert result.pending_write is None
+    assert result.plan.steps[0].facts["acknowledgment"] == {
+        "action": "buy_package",
+        "already_completed": True,
+    }
+    assert result.plan.steps[1].facts == {
+        "package_correction_noop": True,
+        "rejected_package_was_not_created": True,
+    }
+    assert "acknowledgment" not in result.plan.steps[1].facts
 
 
 def test_immediate_package_replay_is_suppressed_after_canonical_validation(monkeypatch) -> None:
@@ -665,6 +677,8 @@ def test_recent_package_recovery_fails_closed_on_financial_or_usage_impact(
 
     assert calls == []
     assert any(trace.disposition_after == "clarify" for trace in result.traces)
+    assert result.plan.steps[0].facts == {"recent_package_recovery_requires_human": True}
+    assert "acknowledgment" not in result.plan.steps[0].facts
 
 
 def test_later_explicit_package_purchase_remains_allowed(monkeypatch) -> None:

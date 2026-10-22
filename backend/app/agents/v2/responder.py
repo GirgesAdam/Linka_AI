@@ -1119,6 +1119,17 @@ def _deterministic_typed_unit_reply(
     booking_ack_reply = _deterministic_same_booking_ack_reply(unit, arabic=arabic)
     if booking_ack_reply is not None:
         return booking_ack_reply
+    if (
+        unit.response_goal == "social_ack"
+        and unit.action_truth is None
+        and _fact_value(unit, "package_correction_noop") is True
+        and _fact_value(unit, "rejected_package_was_not_created") is True
+    ):
+        return (
+            "تمام، هنخلي الباكدجات اللي اتسجلت بس."
+            if arabic
+            else "Okay, we'll keep only the packages that were actually registered."
+        )
     if unit.response_goal == "social_ack" and unit.action_truth is not None:
         return deterministic_terminal_fallback(contract, arabic=arabic)
     if is_pure_supported_terminal_contract(contract):
