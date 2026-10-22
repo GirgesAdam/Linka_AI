@@ -1096,6 +1096,8 @@ def compose_availability_contract_reply(
         continuation=continuation,
         reference_date=reference_date,
     )
+    if len(contract.units) == 1:
+        return fallback_text, "deterministic:availability-contract-fastpath"
 
     try:
         messages = _build_availability_composer_messages(
