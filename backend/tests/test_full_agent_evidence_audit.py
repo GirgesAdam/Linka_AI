@@ -178,6 +178,21 @@ def test_single_next_availability_inventory_is_one_conversation_two_turns(monkey
     ]
 
 
+
+def test_single_existing_package_inventory_is_one_conversation_two_turns(monkeypatch):
+    monkeypatch.setenv(audit.AUDIT_SELECTION_ENV, "existing_package_booking")
+
+    specs = audit.scenario_inventory()
+    payload = audit.inventory_payload(specs)
+
+    assert [item.scenario_id for item in specs] == ["existing_package_booking"]
+    assert payload["unique_conversations_selected"] == 1
+    assert payload["turns_planned"] == 2
+    assert payload["portfolio_mode"] == "targeted"
+    assert payload["selector_invariant"] is True
+    assert payload["selected_handler_ids"] == ["existing_package_booking"]
+    assert payload["executable_handler_ids"] == ["existing_package_booking"]
+
 def test_next_availability_core_wrapper_requires_real_later_day_fixture() -> None:
     source = Path(audit.SCRIPT_PATH).read_text(encoding="utf-8")
     start = source.index("    def core_nearest_availability_continuation")

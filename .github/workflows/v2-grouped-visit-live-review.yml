@@ -21,6 +21,7 @@ on:
           - full-evidence
           - targeted-evidence
           - next-availability-evidence
+          - existing-package-evidence
         default: strict
 
 permissions:
@@ -423,7 +424,7 @@ jobs:
 
 
   full-evidence-audit:
-    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'full-evidence' || inputs.audit_mode == 'targeted-evidence' || inputs.audit_mode == 'next-availability-evidence')) || (github.event_name == 'push' && (github.ref == 'refs/tags/core-evidence-audit-pr278' || (github.ref == 'refs/tags/core-next-availability-pr278-01d' || github.ref == 'refs/tags/core-next-availability-pr278-01e'))) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'full-evidence' || inputs.audit_mode == 'targeted-evidence' || inputs.audit_mode == 'next-availability-evidence' || inputs.audit_mode == 'existing-package-evidence')) || (github.event_name == 'push' && (github.ref == 'refs/tags/core-evidence-audit-pr278' || (github.ref == 'refs/tags/core-next-availability-pr278-01d' || github.ref == 'refs/tags/core-next-availability-pr278-01e'))) }}
     name: Full real-Agent core evidence audit
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -454,7 +455,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       FULL_AUDIT_LIVE_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      CORE_AUDIT_SCENARIOS: ${{ inputs.audit_mode == 'targeted-evidence' && 'laser_device_consistency,core_nearest_availability_continuation,existing_package_booking,package_comparison,core_package_recovery' || (inputs.audit_mode == 'next-availability-evidence' || github.ref == 'refs/tags/core-next-availability-pr278-01d' || github.ref == 'refs/tags/core-next-availability-pr278-01e') && 'core_nearest_availability_continuation' || '' }}
+      CORE_AUDIT_SCENARIOS: ${{ inputs.audit_mode == 'targeted-evidence' && 'laser_device_consistency,core_nearest_availability_continuation,existing_package_booking,package_comparison,core_package_recovery' || inputs.audit_mode == 'existing-package-evidence' && 'existing_package_booking' || (inputs.audit_mode == 'next-availability-evidence' || github.ref == 'refs/tags/core-next-availability-pr278-01d' || github.ref == 'refs/tags/core-next-availability-pr278-01e') && 'core_nearest_availability_continuation' || '' }}
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_full_audit_unused
       SUPABASE_SECRET_KEY: sb_secret_full_audit_unused
