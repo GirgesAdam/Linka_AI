@@ -176,3 +176,19 @@ def test_single_next_availability_inventory_is_one_conversation_two_turns(monkey
     assert payload["executable_handler_ids"] == [
         "core_nearest_availability_continuation"
     ]
+
+
+def test_next_availability_core_wrapper_requires_real_later_day_fixture() -> None:
+    source = Path(audit.SCRIPT_PATH).read_text(encoding="utf-8")
+    start = source.index("    def core_nearest_availability_continuation")
+    end = source.index("    def core_normal_booking", start)
+    wrapper = source[start:end]
+
+    assert 'messages=[prepared.messages[0], "طب اللي بعده؟"]' in wrapper
+    assert "get_clinic_adapter" in wrapper
+    assert "AvailabilityRequest" in wrapper
+    assert "availability_windows_from_slots" in wrapper
+    assert "AVAILABILITY_PRESENTATION_PAGE_SIZE" in wrapper
+    assert "qa_nearest_availability_date=" in wrapper
+    assert "qa_later_availability_date=" in wrapper
+    assert "mock" not in wrapper.casefold()

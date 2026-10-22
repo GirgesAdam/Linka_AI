@@ -445,11 +445,91 @@ def _run_internal_v2() -> int:
         )
 
     def core_nearest_availability_continuation(db, workspace):
+        from app.agents.availability_presentation import availability_windows_from_slots
+        from app.agents.v2.availability_pagination import AVAILABILITY_PRESENTATION_PAGE_SIZE
+
         prepared = scenarios._HANDLERS["nearest_available"](db, workspace)
-        return clone(
-            prepared,
-            [prepared.messages[0], "طب اللي بعده؟"],
-            observation="core_journey=nearest_availability_natural_continuation",
+        service = next(
+            (
+                row
+                for row in db.scalars(
+                    core.select(core.Service).where(
+                        core.Service.workspace_id == workspace.id,
+                        core.Service.is_active.is_(True),
+                    )
+                )
+                if row.name and row.name in prepared.messages[0]
+            ),
+            None,
+        )
+        if service is None:
+            raise RuntimeError("Core nearest-availability fixture service could not be resolved.")
+        catalog = core.build_clinic_catalog(db, workspace)
+        doctors = [
+            row
+            for row in catalog.get("doctors", [])
+            if isinstance(row, dict)
+            and row.get("id")
+            and str(service.id) in {str(value) for value in (row.get("service_ids") or [])}
+        ]
+        if not doctors:
+            raise RuntimeError("Core nearest-availability fixture has no canonical service doctors.")
+        adapter = core.get_clinic_adapter(db=db, workspace=workspace)
+        branch_id = str(workspace.primary_branch_id)
+        today = core.datetime.now(core.UTC).date()
+        available_days: list[tuple[object, list[dict[str, object]]]] = []
+        for offset in range(15):
+            day = today + core.timedelta(days=offset)
+            slots: list[dict[str, object]] = []
+            for doctor in doctors:
+                result = adapter.get_availability(
+                    core.AvailabilityRequest(
+                        branch_id=branch_id,
+                        service_id=str(service.id),
+                        booking_date=day,
+                        doctor_id=str(doctor["id"]),
+                    )
+                )
+                tz = core.ZoneInfo(result.timezone)
+                slots.extend(
+                    {
+                        "doctor_id": slot.doctor_id,
+                        "doctor_name": slot.doctor_name,
+                        "laser_device_key": slot.laser_device_key,
+                        "laser_device_name": slot.laser_device_name,
+                        "start_local": slot.start_at.astimezone(tz).isoformat(),
+                        "end_local": slot.end_at.astimezone(tz).isoformat(),
+                    }
+                    for slot in result.slots
+                )
+            windows = availability_windows_from_slots(slots)
+            if windows:
+                available_days.append((day, windows))
+            if len(available_days) >= 2:
+                break
+        if len(available_days) < 2:
+            raise RuntimeError(
+                "Core nearest-availability fixture requires a canonical later availability day."
+            )
+        first_day, first_windows = available_days[0]
+        later_day, later_windows = available_days[1]
+        if len(first_windows) > AVAILABILITY_PRESENTATION_PAGE_SIZE:
+            raise RuntimeError(
+                "Core nearest-availability fixture must exhaust Day A presentation in one page."
+            )
+        observations = [
+            *prepared.observations,
+            "core_journey=nearest_availability_natural_continuation",
+            f"qa_nearest_availability_date={first_day.isoformat()}",
+            f"qa_nearest_window_count={len(first_windows)}",
+            f"qa_later_availability_date={later_day.isoformat()}",
+            f"qa_later_window_count={len(later_windows)}",
+        ]
+        return core.PreparedScenario(
+            patient=prepared.patient,
+            messages=[prepared.messages[0], "طب اللي بعده؟"],
+            observations=observations,
+            post=prepared.post,
         )
 
     def core_normal_booking(db, workspace):
