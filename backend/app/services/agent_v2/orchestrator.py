@@ -2250,7 +2250,11 @@ def _bare_recent_booking_confirmation_ack(
     """
 
     if (
-        step.operation_type != "confirm_appointment"
+        step.operation_type not in {"confirm_appointment", "confirm_booking_proposal"}
+        or (
+            step.operation_type == "confirm_booking_proposal"
+            and (step.disposition != "clarify" or step.write_intent is not None)
+        )
         or recent_action.get("operation_type") != "book"
         or recent_action.get("status") not in {"pending", "confirmed"}
         or not operation.continues_previous

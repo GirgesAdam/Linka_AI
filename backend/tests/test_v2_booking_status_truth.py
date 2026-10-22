@@ -249,13 +249,14 @@ def _same_booking_ack_unit(status: str | None):
     return build_customer_response_contract([outcome]).units[0]
 
 
-def test_repeat_booking_acknowledgment_pending_status_is_truthful() -> None:
+def test_repeat_booking_acknowledgment_pending_status_stays_internal() -> None:
     text = _deterministic_same_booking_ack_reply(
         _same_booking_ack_unit("pending"),
         arabic=True,
     )
     assert text is not None
-    assert AR_PENDING in text
+    assert AR_PENDING not in text
+    assert AR_REGISTERED in text or AR_REGISTERED_COLLOQUIAL in text
     _assert_no_ar_confirmation(text)
 
 

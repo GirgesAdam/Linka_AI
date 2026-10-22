@@ -1514,6 +1514,58 @@ def merge_verified_action_context(
         for operation in turn.operations:
             if (
                 operation.continues_previous
+                and operation.type == "book"
+                and recent_appointment is not None
+                and not operation.fresh_task
+                and operation.active_task_relationship != "replace"
+                and operation.selection is None
+                and operation.entities.appointment is None
+                and isinstance(raw.get("time"), dict)
+                and raw["time"].get("mode") == "exact"
+                and operation.entities.time is not None
+                and operation.entities.time.mode == "exact"
+                and operation.entities.time.start_time not in (None, "")
+                and operation.entities.time.start_time != raw["time"].get("start_time")
+                and (
+                    operation.entities.date is None
+                    or not isinstance(raw.get("date"), dict)
+                    or (
+                        operation.entities.date.mode == raw["date"].get("mode") == "exact"
+                        and operation.entities.date.start_date == raw["date"].get("start_date")
+                    )
+                )
+                and (
+                    operation.entities.service is None
+                    or operation.entities.service.ref in (None, raw.get("service_ref"))
+                )
+                and (
+                    operation.entities.doctor is None
+                    or operation.entities.doctor.ref in (None, raw.get("doctor_ref"))
+                )
+                and (
+                    operation.entities.device is None
+                    or operation.entities.device.ref in (None, raw.get("device_ref"))
+                )
+                and str(operation.package_usage or "unspecified")
+                == str(raw.get("package_usage") or "unspecified")
+            ):
+                entities = operation.entities
+                if entities.date is None and isinstance(raw.get("date"), dict):
+                    entities = entities.model_copy(
+                        update={"date": DateConstraint.model_validate(raw["date"])}
+                    )
+                operation = operation.model_copy(
+                    update={
+                        "type": "reschedule",
+                        "entities": entities,
+                        "source_appointment": AppointmentSelector(
+                            appointment=recent_appointment
+                        ),
+                    }
+                )
+                changed = True
+            elif (
+                operation.continues_previous
                 and operation.type == "cancel_appointment"
                 and recent_appointment is not None
             ):

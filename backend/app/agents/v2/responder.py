@@ -1091,11 +1091,7 @@ def _deterministic_same_booking_ack_reply(
     if statuses == {"confirmed"}:
         return "\u0627\u0644\u062d\u062c\u0632 \u0645\u062a\u0623\u0643\u062f \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already confirmed."
     if statuses == {"pending"}:
-        return (
-            "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0648\u062d\u0627\u0644\u062a\u0647 \u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631."
-            if arabic
-            else "The booking is already registered and is pending."
-        )
+        return "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already registered."
     return "\u0627\u0644\u062d\u062c\u0632 \u0627\u062a\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644." if arabic else "The booking is already registered."
 
 
