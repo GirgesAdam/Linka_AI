@@ -25,6 +25,7 @@ from app.services.agent_v2.planner import PlannerContext, plan_turn
 
 NOW = datetime(2026, 10, 2, 10, 0, tzinfo=UTC)
 APPOINTMENT_ID = "appointment-a"
+APPOINTMENT_B_ID = "appointment-b"
 SERVICE_ID = "service-hydrafacial"
 DOCTOR_ID = "doctor-mariam"
 
@@ -55,7 +56,16 @@ def _catalog(*, start_local: str = "2026-10-02T14:00:00+03:00") -> dict[str, obj
                 "doctor_name": "دكتورة مريم",
                 "status": "confirmed",
                 "start_local": start_local,
-            }
+            },
+            {
+                "appointment_id": APPOINTMENT_B_ID,
+                "service_id": SERVICE_ID,
+                "service_name": "Hydrafacial",
+                "doctor_id": DOCTOR_ID,
+                "doctor_name": "دكتورة مريم",
+                "status": "confirmed",
+                "start_local": "2026-10-03T11:00:00+03:00",
+            },
         ],
     }
 
@@ -107,6 +117,93 @@ def _appointment_outcome(
             },
         },
     )
+
+
+def _turn_with_read(
+    *,
+    operation_type: str,
+    read_kind: str,
+    parameters: dict[str, object],
+    verified_parameters: dict[str, object] | None = None,
+    execution_intent: str = "informational",
+    state_action: str = "none",
+    active_task: object | None = None,
+) -> SimpleNamespace:
+    step = SimpleNamespace(
+        operation_index=0,
+        operation_type=operation_type,
+        disposition="read",
+        write_intent=None,
+        state_action=state_action,
+        reads=(SimpleNamespace(kind=read_kind, parameters=parameters),),
+        facts=dict(parameters),
+    )
+    trace = SimpleNamespace(
+        operation_index=0,
+        operation_type=operation_type,
+        outcome=None,
+        verified_parameters=verified_parameters or {},
+    )
+    return SimpleNamespace(
+        plan=SimpleNamespace(steps=(step,)),
+        understanding=SimpleNamespace(
+            operations=(SimpleNamespace(execution_intent=execution_intent),)
+        ),
+        traces=(trace,),
+        outcomes=(),
+        active_task=active_task,
+        pending_write=None,
+    )
+
+
+def _persisted_context_after(
+    turn: SimpleNamespace,
+    *,
+    previous: dict[str, object] | None,
+) -> dict[str, object] | None:
+    return _verified_read_context_from_turn(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        turn=turn,
+        previous_read_context=previous,
+    )
+
+
+def _ref_for_appointment(context, appointment_id: str) -> str:
+    return next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "appointment" and target.canonical_id == appointment_id
+    )
+
+
+def _assert_challenge_rereads(
+    read_context: dict[str, object],
+    *,
+    expected_appointment_id: str,
+) -> None:
+    context = with_safe_read_context(_semantic_context(), read_context=read_context)
+    recent = context.model_input["recent_verified_read"]
+    appointment_ref = recent.get("appointment_ref")
+    assert isinstance(appointment_ref, str)
+    assert context.resolve(appointment_ref, expected_kind="appointment") == expected_appointment_id
+
+    turn = TiaTurnUnderstanding(operations=[_challenge_operation("11:00")])
+    merged = merge_verified_read_context(turn, context)
+    operation = merged.operations[0]
+    assert operation.appointment_fact_challenge == "time"
+    assert operation.continues_previous is True
+    assert operation.entities.time == _time("11:00")
+    assert operation.entities.appointment == EntityReference(ref=appointment_ref)
+
+    plan = plan_turn(
+        merged,
+        PlannerContext(semantic_context=context, active_task=None, now=NOW),
+    )
+    step = plan.steps[0]
+    assert step.reads[0].kind == "appointments"
+    assert step.reads[0].parameters == {"appointment_id": expected_appointment_id}
+    assert step.write_intent is None
 
 
 def test_unique_appointment_read_persists_verified_result_identity() -> None:
@@ -252,6 +349,223 @@ def test_time_challenge_binds_verified_target_and_rereads_by_id_only() -> None:
             "claimed_time": "18:00",
         }
     }
+
+
+def test_f8_a_price_side_read_preserves_unique_appointment_for_time_challenge() -> None:
+    previous = {
+        "operation_type": "appointment_list",
+        "appointment_id": APPOINTMENT_ID,
+    }
+    side_context = _persisted_context_after(
+        _turn_with_read(
+            operation_type="pricing",
+            read_kind="service_catalog",
+            parameters={"service_id": SERVICE_ID},
+        ),
+        previous=previous,
+    )
+
+    assert side_context == {
+        "operation_type": "pricing",
+        "service_id": SERVICE_ID,
+        "appointment_id": APPOINTMENT_ID,
+    }
+    _assert_challenge_rereads(
+        side_context,
+        expected_appointment_id=APPOINTMENT_ID,
+    )
+
+
+def test_f8_b_service_info_side_read_preserves_unique_appointment_for_challenge() -> None:
+    previous = {
+        "operation_type": "appointment_list",
+        "appointment_id": APPOINTMENT_ID,
+    }
+    side_context = _persisted_context_after(
+        _turn_with_read(
+            operation_type="service_info",
+            read_kind="service_catalog",
+            parameters={"service_id": SERVICE_ID},
+        ),
+        previous=previous,
+    )
+
+    assert side_context is not None
+    assert side_context["operation_type"] == "service_info"
+    assert side_context["appointment_id"] == APPOINTMENT_ID
+    _assert_challenge_rereads(
+        side_context,
+        expected_appointment_id=APPOINTMENT_ID,
+    )
+
+
+def test_f8_c_new_unique_appointment_read_replaces_previous_anchor() -> None:
+    previous = {
+        "operation_type": "appointment_list",
+        "appointment_id": APPOINTMENT_ID,
+    }
+    current = _persisted_context_after(
+        _turn_with_read(
+            operation_type="appointment_list",
+            read_kind="appointments",
+            parameters={},
+            verified_parameters={"appointment_id": APPOINTMENT_B_ID},
+        ),
+        previous=previous,
+    )
+
+    assert current == {
+        "operation_type": "appointment_list",
+        "appointment_id": APPOINTMENT_B_ID,
+    }
+    _assert_challenge_rereads(
+        current,
+        expected_appointment_id=APPOINTMENT_B_ID,
+    )
+
+
+def test_f8_d_multi_appointment_read_clears_unique_anchor_authority() -> None:
+    previous = {
+        "operation_type": "appointment_list",
+        "appointment_id": APPOINTMENT_ID,
+    }
+    current = _persisted_context_after(
+        _turn_with_read(
+            operation_type="appointment_list",
+            read_kind="appointments",
+            parameters={},
+            verified_parameters={
+                "appointment_ids": [APPOINTMENT_ID, APPOINTMENT_B_ID],
+            },
+        ),
+        previous=previous,
+    )
+
+    assert current == {"operation_type": "appointment_list"}
+    context = with_safe_read_context(_semantic_context(), read_context=current)
+    assert "appointment_ref" not in context.model_input["recent_verified_read"]
+
+    merged = merge_verified_read_context(
+        TiaTurnUnderstanding(operations=[_challenge_operation("11:00")]),
+        context,
+    )
+    assert merged.operations[0].entities.appointment is None
+    step = plan_turn(
+        merged,
+        PlannerContext(semantic_context=context, active_task=None, now=NOW),
+    ).steps[0]
+    assert step.disposition == "clarify"
+    assert step.clarification_field == "appointment"
+    assert step.write_intent is None
+
+
+def test_f8_e_fresh_unrelated_task_does_not_retain_old_appointment_anchor() -> None:
+    previous = {
+        "operation_type": "appointment_list",
+        "appointment_id": APPOINTMENT_ID,
+    }
+    current = _persisted_context_after(
+        _turn_with_read(
+            operation_type="book",
+            read_kind="availability",
+            parameters={"service_id": SERVICE_ID},
+            execution_intent="execute",
+            state_action="replace_active",
+            active_task=SimpleNamespace(task_type="booking"),
+        ),
+        previous=previous,
+    )
+
+    assert current is not None
+    assert current["operation_type"] == "book"
+    assert "appointment_id" not in current
+    context = with_safe_read_context(_semantic_context(), read_context=current)
+    assert "appointment_ref" not in context.model_input["recent_verified_read"]
+
+    merged = merge_verified_read_context(
+        TiaTurnUnderstanding(operations=[_challenge_operation("11:00")]),
+        context,
+    )
+    assert merged.operations[0].entities.appointment is None
+    step = plan_turn(
+        merged,
+        PlannerContext(semantic_context=context, active_task=None, now=NOW),
+    ).steps[0]
+    assert step.disposition == "clarify"
+    assert step.write_intent is None
+
+
+def test_f8_f_explicit_different_appointment_reference_wins_over_carried_anchor() -> None:
+    side_context = _persisted_context_after(
+        _turn_with_read(
+            operation_type="pricing",
+            read_kind="service_catalog",
+            parameters={"service_id": SERVICE_ID},
+        ),
+        previous={
+            "operation_type": "appointment_list",
+            "appointment_id": APPOINTMENT_ID,
+        },
+    )
+    assert side_context is not None
+    context = with_safe_read_context(_semantic_context(), read_context=side_context)
+    b_ref = _ref_for_appointment(context, APPOINTMENT_B_ID)
+
+    operation = TurnOperation(
+        type="appointment_list",
+        entities=TurnEntities(
+            appointment=EntityReference(ref=b_ref),
+            time=_time("11:00"),
+        ),
+        execution_intent="informational",
+        appointment_fact_challenge="none",
+        continues_previous=False,
+    )
+    plan = plan_turn(
+        TiaTurnUnderstanding(operations=[operation]),
+        PlannerContext(semantic_context=context, active_task=None, now=NOW),
+    )
+    step = plan.steps[0]
+    assert step.reads[0].parameters["appointment_id"] == APPOINTMENT_B_ID
+    assert step.reads[0].parameters["appointment_id"] != APPOINTMENT_ID
+    assert step.write_intent is None
+
+
+def test_f8_g_immediate_challenge_control_still_rereads_same_appointment() -> None:
+    _assert_challenge_rereads(
+        {
+            "operation_type": "appointment_list",
+            "appointment_id": APPOINTMENT_ID,
+        },
+        expected_appointment_id=APPOINTMENT_ID,
+    )
+
+
+def test_verified_appointment_anchor_is_bounded_to_one_harmless_side_read() -> None:
+    first_side = _persisted_context_after(
+        _turn_with_read(
+            operation_type="pricing",
+            read_kind="service_catalog",
+            parameters={"service_id": SERVICE_ID},
+        ),
+        previous={
+            "operation_type": "appointment_list",
+            "appointment_id": APPOINTMENT_ID,
+        },
+    )
+    assert first_side is not None
+    assert first_side["appointment_id"] == APPOINTMENT_ID
+
+    second_side = _persisted_context_after(
+        _turn_with_read(
+            operation_type="service_info",
+            read_kind="service_catalog",
+            parameters={"service_id": SERVICE_ID},
+        ),
+        previous=first_side,
+    )
+    assert second_side is not None
+    assert "appointment_id" not in second_side
 
 
 def test_time_challenge_without_verified_target_fails_non_destructively() -> None:
