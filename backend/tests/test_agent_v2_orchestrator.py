@@ -1208,6 +1208,7 @@ def _run_ra_g6_unpresented_exact_time_case(
     continuation_available: bool = True,
     device_auto_resolved: bool = False,
     stale_reference_selection: bool = False,
+    narrow_exact_time: str | None = None,
 ):
     task = BookingTaskState(
         status="awaiting_slot",
@@ -1322,7 +1323,7 @@ def _run_ra_g6_unpresented_exact_time_case(
             decision=ReferenceDecision(
                 action=("select_presented_option" if stale_reference_selection else "new_search"),
                 option_ref="stale-option" if stale_reference_selection else None,
-                exact_time=None,
+                exact_time=narrow_exact_time,
                 selection_scope="none",
             ),
             model_name="deterministic-test",
@@ -1489,7 +1490,11 @@ def _run_ra_g6_unpresented_exact_time_case(
     args = _runtime_args()
     args.update({
         "catalog": catalog,
-        "history": [HumanMessage(content="الساعة 8 مساء مناسبة")],
+        "history": [
+            HumanMessage(
+                content=("20:00" if narrow_exact_time is not None else "الساعة 8 مساء مناسبة")
+            )
+        ],
         "availability_reference_context": None if stale_reference_selection else reference_context,
     })
     result = runtime.orchestrate_v2_turn(**args)
@@ -1518,6 +1523,23 @@ def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
     assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
     assert result.outcomes[-1].response_goal == "booking_proposal"
     assert saved and saved[-1].proposal is not None
+
+
+def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        narrow_exact_time="20:00",
+    )
+
+    assert result.reference_action == "new_search"
+    assert result.full_interpreter_called is True
+    assert result.pending_write is None
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
 
 
 def test_ra_g6_unpresented_exact_time_fails_closed_when_fresh_continuation_is_unavailable(
