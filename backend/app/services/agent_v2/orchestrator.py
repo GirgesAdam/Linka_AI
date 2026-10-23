@@ -39,11 +39,7 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.agents.v2.turn_interpreter import (
-    interpret_customer_turn_v2,
-    merge_presented_availability_context,
-    merge_verified_read_context,
-)
+from app.agents.v2.turn_interpreter import interpret_customer_turn_v2
 from app.integrations.clinic.base import ClinicAdapter
 from app.models.patient import Patient
 from app.models.workspace import Workspace
@@ -2939,37 +2935,6 @@ def orchestrate_v2_turn(
         full_interpreter_called = False
     elif grouped_reference is not None:
         understanding, initial_task = grouped_reference
-        full_interpreter_called = False
-    elif (
-        decision is not None
-        and decision.action == "new_search"
-        and exact_reference_time is not None
-        and explicit_user_time is not None
-        and exact_reference_time == explicit_user_time
-    ):
-        understanding = TiaTurnUnderstanding(
-            operations=[
-                TurnOperation(
-                    type="availability",
-                    entities=TurnEntities(
-                        time=TimeConstraint(
-                            mode="exact",
-                            start_time=explicit_user_time,
-                            start_time_ambiguity="none",
-                        )
-                    ),
-                    execution_intent="informational",
-                    continues_previous=True,
-                )
-            ]
-        )
-        # The narrow resolver understands only the changed clock. Rebind the
-        # unchanged service/doctor/device/date from the current server-owned
-        # displayed availability before planning the fresh canonical read.
-        understanding = merge_presented_availability_context(
-            understanding, semantic_context
-        )
-        understanding = merge_verified_read_context(understanding, semantic_context)
         full_interpreter_called = False
     elif decision is not None and decision.action == "select_presented_option" and decision.option_ref:
         active_selection_type = (
