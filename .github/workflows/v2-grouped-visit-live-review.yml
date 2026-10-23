@@ -574,9 +574,9 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          git fetch origin 8dd566a10bb49edb8238f0ce8066c0e346f367f4 --depth=1
-          git checkout --detach 8dd566a10bb49edb8238f0ce8066c0e346f367f4
-          test "$(git rev-parse HEAD)" = "8dd566a10bb49edb8238f0ce8066c0e346f367f4"
+          git fetch origin 2f33339f882291f59e665b9a2d9ddff16500e27a --depth=1
+          git checkout --detach 2f33339f882291f59e665b9a2d9ddff16500e27a
+          test "$(git rev-parse HEAD)" = "2f33339f882291f59e665b9a2d9ddff16500e27a"
           test -z "$(git status --porcelain)"
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -619,7 +619,7 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          test "$(git rev-parse HEAD)" = "8dd566a10bb49edb8238f0ce8066c0e346f367f4"
+          test "$(git rev-parse HEAD)" = "2f33339f882291f59e665b9a2d9ddff16500e27a"
           test -z "$(git status --porcelain)"
           echo "PROMPT03_EXACT_HEAD=$(git rev-parse HEAD)"
       - name: Run exactly one PROMPT-03 hybrid provider audit

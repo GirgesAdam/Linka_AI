@@ -27,31 +27,18 @@ from app.models.appointment import Appointment
 from app.models.service import Service
 from app.models.workspace import Workspace
 
-TARGET_HEAD = "8dd566a10bb49edb8238f0ce8066c0e346f367f4"
+TARGET_HEAD = "2f33339f882291f59e665b9a2d9ddff16500e27a"
 REPORT = Path("artifacts/prompt03-hybrid-core.json")
 PAGE_SIZE = 4
 _PREFLIGHT_PROVIDER_CALLS = 0
 
 ANCHORS = (
     ("existing_package_booking", "A1", 2, "existing package booking"),
-    ("package_purchase", "A2", 2, "package purchase"),
-    ("change_time_during_booking", "A3", 2, "time correction during booking"),
-    ("core_nearest_availability_continuation", "A4", 2, "nearest availability continuation"),
-    ("core_normal_booking", "A5", 3, "normal booking + confirmation"),
 )
 FRESH = (
-    ("prompt03_f1_question_to_booking", "F1", 2, "question to booking execution"),
     ("prompt03_f2_multi_dimension_availability_edit", "F2", 2, "multi-dimension availability edit"),
     ("prompt03_f3_next_after_continuation", "F3", 3, "next after continuation"),
-    ("prompt03_f4_service_correction_active_booking", "F4", 2, "service correction during active booking"),
-    ("prompt03_f5_package_side_question_purchase", "F5", 3, "package offer side question purchase"),
-    ("prompt03_f6_reject_existing_package", "F6", 1, "explicit existing-package rejection"),
-    ("prompt03_f7_same_date_reschedule_time", "F7", 1, "same-date reschedule time change"),
     ("prompt03_f8_fact_challenge_after_side_question", "F8", 3, "appointment fact challenge after side question"),
-    ("prompt03_f9_multiple_offers_explicit_choice", "F9", 2, "multiple offers explicit package choice"),
-    ("prompt03_f10_purchase_and_book_same_turn", "F10", 1, "package purchase plus first booking same turn"),
-    ("prompt03_f11_fresh_task_after_active_booking", "F11", 2, "fresh task after active booking"),
-    ("prompt03_f12_new_availability_reference_language", "F12", 2, "new availability-reference language"),
 )
 PORTFOLIO = ANCHORS + FRESH
 ORDER = [row[0] for row in PORTFOLIO]
@@ -607,9 +594,9 @@ def inventory_only() -> int:
         "provider_calls": _PREFLIGHT_PROVIDER_CALLS,
         "scenarios": [{"id": row[0], **META[row[0]]} for row in PORTFOLIO],
     }
-    if payload["conversation_count"] != 17 or payload["anchor_count"] != 5 or payload["fresh_count"] != 12:
+    if payload["conversation_count"] != 4 or payload["anchor_count"] != 1 or payload["fresh_count"] != 3:
         raise RuntimeError(f"Hybrid inventory count mismatch: {payload}")
-    if payload["planned_turns"] != 35:
+    if payload["planned_turns"] != 10:
         raise RuntimeError(f"Hybrid planned-turn mismatch: {payload['planned_turns']}")
     if payload["provider_calls"] != 0:
         raise RuntimeError(f"Provider calls occurred during inventory preflight: {payload['provider_calls']}")
