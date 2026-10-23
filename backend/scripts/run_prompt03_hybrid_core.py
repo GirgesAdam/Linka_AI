@@ -27,31 +27,15 @@ from app.models.appointment import Appointment
 from app.models.service import Service
 from app.models.workspace import Workspace
 
-TARGET_HEAD = "8dd566a10bb49edb8238f0ce8066c0e346f367f4"
+TARGET_HEAD = "241aa604e6cea2851641f7f16e47c0fe9dc7c4c9"
 REPORT = Path("artifacts/prompt03-hybrid-core.json")
 PAGE_SIZE = 4
 _PREFLIGHT_PROVIDER_CALLS = 0
 
-ANCHORS = (
-    ("existing_package_booking", "A1", 2, "existing package booking"),
-    ("package_purchase", "A2", 2, "package purchase"),
-    ("change_time_during_booking", "A3", 2, "time correction during booking"),
-    ("core_nearest_availability_continuation", "A4", 2, "nearest availability continuation"),
-    ("core_normal_booking", "A5", 3, "normal booking + confirmation"),
-)
+ANCHORS = ()
 FRESH = (
-    ("prompt03_f1_question_to_booking", "F1", 2, "question to booking execution"),
-    ("prompt03_f2_multi_dimension_availability_edit", "F2", 2, "multi-dimension availability edit"),
-    ("prompt03_f3_next_after_continuation", "F3", 3, "next after continuation"),
-    ("prompt03_f4_service_correction_active_booking", "F4", 2, "service correction during active booking"),
-    ("prompt03_f5_package_side_question_purchase", "F5", 3, "package offer side question purchase"),
-    ("prompt03_f6_reject_existing_package", "F6", 1, "explicit existing-package rejection"),
-    ("prompt03_f7_same_date_reschedule_time", "F7", 1, "same-date reschedule time change"),
-    ("prompt03_f8_fact_challenge_after_side_question", "F8", 3, "appointment fact challenge after side question"),
-    ("prompt03_f9_multiple_offers_explicit_choice", "F9", 2, "multiple offers explicit package choice"),
-    ("prompt03_f10_purchase_and_book_same_turn", "F10", 1, "package purchase plus first booking same turn"),
-    ("prompt03_f11_fresh_task_after_active_booking", "F11", 2, "fresh task after active booking"),
-    ("prompt03_f12_new_availability_reference_language", "F12", 2, "new availability-reference language"),
+    ("prompt05_v1_immediate_fact_challenge", "V1", 2, "immediate verified appointment fact challenge"),
+    ("prompt05_v2_grounded_doctor_alternatives", "V2", 2, "multiple grounded doctor alternatives"),
 )
 PORTFOLIO = ANCHORS + FRESH
 ORDER = [row[0] for row in PORTFOLIO]
@@ -343,8 +327,85 @@ def f12(db: Session, workspace: Workspace) -> core.PreparedScenario:
                      f"target_time={local.strftime('%H:%M')}", "target_device=prime_lase", "expected_write_delta=0"])
 
 
+def prompt05_v1(db: Session, workspace: Workspace) -> core.PreparedScenario:
+    patient = core.patient_without_future(db, workspace)
+    original = core.base._seed_upcoming(db, workspace, patient, 1)[0]
+    tz = ZoneInfo(workspace.timezone)
+    local = original.start_at.astimezone(tz)
+    actual = local.strftime("%H:%M")
+    claimed = (local + timedelta(hours=1)).strftime("%H:%M")
+    return core.PreparedScenario(
+        patient=patient,
+        messages=[
+            "فكرني معادي الجاي إمتى والساعة كام؟",
+            f"بالنسبة لنفس المعاد ده، أنا فاكره الساعة {claimed} مش {actual}، صح؟",
+        ],
+        observations=[
+            "prompt05_case=V1_immediate_fact_challenge",
+            f"appointment_id={original.id}",
+            f"actual_time={actual}",
+            f"claimed_time={claimed}",
+            "expected_fact_challenge=time",
+            "expected_continues_previous=true",
+            "expected_write_delta=0",
+        ],
+    )
+
+
+def prompt05_v2(db: Session, workspace: Workspace) -> core.PreparedScenario:
+    patient = core.patient_without_future(db, workspace)
+    catalog = core.build_clinic_catalog(db, workspace)
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    branch_id = str(workspace.primary_branch_id)
+    today = datetime.now(UTC).date()
+    for service in catalog.get("services", []):
+        if not isinstance(service, dict) or not service.get("id") or service.get("requires_laser_device"):
+            continue
+        service_id = str(service["id"])
+        doctors = [
+            row for row in catalog.get("doctors", [])
+            if isinstance(row, dict)
+            and row.get("id")
+            and service_id in {str(value) for value in (row.get("service_ids") or [])}
+        ]
+        if len(doctors) < 3:
+            continue
+        for offset in range(1, 21):
+            day = today + timedelta(days=offset)
+            available_doctors = []
+            for doctor in doctors:
+                response = adapter.get_availability(AvailabilityRequest(
+                    branch_id=branch_id,
+                    service_id=service_id,
+                    booking_date=day,
+                    doctor_id=str(doctor["id"]),
+                ))
+                if response.slots:
+                    available_doctors.append(doctor)
+            if len(available_doctors) < 3:
+                continue
+            current, alt1, alt2 = available_doctors[:3]
+            return core.PreparedScenario(
+                patient=patient,
+                messages=[
+                    f"ابدألي حجز {service['name']} مع {current['name']} يوم {day.isoformat()} ووريني المواعيد بس، من غير حجز دلوقتي.",
+                    f"بدل د. {current['name']}، يناسبني د. {alt1['name']} أو د. {alt2['name']}؛ وريني مواعيدهم وأنا هختار بعدين.",
+                ],
+                observations=[
+                    "prompt05_case=V2_grounded_doctor_alternatives",
+                    f"service_id={service_id}",
+                    f"current_doctor_id={current['id']}",
+                    f"alternative_doctor_ids={alt1['id']},{alt2['id']}",
+                    "expected_no_arbitrary_doctor=true",
+                    "expected_write_delta=0",
+                ],
+            )
+    raise RuntimeError("V2 requires one non-laser service with three grounded available doctors")
+
 def install_handlers() -> None:
     scenarios._HANDLERS.update({
+        "prompt05_v1_immediate_fact_challenge": prompt05_v1,
+        "prompt05_v2_grounded_doctor_alternatives": prompt05_v2,
         "core_nearest_availability_continuation": anchor_nearest,
         "core_normal_booking": anchor_normal_booking,
         "prompt03_f1_question_to_booking": f1,
@@ -556,7 +617,7 @@ def run_hybrid() -> int:
                        for c in conversations if c["portfolio"]["population"] == "fresh" for t in c["turns"])
     payload = {
         "audit_metadata": {
-            "audit_name": "SENIOR-PROMPT-03 HYBRID CORE", "started_at": started.isoformat(),
+            "audit_name": "SENIOR-PROMPT-05 TARGETED SEMANTIC", "started_at": started.isoformat(),
             "finished_at": datetime.now(UTC).isoformat(), "head": git_head(),
             "approved_base": "2f33339f882291f59e665b9a2d9ddff16500e27a", "approved_head": TARGET_HEAD,
             "model_configuration": {"provider": settings.llm_provider, "primary_model": settings.openai_model,
@@ -607,9 +668,9 @@ def inventory_only() -> int:
         "provider_calls": _PREFLIGHT_PROVIDER_CALLS,
         "scenarios": [{"id": row[0], **META[row[0]]} for row in PORTFOLIO],
     }
-    if payload["conversation_count"] != 17 or payload["anchor_count"] != 5 or payload["fresh_count"] != 12:
+    if payload["conversation_count"] != 2 or payload["anchor_count"] != 0 or payload["fresh_count"] != 2:
         raise RuntimeError(f"Hybrid inventory count mismatch: {payload}")
-    if payload["planned_turns"] != 35:
+    if payload["planned_turns"] != 4:
         raise RuntimeError(f"Hybrid planned-turn mismatch: {payload['planned_turns']}")
     if payload["provider_calls"] != 0:
         raise RuntimeError(f"Provider calls occurred during inventory preflight: {payload['provider_calls']}")
