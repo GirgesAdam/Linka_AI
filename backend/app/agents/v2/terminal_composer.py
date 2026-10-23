@@ -463,8 +463,8 @@ def _build_terminal_composer_messages(
     system = SystemMessage(
         content=(
             "You are selecting presentation structure for completed clinic actions. "
-            "You do not write customer prose and you never return fact values. "
-            "The backend owns every action phrase and exact fact value.\n"
+            ""
+            ""
             "Return exactly one draft unit for every CONTRACT unit, in the same order. "
             "unit_index must match its CONTRACT position and action_ref must be unit_action. "
             "Choose a natural style, choose only fact_keys listed for that same unit, "

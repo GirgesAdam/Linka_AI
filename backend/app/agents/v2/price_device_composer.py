@@ -139,9 +139,9 @@ def _build_price_device_composer_messages(
         SystemMessage(
             content=(
                 "You select presentation structure for verified clinic pricing. "
-                "You never write customer prose and you never return any service name, "
-                "device name, amount, currency, session count, or other commercial value. "
-                "The backend owns every exact value and every commercial binding.\n"
+                ""
+                ""
+                ""
                 "Return one draft unit per CONTRACT unit in identical order. "
                 "commercial_ref must be unit_commercial. option_refs must contain every "
                 "price_option_ref exactly once and in the same order. Never infer, merge, "

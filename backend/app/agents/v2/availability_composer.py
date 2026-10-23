@@ -192,13 +192,13 @@ def _build_availability_composer_messages(
     system = SystemMessage(
         content=(
             "You select presentation structure for verified clinic availability. "
-            "You never write customer prose and you never return any slot/date/time/"
-            "doctor/device value. The backend owns availability state and every exact value.\n"
+            ""
+            ""
             "The schema intentionally lets you choose only two presentation properties: "
-            "style and presentation_mode. Do not return unit indexes, refs, facts, transitions, "
-            "closing actions, availability states, or any business value; the backend derives "
-            "all of those from the contract. Keep the presentation concise and natural. "
-            "Do not infer, merge, invent, or rewrite windows.\n"
+            "style and presentation_mode. "
+            ""
+            "Keep the presentation concise and natural. "
+            ""
             f"Customer reply language: {language}."
         )
     )
