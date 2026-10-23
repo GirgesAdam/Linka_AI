@@ -488,7 +488,7 @@ def test_customer_visible_availability_uses_durable_service_and_date(monkeypatch
         history=[HumanMessage(content="Show me the available appointment")],
         outcomes=[outcome],
     )
-    assert source == "deterministic:availability-contract-fallback"
+    assert source == "deterministic:availability-contract-fastpath"
     assert "Underarm Laser" in reply
     assert "7 PM" in reply
     assert "Saturday, October 24" in reply

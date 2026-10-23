@@ -3284,6 +3284,75 @@ def orchestrate_v2_turn(
         understanding,
         recent_read_context=recent_read_context,
     )
+    if (
+        isinstance(recent_read_context, dict)
+        and recent_read_context.get("package_offer_id") not in (None, "")
+        and isinstance(recent_read_context.get("package_sessions"), int)
+        and not isinstance(recent_read_context.get("package_sessions"), bool)
+        and int(recent_read_context["package_sessions"]) > 0
+        and recent_read_context.get("service_id") not in (None, "")
+    ):
+        verified_offer_service = str(recent_read_context["service_id"])
+        verified_offer_device = recent_read_context.get("device_key")
+        verified_offer_sessions = int(recent_read_context["package_sessions"])
+        continued_operations: list[TurnOperation] = []
+        continuity_changed = False
+        for operation in understanding.operations:
+            service_entity = operation.entities.service
+            device_entity = operation.entities.device
+            package_entity = operation.entities.package
+            service_matches = service_entity is None
+            if service_entity is not None and not service_entity.candidate_refs:
+                if service_entity.ref is not None:
+                    service_matches = (
+                        semantic_context.resolve(service_entity.ref, expected_kind="service")
+                        == verified_offer_service
+                    )
+                elif not (service_entity.text or "").strip():
+                    service_matches = True
+            device_matches = device_entity is None
+            if device_entity is not None and not device_entity.candidate_refs:
+                if device_entity.ref is not None:
+                    device_matches = (
+                        semantic_context.resolve(device_entity.ref, expected_kind="device")
+                        == (
+                            str(verified_offer_device)
+                            if verified_offer_device not in (None, "")
+                            else None
+                        )
+                    )
+                elif not (device_entity.text or "").strip():
+                    device_matches = True
+            package_identity_present = bool(
+                package_entity is not None
+                and (
+                    package_entity.ref is not None
+                    or package_entity.candidate_refs
+                    or (package_entity.text or "").strip()
+                )
+            )
+            if (
+                operation.type == "buy_package"
+                and operation.execution_intent == "execute"
+                and operation.continues_previous
+                and not operation.fresh_task
+                and operation.active_task_relationship != "replace"
+                and operation.entities.package_sessions is None
+                and not package_identity_present
+                and service_matches
+                and device_matches
+            ):
+                operation = operation.model_copy(
+                    update={
+                        "entities": operation.entities.model_copy(
+                            update={"package_sessions": verified_offer_sessions}
+                        )
+                    }
+                )
+                continuity_changed = True
+            continued_operations.append(operation)
+        if continuity_changed:
+            understanding = understanding.model_copy(update={"operations": continued_operations})
     planner_active_task: ActiveTaskState | None = narrowed_booking_task or initial_task
     plan = reference_plan_override or plan_turn(
         understanding,

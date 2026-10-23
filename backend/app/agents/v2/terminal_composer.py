@@ -108,6 +108,13 @@ _DEFAULT_FACT_KEYS_BY_GOAL: dict[str, tuple[str, ...]] = {
     "marketing_updated": ("marketing_consent",),
 }
 
+_DETERMINISTIC_SINGLE_UNIT_FAST_PATH_GOALS = frozenset(
+    {
+        "booking_completed",
+        "reschedule_completed",
+    }
+)
+
 _ACTION_PHRASES_AR: dict[str, dict[ComposerStyle, str]] = {
     "booking_completed": {
         "plain": "تم تأكيد الحجز",
@@ -778,7 +785,7 @@ def _action_phrase(
         raise TerminalComposerValidationError(
             "Unsupported terminal action phrase."
         ) from exc
-    if first and style == "warm":
+    if first and style == "warm" and arabic:
         return f"تمام، {phrase}"
     if first and style == "friendly":
         return f"تمام جدًا، {phrase}" if arabic else f"Great, {phrase}"
@@ -892,6 +899,16 @@ def compose_terminal_contract_reply(
         contract,
         arabic=arabic,
     )
+    unit = contract.units[0] if len(contract.units) == 1 else None
+    if (
+        unit is not None
+        and unit.response_goal in _DETERMINISTIC_SINGLE_UNIT_FAST_PATH_GOALS
+        and unit.status == "completed"
+        and unit.action_truth is not None
+        and unit.action_truth.succeeded is True
+        and unit.action_truth.action == TERMINAL_ACTION_BY_GOAL[unit.response_goal]
+    ):
+        return fallback_text, "deterministic:terminal-contract-fast-path"
 
     try:
         messages = _build_terminal_composer_messages(

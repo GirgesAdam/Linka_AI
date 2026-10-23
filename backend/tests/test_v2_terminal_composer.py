@@ -753,13 +753,202 @@ def test_final_resolved_text_never_exposes_internal_ids_or_refs() -> None:
         assert secret not in contract.model_dump_json()
 
 
-def test_provider_failure_uses_terminal_contract_fallback(
+@pytest.mark.parametrize(
+    ("goal", "facts", "action_result", "customer", "expected_fragments", "forbidden_fragments"),
+    [
+        (
+            "booking_completed",
+            {
+                "service_name": "Laser",
+                "doctor_name": "Maha",
+                "device_name": "Prime Lase",
+                "start_local": "2026-10-23T14:00:00+03:00",
+            },
+            {"status": "pending"},
+            "Book it for me.",
+            ("booking", "Laser", "Maha", "Prime Lase", "Friday", "2 PM"),
+            ("awaiting attendance confirmation", "pending", "\u062a\u0645\u0627\u0645"),
+        ),
+        (
+            "booking_completed",
+            {
+                "service_name": "Laser",
+                "doctor_name": "Maha",
+                "start_local": "2026-10-23T14:00:00+03:00",
+            },
+            {"status": "confirmed"},
+            "Confirm the booking.",
+            ("booking", "Laser", "Maha", "Friday", "2 PM"),
+            ("awaiting attendance confirmation", "pending", "\u062a\u0645\u0627\u0645"),
+        ),
+        (
+            "reschedule_completed",
+            {
+                "service_name": "PRP",
+                "doctor_name": "Maha",
+                "start_local": "2026-10-24T10:00:00+03:00",
+            },
+            {"status": "pending"},
+            "Move it to Saturday at 10:00.",
+            ("moved", "PRP", "Maha", "Saturday", "10 AM"),
+            ("Friday", "2 PM", "\u062a\u0645\u0627\u0645"),
+        ),
+    ],
+)
+def test_single_unit_terminal_fast_path_skips_provider_for_proven_goals(
+    monkeypatch: pytest.MonkeyPatch,
+    goal: str,
+    facts: dict[str, object],
+    action_result: dict[str, object],
+    customer: str,
+    expected_fragments: tuple[str, ...],
+    forbidden_fragments: tuple[str, ...],
+) -> None:
+    contract = build_customer_response_contract(
+        [_terminal(goal, facts=facts, action_result=action_result)]
+    )
+    monkeypatch.setattr(
+        terminal_composer,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("eligible terminal fast path must not build a provider model")
+        ),
+    )
+
+    text, source = compose_terminal_contract_reply(
+        history=[HumanMessage(content=customer)],
+        contract=contract,
+    )
+
+    assert source == "deterministic:terminal-contract-fast-path"
+    for fragment in expected_fragments:
+        assert fragment in text
+    lowered = text.lower()
+    for fragment in forbidden_fragments:
+        assert fragment.lower() not in lowered
+
+
+def test_package_bound_booking_fast_path_preserves_server_owned_binding_without_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     contract = build_customer_response_contract(
         [
             _terminal(
                 "booking_completed",
+                facts={
+                    "service_name": "Laser Underarm",
+                    "doctor_name": "Ahmed",
+                    "device_name": "Prime Lase",
+                    "start_local": "2026-10-23T14:00:00+03:00",
+                    "package_used": True,
+                    "package_name": "Underarm · Prime Lase · 9 sessions",
+                },
+                action_result={"status": "pending"},
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        terminal_composer,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("package-bound booking fast path must not build a provider model")
+        ),
+    )
+
+    text, source = compose_terminal_contract_reply(
+        history=[HumanMessage(content="تمام احجزه من الباكدج")],
+        contract=contract,
+    )
+
+    assert source == "deterministic:terminal-contract-fast-path"
+    assert "Laser Underarm" in text
+    assert "Ahmed" in text
+    assert "Prime Lase" in text
+    assert "Underarm · Prime Lase · 9 sessions" in text
+    assert "في انتظار تأكيد الحضور" not in text
+
+
+def test_package_purchase_stays_on_model_path_until_identity_is_in_terminal_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract = build_customer_response_contract(
+        [_terminal("package_purchased", action_result={"status": "active"})]
+    )
+    called = {"model_chain": 0}
+    monkeypatch.setattr(terminal_composer, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(terminal_composer, "model_label", lambda name: str(name))
+
+    def invoke(**_kwargs):
+        called["model_chain"] += 1
+        return SimpleNamespace(value=_draft(), model_name="test-model")
+
+    monkeypatch.setattr(terminal_composer, "invoke_with_model_chain", invoke)
+
+    text, source = compose_terminal_contract_reply(
+        history=[HumanMessage(content="Add the package.")],
+        contract=contract,
+    )
+
+    assert called["model_chain"] == 1
+    assert source == "contract-composer:test-model"
+    assert "package" in text.lower()
+
+
+def test_multi_unit_terminal_contract_preserves_existing_model_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract = build_customer_response_contract(
+        [
+            _terminal("booking_completed", action_result={"status": "pending"}),
+            _terminal("cancellation_completed", action_result={"status": "cancelled"}),
+        ]
+    )
+    called = {"model_chain": 0}
+    monkeypatch.setattr(terminal_composer, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(terminal_composer, "model_label", lambda name: str(name))
+    draft = TerminalComposerDraft(
+        units=[
+            TerminalComposerUnitDraft(
+                unit_index=0,
+                action_ref="unit_action",
+                style="warm",
+                fact_keys=[],
+                transition="sentence",
+            ),
+            TerminalComposerUnitDraft(
+                unit_index=1,
+                action_ref="unit_action",
+                style="plain",
+                fact_keys=[],
+                transition="and",
+            ),
+        ]
+    )
+
+    def invoke(**_kwargs):
+        called["model_chain"] += 1
+        return SimpleNamespace(value=draft, model_name="test-model")
+
+    monkeypatch.setattr(terminal_composer, "invoke_with_model_chain", invoke)
+
+    text, source = compose_terminal_contract_reply(
+        history=[HumanMessage(content="Do both actions.")],
+        contract=contract,
+    )
+
+    assert called["model_chain"] == 1
+    assert source == "contract-composer:test-model"
+    assert "booking" in text.lower()
+    assert "cancel" in text.lower()
+
+
+def test_provider_failure_uses_terminal_contract_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract = build_customer_response_contract(
+        [
+            _terminal(
+                "appointment_confirmed",
                 facts={"service_name": "Laser"},
             )
         ]
@@ -782,20 +971,19 @@ def test_provider_failure_uses_terminal_contract_fallback(
     )
 
     text, source = compose_terminal_contract_reply(
-        history=[HumanMessage(content="تم الحجز؟")],
+        history=[HumanMessage(content="Is it confirmed?")],
         contract=contract,
     )
 
     assert source == "deterministic:terminal-contract-fallback"
-    assert "الحجز اتسجل" in text
+    assert "appointment" in text.lower()
     assert "Laser" in text
-
 
 def test_invalid_structured_draft_uses_terminal_contract_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     contract = build_customer_response_contract(
-        [_terminal("booking_completed")]
+        [_terminal("appointment_confirmed")]
     )
     invalid = _draft("invented_fact")
     monkeypatch.setattr(
@@ -813,13 +1001,12 @@ def test_invalid_structured_draft_uses_terminal_contract_fallback(
     )
 
     text, source = compose_terminal_contract_reply(
-        history=[HumanMessage(content="تم؟")],
+        history=[HumanMessage(content="Is it confirmed?")],
         contract=contract,
     )
 
     assert source == "deterministic:terminal-contract-fallback"
-    assert "الحجز اتسجل" in text
-
+    assert "appointment" in text.lower()
 
 def test_valid_composer_source_is_observable(
     monkeypatch: pytest.MonkeyPatch,
@@ -827,7 +1014,7 @@ def test_valid_composer_source_is_observable(
     contract = build_customer_response_contract(
         [
             _terminal(
-                "booking_completed",
+                "appointment_confirmed",
                 facts={"service_name": "Laser"},
             )
         ]
@@ -852,13 +1039,12 @@ def test_valid_composer_source_is_observable(
     )
 
     text, source = compose_terminal_contract_reply(
-        history=[HumanMessage(content="تم؟")],
+        history=[HumanMessage(content="Is it confirmed?")],
         contract=contract,
     )
 
     assert source == "contract-composer:test-model"
     assert "Laser" in text
-
 
 def test_pure_terminal_responder_routes_to_contract_composer(
     monkeypatch: pytest.MonkeyPatch,

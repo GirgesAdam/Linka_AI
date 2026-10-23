@@ -760,7 +760,10 @@ def test_composer_contract_view_contains_no_exact_availability_values() -> None:
 def test_invalid_model_draft_falls_back_without_legacy_guard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    outcome = _present([_window("17:00")])
+    outcomes = [
+        _present([_window("17:00", doctor="د. مريم")]),
+        _present([_window("19:00", doctor="د. سارة")]),
+    ]
     monkeypatch.setattr(
         availability_composer,
         "build_realtime_composer_model",
@@ -812,7 +815,7 @@ def test_invalid_model_draft_falls_back_without_legacy_guard(
         timezone_name="Africa/Cairo",
         local_now=NOW,
         history=[HumanMessage(content="إيه المتاح؟")],
-        outcomes=[outcome],
+        outcomes=outcomes,
     )
 
     assert source == "deterministic:availability-contract-fallback"
@@ -896,22 +899,12 @@ def test_valid_availability_path_never_calls_legacy_responder_or_guard(
     monkeypatch.setattr(
         availability_composer,
         "build_realtime_composer_model",
-        lambda: object(),
-    )
-    monkeypatch.setattr(
-        availability_composer,
-        "model_label",
-        lambda name: str(name),
+        lambda: (_ for _ in ()).throw(AssertionError("availability model must not be built")),
     )
     monkeypatch.setattr(
         availability_composer,
         "invoke_with_model_chain",
-        lambda **_kwargs: SimpleNamespace(
-            value=AvailabilityComposerPresentationDraft(
-                style="warm", presentation_mode="compact"
-            ),
-            model_name="test-model",
-        ),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("availability model must not be invoked")),
     )
     monkeypatch.setattr(
         responder,
@@ -936,9 +929,133 @@ def test_valid_availability_path_never_calls_legacy_responder_or_guard(
         outcomes=[outcome],
     )
 
-    assert source == "availability-contract:test-model"
+    assert source == "deterministic:availability-contract-fastpath"
     assert "5 مساءً" in text
 
+
+
+def test_single_unit_availability_fastpath_eliminates_provider_for_historical_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        availability_composer,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("availability model must not be built")),
+    )
+    monkeypatch.setattr(
+        availability_composer,
+        "invoke_with_model_chain",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("availability model must not be invoked")),
+    )
+
+    paged_windows = [
+        {**_window("17:00"), "start_local": f"2026-10-0{day}T17:00:00+03:00", "end_local": f"2026-10-0{day}T17:00:00+03:00"}
+        for day in range(1, 6)
+    ]
+    paged_contract = build_customer_response_contract(
+        [_present(paged_windows, checked_dates=[f"2026-10-0{day}" for day in range(1, 6)])]
+    )
+    _first_page, first_keys, _first_more = _paged_contract(
+        paged_contract, shown_window_keys=None
+    )
+    cases = [
+        (
+            [HumanMessage(content="مين منهم متاح أقرب؟")],
+            build_customer_response_contract([_present([_window("17:00", doctor="د. مريم")])]),
+            {},
+        ),
+        (
+            [HumanMessage(content="إيه أقرب معاد متاح؟")],
+            paged_contract,
+            {},
+        ),
+        (
+            [HumanMessage(content="طب اللي بعده؟")],
+            paged_contract,
+            {"shown_window_keys": set(first_keys), "continuation": True},
+        ),
+        (
+            [HumanMessage(content="إيه مواعيد Hydrafacial يوم 2026-10-01؟")],
+            build_customer_response_contract([_present([_window("17:00")], service="Hydrafacial")]),
+            {},
+        ),
+        (
+            [HumanMessage(content="غيرت رأيي وعايز الليزر على Prime Lase، إيه المتاح؟")],
+            build_customer_response_contract(
+                [_present([_window("19:00", device="Prime Lase")], service="Laser")]
+            ),
+            {},
+        ),
+    ]
+
+    for history, contract, kwargs in cases:
+        text, source = availability_composer.compose_availability_contract_reply(
+            history=history,
+            contract=contract,
+            reference_date=NOW.date(),
+            **kwargs,
+        )
+        assert source == "deterministic:availability-contract-fastpath"
+        assert text.strip()
+
+
+def test_single_unit_availability_fastpath_preserves_english_and_package_device_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        availability_composer,
+        "build_realtime_composer_model",
+        lambda: (_ for _ in ()).throw(AssertionError("availability model must not be built")),
+    )
+    contract = build_customer_response_contract(
+        [_present([_window("17:00", doctor="Dr Mariam", device="Prime Lase")], service="Underarm")]
+    )
+
+    text, source = availability_composer.compose_availability_contract_reply(
+        history=[HumanMessage(content="What is available for my Prime package?")],
+        contract=contract,
+        reference_date=NOW.date(),
+    )
+
+    assert source == "deterministic:availability-contract-fastpath"
+    assert "Prime Lase" in text
+    assert "Candela" not in text
+    assert "Dr Mariam" in text
+    assert "5 PM" in text
+
+
+def test_multi_unit_availability_retains_model_assisted_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(availability_composer, "build_realtime_composer_model", lambda: object())
+    monkeypatch.setattr(availability_composer, "model_label", lambda name: str(name))
+
+    def fake_invoke(**_kwargs):
+        calls.append(True)
+        return SimpleNamespace(
+            value=AvailabilityComposerPresentationDraft(style="warm", presentation_mode="compact"),
+            model_name="test-model",
+        )
+
+    monkeypatch.setattr(availability_composer, "invoke_with_model_chain", fake_invoke)
+    contract = build_customer_response_contract(
+        [
+            _present([_window("17:00", doctor="د. مريم")]),
+            _present([_window("19:00", doctor="د. سارة")]),
+        ]
+    )
+
+    text, source = availability_composer.compose_availability_contract_reply(
+        history=[HumanMessage(content="قارنلي المواعيد")],
+        contract=contract,
+        reference_date=NOW.date(),
+    )
+
+    assert calls == [True]
+    assert source == "availability-contract:test-model"
+    assert "د. مريم" in text
+    assert "د. سارة" in text
 
 
 def test_mixed_availability_and_unsupported_family_preserves_verified_availability(

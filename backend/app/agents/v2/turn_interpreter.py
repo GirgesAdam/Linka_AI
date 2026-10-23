@@ -1734,7 +1734,17 @@ def _normalize_time_semantics_v2(
 ) -> TiaTurnUnderstanding:
     """Keep language meaning in the LLM while Python owns clock authority."""
     structural_literal = extract_single_explicit_hhmm(latest_customer_text)
-    literal_clock = structural_literal if _count_time_targets(turn) == 1 else None
+    time_target_count = _count_time_targets(turn)
+    literal_clock = (
+        structural_literal
+        if time_target_count == 1
+        or (
+            time_target_count == 0
+            and len(turn.operations) == 1
+            and turn.operations[0].type in {"book", "reschedule", "availability"}
+        )
+        else None
+    )
     operations: list = []
     changed = False
 
