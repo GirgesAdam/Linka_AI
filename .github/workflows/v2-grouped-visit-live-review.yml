@@ -534,7 +534,7 @@ jobs:
 
   prompt03-hybrid-core:
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'targeted-evidence' || inputs.audit_mode == 'prompt03-preflight') }}
-    name: PROMPT-03 hybrid harness
+    name: F2 targeted live harness
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: staging
@@ -574,9 +574,9 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          git fetch origin 241aa604e6cea2851641f7f16e47c0fe9dc7c4c9 --depth=1
-          git checkout --detach 241aa604e6cea2851641f7f16e47c0fe9dc7c4c9
-          test "$(git rev-parse HEAD)" = "241aa604e6cea2851641f7f16e47c0fe9dc7c4c9"
+          git fetch origin db5865c5bb90e8d7f6cea0dc3f9c4ad2541f589f --depth=1
+          git checkout --detach db5865c5bb90e8d7f6cea0dc3f9c4ad2541f589f
+          test "$(git rev-parse HEAD)" = "db5865c5bb90e8d7f6cea0dc3f9c4ad2541f589f"
           test -z "$(git status --porcelain)"
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -619,16 +619,16 @@ jobs:
         shell: bash
         working-directory: .
         run: |
-          test "$(git rev-parse HEAD)" = "241aa604e6cea2851641f7f16e47c0fe9dc7c4c9"
+          test "$(git rev-parse HEAD)" = "db5865c5bb90e8d7f6cea0dc3f9c4ad2541f589f"
           test -z "$(git status --porcelain)"
-          echo "PROMPT03_EXACT_HEAD=$(git rev-parse HEAD)"
-      - name: Run exactly one PROMPT-03 hybrid provider audit
+          echo "F2_EXACT_HEAD=$(git rev-parse HEAD)"
+      - name: Run exactly one F2 targeted provider audit
         if: ${{ inputs.audit_mode == 'targeted-evidence' }}
         shell: bash
         run: |
           set -o pipefail
           python /tmp/run_prompt03_hybrid_core.py 2>&1 | tee artifacts/prompt03-hybrid-core.log
-      - name: Upload PROMPT-03 hybrid evidence
+      - name: Upload F2 targeted evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:

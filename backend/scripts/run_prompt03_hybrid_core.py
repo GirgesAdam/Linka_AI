@@ -27,15 +27,16 @@ from app.models.appointment import Appointment
 from app.models.service import Service
 from app.models.workspace import Workspace
 
-TARGET_HEAD = "241aa604e6cea2851641f7f16e47c0fe9dc7c4c9"
+TARGET_HEAD = "db5865c5bb90e8d7f6cea0dc3f9c4ad2541f589f"
 REPORT = Path("artifacts/prompt03-hybrid-core.json")
 PAGE_SIZE = 4
 _PREFLIGHT_PROVIDER_CALLS = 0
 
 ANCHORS = ()
 FRESH = (
-    ("prompt05_v1_immediate_fact_challenge", "V1", 2, "immediate verified appointment fact challenge"),
-    ("prompt05_v2_grounded_doctor_alternatives", "V2", 2, "multiple grounded doctor alternatives"),
+    ("f2_live_l1_date_time_same_doctor", "L1", 2, "explicit date and time while preserving verified doctor"),
+    ("f2_live_l2_date_time_doctor", "L2", 2, "explicit date time and doctor replacement"),
+    ("f2_live_l3_time_only_inheritance", "L3", 2, "time-only change with verified date and doctor inheritance"),
 )
 PORTFOLIO = ANCHORS + FRESH
 ORDER = [row[0] for row in PORTFOLIO]
@@ -402,10 +403,99 @@ def prompt05_v2(db: Session, workspace: Workspace) -> core.PreparedScenario:
             )
     raise RuntimeError("V2 requires one non-laser service with three grounded available doctors")
 
+
+F2_INITIAL_DATE = datetime(2026, 10, 24, tzinfo=UTC).date()
+F2_TARGET_DATE = datetime(2026, 10, 25, tzinfo=UTC).date()
+
+def _f2_live_scope(db: Session, workspace: Workspace, *, require_alternative: bool):
+    patient = core.patient_without_future(db, workspace)
+    catalog = core.build_clinic_catalog(db, workspace)
+    adapter = get_clinic_adapter(db=db, workspace=workspace)
+    branch_id = str(workspace.primary_branch_id)
+    for service in catalog.get("services", []):
+        if not isinstance(service, dict) or not service.get("id") or service.get("requires_laser_device"):
+            continue
+        service_id = str(service["id"])
+        doctors = [
+            row for row in catalog.get("doctors", [])
+            if isinstance(row, dict) and row.get("id")
+            and service_id in {str(value) for value in (row.get("service_ids") or [])}
+        ]
+        if not doctors:
+            continue
+        current = None
+        for doctor in doctors:
+            response = adapter.get_availability(AvailabilityRequest(
+                branch_id=branch_id,
+                service_id=service_id,
+                booking_date=F2_INITIAL_DATE,
+                doctor_id=str(doctor["id"]),
+            ))
+            if response.slots:
+                current = doctor
+                break
+        if current is None:
+            continue
+        alternatives = [row for row in doctors if str(row["id"]) != str(current["id"])]
+        if require_alternative and not alternatives:
+            continue
+        return patient, service, current, (alternatives[0] if alternatives else None)
+    raise RuntimeError("F2 live fixture requires a non-laser service with verified Oct-24 availability")
+
+def f2_live_l1(db: Session, workspace: Workspace) -> core.PreparedScenario:
+    patient, service, doctor, _ = _f2_live_scope(db, workspace, require_alternative=False)
+    return core.PreparedScenario(
+        patient=patient,
+        messages=[
+            f"وريني المواعيد المتاحة لـ{service['name']} مع د. {doctor['name']} يوم السبت 24 أكتوبر 2026، من غير حجز.",
+            "ممكن نغيّر البحث للأحد 25 أكتوبر 2026 الساعة 16:00، يعني 4 العصر، والدكتور يفضل زي ما هو؟",
+        ],
+        observations=[
+            "f2_live_case=L1_date_time_same_doctor",
+            f"service_id={service['id']}", f"initial_doctor_id={doctor['id']}",
+            "initial_date=2026-10-24", "target_date=2026-10-25", "target_time=16:00",
+            "expected_write_delta=0",
+        ],
+    )
+
+def f2_live_l2(db: Session, workspace: Workspace) -> core.PreparedScenario:
+    patient, service, doctor_a, doctor_b = _f2_live_scope(db, workspace, require_alternative=True)
+    assert doctor_b is not None
+    return core.PreparedScenario(
+        patient=patient,
+        messages=[
+            f"وريني المواعيد المتاحة لـ{service['name']} مع د. {doctor_a['name']} يوم السبت 24 أكتوبر 2026، من غير حجز.",
+            f"خلّي البحث للأحد 25 أكتوبر 2026 الساعة 16:00، يعني 4 العصر، وبدّل الدكتور من {doctor_a['name']} إلى {doctor_b['name']}. وريني المتاح بس.",
+        ],
+        observations=[
+            "f2_live_case=L2_date_time_doctor",
+            f"service_id={service['id']}", f"initial_doctor_id={doctor_a['id']}", f"target_doctor_id={doctor_b['id']}",
+            "initial_date=2026-10-24", "target_date=2026-10-25", "target_time=16:00",
+            "expected_write_delta=0",
+        ],
+    )
+
+def f2_live_l3(db: Session, workspace: Workspace) -> core.PreparedScenario:
+    patient, service, doctor, _ = _f2_live_scope(db, workspace, require_alternative=False)
+    return core.PreparedScenario(
+        patient=patient,
+        messages=[
+            f"وريني المواعيد المتاحة لـ{service['name']} مع د. {doctor['name']} يوم السبت 24 أكتوبر 2026، من غير حجز.",
+            "طب خلّيها الساعة 16:00، يعني 4 العصر، والدكتور والتاريخ زي ما هم. وريني المتاح بس.",
+        ],
+        observations=[
+            "f2_live_case=L3_time_only_inheritance",
+            f"service_id={service['id']}", f"initial_doctor_id={doctor['id']}",
+            "initial_date=2026-10-24", "target_date=2026-10-24", "target_time=16:00",
+            "expected_write_delta=0",
+        ],
+    )
+
 def install_handlers() -> None:
     scenarios._HANDLERS.update({
-        "prompt05_v1_immediate_fact_challenge": prompt05_v1,
-        "prompt05_v2_grounded_doctor_alternatives": prompt05_v2,
+        "f2_live_l1_date_time_same_doctor": f2_live_l1,
+        "f2_live_l2_date_time_doctor": f2_live_l2,
+        "f2_live_l3_time_only_inheritance": f2_live_l3,
         "core_nearest_availability_continuation": anchor_nearest,
         "core_normal_booking": anchor_normal_booking,
         "prompt03_f1_question_to_booking": f1,
@@ -617,9 +707,9 @@ def run_hybrid() -> int:
                        for c in conversations if c["portfolio"]["population"] == "fresh" for t in c["turns"])
     payload = {
         "audit_metadata": {
-            "audit_name": "SENIOR-PROMPT-05 TARGETED SEMANTIC", "started_at": started.isoformat(),
+            "audit_name": "SENIOR-CORRECTNESS-F2-02 TARGETED LIVE", "started_at": started.isoformat(),
             "finished_at": datetime.now(UTC).isoformat(), "head": git_head(),
-            "approved_base": "2f33339f882291f59e665b9a2d9ddff16500e27a", "approved_head": TARGET_HEAD,
+            "approved_base": "91aae4ffc26eda75a445fb20dbb3e679fda2c2ff", "approved_head": TARGET_HEAD,
             "model_configuration": {"provider": settings.llm_provider, "primary_model": settings.openai_model,
                 "fallback_model": settings.openai_fallback_model, "reasoning_effort": settings.openai_reasoning_effort,
                 "fallback_reasoning_effort": settings.openai_fallback_reasoning_effort},
@@ -668,9 +758,9 @@ def inventory_only() -> int:
         "provider_calls": _PREFLIGHT_PROVIDER_CALLS,
         "scenarios": [{"id": row[0], **META[row[0]]} for row in PORTFOLIO],
     }
-    if payload["conversation_count"] != 2 or payload["anchor_count"] != 0 or payload["fresh_count"] != 2:
+    if payload["conversation_count"] != 3 or payload["anchor_count"] != 0 or payload["fresh_count"] != 3:
         raise RuntimeError(f"Hybrid inventory count mismatch: {payload}")
-    if payload["planned_turns"] != 4:
+    if payload["planned_turns"] != 6:
         raise RuntimeError(f"Hybrid planned-turn mismatch: {payload['planned_turns']}")
     if payload["provider_calls"] != 0:
         raise RuntimeError(f"Provider calls occurred during inventory preflight: {payload['provider_calls']}")
