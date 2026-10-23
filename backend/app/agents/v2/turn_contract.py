@@ -570,8 +570,7 @@ class TurnOperation(StrictContractModel):
             "For appointment_list only, set time when the customer is questioning or correcting "
             "the time of the same appointment identified by recent_verified_read.appointment_ref. "
             "Put the customer's claimed time in entities.time as an exact constraint and set "
-            "continues_previous=true. This marker is semantic only: "
-            "never treats the claimed time as read truth or write authority. "
+            "continues_previous=true. Do not treat the claimed time as read truth or write authority. "
             "Leave none for new filtered appointment lookups and all lifecycle changes."
         ),
     )

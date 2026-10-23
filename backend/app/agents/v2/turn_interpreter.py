@@ -334,7 +334,7 @@ SEMANTIC PRINCIPLES
   set cleared_active_task_fields=[doctor] and leave entities.doctor null. Do not use CLEAR for an unknown or
   ungrounded doctor name, a choice between doctors, or a request for a different doctor. For a different-doctor
   request, leave doctor.ref null and use grounded doctor candidate_refs that reflect the requested alternatives;
-  do not include the currently selected doctor merely because it exists in active_task. never guesses among multiple alternatives.
+  do not include the currently selected doctor merely because it exists in active_task. Do not guess among multiple alternatives.
 - Independently set fresh_task=true when the latest customer message explicitly opens a new/separate
   booking or reschedule instead of continuing any prior task or completed action. Also, whenever
   active_task is empty and a book/reschedule is not explicitly continuing supplied verified context,
