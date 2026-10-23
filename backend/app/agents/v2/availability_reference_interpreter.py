@@ -63,7 +63,7 @@ class ReferenceDecision(BaseModel):
             "For action=select_presented_option on a compressed window, exact_time may carry the "
             "semantically understood 24-hour clock. For action=clarify, exact_time may preserve a clock "
             "the customer explicitly expressed when multiple displayed options share that same clock. "
-            "Python validates every carried clock against the current snapshot."
+            ""
         ),
     )
     time_constraint: TimeConstraint | None = Field(
@@ -79,8 +79,8 @@ class ReferenceDecision(BaseModel):
         default="none",
         description=(
             "For select_presented_option only: set doctor when the customer selected the displayed option "
-            "by doctor identity, device when they selected it by device identity, otherwise none. Python "
-            "validates the corresponding canonical value from the current server-owned option."
+            "by doctor identity, device when they selected it by device identity, otherwise none."
+            ""
         ),
     )
 
@@ -138,11 +138,10 @@ Actions:
   set selection_scope=doctor only when they selected it by displayed doctor identity; otherwise use none.
   Do not infer a scope dimension merely because the displayed option happens to contain one.
   For a compressed window plus a customer clock, exact_time may carry the semantically understood 24-hour
-  clock; Python validates it against the current server-owned exact slots.
+  clock.
 - refresh_availability: the customer wants Linka to check availability again / refresh the same search, OR asks
   for additional/next availability results beyond the items already displayed. A request for more availability does
-  not require last_selected_option_ref; it continues the verified search scope and lets existing pagination exclude
-  already-presented windows. This is different from selecting the next displayed option relative to a chosen anchor.
+  not require last_selected_option_ref; it continues the verified search scope. This is different from selecting the next displayed option relative to a chosen anchor.
 - new_search: the customer changes or starts an availability search scope such as doctor/service/date/time.
   This includes asking for the nearest available appointment/time and asking for availability earlier or later
   than an authoritative exact time. These are availability-timeline searches, not previous/next displayed-option
@@ -165,11 +164,10 @@ Actions:
   social turn, or a separate lifecycle/action request that needs the normal V2 interpreter).
 
 Safety:
-- option_ref is semantic intent only. Python validates it against server-owned options.
+- option_ref is semantic intent only.
 - A displayed compressed window with concrete=false is not a canonical single slot. If the customer selects
-  that window by doctor/device only, return its option_ref with exact_time=null so Python can narrow the
-  current task without inventing a slot. If the customer also supplies a clock, return that option_ref and
-  the semantically understood exact_time; Python must match it to exactly one current slot.
+  that window by doctor/device only, return its option_ref with exact_time=null without inventing a slot. If the customer also supplies a clock, return that option_ref and
+  the semantically understood exact_time.
 - For availability-timeline earlier/later meaning, current_time_constraint may be used only when its mode is
   exact and it carries start_time. A concrete last_selected_option_ref can also identify the exact displayed
   time the customer is referring to. If neither gives an exact anchor, clarify rather than guessing one. When
@@ -189,8 +187,7 @@ Safety:
   select that supplied option_ref and return the semantically understood exact_time when needed. If multiple
   displayed options share that clock, clarify and preserve only the explicit clock in exact_time.
 - An explicit colon-formatted clock is exact: 03:00 is not 15:00. If that exact clock is one displayed option,
-  select that option_ref. If it is not displayed, use new_search so the normal availability flow can verify
-  that exact time. For this time-only new search, copy the exact colon clock into exact_time. Never map it to a different displayed clock.
+  select that option_ref. If it is not displayed, use new_search. For this time-only new search, copy the exact colon clock into exact_time. Never map it to a different displayed clock.
 - If the customer explicitly asks Linka to book/reschedule/cancel or otherwise execute a lifecycle action now,
   use normal so the full V2 interpreter preserves that action. Do not turn a write request into a mere selection.
 """

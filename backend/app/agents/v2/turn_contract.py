@@ -163,7 +163,7 @@ class TimeConstraint(StrictContractModel):
         description=(
             "Clock disambiguation hint only. Use am/pm for a spoken 12-hour clock when the "
             "customer explicitly distinguishes AM vs PM; use midnight only for explicit "
-            "midnight at 12; use none otherwise. Python owns final resolution from clinic hours."
+            "midnight at 12; use none otherwise."
         ),
     )
 
@@ -217,7 +217,7 @@ class Selection(StrictContractModel):
         description=(
             "Clock disambiguation hint only. Use am/pm for a spoken 12-hour clock when the "
             "customer explicitly distinguishes AM vs PM, including a period-only answer to a "
-            "pending time clarification; use none otherwise. Python owns final resolution."
+            "pending time clarification; use none otherwise."
         ),
     )
 
@@ -328,9 +328,9 @@ class TurnEntities(StrictContractModel):
         default=None,
         description=(
             "Exact session count explicitly associated with a multi-session package/course/bundle. "
-            "Preserve this count on pricing questions about that package so deterministic Python can "
-            "resolve the matching package offer instead of falling back to the single-session service "
-            "price. Do not calculate or invent a session count."
+            "Preserve this count on pricing questions about that package"
+            ""
+            ". Do not calculate or invent a session count."
         ),
     )
     pulse_count: int | None = Field(
@@ -361,7 +361,7 @@ class TurnOperation(StrictContractModel):
             "payment-method/timing/policy questions that do not ask to inspect or change a customer's "
             "financial ledger. Use book whenever the customer is asking Linka "
             "to create/reserve a new appointment now, even when required booking details are still "
-            "missing and Python will need to clarify them. Do not downgrade an incomplete booking "
+            "missing. Do not downgrade an incomplete booking "
             "request to availability. Use availability only when the customer is asking to inspect "
             "possible appointment options without requesting creation of a new appointment. Buying "
             "a package and creating an appointment are separate actions: a request to buy a package "
@@ -396,9 +396,9 @@ class TurnOperation(StrictContractModel):
             "For pricing only, set verified_appointment when the customer asks for the price of "
             "the primary service belonging to an appointment they also asked Linka to inspect earlier "
             "in this same customer turn. This is a semantic relationship marker only: do not invent "
-            "or expose a service ID/ref from appointment wording. Python may bind the pricing read only "
-            "after that appointment read verifies one canonical service, and may also inherit its "
-            "verified laser device key. Leave none when the customer explicitly names/selects a service, "
+            "or expose a service ID/ref from appointment wording. "
+            ""
+            "Leave none when the customer explicitly names/selects a service, "
             "when the price request is independent, or when there is no same-turn appointment relation."
         ),
     )
@@ -462,8 +462,8 @@ class TurnOperation(StrictContractModel):
             "abandons the unfinished task, including an additional/new booking. Never carry replace "
             "forward from an earlier message: a later date/time/doctor/device/service answer for the "
             "newly active task is continue. Leave unspecified when there is no active_task and for "
-            "side reads/social turns. Deterministic Python owns lifecycle transitions and ignores "
-            "this marker on non-task operations."
+            "side reads/social turns."
+            ""
         ),
     )
     active_task_relative_date: ActiveTaskRelativeDate | None = Field(
@@ -473,7 +473,7 @@ class TurnOperation(StrictContractModel):
             "latest customer turn explicitly requests the next occurrence of a named weekday relative "
             "to the current active reschedule date. Set relation=next_occurrence and the requested "
             "weekday, include date in active_task_explicit_fields, and leave entities.date null. "
-            "Python resolves the canonical exact date from durable verified reschedule state. Never "
+            "Never "
             "use Selection.relative for calendar-date meaning."
         ),
     )
@@ -483,9 +483,9 @@ class TurnOperation(StrictContractModel):
             "For active_task_relationship=continue with booking or reschedule, list date and/or time "
             "exactly when that dimension is explicitly supplied or corrected in the latest customer "
             "message. Never mark model-inferred/default constraints, values inherited from active_task, "
-            "source appointment facts, verified context, assistant prose, or older dialogue. Python "
-            "uses this provenance to distinguish customer-grounded active-task constraints from model "
-            "defaults while keeping lifecycle and write authority deterministic."
+            "source appointment facts, verified context, assistant prose, or older dialogue."
+            ""
+            ""
         ),
     )
     cleared_active_task_fields: list[ActiveTaskClearField] = Field(
@@ -507,8 +507,8 @@ class TurnOperation(StrictContractModel):
             "change/cancel/confirm the appointment referenced by automation_context. Use next_session "
             "only when the customer asks for a new next session that clearly refers to the treatment "
             "from a post-visit automation. Leave none when automation_context is absent or unrelated. "
-            "This marker never supplies canonical IDs by itself; Python binds only server-verified "
-            "automation metadata."
+            "This marker never supplies canonical IDs by itself"
+            "."
         ),
     )
     appointment_action_explicit_fields: list[AppointmentActionExplicitField] = Field(
@@ -517,8 +517,8 @@ class TurnOperation(StrictContractModel):
             "For automation_context_relationship=appointment_action with reschedule only, list date "
             "and/or time exactly when that replacement dimension is explicitly supplied in the latest "
             "customer message. Never mark a dimension copied or inferred from automation_context, "
-            "template prose, assistant prose, or older dialogue. Python uses this list to distinguish "
-            "a true time-only edit from an unspecified reschedule request."
+            "template prose, assistant prose, or older dialogue."
+            ""
         ),
     )
     fresh_task: bool = Field(
@@ -535,8 +535,8 @@ class TurnOperation(StrictContractModel):
         description=(
             "For fresh_task=true, list only task fields explicitly supplied in the latest customer "
             "message itself. Never include values recovered only from active_task, recent_verified_action, "
-            "assistant prose, or older dialogue. Deterministic Python uses this list as the authority "
-            "boundary for fresh task state."
+            "assistant prose, or older dialogue."
+            ""
         ),
     )
     grouped_booking_action: GroupedBookingAction = Field(
@@ -548,8 +548,8 @@ class TurnOperation(StrictContractModel):
             "identify only the newly added service or services; do not omit a newly named service merely "
             "because the existing group already exists, and do not repeat existing services solely to "
             "preserve them. For a constraint-only edit with no service addition or replacement, use "
-            "preserve_group and entities.service may remain omitted/null. Deterministic Python preserves "
-            "the existing durable group and merges only newly supplied services."
+            "preserve_group and entities.service may remain omitted/null."
+            ""
         ),
     )
     cleared_verified_read_fields: list[VerifiedReadClearField] = Field(
@@ -570,8 +570,8 @@ class TurnOperation(StrictContractModel):
             "For appointment_list only, set time when the customer is questioning or correcting "
             "the time of the same appointment identified by recent_verified_read.appointment_ref. "
             "Put the customer's claimed time in entities.time as an exact constraint and set "
-            "continues_previous=true. This marker is semantic only: Python re-verifies the prior "
-            "appointment identity and never treats the claimed time as read truth or write authority. "
+            "continues_previous=true. This marker is semantic only: "
+            "never treats the claimed time as read truth or write authority. "
             "Leave none for new filtered appointment lookups and all lifecycle changes."
         ),
     )
@@ -586,8 +586,8 @@ class TurnOperation(StrictContractModel):
             "switches language or omits the unchanged search constraints. A fresh/contextless request "
             "for additional results is not continuation. Respect verified read summaries and use "
             "verified action references instead of reconstructing completed-action identity from prose. "
-            "Python owns inheritance, canonical scope comparison, pagination cursor safety, and grounding "
-            "of omitted verified scope fields."
+            ""
+            ""
         ),
     )
     continuation_condition: ContinuationCondition = Field(
@@ -595,8 +595,8 @@ class TurnOperation(StrictContractModel):
         description=(
             "Use if_previous_no_availability only when this operation is a conditional fallback "
             "that should activate only if recent_verified_read found no availability. Use always "
-            "for ordinary continuations and unconditional nearest/next-available requests. Python "
-            "evaluates this condition against the verified previous result."
+            "for ordinary continuations and unconditional nearest/next-available requests."
+            ""
         ),
     )
 
@@ -802,7 +802,7 @@ class TiaTurnUnderstanding(StrictContractModel):
             "Use no_reply only when the latest customer message is purely a conversational closing "
             "acknowledgement after the prior task/read is already complete, with no active task, pending "
             "choice, automation acknowledgement, requested action, question, or safety concern. This is "
-            "semantic classification only; deterministic Python re-checks state before suppressing output."
+            "semantic classification only."
         ),
     )
 

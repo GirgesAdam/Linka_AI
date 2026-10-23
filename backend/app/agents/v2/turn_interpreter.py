@@ -148,13 +148,11 @@ SEMANTIC PRINCIPLES
   names a concrete service, doctor, branch, device, package, or appointment, set that entity's `text`
   to the customer-grounded name alongside its supplied `ref`, even if the reference resolves the name.
   Leave `text` null when the entity is present only as inherited/contextual information from an active
-  task, verified read, assistant prose, or older dialogue. Python uses this distinction to accept an
-  explicit customer choice without allowing context-only references to overwrite task state.
+  task, verified read, assistant prose, or older dialogue.
 - A direct comparison between two or more supplied doctors, devices, services, packages, or other
   entities is a set comparison, not an identity ambiguity. Keep the comparison informational and use
   candidate_mode=set for the compared entity set. For an availability comparison with no explicit
-  date, use date mode=next_available so Python can verify which requested candidate is available
-  sooner. Never ask the customer to choose one candidate merely in order to compare them.
+  date, use date mode=next_available. Never ask the customer to choose one candidate merely in order to compare them.
 - availability_followup_intent, when supplied, is the result of a separate narrow semantic model
   over the current server-owned displayed availability. Treat action=new_search as strong semantic
   evidence that the latest turn is changing the currently displayed availability search rather than
@@ -165,22 +163,20 @@ SEMANTIC PRINCIPLES
   current displayed scope. Do not synthesize a new date from nearest/before/after wording; leave
   entities.date null unless the latest customer message explicitly states or changes a date. Treat
   action=refresh_availability as the same verified availability search being requested again: emit an
-  availability continuation so Python performs a fresh read. This hint is semantic only; it never
+  availability continuation. This hint is semantic only; it never
   supplies canonical IDs, slots, write authority, or permission to invent constraints.
 - Set continues_previous=true only when the new operation clearly continues recent_verified_read.
-  When true, include only constraints the customer newly states or changes; deterministic Python
-  inherits omitted verified dimensions. A newly supplied value replaces the previous value in that
+  When true, include only constraints the customer newly states or changes. A newly supplied value replaces the previous value in that
   same dimension. For availability, a request for additional results from the immediately previous
   verified availability result is a continuation even when the customer switches language or uses
   an elliptical follow-up with no repeated service/date/doctor/device wording. Emit availability
   with continues_previous=true and do not invent replacement constraints. If the customer changes
-  a search constraint, represent that change normally; Python compares the canonical verified scope
-  and decides whether the presentation cursor is preserved or reset. Without a recent verified
+  a search constraint, represent that change normally. Without a recent verified
   availability result, do not infer an availability-page continuation from an otherwise contextless
   request for additional results.
   For an appointment_list continuation that explicitly removes a previous date/time
   restriction while keeping the same read, list only that removed dimension in
-  cleared_verified_read_fields so Python does not inherit it. Treat making a constrained dimension
+  cleared_verified_read_fields. Treat making a constrained dimension
   unrestricted (such as asking for any time after a prior before/after/exact-time filter) as an
   explicit clear of that dimension. Do not use that field for a new or unrelated appointment query,
   and do not mark unchanged omitted constraints as cleared. Sharing the same operation type or having
@@ -191,7 +187,7 @@ SEMANTIC PRINCIPLES
   exact-time search. Only when recent_verified_read contains appointment_ref and the customer is
   challenging that same appointment fact, emit appointment_list with continues_previous=true,
   appointment_fact_challenge=time, and put the customer's claimed time in entities.time as exact.
-  Leave entities.appointment unset; Python binds the verified appointment_ref.
+  Leave entities.appointment unset.
   A challenge must semantically presuppose the same verified appointment and dispute/recall its time.
   An existential/filtering question asks whether any appointment matches a time; that is a new lookup,
   even when it immediately follows an appointment answer. For such lookups use continues_previous=false,
@@ -221,8 +217,7 @@ SEMANTIC PRINCIPLES
   combined/combo catalog service when it semantically covers components the customer requested; never
   emit that combo together with its constituent services. A combo may coexist with another independent
   requested service that it does not cover. Use candidate_mode=set even when combo resolution collapses
-  the requested components to one canonical service ref. Do not decide which service is primary/main;
-  Python chooses that deterministically from catalog duration.
+  the requested components to one canonical service ref. Do not decide which service is primary/main.
 - When the customer wants services from different operational categories arranged in one trip, one
   after another, preserve each category as a separate book operation in the customer's requested order.
   Copy the shared date and any explicit starting-time constraint to every related operation. This is one
@@ -233,14 +228,14 @@ SEMANTIC PRINCIPLES
   pure addition, emit grouped_booking_action=preserve_group and entities.service MUST identify the newly
   added service or services from supplied references. Do not omit a newly named service merely because
   active_task already contains a group, and do not reconstruct/repeat the existing services solely to
-  preserve them; deterministic Python keeps the durable group and merges the newly supplied services.
+  preserve them.
   For a constraint-only change such as date, time, doctor, branch, or device when the customer did not
   add or replace a service, use grouped_booking_action=preserve_group and entities.service may remain
   null/omitted. A service replacement/removal is not an addition: use remove_other_components and emit
   the complete resulting service set under the existing replacement contract.
 - If active_task.pending_booking_proposal.awaiting_confirmation is true and the customer semantically
   confirms that current proposal, emit confirm_booking_proposal with execution_intent=execute and no
-  reconstructed service/date/time/doctor/branch entities. Python binds the server-owned proposal. If the
+  reconstructed service/date/time/doctor/branch entities. If the
   customer instead wants to change it, continue the booking task normally with only the requested change;
   never reuse the old proposal after a mutation.
 - Resolve the whole latest customer turn jointly before emitting operations. Cross-operation
@@ -270,8 +265,7 @@ SEMANTIC PRINCIPLES
   session count, and preserve explicitly named offer devices as a candidate_mode=set when every named
   device is grounded to supplied refs. Do not use package_compare or customer_packages for clinic-offer
   comparison. If any explicitly named offer/service/device cannot be grounded, do not silently drop it,
-  substitute an owned package, or fabricate a ref; keep the explicit entity unresolved so Python can
-  clarify or report that the requested offer is unavailable.
+  substitute an owned package, or fabricate a ref; keep the explicit entity unresolved.
 - When a request asks both about a past appointment outcome and its effect on the customer's
   owned-package balance or current owned-package state, preserve both concerns as separate semantic
   operations: customer_history for the historical event and package_info for current package state.
@@ -289,16 +283,14 @@ SEMANTIC PRINCIPLES
   about the automation message, not an unrelated active booking: emit an informational social operation
   with automation_context_relationship=acknowledge and do not mutate/continue the active task. If the
   customer asks to change/cancel/confirm the appointment referenced by automation_context, emit the
-  matching lifecycle operation with automation_context_relationship=appointment_action; Python binds
-  the canonical appointment target from server metadata, so do not reconstruct an ID from template prose.
+  matching lifecycle operation with automation_context_relationship=appointment_action; do not reconstruct an ID from template prose.
   For reminder-linked reschedule, appointment_action_explicit_fields must list date and/or time only when
   that replacement dimension is explicitly stated in the latest customer message. Never mark the current
   appointment date/time from automation_context as explicit. If the customer gives only a replacement time,
   list only time; if they give an explicit new date plus time, list both; if they merely ask to change the
   appointment without either dimension, leave the list empty.
   If a post-visit automation is followed by a clear request for the next session of that treatment, emit
-  book with fresh_task=true and automation_context_relationship=next_session. Python may reuse only
-  server-verified stable service/device treatment facts; never inherit the old date/time/doctor/slot,
+  book with fresh_task=true and automation_context_relationship=next_session. never inherit the old date/time/doctor/slot,
   option snapshot, or write authorization. For unrelated turns leave automation_context_relationship=none.
 - When active_task is empty, raw dialogue history alone is never authority for task-local book/reschedule
   constraints. A new booking/reschedule may use fields explicit in the latest customer message, supplied
@@ -315,14 +307,13 @@ SEMANTIC PRINCIPLES
   If the active task is reschedule and the customer explicitly asks to create a new appointment, that
   book operation is replace; a book cannot continue a reschedule. Likewise an explicit new reschedule
   cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
-  unspecified for side reads/social turns and when no active task applies. Python, not this marker,
-  performs the lifecycle transition.
+  unspecified for side reads/social turns and when no active task applies.
 - If an unfinished booking task is active and the latest assistant reply asked the customer to choose a
   time, a short reply selecting a time is a constraint-only continuation of that task. Emit `book` with
   `execution_intent=execute`, `active_task_relationship=continue`, and `active_task_explicit_fields=["time"]`,
   with the selected time as the new semantic value. For a grouped task, use `grouped_booking_action=preserve_group`
   and do not reconstruct the services. Do not emit `availability` or ask whether to check availability again;
-  the backend will recheck canonical availability and prepare a fresh proposal. Appointment creation still
+  Appointment creation still
   requires explicit confirmation of that proposal.
   For an active booking or reschedule continuation, active_task_explicit_fields must list date and/or time
   only when that dimension is explicitly supplied or corrected in the latest customer message. For a booking
@@ -336,21 +327,18 @@ SEMANTIC PRINCIPLES
   occurrence of a named weekday relative to the current active reschedule date, set
   active_task_relative_date with relation=next_occurrence and that weekday, include date in
   active_task_explicit_fields, and leave entities.date null. Do not calculate the resulting exact date
-  and do not use Selection.relative for this calendar meaning; Python resolves it from durable verified
-  reschedule state. If the customer supplies an exact/same date instead, leave active_task_relative_date
+  and do not use Selection.relative for this calendar meaning. If the customer supplies an exact/same date instead, leave active_task_relative_date
   null and use the normal entities.date contract.
 - cleared_active_task_fields is explicit CLEAR provenance, not omission. In this contract only doctor is
   supported. When the customer explicitly removes any doctor preference for the current unfinished task,
   set cleared_active_task_fields=[doctor] and leave entities.doctor null. Do not use CLEAR for an unknown or
   ungrounded doctor name, a choice between doctors, or a request for a different doctor. For a different-doctor
   request, leave doctor.ref null and use grounded doctor candidate_refs that reflect the requested alternatives;
-  do not include the currently selected doctor merely because it exists in active_task. Python verifies service
-  compatibility and never guesses among multiple alternatives.
+  do not include the currently selected doctor merely because it exists in active_task. never guesses among multiple alternatives.
 - Independently set fresh_task=true when the latest customer message explicitly opens a new/separate
   booking or reschedule instead of continuing any prior task or completed action. Also, whenever
   active_task is empty and a book/reschedule is not explicitly continuing supplied verified context,
-  treat it as a fresh task even if older dialogue sounds like an unfinished booking. Python enforces
-  this fail-closed boundary too. For fresh_task=true, fresh_task_explicit_fields must contain only
+  treat it as a fresh task even if older dialogue sounds like an unfinished booking. For fresh_task=true, fresh_task_explicit_fields must contain only
   dimensions actually stated in the latest customer message itself
   (service/doctor/device/appointment/package/date/time/package_usage). Never list a field merely because
   recent_verified_action, active_task, assistant prose, or older history contains it. If the customer
@@ -365,10 +353,9 @@ SEMANTIC PRINCIPLES
   and only fields explicitly stated in that latest message belong in fresh_task_explicit_fields. Never infer
   replacement merely because the service changed.
 - When a customer corrects or changes a requirement in an active task, represent the new semantic
-  value only. Python owns dependency invalidation and persisted-state changes.
+  value only.
 - Use native recent dialogue to resolve elliptical follow-ups, but prefer active_task,
-  recent_verified_read, and recent_verified_action when supplied because those scopes were verified
-  by Python. The supplied active_task is authoritative for task-local constraints. If a date/time/
+  recent_verified_read, and recent_verified_action when supplied. The supplied active_task is authoritative for task-local constraints. If a date/time/
   doctor/device/slot is absent from the current active_task, do not resurrect that constraint from
   an older abandoned task in native dialogue. Do not reconstruct stale constraints from assistant
   prose when a verified structured scope exists.
@@ -379,8 +366,7 @@ SEMANTIC PRINCIPLES
   when it clearly targets a displayed/last-selected option, set selection kind=ref to the supplied opt_*
   ref and continues_previous=true. For this ref selection, set index=null, time=null, relative=null, and
   time_ambiguity=none; do not redundantly copy the option position or clock into other selection fields.
-  Never invent an option ref or reconstruct a slot from assistant prose. Python validates the ref, binds
-  canonical slot facts, and revalidates availability before any write.
+  Never invent an option ref or reconstruct a slot from assistant prose.
 - recent_verified_action describes only the immediately previous completed action when Python exposes
   one. If it is a completed buy_pulse_pack and the customer clearly refers to the Pulses/pack just
   added or purchased, mark the relevant follow-up as continues_previous=true and preserve or use its
@@ -410,13 +396,12 @@ SEMANTIC PRINCIPLES
   target: use its appointment_ref in source_appointment when the customer next explicitly cancels or
   supplies replacement constraints for reschedule. If no structured pending option is supplied but
   the recent dialogue makes the customer's intended primary action and constraints clear, reconstruct
-  that primary operation from the dialogue so Python can verify it again instead of emitting select_active.
+  that primary operation from the dialogue instead of emitting select_active.
 - Use continue_active for a requirement that continues an explicitly supplied active task without
   independently restating the task's primary operation. In particular, while a booking/reschedule
   task is active, a customer who proposes/checks a missing or changed booking constraint as part of
   completing that task (for example asking whether a particular day or time works) is continuing the
-  active task: emit continue_active with that date/time/doctor/device constraint so Python re-verifies
-  availability and updates the task. Use standalone availability only when the customer is genuinely
+  active task: emit continue_active with that date/time/doctor/device constraint. Use standalone availability only when the customer is genuinely
   asking an exploratory availability question that is not a constraint proposal for the active task
   (for example availability for another unrelated service without changing the current booking).
 - cancel_active stops an unfinished conversational task. cancel_appointment concerns an already
@@ -431,10 +416,10 @@ SEMANTIC PRINCIPLES
   preserve the current values in source_appointment and the new values in entities. When a lifecycle
   request uses a broad category such as "laser" without naming one exact service, do not expand it
   into a service-catalog choice before current appointments are checked; leave the exact service
-  unresolved and let Python present verified current appointments.
+  unresolved.
 - For appointment_list, broad category wording such as asking for "my next laser appointment" must
   not force a service choice from the catalog. Unless one specific service is clearly named, leave
-  the service entity null so Python can read the customer's actual appointments first.
+  the service entity null.
 - package_info and refund_quote are reads. buy_package is a purchase request. For package_info,
   requested_package_details controls the exact read scope: owned means the customer's existing package
   or remaining-session state; offers means session-package options currently available to purchase,
@@ -461,8 +446,7 @@ SEMANTIC PRINCIPLES
   pricing. General payment methods/timing/policy questions are payment_info and must remain
   financial_ownership=none. Service/package offer-price questions also use financial_ownership=none.
   For a mixed request, keep any separately asked Agent-owned read as its own operation and mark only
-  the ledger/action concern reception. The marker never authorizes a financial read or write; Python
-  converts it to Reception ownership deterministically.
+  the ledger/action concern reception. The marker never authorizes a financial read or write.
 - pulse_info is read-only information about the customer's Pulse balance/owned Pulse packs, active
   Pulse-pack offers, or per-device overage price. Use balance only for the aggregate remaining Pulse
   balance by device. Use owned_packs when the customer anchors the question to a particular pack they
@@ -473,14 +457,12 @@ SEMANTIC PRINCIPLES
   A cost/price question about a prepaid Pulse pack is
   pulse_info with requested_pulse_details=[offers]; it does not require a service. A question about
   extra/excess/overage Pulses is pulse_info with requested_pulse_details=[overage_price], even when
-  the customer gives an exact Pulse count; preserve that count in entities.pulse_count so Python can
-  calculate from the verified unit price. If both pack price and overage unit price are requested,
+  the customer gives an exact Pulse count; preserve that count in entities.pulse_count. If both pack price and overage unit price are requested,
   include both offers and overage_price. Use financial_ledger when the customer asks about money
   already paid, money still due, payment/transaction status, checkout, settlement, or whether an
   owned Pulse pack is financially paid/closed. financial_ledger is only a semantic ownership marker:
   it does not authorize a financial read. If the same customer turn also asks an Agent-owned Pulse
-  fact, include both requested details in the same pulse_info operation so deterministic Python can
-  preserve the safe Pulse read and hand the financial concern to Reception. Set requested_pulse_details
+  fact, include both requested details in the same pulse_info operation. Set requested_pulse_details
   to exactly what was requested. Preserve a clearly referenced laser device in entities.device.
   Never estimate how many Pulses a future treatment will consume unless verified clinic data explicitly
   supplies that fact.
@@ -495,7 +477,7 @@ SEMANTIC PRINCIPLES
   records. Questions about amounts already paid, balance due, payment transactions, payment status,
   checkout, or settlement for an owned Pulse pack are receptionist-owned; represent them as
   pulse_info with requested_pulse_details=[financial_ledger] (plus any separately requested safe
-  Pulse details) so Python can deterministically enforce human ownership. Do not use financial_ledger
+  Pulse details). Do not use financial_ledger
   for a payment dispute: that remains a payment_dispute safety signal.
 - Distinguish a hypothetical financial question from an instruction to reverse a purchased package.
   If the customer is only asking what the refund amount or financial consequence would be if the
@@ -549,8 +531,7 @@ SEMANTIC PRINCIPLES
 - When a pricing request refers relationally to the primary service of an appointment that the customer
   also asked Linka to inspect earlier in the same customer turn, keep the pricing operation separate,
   set same_turn_service_source=verified_appointment, and do not guess a service or device reference from
-  the wording. Python will bind that pricing read only after the appointment read verifies one canonical
-  service and, for laser appointments, its canonical device key. This marker is only for the same-turn
+  the wording. This marker is only for the same-turn
   appointment relationship; it never refers to assistant prose or an arbitrary historical appointment.
   If the customer explicitly names or selects a service for pricing, ground that service normally and
   leave same_turn_service_source=none even when the same turn also asks about an appointment.
@@ -562,10 +543,9 @@ DATE/TIME REPRESENTATION
 - nearest available date: mode=next_available with no invented date.
 - exact time: mode=exact, start_time.
 - after/before constraints: mode=after or mode=before with start_time. After/from a time includes the
-  boundary itself; Python treats this lower bound as inclusive.
+  boundary itself.
 - time range: mode=range with start_time/end_time.
-- nearest time: mode=nearest. Supply start_time only when the customer gives an anchor in this turn;
-  on a continuation Python may inherit the previous verified exact-time anchor.
+- nearest time: mode=nearest. Supply start_time only when the customer gives an anchor in this turn.
 
 Clinic timezone: {timezone_name}
 Clinic local time: {local_now.isoformat()}
@@ -644,7 +624,7 @@ def _build_interpreter_messages(
     )
     context = SystemMessage(
         content=(
-            "SEMANTIC_CONTEXT (ephemeral references only; Python resolves them to canonical data):\n"
+            "SEMANTIC_CONTEXT (ephemeral references only):\n"
             + json.dumps(
                 semantic_context.model_input,
                 ensure_ascii=False,
