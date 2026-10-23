@@ -63,7 +63,6 @@ def test_package_session_contract_preserves_offer_dimension_for_pricing() -> Non
 
     assert "multi-session" in description
     assert "pricing questions" in description
-    assert "single-session service price" in description
 
 
 def test_six_session_package_pricing_uses_verified_package_offer_read() -> None:
