@@ -710,6 +710,37 @@ def _verified_read_context_from_turn(
             if value not in (None, "", [], {}):
                 context[key] = value
 
+        if any(request.kind == "package_offers" for request in step.reads):
+            trace = next(
+                (
+                    item
+                    for item in reversed(turn.traces)
+                    if item.operation_index == step.operation_index
+                    and isinstance(getattr(item, "verified_parameters", None), dict)
+                ),
+                None,
+            )
+            verified_offer = (
+                dict(trace.verified_parameters)
+                if trace is not None and isinstance(trace.verified_parameters, dict)
+                else {}
+            )
+            package_offer_id = verified_offer.get("package_offer_id")
+            package_sessions = verified_offer.get("package_sessions")
+            service_id = verified_offer.get("service_id")
+            if (
+                package_offer_id not in (None, "")
+                and isinstance(package_sessions, int)
+                and not isinstance(package_sessions, bool)
+                and package_sessions > 0
+                and service_id not in (None, "")
+            ):
+                context["package_offer_id"] = str(package_offer_id)
+                context["package_sessions"] = package_sessions
+                context["service_id"] = str(service_id)
+                if verified_offer.get("device_key") not in (None, ""):
+                    context["device_key"] = str(verified_offer["device_key"])
+
         option_count = _availability_option_count_for_step(
             turn,
             operation_index=step.operation_index,
