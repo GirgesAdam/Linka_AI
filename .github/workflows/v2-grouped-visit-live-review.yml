@@ -20,6 +20,7 @@ on:
           - strict
           - full-evidence
           - targeted-evidence
+          - prompt03-preflight
           - next-availability-evidence
           - existing-package-evidence
         default: strict
@@ -532,8 +533,8 @@ jobs:
           retention-days: 14
 
   prompt03-hybrid-core:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.audit_mode == 'targeted-evidence' }}
-    name: PROMPT-03 fresh hybrid core
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.audit_mode == 'targeted-evidence' || inputs.audit_mode == 'prompt03-preflight') }}
+    name: PROMPT-03 hybrid harness
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: staging
@@ -546,6 +547,8 @@ jobs:
       ENVIRONMENT: staging
       DEBUG: "false"
       DOCS_ENABLED: "false"
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
       FULL_AUDIT_LIVE_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_prompt03_unused
@@ -585,24 +588,30 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Verify live audit secrets
+      - name: Verify staging database secret
         shell: bash
         run: |
-          test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
-          test -n "$FULL_AUDIT_LIVE_DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+          test -n "$DATABASE_URL" || { echo "DATABASE_URL is missing"; exit 1; }
+          test -n "$MIGRATION_DATABASE_URL" || { echo "MIGRATION_DATABASE_URL is missing"; exit 1; }
+          test -n "$FULL_AUDIT_LIVE_DATABASE_URL" || { echo "FULL_AUDIT_LIVE_DATABASE_URL is missing"; exit 1; }
+      - name: Verify provider secret for live execution
+        if: ${{ inputs.audit_mode == 'targeted-evidence' }}
+        shell: bash
+        run: test -n "$OPENAI_API_KEY" || { echo "OPENAI_API_KEY is missing"; exit 1; }
       - name: Assemble exact-head V2 benchmark scenario module
         shell: bash
         run: cat ../.github/benchmark/v2_benchmark_scenarios.part.* > /tmp/v2_benchmark_scenarios.py
       - name: Validate hybrid inventory without provider calls
         shell: bash
+        env:
+          OPENAI_API_KEY: ""
         run: |
           mkdir -p artifacts
           python /tmp/run_prompt03_hybrid_core.py --inventory-only | tee artifacts/prompt03-hybrid-inventory.json
       - name: Validate all fixtures without provider calls
         shell: bash
         env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          OPENAI_API_KEY: ""
         run: |
           set -o pipefail
           python /tmp/run_prompt03_hybrid_core.py --fixture-preflight 2>&1 | tee artifacts/prompt03-hybrid-preflight.log
@@ -614,10 +623,8 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "PROMPT03_EXACT_HEAD=$(git rev-parse HEAD)"
       - name: Run exactly one PROMPT-03 hybrid provider audit
+        if: ${{ inputs.audit_mode == 'targeted-evidence' }}
         shell: bash
-        env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           set -o pipefail
           python /tmp/run_prompt03_hybrid_core.py 2>&1 | tee artifacts/prompt03-hybrid-core.log
@@ -625,7 +632,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prompt03-hybrid-core-${{ github.run_id }}-${{ github.run_attempt }}
+          name: prompt03-hybrid-${{ inputs.audit_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             backend/artifacts/prompt03-hybrid-core.json
             backend/artifacts/prompt03-hybrid-core.log

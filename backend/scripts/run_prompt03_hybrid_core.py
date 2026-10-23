@@ -30,6 +30,7 @@ from app.models.workspace import Workspace
 TARGET_HEAD = "8dd566a10bb49edb8238f0ce8066c0e346f367f4"
 REPORT = Path("artifacts/prompt03-hybrid-core.json")
 PAGE_SIZE = 4
+_PREFLIGHT_PROVIDER_CALLS = 0
 
 ANCHORS = (
     ("existing_package_booking", "A1", 2, "existing package booking"),
@@ -61,6 +62,25 @@ META = {
     }
     for row in PORTFOLIO
 }
+
+
+def install_provider_forbidden_guard() -> None:
+    global _PREFLIGHT_PROVIDER_CALLS
+    _PREFLIGHT_PROVIDER_CALLS = 0
+
+    def forbidden_generate(self, *args, **kwargs):
+        global _PREFLIGHT_PROVIDER_CALLS
+        _PREFLIGHT_PROVIDER_CALLS += 1
+        raise RuntimeError("Provider invocation is forbidden during PROMPT-03 preflight")
+
+    ChatOpenAI._generate = forbidden_generate
+
+
+def verify_output_path() -> None:
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
+    probe = REPORT.parent / ".prompt03-preflight-write-probe"
+    probe.write_text("ok", encoding="utf-8")
+    probe.unlink()
 
 
 def git_head() -> str:
@@ -407,9 +427,12 @@ def install_stage_telemetry() -> None:
 
 def fixture_preflight() -> dict[str, Any]:
     install_handlers()
+    verify_output_path()
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     rows = []
     try:
+        with engine.connect() as bootstrap_connection:
+            bootstrap_connection.exec_driver_sql("select 1")
         for sid in ORDER:
             connection = engine.connect()
             outer = connection.begin()
@@ -431,8 +454,22 @@ def fixture_preflight() -> dict[str, Any]:
                 connection.close()
     finally:
         engine.dispose()
-    return {"head": git_head(), "scenario_count": len(rows),
-            "turns": sum(META[x]["planned_turns"] for x in ORDER), "scenarios": rows}
+    if _PREFLIGHT_PROVIDER_CALLS != 0:
+        raise RuntimeError(f"Provider calls occurred during fixture preflight: {_PREFLIGHT_PROVIDER_CALLS}")
+    return {
+        "head": git_head(),
+        "scenario_count": len(rows),
+        "anchor_count": len(ANCHORS),
+        "fresh_count": len(FRESH),
+        "turns": sum(META[x]["planned_turns"] for x in ORDER),
+        "provider_calls": _PREFLIGHT_PROVIDER_CALLS,
+        "database_bootstrap": "PASS",
+        "scenario_reset_capability": "PASS",
+        "transaction_rollbacks": len(rows),
+        "database_writes_persisted": False,
+        "evidence_output_path": str(REPORT),
+        "scenarios": rows,
+    }
 
 
 def percentile(values: list[int], p: float) -> float | None:
@@ -557,10 +594,26 @@ def run_hybrid() -> int:
 
 
 def inventory_only() -> int:
-    print(json.dumps({"target_head": TARGET_HEAD, "conversation_count": len(PORTFOLIO),
-        "anchor_count": len(ANCHORS), "fresh_count": len(FRESH),
+    if git_head() != TARGET_HEAD:
+        raise RuntimeError(f"Exact-head guard failed: {git_head()} != {TARGET_HEAD}")
+    install_provider_forbidden_guard()
+    payload = {
+        "target_head": TARGET_HEAD,
+        "tested_head": git_head(),
+        "conversation_count": len(PORTFOLIO),
+        "anchor_count": len(ANCHORS),
+        "fresh_count": len(FRESH),
         "planned_turns": sum(row[2] for row in PORTFOLIO),
-        "scenarios": [{"id": row[0], **META[row[0]]} for row in PORTFOLIO]}, ensure_ascii=False, indent=2))
+        "provider_calls": _PREFLIGHT_PROVIDER_CALLS,
+        "scenarios": [{"id": row[0], **META[row[0]]} for row in PORTFOLIO],
+    }
+    if payload["conversation_count"] != 17 or payload["anchor_count"] != 5 or payload["fresh_count"] != 12:
+        raise RuntimeError(f"Hybrid inventory count mismatch: {payload}")
+    if payload["planned_turns"] != 35:
+        raise RuntimeError(f"Hybrid planned-turn mismatch: {payload['planned_turns']}")
+    if payload["provider_calls"] != 0:
+        raise RuntimeError(f"Provider calls occurred during inventory preflight: {payload['provider_calls']}")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -574,6 +627,7 @@ def main() -> int:
     if args.fixture_preflight:
         if git_head() != TARGET_HEAD:
             raise RuntimeError(f"Exact-head guard failed: {git_head()} != {TARGET_HEAD}")
+        install_provider_forbidden_guard()
         print(json.dumps(fixture_preflight(), ensure_ascii=False, indent=2, default=str))
         return 0
     return run_hybrid()
