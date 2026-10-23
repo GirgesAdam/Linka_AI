@@ -224,14 +224,13 @@ def verified_read_semantic_view(
         return {}
     safe: dict[str, object] = {"operation_type": operation_type}
     safe.update(_safe_constraints(read_context, context))
-    if operation_type == "appointment_list":
-        appointment_ref = _entity_ref(
-            read_context.get("appointment_id"),
-            kind="appointment",
-            context=context,
-        )
-        if appointment_ref is not None:
-            safe["appointment_ref"] = appointment_ref
+    appointment_ref = _entity_ref(
+        read_context.get("appointment_id"),
+        kind="appointment",
+        context=context,
+    )
+    if appointment_ref is not None:
+        safe["appointment_ref"] = appointment_ref
     raw_reference_options = read_context.get("availability_reference_options")
     if isinstance(raw_reference_options, list):
         safe_options: list[dict[str, object]] = []
@@ -586,9 +585,7 @@ def _with_recent_verified_read_appointment_reference(
     context: SemanticContext,
     read_context: dict[str, Any],
 ) -> SemanticContext:
-    """Add one server-owned ephemeral ref for the immediately prior verified appointment read."""
-    if read_context.get("operation_type") != "appointment_list":
-        return context
+    """Add one server-owned ephemeral ref for the bounded verified appointment anchor."""
     appointment_id = read_context.get("appointment_id")
     if appointment_id in (None, ""):
         return context

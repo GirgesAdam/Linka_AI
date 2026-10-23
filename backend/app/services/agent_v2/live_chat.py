@@ -843,6 +843,24 @@ def _verified_read_context_from_turn(
                 ]
                 if ids:
                     context["doctor_ids"] = ids
+
+        previous_appointment_id = (
+            previous_read_context.get("appointment_id")
+            if isinstance(previous_read_context, dict)
+            and previous_read_context.get("operation_type") == "appointment_list"
+            else None
+        )
+        current_has_appointment_read = any(
+            current_step.operation_type == "appointment_list"
+            for current_step in turn.plan.steps
+        )
+        if (
+            step.operation_type != "appointment_list"
+            and not current_has_appointment_read
+            and previous_appointment_id not in (None, "")
+            and _safe_action_context_passthrough(turn)
+        ):
+            context["appointment_id"] = str(previous_appointment_id)
         return context
     return _displayed_booking_availability_context_from_outcome(turn)
 
