@@ -26,8 +26,8 @@ from app.models.user import User
 from app.schemas.crm import (
     PatientCRMStats,
     PatientNoteRead,
+    PatientProfilePatientRead,
     PatientProfileRead,
-    PatientRead,
     PatientTagRead,
     PatientTimelineAppointment,
     PatientTimelineEvent,
@@ -709,7 +709,7 @@ def build_patient_profile(
     )
 
     return PatientProfileRead(
-        patient=PatientRead.model_validate(patient),
+        patient=PatientProfilePatientRead.model_validate(patient),
         stats=stats,
         tags=[PatientTagRead.model_validate(tag) for tag in tags],
         notes=[PatientNoteRead.model_validate(note) for note in notes],

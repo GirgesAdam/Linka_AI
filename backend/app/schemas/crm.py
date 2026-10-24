@@ -95,6 +95,7 @@ class PatientCreate(BaseModel):
     first_name: str = Field(max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
+    customer_id: str | None = None
     gender: str | None = Field(default=None, max_length=32)
     birth_date: date | None = None
     preferred_language: str = Field(default="ar", min_length=2, max_length=10)
@@ -131,6 +132,7 @@ class PatientUpdate(BaseModel):
     first_name: str | None = Field(default=None, max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
+    customer_id: str | None = None
     gender: str | None = Field(default=None, max_length=32)
     birth_date: date | None = None
     preferred_language: str | None = Field(default=None, min_length=2, max_length=10)
@@ -344,8 +346,12 @@ class PatientCRMStats(BaseModel):
     last_appointment_at: datetime | None = None
 
 
+class PatientProfilePatientRead(PatientRead):
+    customer_id: str | None = None
+
+
 class PatientProfileRead(BaseModel):
-    patient: PatientRead
+    patient: PatientProfilePatientRead
     stats: PatientCRMStats
     tags: list[PatientTagRead]
     notes: list[PatientNoteRead]

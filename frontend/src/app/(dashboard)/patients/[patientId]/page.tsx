@@ -14,7 +14,7 @@ import {
   StickyNote,
   Tag,
 } from "lucide-react";
-import { addPatientNote, createPatientTask } from "../actions";
+import { addPatientNote, createPatientTask, updatePatientCustomerId } from "../actions";
 import { PatientPackagePanel } from "./package-panel";
 import { PatientPulsePanel } from "./pulse-panel";
 import { PageHeader } from "@/components/page-header";
@@ -267,6 +267,12 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
             <CardHeader><CardTitle>بيانات العميل</CardTitle></CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">رقم الهاتف</span><b className="text-left" dir="ltr">{patient.phone || "—"}</b></div>
+              <form action={updatePatientCustomerId} className="space-y-2 rounded-xl border border-[var(--border)] p-3">
+                <input type="hidden" name="patient_id" value={patient.id} />
+                <label htmlFor="customer_id" className="block text-xs font-bold text-[var(--muted)]">Customer ID (optional)</label>
+                <Input id="customer_id" name="customer_id" defaultValue={patient.customer_id || ""} autoComplete="off" />
+                <Button type="submit" size="sm" variant="outline" className="w-full">Save Customer ID</Button>
+              </form>
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">مصدر العميل</span><b>{labelForSource(patient.source)}</b></div>
               <div className="flex justify-between gap-4"><span className="text-[var(--muted)]">آخر تواصل</span><b className="text-left">{formatDateTime(patient.last_contact_at)}</b></div>
             </CardContent>

@@ -143,8 +143,9 @@ export interface PatientTimelineEvent {
   message: PatientTimelineMessage | null; handoff: PatientTimelineHandoff | null; note: PatientTimelineNote | null; task: PatientTimelineTask | null;
   payment: PatientTimelinePayment | null;
 }
+export interface PatientProfilePatient extends Patient { customer_id: string | null }
 export interface PatientProfile {
-  patient: Patient; stats: PatientCRMStats; tags: PatientTag[]; notes: PatientNote[];
+  patient: PatientProfilePatient; stats: PatientCRMStats; tags: PatientTag[]; notes: PatientNote[];
   timeline: PatientTimelineEvent[]; latest_conversation_id: string | null;
 }
 

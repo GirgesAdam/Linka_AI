@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -67,6 +68,7 @@ class Patient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     phone_normalized: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    customer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     gender: Mapped[str | None] = mapped_column(String(32), nullable=True)
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     preferred_language: Mapped[str] = mapped_column(
