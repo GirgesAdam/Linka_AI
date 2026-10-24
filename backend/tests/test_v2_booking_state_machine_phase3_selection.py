@@ -12,7 +12,14 @@ from app.agents.v2.availability_reference_interpreter import (
     ReferenceDecision,
     ReferenceInterpretation,
 )
-from app.agents.v2.turn_contract import DateConstraint, Selection, TurnEntities, TurnOperation
+from app.agents.v2.turn_contract import (
+    DateConstraint,
+    Selection,
+    TiaTurnUnderstanding,
+    TimeConstraint,
+    TurnEntities,
+    TurnOperation,
+)
 from app.services.agent_v2.orchestrator import (
     _attach_verified_booking_proposal_to_task,
     _prepare_booking_proposal,
@@ -27,6 +34,7 @@ from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import (
     BookingTaskState,
     CustomerConstraints,
+    DerivedBookingState,
     OptionChoice,
     OptionSnapshot,
     WriteAuthorization,
@@ -586,3 +594,98 @@ def test_stateful_h3_selection_reuses_production_boundary_and_respects_booking_a
         assert result.outcomes[-1].response_goal == "booking_proposal"
         assert result.traces[-1].simulated_write is None
         assert result.active_task.write_authorization.authorized is False
+
+
+def test_review_first_booking_revokes_prior_authority_then_explicit_proceed_revalidates_and_writes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = _task(grouped=False).model_copy(
+        update={
+            "write_authorization": WriteAuthorization(
+                operation="booking",
+                authorized=True,
+                source_turn_id="original-booking-request",
+                granted_at=NOW - timedelta(minutes=5),
+            ),
+            "constraints": CustomerConstraints(
+                service_id=A,
+                doctor_id=DOCTOR,
+                branch_id=BRANCH,
+                device_key=DEVICE,
+                date=DateConstraint(mode="exact", start_date="2026-09-12"),
+                time=TimeConstraint(mode="exact", start_time="20:00"),
+            ),
+            "derived": DerivedBookingState(
+                availability_snapshot_id="snapshot-1",
+                commercial_basis_presented_key=f"{A}|{DEVICE}|standalone",
+            ),
+        }
+    )
+    def understanding(execution_intent: str) -> TiaTurnUnderstanding:
+        return TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="book",
+                    entities=TurnEntities(),
+                    execution_intent=execution_intent,
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+
+    understandings = iter([understanding("informational"), understanding("execute")])
+    monkeypatch.setattr(
+        stateful_harness,
+        "interpret_customer_turn_v2",
+        lambda **_kwargs: next(understandings),
+    )
+    monkeypatch.setattr(
+        stateful_harness,
+        "compose_v2_customer_reply",
+        lambda **_kwargs: ("Deterministic test reply.", "deterministic-test"),
+    )
+    env = V2FixtureEnvironment(
+        catalog=_catalog(grouped=False),
+        slots=[_slot(service_id=A)],
+    )
+
+    review = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[HumanMessage(content="عايزة أراجع تفاصيل الحجز قبل ما أأكد")],
+        local_now=NOW,
+        timezone_name="Africa/Cairo",
+        env=env,
+        active_task=task,
+        simulate_writes=True,
+        turn_id="review-before-confirmation",
+    )
+
+    assert isinstance(review.active_task, BookingTaskState)
+    assert review.active_task.write_authorization.authorized is False
+    assert review.active_task.write_authorization.source_turn_id is None
+    assert review.active_task.proposal is None
+    assert review.active_task.constraints.service_id == A
+    assert review.active_task.constraints.date == DateConstraint(
+        mode="exact", start_date="2026-09-12"
+    )
+    assert review.active_task.constraints.time == TimeConstraint(
+        mode="exact", start_time="20:00"
+    )
+    assert any("availability" in trace.read_kinds for trace in review.traces)
+    assert all(trace.simulated_write is None for trace in review.traces)
+
+    proceed = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[HumanMessage(content="تمام احجز")],
+        local_now=NOW,
+        timezone_name="Africa/Cairo",
+        env=env,
+        active_task=review.active_task,
+        simulate_writes=True,
+        turn_id="explicit-proceed-after-review",
+    )
+
+    assert proceed.active_task is None
+    assert any("availability" in trace.read_kinds for trace in proceed.traces)
+    assert sum(trace.simulated_write is not None for trace in proceed.traces) == 1
+    assert proceed.traces[-1].simulated_write == "booking"
+    assert proceed.outcomes[-1].response_goal == "booking_completed"
