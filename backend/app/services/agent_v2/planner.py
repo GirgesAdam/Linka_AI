@@ -846,13 +846,28 @@ def _informational_write_read(
                 response_goal="present_availability",
                 facts=params,
             )
+        if operation.fresh_task:
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="clarify",
+                state_action=state_action,
+                response_goal="clarification",
+                clarification_field="date",
+                facts=params,
+            )
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
-            disposition="clarify",
+            disposition="read",
+            reads=[
+                ReadRequest(
+                    kind="service_catalog",
+                    parameters={"service_id": params["service_id"]},
+                )
+            ],
             state_action=state_action,
-            response_goal="clarification",
-            clarification_field="date",
+            response_goal="answer_service",
             facts=params,
         )
     if operation.type in {"confirm_appointment", "cancel_appointment"}:

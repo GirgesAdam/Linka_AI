@@ -111,6 +111,7 @@ def test_review_first_booking_with_missing_date_asks_only_for_date_and_retains_t
         type="book",
         entities=TurnEntities(service=EntityReference(text=None, ref="S1", candidate_refs=[])),
         execution_intent="informational",
+        fresh_task=True,
     )
     step = plan_turn(TiaTurnUnderstanding(operations=[operation]), _context()).steps[0]
 
