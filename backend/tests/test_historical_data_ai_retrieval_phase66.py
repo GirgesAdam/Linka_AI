@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from app.agents.tools import clinic_tools
+from app.agents.tools.clinic_tools import AgentToolContext, build_clinic_tools
 from app.integrations.clinic.mapped_sync import canonicalize_raw_sync_page
 from app.integrations.clinic.sync_contract import ClinicRawSyncPage, ClinicSyncDomain
 from app.models.patient import Patient
 from app.schemas.clinic_connector_mapping import ClinicSyncMapping, PatientSyncMapping
+from app.services.agent_v2.planner import ReadRequest
+from app.services.agent_v2.read_executor import (
+    ReadExecutionContext,
+    _read_customer_history,
+    _read_customer_profile,
+)
 from app.services.patient_history import build_patient_history_context, historical_analytics
 
 NOW = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
@@ -23,7 +33,7 @@ def _schema(engine) -> None:
         CREATE TABLE patients (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32) NOT NULL,
             first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40),
-            phone_normalized VARCHAR(40), gender VARCHAR(32), birth_date DATE,
+            phone_normalized VARCHAR(40), customer_id TEXT, gender VARCHAR(32), birth_date DATE,
             preferred_language VARCHAR(10), preferred_branch_id CHAR(32), source VARCHAR(32),
             source_detail VARCHAR(200), status VARCHAR(20), marketing_consent BOOLEAN DEFAULT 0,
             marketing_consent_at DATETIME, whatsapp_opt_in BOOLEAN DEFAULT 0,
@@ -214,3 +224,47 @@ def test_migration_preserves_original_patient_timestamp_and_head() -> None:
     assert 'sa.Column("source_created_at", sa.DateTime(timezone=True), nullable=True)' in migration
     assert 'EXPECTED_MIGRATION_HEAD = "0072_workspace_demo_policy"' in readiness
     assert len("0037_patient_history") <= 32
+
+def test_populated_customer_id_is_absent_from_agent_tool_and_agent_v2_payloads(monkeypatch) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    _schema(engine)
+    customer_id_secret = "PRIVATE-CUSTOMER-ID-009812"
+    monkeypatch.setattr(clinic_tools, "_record_action", lambda *args, **kwargs: None)
+
+    with Session(engine) as db:
+        workspace_id, patient_id = _seed(db)
+        patient = db.get(Patient, patient_id)
+        patient.customer_id = customer_id_secret
+        db.commit()
+
+        history = build_patient_history_context(db, workspace_id=workspace_id, patient=patient)
+        history_json = history.model_dump_json()
+        assert customer_id_secret not in history_json
+        assert "customer_id" not in history_json
+
+        agent_context = AgentToolContext(
+            db=db,
+            workspace=SimpleNamespace(id=workspace_id),
+            patient=patient,
+            conversation=SimpleNamespace(id=uuid4()),
+            run_id=uuid4(),
+        )
+        tools = {item.name: item for item in build_clinic_tools(agent_context)}
+        for tool_name in ("get_customer_profile", "get_customer_history"):
+            tool_payload = tools[tool_name].invoke({})
+            assert customer_id_secret not in tool_payload
+            assert "customer_id" not in tool_payload
+
+        v2_context = ReadExecutionContext(
+            db=db,
+            workspace=SimpleNamespace(id=workspace_id),
+            patient=patient,
+            now=NOW,
+        )
+        for result in (
+            _read_customer_profile(ReadRequest(kind="customer_profile"), v2_context),
+            _read_customer_history(ReadRequest(kind="customer_history"), v2_context),
+        ):
+            payload_json = json.dumps(result.model_dump(mode="json"))
+            assert customer_id_secret not in payload_json
+            assert "customer_id" not in payload_json

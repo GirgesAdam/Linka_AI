@@ -23,7 +23,7 @@ def _schema(engine) -> None:
     ddl = [
         """CREATE TABLE workspaces (id CHAR(32) PRIMARY KEY, name VARCHAR(200), slug VARCHAR(120), timezone VARCHAR(64), primary_branch_id CHAR(32), is_active BOOLEAN, is_demo BOOLEAN DEFAULT 0, created_at DATETIME, updated_at DATETIME)""",
         """CREATE TABLE patients (
-            id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40), phone_normalized VARCHAR(40),
+            id CHAR(32) PRIMARY KEY, workspace_id CHAR(32), first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40), phone_normalized VARCHAR(40), customer_id TEXT,
             gender VARCHAR(32), birth_date DATE, preferred_language VARCHAR(10), preferred_branch_id CHAR(32), source VARCHAR(32), source_detail VARCHAR(200),
             status VARCHAR(20), marketing_consent BOOLEAN, marketing_consent_at DATETIME, whatsapp_opt_in BOOLEAN DEFAULT 0,
             whatsapp_opt_in_at DATETIME, whatsapp_opt_in_source VARCHAR(32), source_created_at DATETIME, last_contact_at DATETIME,
