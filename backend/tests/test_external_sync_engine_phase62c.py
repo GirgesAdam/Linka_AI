@@ -56,7 +56,7 @@ def _create_sqlite_schema(engine) -> None:
         CREATE TABLE patients (
             id CHAR(32) PRIMARY KEY, workspace_id CHAR(32) NOT NULL,
             first_name VARCHAR(120), last_name VARCHAR(120), phone VARCHAR(40),
-            phone_normalized VARCHAR(40), gender VARCHAR(32),
+            phone_normalized VARCHAR(40), customer_id TEXT, gender VARCHAR(32),
             birth_date DATE, source_created_at DATETIME, preferred_language VARCHAR(10), preferred_branch_id CHAR(32),
             source VARCHAR(32), source_detail VARCHAR(200), status VARCHAR(20),
             marketing_consent BOOLEAN DEFAULT 0, marketing_consent_at DATETIME, whatsapp_opt_in BOOLEAN DEFAULT 0,
