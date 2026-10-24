@@ -488,6 +488,16 @@ class TurnOperation(StrictContractModel):
             ""
         ),
     )
+    active_task_corrected_fields: list[ActiveTaskExplicitField] = Field(
+        default_factory=list,
+        description=(
+            "For active_task_relationship=continue with booking or reschedule, list date and/or time "
+            "only when the latest customer message explicitly rejects, replaces, or corrects that "
+            "active-task dimension. Do not include a field merely because the customer repeats, "
+            "confirms, or restates its current value. Every corrected field must also appear in "
+            "active_task_explicit_fields."
+        ),
+    )
     cleared_active_task_fields: list[ActiveTaskClearField] = Field(
         default_factory=list,
         description=(
@@ -661,6 +671,22 @@ class TurnOperation(StrictContractModel):
             )
         if "time" in explicit and self.entities.time is None:
             raise ValueError("active-task explicit time marker requires a time entity.")
+        return self
+
+    @model_validator(mode="after")
+    def validate_active_task_corrected_fields(self) -> TurnOperation:
+        corrected = set(self.active_task_corrected_fields)
+        if not corrected:
+            return self
+        if self.active_task_relationship != "continue" or self.type not in {"book", "reschedule"}:
+            raise ValueError(
+                "active_task_corrected_fields is only valid for active booking/reschedule continuations."
+            )
+        explicit = set(self.active_task_explicit_fields)
+        if not corrected.issubset(explicit):
+            raise ValueError(
+                "active_task_corrected_fields must be a subset of active_task_explicit_fields."
+            )
         return self
 
     @model_validator(mode="after")

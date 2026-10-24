@@ -16,6 +16,8 @@ from app.services.agent_v2.state import (
     RescheduleTaskState,
 )
 
+TIME_CORRECTION_AUTHORITY_FACT = "_time_correction_authority"
+
 
 def _booking_derived(
     state: BookingTaskState,
