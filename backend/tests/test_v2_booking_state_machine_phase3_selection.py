@@ -216,6 +216,7 @@ def test_selection_fails_closed_for_stale_expired_compressed_or_wrong_clock() ->
     assert _selection_plan(task=_task(stale_version=True)) is None
     assert _selection_plan(task=_task(expired=True)) is None
     assert _selection_plan(context=_context(concrete=False), selection_time=None) is None
+
     assert _selection_plan(selection_time="08:00") is None
 
 
@@ -689,3 +690,119 @@ def test_review_first_booking_revokes_prior_authority_then_explicit_proceed_reva
     assert sum(trace.simulated_write is not None for trace in proceed.traces) == 1
     assert proceed.traces[-1].simulated_write == "booking"
     assert proceed.outcomes[-1].response_goal == "booking_completed"
+
+
+def test_explicit_booking_authority_survives_missing_date_and_writes_once_after_verified_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = V2FixtureEnvironment()
+    task = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-underarm",
+            branch_id="single-location",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            time=TimeConstraint(mode="exact", start_time="20:00"),
+        ),
+        derived=DerivedBookingState(
+            commercial_basis_presented_key="svc-underarm|candela_gentle|standalone",
+            commercial_basis_presented_device_key="candela_gentle",
+        ),
+        version=3,
+    )
+    understandings = iter(
+        [
+            TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="book",
+                        execution_intent="execute",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                        entities=TurnEntities(),
+                    )
+                ]
+            ),
+            TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="continue_active",
+                        execution_intent="execute",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                        entities=TurnEntities(
+                            date=DateConstraint(
+                                mode="exact",
+                                start_date="2026-09-12",
+                            )
+                        ),
+                    )
+                ]
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        stateful_harness,
+        "interpret_customer_turn_v2",
+        lambda **kwargs: next(understandings),
+    )
+
+    def deterministic_reply(**kwargs: object) -> tuple[str, str]:
+        outcomes = kwargs.get("outcomes", [])
+        if any(
+            getattr(outcome, "response_goal", None) == "booking_completed"
+            for outcome in outcomes
+        ):
+            return "Your underarm appointment is booked.", "deterministic-test"
+        return "What date would you like?", "deterministic-test"
+
+    monkeypatch.setattr(stateful_harness, "compose_v2_customer_reply", deterministic_reply)
+
+    first = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[HumanMessage(content="Book the appointment")],
+        local_now=NOW,
+        timezone_name="Africa/Cairo",
+        env=env,
+        active_task=task,
+        simulate_writes=True,
+        turn_id="explicit-booking-missing-date",
+    )
+
+    assert isinstance(first.active_task, BookingTaskState)
+    assert first.active_task.write_authorization.authorized is True
+    assert first.active_task.write_authorization.source_turn_id == "explicit-booking-missing-date"
+    assert first.active_task.constraints.service_id == "svc-underarm"
+    assert first.active_task.constraints.date is None
+    assert first.active_task.constraints.time == TimeConstraint(
+        mode="exact",
+        start_time="20:00",
+    )
+    assert first.outcomes[-1].status == "needs_input"
+    assert first.outcomes[-1].response_goal == "clarification"
+    assert first.outcomes[-1].facts["needed"] == "date"
+    assert all(trace.simulated_write is None for trace in first.traces)
+
+    second = stateful_harness.run_v2_stateful_fixture_turn(
+        history=[HumanMessage(content="September 12")],
+        local_now=NOW,
+        timezone_name="Africa/Cairo",
+        env=env,
+        active_task=first.active_task,
+        simulate_writes=True,
+        turn_id="explicit-booking-date-supplied",
+    )
+
+    assert second.active_task is None
+    assert sum(trace.simulated_write is not None for trace in second.traces) == 1
+    assert second.traces[-1].simulated_write == "booking"
+    assert second.traces[-1].disposition_after == "write_ready"
+    assert "availability" in second.traces[-1].read_kinds
+    assert second.outcomes[-1].status == "completed"
+    assert second.outcomes[-1].response_goal == "booking_completed"
+    assert second.outcomes[-1].action_result is not None
+    assert second.outcomes[-1].action_result["ok"] is True
+    assert all(outcome.response_goal != "booking_proposal" for outcome in second.outcomes)
+    assert second.reply == "Your underarm appointment is booked."
+    assert "confirm" not in second.reply.lower()

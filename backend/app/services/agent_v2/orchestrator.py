@@ -3082,6 +3082,49 @@ def orchestrate_v2_turn(
                     )
                 ]
             )
+        elif isinstance(initial_task, BookingTaskState) and (
+            validated_reference_context is not None or ambiguous_current_reference
+        ):
+            # The specialized booking validator is authoritative for slot selection.
+            # A valid reference is not enough to execute a selection it did not accept.
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="book",
+                        entities=TurnEntities(),
+                        execution_intent="informational",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                    )
+                ]
+            )
+            reference_plan_override = TurnPlan(
+                steps=[
+                    PlanStep(
+                        operation_index=0,
+                        operation_type="book",
+                        disposition="clarify",
+                        state_action="none",
+                        response_goal="clarification",
+                        clarification_field=(
+                            dimensions[0]
+                            if ambiguous_current_reference and dimensions
+                            else "availability_reference"
+                        ),
+                        facts={
+                            "booking_selection_rejected": True,
+                            "booking_selection_rejection_reason": (
+                                "ambiguous_booking_reference"
+                                if ambiguous_current_reference
+                                else "booking_selection_validation_failed"
+                            ),
+                            "selected_option_ref": decision.option_ref,
+                        },
+                    )
+                ]
+            )
+            if validated_reference_context is not None:
+                availability_reference_context = validated_reference_context
         else:
             if initial_task is not None and validated_reference_context is not None:
                 availability_reference_context = validated_reference_context
@@ -3567,18 +3610,23 @@ def orchestrate_v2_turn(
             operation=operation,
             verified_appointment_parameters=same_turn_verified_appointment,
         )
-        effective_step = adapt_matching_active_task_step(
-            planned_step,
-            operation=operation,
-            active_task=current_task,
-            context=semantic_context,
-            now=local_now,
-        )
-        effective_step = persist_initial_task_intent(
-            effective_step,
-            operation=operation,
-            context=semantic_context,
-        )
+        if planned_step.facts.get("booking_selection_rejected") is True:
+            # A rejected server-owned selection is terminal for this turn. Do not let
+            # generic task progression reinterpret it as a booking continuation.
+            effective_step = planned_step
+        else:
+            effective_step = adapt_matching_active_task_step(
+                planned_step,
+                operation=operation,
+                active_task=current_task,
+                context=semantic_context,
+                now=local_now,
+            )
+            effective_step = persist_initial_task_intent(
+                effective_step,
+                operation=operation,
+                context=semantic_context,
+            )
         if isinstance(planned_step.facts.get("requested_service_ids"), list):
             effective_step = effective_step.model_copy(
                 update={
