@@ -1501,7 +1501,7 @@ def _run_ra_g6_unpresented_exact_time_case(
     return result, read_calls, saved
 
 
-def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
+def test_ra_g6_unpresented_exact_time_produces_write_ready_booking_proposal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result, read_calls, saved = _run_ra_g6_unpresented_exact_time_case(monkeypatch)
@@ -1512,7 +1512,11 @@ def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
         ["service_catalog_set", "availability"],
         ["service_catalog_set", "availability"],
     ]
-    assert result.pending_write is None
+    assert result.pending_write is not None
+    assert result.pending_write.step.disposition == "write_ready"
+    assert result.pending_write.step.write_intent is not None
+    assert result.pending_write.step.write_intent.kind == "booking_proposal"
+    assert result.pending_write.step.response_goal == "booking_completed"
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.requested_service_ids == ["service-a", "service-b"]
     assert result.active_task.status == "awaiting_confirmation"
@@ -1521,11 +1525,11 @@ def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
     assert result.active_task.proposal.doctor_id == "doctor-1"
     assert result.active_task.proposal.device_key == "device-1"
     assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
-    assert result.outcomes[-1].response_goal == "booking_proposal"
+    assert result.active_task.write_authorization.authorized is True
     assert saved and saved[-1].proposal is not None
 
 
-def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter(
+def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter_and_write_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result, read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
@@ -1535,7 +1539,9 @@ def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter(
 
     assert result.reference_action == "new_search"
     assert result.full_interpreter_called is True
-    assert result.pending_write is None
+    assert result.pending_write is not None
+    assert result.pending_write.step.write_intent is not None
+    assert result.pending_write.step.write_intent.kind == "booking_proposal"
     assert read_calls == [
         ["service_catalog_set", "availability"],
         ["service_catalog_set", "availability"],

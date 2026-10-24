@@ -266,6 +266,7 @@ def _proposal_matches_current_exact_time(
 def _prepare_booking_proposal(
     step: PlanStep,
     *,
+    operation: TurnOperation | None = None,
     reads: ReadExecutionBundle,
     current_task: ActiveTaskState | None,
     db: Session,
@@ -473,6 +474,39 @@ def _prepare_booking_proposal(
         "branch_name": slot.get("branch_name"),
         "device_name": slot.get("laser_device_name"),
     }
+    explicit_booking_authorized = (
+        operation is not None
+        and operation.type == "book"
+        and operation.execution_intent == "execute"
+    )
+    auto_execute_authorized_booking = intent.authorized and (
+        explicit_booking_authorized
+        or current_task is None
+        or step.state_action in {"start_booking", "replace_active"}
+        or (
+            isinstance(current_task, BookingTaskState)
+            and current_task.write_authorization.authorized
+        )
+    )
+    if auto_execute_authorized_booking:
+        return step.model_copy(
+            update={
+                "disposition": "write_ready",
+                "write_intent": WriteIntent(
+                    kind="booking_proposal",
+                    authorized=True,
+                    parameters={
+                        **intent.parameters,
+                        "proposal_id": proposal.proposal_id,
+                        "proposal": proposal.model_dump(mode="json"),
+                    },
+                    requires_verification=False,
+                ),
+                "response_goal": "booking_completed",
+                "facts": {**step.facts, "booking_proposal_summary": summary},
+            }
+        ), proposal
+
     return step.model_copy(
         update={
             "disposition": "respond",
@@ -3687,6 +3721,7 @@ def orchestrate_v2_turn(
         advanced = _auto_resolve_single_booking_device(advanced, reads)
         advanced, pending_proposal_for_step = _prepare_booking_proposal(
             advanced,
+            operation=operation,
             reads=reads,
             current_task=current_task,
             db=db,
@@ -3804,6 +3839,7 @@ def orchestrate_v2_turn(
             operation_reads[effective_step.operation_index] = reads
             advanced, pending_proposal_for_step = _prepare_booking_proposal(
                 advanced,
+                operation=operation,
                 reads=reads,
                 current_task=current_task,
                 db=db,

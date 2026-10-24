@@ -281,6 +281,7 @@ def _execute_step(
     ):
         advanced, pending_proposal = _prepare_booking_proposal(
             advanced,
+            operation=operation,
             reads=bundle,
             current_task=current_task,
             db=object(),

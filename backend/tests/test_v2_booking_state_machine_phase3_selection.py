@@ -329,7 +329,14 @@ def test_multiple_fresh_exact_matches_fail_closed_without_selected_authority() -
     assert state.write_authorization.authorized is False
 
 
-def test_single_service_fresh_verification_builds_proposal_without_db_write_authority() -> None:
+@pytest.mark.parametrize(
+    ("execution_intent", "expected_goal"),
+    [("informational", "booking_proposal"), ("execute", "booking_completed")],
+)
+def test_single_service_fresh_verification_respects_booking_authority(
+    execution_intent: str,
+    expected_goal: str,
+) -> None:
     task = _task(grouped=False)
     planned = _selection_plan(grouped=False, task=task)
     assert planned is not None
@@ -350,8 +357,10 @@ def test_single_service_fresh_verification_builds_proposal_without_db_write_auth
         verification=verification,
     )
     advanced = advance_step_after_verification(step, verification)
+    operation = _operation().model_copy(update={"execution_intent": execution_intent})
     prepared, proposal = _prepare_booking_proposal(
         advanced,
+        operation=operation,
         reads=reads,
         current_task=task,
         db=object(),
@@ -363,12 +372,20 @@ def test_single_service_fresh_verification_builds_proposal_without_db_write_auth
         additional_service_resolver=lambda _proposal: [],
     )
     assert proposal is not None
-    assert prepared.response_goal == "booking_proposal"
+    if execution_intent == "execute":
+        assert prepared.disposition == "write_ready"
+        assert prepared.response_goal == expected_goal
+        assert prepared.write_intent is not None
+        assert prepared.write_intent.kind == "booking_proposal"
+        assert prepared.write_intent.authorized is True
+        return
+
+    assert prepared.response_goal == expected_goal
     assert prepared.write_intent is None
     transitioned = apply_step_state(
         task,
         step=prepared,
-        operation=_operation(),
+        operation=operation,
         reads=reads,
         now=NOW,
         turn_id="single-selected",
@@ -427,8 +444,10 @@ def test_single_service_fresh_verification_builds_proposal_without_db_write_auth
     assert declined.active_task is None
 
 
-def test_stateful_h3_selection_reuses_production_boundary_and_reaches_proposal(
+@pytest.mark.parametrize("authorized", [False, True])
+def test_stateful_h3_selection_reuses_production_boundary_and_respects_booking_authority(
     monkeypatch: pytest.MonkeyPatch,
+    authorized: bool,
 ) -> None:
     base = V2FixtureEnvironment()
     catalog = deepcopy(base.catalog)
@@ -466,7 +485,12 @@ def test_stateful_h3_selection_reuses_production_boundary_and_reaches_proposal(
     )
     task = BookingTaskState(
         status="awaiting_slot",
-        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        write_authorization=WriteAuthorization(
+            operation="booking",
+            authorized=authorized,
+            source_turn_id="booking-request" if authorized else None,
+            granted_at=NOW if authorized else None,
+        ),
         constraints=CustomerConstraints(
             service_id="svc-bikini",
             branch_id="single-location",
@@ -539,21 +563,26 @@ def test_stateful_h3_selection_reuses_production_boundary_and_reaches_proposal(
     assert result.reference_action == "select_presented_option"
     assert result.selected_option_ref == "opt_1"
     assert result.full_interpreter_called is False
-    assert isinstance(result.active_task, BookingTaskState)
-    assert result.active_task.status == "awaiting_confirmation"
-    assert result.active_task.requested_service_ids == ["svc-underarm", "svc-bikini"]
-    assert result.active_task.constraints.doctor_id == "doc-maryam"
-    assert result.active_task.constraints.device_key == "candela_gentle"
-    assert result.active_task.constraints.date is not None
-    assert result.active_task.constraints.date.start_date == "2026-09-12"
-    assert result.active_task.constraints.time is not None
-    assert result.active_task.constraints.time.start_time == "20:00"
-    assert result.active_task.proposal is not None
-    assert result.active_task.proposal.service_ids == ["svc-underarm", "svc-bikini"]
-    assert result.active_task.proposal.doctor_id == "doc-maryam"
-    assert result.active_task.proposal.device_key == "candela_gentle"
-    assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
-    assert result.outcomes[-1].response_goal == "booking_proposal"
     assert "???? ??? ???? ??" not in result.reply
-    assert result.traces[-1].simulated_write is None
-    assert result.active_task.write_authorization.authorized is False
+    if authorized:
+        assert result.active_task is None
+        assert result.outcomes[-1].response_goal == "booking_completed"
+        assert result.traces[-1].simulated_write == "booking_proposal"
+    else:
+        assert isinstance(result.active_task, BookingTaskState)
+        assert result.active_task.status == "awaiting_confirmation"
+        assert result.active_task.requested_service_ids == ["svc-underarm", "svc-bikini"]
+        assert result.active_task.constraints.doctor_id == "doc-maryam"
+        assert result.active_task.constraints.device_key == "candela_gentle"
+        assert result.active_task.constraints.date is not None
+        assert result.active_task.constraints.date.start_date == "2026-09-12"
+        assert result.active_task.constraints.time is not None
+        assert result.active_task.constraints.time.start_time == "20:00"
+        assert result.active_task.proposal is not None
+        assert result.active_task.proposal.service_ids == ["svc-underarm", "svc-bikini"]
+        assert result.active_task.proposal.doctor_id == "doc-maryam"
+        assert result.active_task.proposal.device_key == "candela_gentle"
+        assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
+        assert result.outcomes[-1].response_goal == "booking_proposal"
+        assert result.traces[-1].simulated_write is None
+        assert result.active_task.write_authorization.authorized is False

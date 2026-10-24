@@ -812,28 +812,47 @@ def _informational_write_read(
     index: int,
     operation: TurnOperation,
     params: dict[str, object],
+    *,
+    active_task: object | None = None,
 ) -> PlanStep | None:
-    """Fail closed to reads when the semantic action is mentioned without execution authority."""
+    """Keep informational lifecycle requests read-only and preserve review-first booking tasks."""
     if operation.execution_intent == "execute":
         return None
     if operation.type == "book":
+        state_action = (
+            "update_active"
+            if isinstance(active_task, BookingTaskState)
+            else "start_booking"
+            if active_task is None
+            else "none"
+        )
         if "service_id" not in params:
-            return _clarify(index=index, operation=operation, field="service")
+            return PlanStep(
+                operation_index=index,
+                operation_type=operation.type,
+                disposition="clarify",
+                state_action=state_action,
+                response_goal="clarification",
+                clarification_field="service",
+                facts=params,
+            )
         if "date" in params:
             return PlanStep(
                 operation_index=index,
                 operation_type=operation.type,
                 disposition="read",
                 reads=[ReadRequest(kind="availability", parameters=params)],
+                state_action=state_action,
                 response_goal="present_availability",
                 facts=params,
             )
         return PlanStep(
             operation_index=index,
             operation_type=operation.type,
-            disposition="read",
-            reads=[ReadRequest(kind="service_catalog", parameters={"service_id": params["service_id"]})],
-            response_goal="answer_service",
+            disposition="clarify",
+            state_action=state_action,
+            response_goal="clarification",
+            clarification_field="date",
             facts=params,
         )
     if operation.type in {"confirm_appointment", "cancel_appointment"}:
@@ -1047,7 +1066,12 @@ def _plan_operation(
             facts=params,
         )
 
-    informational = _informational_write_read(index, operation, params)
+    informational = _informational_write_read(
+        index,
+        operation,
+        params,
+        active_task=context.active_task,
+    )
     if informational is not None:
         return informational
 
