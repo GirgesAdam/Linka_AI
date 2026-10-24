@@ -17,7 +17,6 @@ from app.models.appointment import Appointment
 from app.models.appointment_status_history import AppointmentStatusHistory
 from app.models.branch import Branch
 from app.models.doctor import Doctor
-from app.models.patient import Patient
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.user import User
@@ -88,13 +87,8 @@ def _seed_confirmation_case(
         code=f"MAIN-{suffix}",
         timezone=branch_timezone,
     )
-    patient = Patient(
-        workspace_id=workspace.id,
-        first_name="Migration",
-        phone=f"0100{uuid4().int % 100000000:08d}",
-        status="active",
-        whatsapp_opt_in=True,
-    )
+    patient_id = uuid4()
+    patient_phone = f"0100{uuid4().int % 100000000:08d}"
     staff = Staff(
         workspace_id=workspace.id,
         first_name="Migration",
@@ -110,8 +104,17 @@ def _seed_confirmation_case(
         email=f"migration-{suffix}-{uuid4().hex[:8]}@example.com",
         full_name="Migration Staff",
     )
-    db.add_all([branch, patient, staff, service, user])
+    db.add_all([branch, staff, service, user])
     db.flush()
+    # This test intentionally stops at revision 0091, before customer_id exists.
+    db.execute(
+        text(
+            "INSERT INTO patients (id, workspace_id, first_name, phone, phone_normalized, "
+            "preferred_language, source, status, marketing_consent, whatsapp_opt_in) "
+            "VALUES (:id, :workspace_id, :first_name, :phone, NULL, 'ar', 'other', 'active', false, true)"
+        ),
+        {"id": patient_id, "workspace_id": workspace.id, "first_name": "Migration", "phone": patient_phone},
+    )
     doctor = Doctor(workspace_id=workspace.id, staff_id=staff.id)
     db.add(doctor)
     db.flush()
@@ -122,7 +125,7 @@ def _seed_confirmation_case(
         confirmed_at = manual_confirmed_at or created_at
     appointment = Appointment(
         workspace_id=workspace.id,
-        patient_id=patient.id,
+        patient_id=patient_id,
         branch_id=branch.id,
         doctor_id=doctor.id,
         service_id=service.id,
