@@ -495,9 +495,9 @@ def adapt_matching_active_task_step(
             return step.model_copy(update={"state_action": "none"})
         semantic_time = operation.entities.time
         current_time = active_task.constraints.time
-        explicit_same_time_correction = (
+        same_time_correction_conflict = (
             operation.type in {"continue_active", "book"}
-            and "time" in set(operation.active_task_explicit_fields)
+            and "time" in set(operation.active_task_corrected_fields)
             and semantic_time is not None
             and current_time is not None
             and (
@@ -515,7 +515,7 @@ def adapt_matching_active_task_step(
                 current_time.end_time_ambiguity,
             )
         )
-        if explicit_same_time_correction:
+        if same_time_correction_conflict:
             params = _booking_followup_parameters(
                 operation,
                 active_task=active_task,
@@ -747,7 +747,7 @@ def adapt_matching_active_task_step(
 
     semantic_time = operation.entities.time
     if (
-        "time" in set(operation.active_task_explicit_fields)
+        "time" in set(operation.active_task_corrected_fields)
         and semantic_time is not None
         and semantic_time.mode == "exact"
         and semantic_time.start_time

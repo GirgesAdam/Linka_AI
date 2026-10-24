@@ -170,6 +170,40 @@ def test_active_reschedule_explicit_fields_are_latest_message_provenance() -> No
         )
 
 
+def test_active_task_corrected_fields_are_narrow_explicit_provenance() -> None:
+    operation = TurnOperation(
+        type="book",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+        active_task_corrected_fields=["time"],
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+            time=TimeConstraint(mode="exact", start_time="17:00"),
+        ),
+    )
+    assert operation.active_task_corrected_fields == ["time"]
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="book",
+            active_task_relationship="continue",
+            active_task_explicit_fields=["date"],
+            active_task_corrected_fields=["time"],
+            entities=TurnEntities(
+                date=DateConstraint(mode="exact", start_date="2026-10-17"),
+                time=TimeConstraint(mode="exact", start_time="17:00"),
+            ),
+        )
+
+    with pytest.raises(ValidationError):
+        TurnOperation(
+            type="availability",
+            active_task_explicit_fields=["time"],
+            active_task_corrected_fields=["time"],
+            entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="17:00")),
+        )
+
+
 def test_non_task_active_task_explicit_fields_are_discarded() -> None:
     operation = TurnOperation(
         type="availability",

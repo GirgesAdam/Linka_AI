@@ -722,6 +722,7 @@ def test_active_reschedule_explicit_old_clock_correction_clears_target_authority
         execution_intent="execute",
         active_task_relationship="continue",
         active_task_explicit_fields=["time"],
+        active_task_corrected_fields=["time"],
     )
     adapted = _adapt_active_reschedule(state, operation)
     assert adapted.disposition == "clarify"
@@ -772,3 +773,68 @@ def test_active_reschedule_same_clock_on_new_date_is_not_blanket_blocked() -> No
     assert updated.replacement.date.start_date == "2026-10-31"
     assert updated.replacement.time is not None
     assert updated.replacement.time.start_time == "15:00"
+
+
+def test_time_03_g_same_clock_different_explicit_date_remains_valid() -> None:
+    state = _active_reschedule_state(target_start_local="2026-10-24T15:00:00+03:00")
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-31"),
+            time=TimeConstraint(mode="exact", start_time="15:00"),
+        ),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+        active_task_corrected_fields=["date"],
+    )
+    adapted = _adapt_active_reschedule(state, operation)
+    assert adapted.disposition == "state_update"
+    assert adapted.clarification_field is None
+
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="time-03-g",
+    ).active_task
+    assert isinstance(updated, RescheduleTaskState)
+    assert updated.replacement.date is not None
+    assert updated.replacement.date.start_date == "2026-10-31"
+    assert updated.replacement.time is not None
+    assert updated.replacement.time.start_time == "15:00"
+
+
+def test_time_03_i_reschedule_wrong_old_protection_remains_fail_closed() -> None:
+    operation = _time_02_reschedule_operation(source_clock="14:00", target_clock="14:00")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    blocked = advance_step_after_verification(
+        step,
+        _time_02_verification(source_clock="14:00", target_clock="14:00"),
+    )
+    assert blocked.disposition == "clarify"
+    assert blocked.clarification_field == "time"
+    assert blocked.write_intent is None
+
+
+def test_time_03_j_unresolved_reschedule_target_still_never_writes() -> None:
+    operation = _reschedule_operation(date="2026-09-14")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    advanced = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            exact_slot_match_count=1,
+            verified_parameters={"appointment_id": "apt-1"},
+        ),
+    )
+    assert advanced.disposition != "write_ready"
+    assert advanced.write_intent is None or advanced.disposition != "write_ready"
