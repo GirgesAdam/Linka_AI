@@ -28,7 +28,7 @@ from app.models.service import Service
 from app.models.workspace import Workspace
 from app.services.agent_v2 import orchestrator as orchestrator_module
 
-TARGET_HEAD = "820014f72244b74d1d25b9b9a6467d23e38eb8e0"
+TARGET_HEAD = "17463a79dff3580ee661ad53c5ece32852237e85"
 APPROVED_BASE = "555bcf496665aa7691a301f27c5ea96ef60aeab1"
 REPORT = Path("artifacts/f8-targeted-live.json")
 SCHEMA_REPORT = Path("artifacts/f8-evidence-schema-preflight.json")
@@ -845,7 +845,7 @@ def run_targeted() -> int:
     ]
     payload = {
         "audit_metadata": {
-            "audit_name": "SENIOR-CORRECTNESS-F8-02 TARGETED LIVE",
+            "audit_name": "SENIOR-CORRECTNESS-F8-03 POST-MERGE TARGETED LIVE",
             "started_at": started.isoformat(),
             "finished_at": datetime.now(UTC).isoformat(),
             "head": git_head(),

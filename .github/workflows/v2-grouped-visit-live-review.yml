@@ -570,13 +570,13 @@ jobs:
       - name: Preserve helper runner outside repository
         shell: bash
         run: cp scripts/run_f8_targeted_live.py /tmp/run_f8_targeted_live.py
-      - name: Checkout exact approved PR head
+      - name: Checkout exact merged main
         shell: bash
         working-directory: .
         run: |
-          git fetch origin 820014f72244b74d1d25b9b9a6467d23e38eb8e0 --depth=1
-          git checkout --detach 820014f72244b74d1d25b9b9a6467d23e38eb8e0
-          test "$(git rev-parse HEAD)" = "820014f72244b74d1d25b9b9a6467d23e38eb8e0"
+          git fetch origin 17463a79dff3580ee661ad53c5ece32852237e85 --depth=1
+          git checkout --detach 17463a79dff3580ee661ad53c5ece32852237e85
+          test "$(git rev-parse HEAD)" = "17463a79dff3580ee661ad53c5ece32852237e85"
           test -z "$(git status --porcelain)"
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -622,13 +622,13 @@ jobs:
         run: |
           set -o pipefail
           python /tmp/run_f8_targeted_live.py --evidence-schema-preflight 2>&1 | tee artifacts/f8-evidence-schema-preflight.log
-      - name: Fresh exact-head guard before the single provider execution
+      - name: Fresh merged-main guard before the single provider execution
         shell: bash
         working-directory: .
         run: |
-          test "$(git rev-parse HEAD)" = "820014f72244b74d1d25b9b9a6467d23e38eb8e0"
+          test "$(git rev-parse HEAD)" = "17463a79dff3580ee661ad53c5ece32852237e85"
           test -z "$(git status --porcelain)"
-          echo "F8_EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "F8_MERGED_MAIN=$(git rev-parse HEAD)"
       - name: Run exactly one F8 targeted provider audit
         if: ${{ inputs.audit_mode == 'targeted-evidence' }}
         shell: bash
