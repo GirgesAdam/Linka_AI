@@ -13,7 +13,10 @@ from app.agents.v2.turn_contract import (
     TurnEntities,
     TurnOperation,
 )
-from app.services.agent_v2.active_task_progress import adapt_matching_active_task_step
+from app.services.agent_v2.active_task_progress import (
+    adapt_matching_active_task_step,
+    plan_active_task_progress,
+)
 from app.services.agent_v2.orchestrator import _prepare_booking_proposal
 from app.services.agent_v2.planner import (
     _EXPLICIT_TIME_AUTHORITY_PARAM,
@@ -432,3 +435,158 @@ def test_confirmation_write_fails_closed_if_current_authority_and_proposal_time_
     assert result["ok"] is False
     assert result["error_code"] == "booking_proposal_time_mismatch"
     assert called is False
+
+
+def test_time_02_a_wrong_old_booking_correction_clears_stale_write_authority(monkeypatch) -> None:
+    state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True)
+    operation = _correction_operation("16:00")
+    stale_step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+        facts={"time": TimeConstraint(mode="exact", start_time="16:00").model_dump(mode="json")},
+    )
+
+    adapted = adapt_matching_active_task_step(
+        stale_step,
+        operation=operation,
+        active_task=state,
+        context=build_semantic_context(_catalog()),
+        now=NOW,
+    )
+    assert adapted.disposition == "clarify"
+    assert adapted.clarification_field == "time"
+    assert adapted.write_intent is None
+
+    transition = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="time-02-a",
+    )
+    updated = transition.active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is None
+    assert updated.proposal is None
+    assert updated.option_snapshot is None
+    assert updated.derived.availability_snapshot_id is None
+    assert updated.derived.selected_slot_ref is None
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.create_appointment_operation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("booking write must not run")),
+    )
+    result = execute_write_ready_step(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id="workspace-1", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id=PATIENT_ID, status="active"),
+        step=adapted,
+        commit=False,
+    )
+    assert result["ok"] is False
+    assert result["error_code"] == "write_not_ready"
+
+
+def test_time_02_b_correct_new_booking_target_invalidates_old_and_requires_fresh_verification(monkeypatch) -> None:
+    state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True)
+    operation = _correction_operation("17:00")
+    stale_step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+        facts={"time": TimeConstraint(mode="exact", start_time="16:00").model_dump(mode="json")},
+    )
+
+    adapted = adapt_matching_active_task_step(
+        stale_step,
+        operation=operation,
+        active_task=state,
+        context=build_semantic_context(_catalog()),
+        now=NOW,
+    )
+    transition = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="time-02-b",
+    )
+    updated = transition.active_task
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "17:00"
+    assert updated.proposal is None
+    assert updated.option_snapshot is None
+    assert updated.derived.availability_snapshot_id is None
+    assert updated.derived.selected_slot_ref is None
+
+    progress = plan_active_task_progress(
+        updated,
+        operation_index=0,
+        context=build_semantic_context(_catalog()),
+    )
+    assert progress.disposition == "read"
+    assert any(read.kind == "availability" for read in progress.reads)
+    assert progress.write_intent is None
+    assert progress.facts["booking_commercial_basis_step"] is True
+
+    # Normal booking remains possible after the existing commercial-basis gate and
+    # fresh exact-slot verification; the repair does not create a second booking path.
+    verified_step, proposal = _prepare(
+        monkeypatch,
+        updated,
+        step_clock="17:00",
+        available_clock="17:00",
+    )
+    assert verified_step.response_goal == "booking_proposal"
+    assert proposal is not None
+    assert proposal.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M") == "17:00"
+
+
+def test_time_02_i_normal_proposal_confirmation_is_unchanged() -> None:
+    proposal = _proposal("16:00")
+    step = _confirmation_step(_task("16:00", proposal=proposal))
+    assert step.disposition == "write_ready"
+    assert step.write_intent is not None
+    assert step.write_intent.kind == "booking_proposal"
+    assert step.write_intent.parameters[_EXPLICIT_TIME_AUTHORITY_PARAM] == "16:00"
+
+
+def test_time_02_j_verified_server_slot_selection_bypasses_correction_guard() -> None:
+    state = _task("16:00", proposal=None, with_snapshot=True)
+    operation = _correction_operation("16:00")
+    verified_selection = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="write_ready",
+        state_action="select_active",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=True,
+            parameters={
+                "service_id": SERVICE_ID,
+                "doctor_id": DOCTOR_ID,
+                "branch_id": BRANCH_ID,
+                "start_at": _start_at("16:00").isoformat(),
+            },
+            requires_verification=True,
+        ),
+        response_goal="booking_completed",
+        facts={"verified_booking_slot_selection": True},
+    )
+    adapted = adapt_matching_active_task_step(
+        verified_selection,
+        operation=operation,
+        active_task=state,
+        context=build_semantic_context(_catalog()),
+        now=NOW,
+    )
+    assert adapted == verified_selection
+    assert adapted.disposition == "write_ready"

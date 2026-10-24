@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +23,7 @@ from app.services.agent_v2.state import (
     RescheduleTaskState,
 )
 from app.services.agent_v2.state_rules import (
+    TIME_CORRECTION_AUTHORITY_FACT,
     booking_proposal_is_current,
     option_snapshot_is_current,
 )
@@ -1482,6 +1483,11 @@ def _plan_operation(
             for key, value in params.items()
             if key not in {"appointment_id", "appointment_ids"}
         }
+        turn_local_time_correction = bool(
+            operation.source_appointment is not None
+            and operation.source_appointment.time is not None
+            and operation.entities.time is not None
+        )
         if "date" not in replacement_params:
             return PlanStep(
                 operation_index=index,
@@ -1491,7 +1497,15 @@ def _plan_operation(
                 state_action="start_reschedule",
                 response_goal="clarification",
                 clarification_field="date",
-                facts={**replacement_params, "source_appointment": source_params},
+                facts={
+                    **replacement_params,
+                    "source_appointment": source_params,
+                    **(
+                        {TIME_CORRECTION_AUTHORITY_FACT: "turn_local"}
+                        if turn_local_time_correction
+                        else {}
+                    ),
+                },
             )
         exact_time = operation.entities.time is not None and operation.entities.time.mode == "exact"
         requires_device = _service_requires_laser_device(operation, context)
@@ -1521,6 +1535,11 @@ def _plan_operation(
                 "source_appointment": source_params,
                 "exact_time_requested": exact_time,
                 "service_requires_laser_device": requires_device,
+                **(
+                    {TIME_CORRECTION_AUTHORITY_FACT: "turn_local"}
+                    if turn_local_time_correction
+                    else {}
+                ),
             },
         )
 
@@ -1752,6 +1771,64 @@ def plan_turn(turn: TiaTurnUnderstanding, context: PlannerContext) -> TurnPlan:
     )
 
 
+def _verified_reschedule_time_correction_collapses_to_source(
+    step: PlanStep,
+    parameters: dict[str, object],
+) -> bool:
+    if step.facts.get(TIME_CORRECTION_AUTHORITY_FACT) != "turn_local":
+        return False
+    source_raw = parameters.get("_source_appointment_start_at")
+    if source_raw in (None, ""):
+        return False
+    try:
+        source_start = datetime.fromisoformat(str(source_raw).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+
+    target_raw = parameters.get("start_at")
+    if target_raw not in (None, ""):
+        try:
+            target_start = datetime.fromisoformat(str(target_raw).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if source_start.tzinfo is None or target_start.tzinfo is None:
+            same_start = source_start == target_start
+        else:
+            same_start = source_start.astimezone(UTC) == target_start.astimezone(UTC)
+        if not same_start:
+            return False
+        identity_values = parameters
+    else:
+        source_local_raw = parameters.get("_source_appointment_start_local")
+        raw_time = step.facts.get("time")
+        if source_local_raw in (None, "") or not isinstance(raw_time, dict):
+            return False
+        target_clock = str(raw_time.get("start_time") or "")[:5]
+        if raw_time.get("mode") != "exact" or not target_clock:
+            return False
+        try:
+            source_local = datetime.fromisoformat(
+                str(source_local_raw).replace("Z", "+00:00")
+            )
+        except ValueError:
+            return False
+        if target_clock != source_local.strftime("%H:%M"):
+            return False
+        identity_values = step.facts
+
+    for target_key, source_key in (
+        ("branch_id", "_source_appointment_branch_id"),
+        ("service_id", "_source_appointment_service_id"),
+        ("doctor_id", "_source_appointment_doctor_id"),
+        ("device_key", "_source_appointment_device_key"),
+    ):
+        source_value = parameters.get(source_key)
+        target_value = identity_values.get(target_key, source_value)
+        if (target_value or None) != (source_value or None):
+            return False
+    return True
+
+
 def advance_step_after_verification(
     step: PlanStep,
     verification: VerificationFacts,
@@ -1762,9 +1839,24 @@ def advance_step_after_verification(
             return step
         appointment_count = verification.appointment_match_count
         if appointment_count == 1:
-            return step.model_copy(
-                update={"facts": {**step.facts, **verification.verified_parameters}}
-            )
+            verified_facts = {**step.facts, **verification.verified_parameters}
+            if _verified_reschedule_time_correction_collapses_to_source(
+                step,
+                verified_facts,
+            ):
+                return step.model_copy(
+                    update={
+                        "disposition": "clarify",
+                        "response_goal": "clarification",
+                        "clarification_field": "time",
+                        "write_intent": None,
+                        "facts": {
+                            **verified_facts,
+                            TIME_CORRECTION_AUTHORITY_FACT: "conflict",
+                        },
+                    }
+                )
+            return step.model_copy(update={"facts": verified_facts})
         if appointment_count == 0:
             return step.model_copy(
                 update={"disposition": "blocked", "response_goal": "clarification"}
@@ -1877,6 +1969,23 @@ def advance_step_after_verification(
             return step
         slot_count = verification.exact_slot_match_count
         if slot_count == 1 and appointment_count == 1:
+            if _verified_reschedule_time_correction_collapses_to_source(
+                step,
+                verified_parameters,
+            ):
+                return step.model_copy(
+                    update={
+                        "disposition": "clarify",
+                        "response_goal": "clarification",
+                        "clarification_field": "time",
+                        "write_intent": None,
+                        "facts": {
+                            **step.facts,
+                            **verification.verified_parameters,
+                            TIME_CORRECTION_AUTHORITY_FACT: "conflict",
+                        },
+                    }
+                )
             if (
                 bool(step.facts.get("service_requires_laser_device"))
                 and not verified_parameters.get("device_key")

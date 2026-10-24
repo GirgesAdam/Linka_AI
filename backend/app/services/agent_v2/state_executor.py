@@ -22,6 +22,7 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_rules import (
+    TIME_CORRECTION_AUTHORITY_FACT,
     apply_booking_branch_change,
     apply_booking_date_change,
     apply_booking_device_change,
@@ -304,18 +305,25 @@ def _apply_booking_updates(
         updated = apply_booking_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_booking_date_change(updated, date=operation.entities.date)
-    apply_time, next_time, next_clock_source = _authoritative_time_update(
-        updated.constraints.time,
-        existing_clock_source=updated.constraints.time_clock_source,
-        facts=facts,
-        operation=operation,
-    )
-    if apply_time:
+    if facts.get(TIME_CORRECTION_AUTHORITY_FACT) == "conflict":
         updated = apply_booking_time_change(
             updated,
-            time=next_time,
-            clock_source=next_clock_source,
+            time=None,
+            clock_source="unspecified",
         )
+    else:
+        apply_time, next_time, next_clock_source = _authoritative_time_update(
+            updated.constraints.time,
+            existing_clock_source=updated.constraints.time_clock_source,
+            facts=facts,
+            operation=operation,
+        )
+        if apply_time:
+            updated = apply_booking_time_change(
+                updated,
+                time=next_time,
+                clock_source=next_clock_source,
+            )
     if operation.package_usage != "unspecified":
         updated = apply_booking_package_usage_change(
             updated,
@@ -463,10 +471,21 @@ def _new_reschedule_state(
             else None
         ),
         date=_date_constraint(step.facts.get("date") or operation.entities.date),
-        time=_state_time_constraint(step.facts.get("time"), semantic=operation.entities.time),
-        time_clock_source=_clock_source(
-            step.facts.get("time_clock_source"),
-            fallback=operation.clock_source,
+        time=(
+            None
+            if step.facts.get(TIME_CORRECTION_AUTHORITY_FACT) == "conflict"
+            else _state_time_constraint(
+                step.facts.get("time"),
+                semantic=operation.entities.time,
+            )
+        ),
+        time_clock_source=(
+            "unspecified"
+            if step.facts.get(TIME_CORRECTION_AUTHORITY_FACT) == "conflict"
+            else _clock_source(
+                step.facts.get("time_clock_source"),
+                fallback=operation.clock_source,
+            )
         ),
         package_usage=operation.package_usage,
         pulse_usage="unspecified",
@@ -515,18 +534,25 @@ def _apply_reschedule_updates(
         updated = apply_reschedule_date_change(updated, date=_date_constraint(facts.get("date")))
     elif operation.entities.date is not None:
         updated = apply_reschedule_date_change(updated, date=operation.entities.date)
-    apply_time, next_time, next_clock_source = _authoritative_time_update(
-        updated.replacement.time,
-        existing_clock_source=updated.replacement.time_clock_source,
-        facts=facts,
-        operation=operation,
-    )
-    if apply_time:
+    if facts.get(TIME_CORRECTION_AUTHORITY_FACT) == "conflict":
         updated = apply_reschedule_time_change(
             updated,
-            time=next_time,
-            clock_source=next_clock_source,
+            time=None,
+            clock_source="unspecified",
         )
+    else:
+        apply_time, next_time, next_clock_source = _authoritative_time_update(
+            updated.replacement.time,
+            existing_clock_source=updated.replacement.time_clock_source,
+            facts=facts,
+            operation=operation,
+        )
+        if apply_time:
+            updated = apply_reschedule_time_change(
+                updated,
+                time=next_time,
+                clock_source=next_clock_source,
+            )
     return updated
 
 

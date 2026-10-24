@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
     ActiveTaskRelativeDate,
+    AppointmentSelector,
     DateConstraint,
+    EntityReference,
     Selection,
     TiaTurnUnderstanding,
     TimeConstraint,
@@ -30,6 +33,7 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import apply_step_state
+from app.services.agent_v2.write_executor import execute_write_ready_step
 
 NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 
@@ -561,3 +565,210 @@ def test_reschedule_occupied_exact_target_never_promotes_to_write() -> None:
     assert blocked.disposition == "blocked"
     assert blocked.response_goal == "requested_time_unavailable"
     assert blocked.disposition != "write_ready"
+
+
+def _time_02_appointment_ref() -> str:
+    context = _semantic_context()
+    return next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "appointment" and target.canonical_id == "apt-1"
+    )
+
+
+def _time_02_reschedule_operation(*, source_clock: str, target_clock: str) -> TurnOperation:
+    return TurnOperation(
+        type="reschedule",
+        source_appointment=AppointmentSelector(
+            appointment=EntityReference(ref=_time_02_appointment_ref()),
+            time=TimeConstraint(mode="exact", start_time=source_clock),
+        ),
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-09-14"),
+            time=TimeConstraint(mode="exact", start_time=target_clock),
+        ),
+        execution_intent="execute",
+        fresh_task=True,
+        fresh_task_explicit_fields=["date", "time"],
+    )
+
+
+def _time_02_verification(*, source_clock: str, target_clock: str) -> VerificationFacts:
+    return VerificationFacts(
+        appointment_match_count=1,
+        exact_slot_match_count=1,
+        verified_parameters={
+            "appointment_id": "apt-1",
+            "branch_id": "branch-main",
+            "service_id": "svc-underarm",
+            "doctor_id": "doc-maryam",
+            "device_key": "candela_gentle",
+            "start_at": f"2026-09-14T{target_clock}:00+03:00",
+            "_source_appointment_start_at": f"2026-09-14T{source_clock}:00+03:00",
+            "_source_appointment_start_local": f"2026-09-14T{source_clock}:00+03:00",
+            "_source_appointment_branch_id": "branch-main",
+            "_source_appointment_service_id": "svc-underarm",
+            "_source_appointment_doctor_id": "doc-maryam",
+            "_source_appointment_device_key": "candela_gentle",
+        },
+    )
+
+
+def _time_02_source_read(clock: str) -> ReadExecutionBundle:
+    row = _appointment_row()
+    row["start_local"] = f"2026-09-14T{clock}:00+03:00"
+    return _appointment_reads([row])
+
+
+def test_time_02_c_wrong_old_reschedule_target_never_reaches_mutation(monkeypatch) -> None:
+    operation = _time_02_reschedule_operation(source_clock="14:00", target_clock="14:00")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    blocked = advance_step_after_verification(
+        step,
+        _time_02_verification(source_clock="14:00", target_clock="14:00"),
+    )
+
+    assert blocked.disposition == "clarify"
+    assert blocked.clarification_field == "time"
+    assert blocked.write_intent is None
+
+    transition = apply_step_state(
+        None,
+        step=blocked,
+        operation=operation,
+        reads=_time_02_source_read("14:00"),
+        now=NOW,
+        turn_id="time-02-c",
+    )
+    state = transition.active_task
+    assert isinstance(state, RescheduleTaskState)
+    assert state.target.appointment_id == "apt-1"
+    assert state.replacement.time is None
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.reschedule_appointment_operation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reschedule write must not run")),
+    )
+    result = execute_write_ready_step(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(id="workspace-1", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id="patient-1", status="active"),
+        step=blocked,
+        commit=False,
+    )
+    assert result["ok"] is False
+    assert result["error_code"] == "write_not_ready"
+
+
+def test_time_02_d_correct_new_reschedule_target_can_promote_after_verification() -> None:
+    operation = _time_02_reschedule_operation(source_clock="14:00", target_clock="15:00")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    ready = advance_step_after_verification(
+        step,
+        _time_02_verification(source_clock="14:00", target_clock="15:00"),
+    )
+    assert ready.disposition == "write_ready"
+    assert ready.write_intent is not None
+    assert ready.write_intent.kind == "reschedule"
+    assert ready.write_intent.parameters["start_at"] == "2026-09-14T15:00:00+03:00"
+    assert ready.write_intent.parameters["_reschedule_required_fields_resolved"] is True
+
+
+def test_time_02_e_reverse_wording_semantics_do_not_make_old_clock_authoritative() -> None:
+    # Textual order is intentionally absent here: the deterministic layer receives only
+    # typed source-vs-target semantics, so a wrong OLD target must fail closed either way.
+    operation = _time_02_reschedule_operation(source_clock="16:00", target_clock="16:00")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    blocked = advance_step_after_verification(
+        step,
+        _time_02_verification(source_clock="16:00", target_clock="16:00"),
+    )
+    assert blocked.disposition == "clarify"
+    assert blocked.clarification_field == "time"
+    assert blocked.write_intent is None
+
+
+def test_time_02_h_unresolved_reschedule_target_remains_fail_closed() -> None:
+    operation = _reschedule_operation(date="2026-09-14")
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    advanced = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            appointment_match_count=1,
+            exact_slot_match_count=1,
+            verified_parameters={"appointment_id": "apt-1"},
+        ),
+    )
+    assert advanced.disposition != "write_ready"
+
+
+def test_active_reschedule_explicit_old_clock_correction_clears_target_authority() -> None:
+    state = _active_reschedule_state(target_start_local="2026-10-24T15:00:00+03:00")
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="15:00")),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+    )
+    adapted = _adapt_active_reschedule(state, operation)
+    assert adapted.disposition == "clarify"
+    assert adapted.clarification_field == "time"
+    assert adapted.write_intent is None
+
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="time-02-active-conflict",
+    ).active_task
+    assert isinstance(updated, RescheduleTaskState)
+    assert updated.replacement.time is None
+    assert updated.option_snapshot is None
+    assert updated.derived.availability_snapshot_id is None
+    assert updated.derived.selected_slot_ref is None
+
+
+def test_active_reschedule_same_clock_on_new_date_is_not_blanket_blocked() -> None:
+    state = _active_reschedule_state(target_start_local="2026-10-24T15:00:00+03:00")
+    operation = TurnOperation(
+        type="reschedule",
+        entities=TurnEntities(
+            date=DateConstraint(mode="exact", start_date="2026-10-31"),
+            time=TimeConstraint(mode="exact", start_time="15:00"),
+        ),
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["date", "time"],
+    )
+    adapted = _adapt_active_reschedule(state, operation)
+    assert adapted.disposition == "state_update"
+    assert adapted.clarification_field is None
+
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="time-02-new-date-same-clock",
+    ).active_task
+    assert isinstance(updated, RescheduleTaskState)
+    assert updated.replacement.date is not None
+    assert updated.replacement.date.start_date == "2026-10-31"
+    assert updated.replacement.time is not None
+    assert updated.replacement.time.start_time == "15:00"

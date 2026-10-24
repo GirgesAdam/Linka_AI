@@ -10,6 +10,7 @@ from app.services.agent_v2.branch_task_resolution import resolve_scheduling_bran
 from app.services.agent_v2.planner import PlanStep, ReadRequest, WriteIntent
 from app.services.agent_v2.state import ActiveTaskState, BookingTaskState, RescheduleTaskState
 from app.services.agent_v2.state_rules import (
+    TIME_CORRECTION_AUTHORITY_FACT,
     apply_booking_branch_change,
     apply_booking_time_change,
     apply_reschedule_branch_change,
@@ -492,6 +493,45 @@ def adapt_matching_active_task_step(
     if isinstance(active_task, BookingTaskState):
         if active_task.grouped is not None and operation.type in {"continue_active", "book"}:
             return step.model_copy(update={"state_action": "none"})
+        semantic_time = operation.entities.time
+        current_time = active_task.constraints.time
+        explicit_same_time_correction = (
+            operation.type in {"continue_active", "book"}
+            and "time" in set(operation.active_task_explicit_fields)
+            and semantic_time is not None
+            and current_time is not None
+            and (
+                semantic_time.mode,
+                semantic_time.start_time,
+                semantic_time.end_time,
+                semantic_time.start_time_ambiguity,
+                semantic_time.end_time_ambiguity,
+            )
+            == (
+                current_time.mode,
+                current_time.start_time,
+                current_time.end_time,
+                current_time.start_time_ambiguity,
+                current_time.end_time_ambiguity,
+            )
+        )
+        if explicit_same_time_correction:
+            params = _booking_followup_parameters(
+                operation,
+                active_task=active_task,
+                context=context,
+                now=now,
+            )
+            params[TIME_CORRECTION_AUTHORITY_FACT] = "conflict"
+            return PlanStep(
+                operation_index=step.operation_index,
+                operation_type=operation.type,
+                disposition="clarify",
+                state_action="update_active",
+                response_goal="clarification",
+                clarification_field="time",
+                facts=params,
+            )
         if operation.type in {"continue_active", "book"}:
             alternatives = _verified_alternative_doctor_candidates(
                 operation,
@@ -704,6 +744,58 @@ def adapt_matching_active_task_step(
         and "date" not in set(operation.active_task_explicit_fields)
     ):
         params["date"] = None
+
+    semantic_time = operation.entities.time
+    if (
+        "time" in set(operation.active_task_explicit_fields)
+        and semantic_time is not None
+        and semantic_time.mode == "exact"
+        and semantic_time.start_time
+        and active_task.target.start_local
+    ):
+        try:
+            source_start = datetime.fromisoformat(
+                active_task.target.start_local.replace("Z", "+00:00")
+            )
+        except ValueError:
+            source_start = None
+        effective_date = params.get("date")
+        if effective_date is None and active_task.replacement.date is not None:
+            effective_date = active_task.replacement.date.model_dump(mode="json")
+        same_source_date = (
+            effective_date is None
+            or (
+                isinstance(effective_date, dict)
+                and effective_date.get("mode") == "exact"
+                and effective_date.get("start_date") == source_start.date().isoformat()
+            )
+        ) if source_start is not None else False
+        effective_branch = params.get("branch_id", active_task.replacement.branch_id)
+        same_source_identity = (
+            params.get("service_id", active_task.replacement.service_id)
+            == active_task.target.service_id
+            and params.get("doctor_id", active_task.replacement.doctor_id)
+            == active_task.target.doctor_id
+            and params.get("device_key", active_task.replacement.device_key)
+            == active_task.target.device_key
+            and effective_branch in (None, "")
+        )
+        if (
+            source_start is not None
+            and semantic_time.start_time == source_start.strftime("%H:%M")
+            and same_source_date
+            and same_source_identity
+        ):
+            params[TIME_CORRECTION_AUTHORITY_FACT] = "conflict"
+            return PlanStep(
+                operation_index=step.operation_index,
+                operation_type=operation.type,
+                disposition="clarify",
+                state_action="update_active",
+                response_goal="clarification",
+                clarification_field="time",
+                facts=params,
+            )
 
     return PlanStep(
         operation_index=step.operation_index,

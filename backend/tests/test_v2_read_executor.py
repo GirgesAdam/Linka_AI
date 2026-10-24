@@ -642,6 +642,13 @@ def test_reschedule_inherits_verified_target_identity_before_availability_read()
 
     assert bundle.verification.appointment_match_count == 1
     assert bundle.verification.exact_slot_match_count == 1
+    verified = bundle.verification.verified_parameters
+    assert verified["_source_appointment_start_at"] == "2026-09-17T16:00:00+00:00"
+    assert verified["_source_appointment_start_local"] == "2026-09-17T19:00:00+03:00"
+    assert verified["_source_appointment_branch_id"] == str(BRANCH_ID)
+    assert verified["_source_appointment_service_id"] == str(SERVICE_ID)
+    assert verified["_source_appointment_doctor_id"] == "doctor-maryam"
+    assert verified["_source_appointment_device_key"] == "candela_gentle"
     request = adapter.availability_requests[0]
     assert request.service_id == str(SERVICE_ID)
     assert request.branch_id == str(BRANCH_ID)

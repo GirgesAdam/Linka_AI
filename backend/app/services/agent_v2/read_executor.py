@@ -1291,6 +1291,19 @@ def _read_appointments(
             "branch_id": anchor.branch_id,
             "doctor_id": anchor.doctor_id,
         }
+        if operation_type == "reschedule":
+            verified.update(
+                {
+                    "_source_appointment_start_at": anchor.start_at.isoformat(),
+                    "_source_appointment_start_local": anchor.start_at.astimezone(
+                        ZoneInfo(anchor.timezone)
+                    ).isoformat(),
+                    "_source_appointment_branch_id": anchor.branch_id,
+                    "_source_appointment_service_id": anchor.service_id,
+                    "_source_appointment_doctor_id": anchor.doctor_id,
+                    "_source_appointment_device_key": anchor.laser_device_key,
+                }
+            )
         if len(selected) == 1:
             verified["service_id"] = anchor.service_id
             if anchor.laser_device_key:
