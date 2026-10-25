@@ -253,6 +253,35 @@ def apply_patient_contact_fields(patient: Patient, phone: str | None) -> None:
     patient.phone_normalized = normalized_phone
 
 
+DUPLICATE_PATIENT_MESSAGE = "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f."
+
+
+def existing_patient_by_phone(
+    db: Session, *, workspace_id: UUID, phone: str
+) -> Patient | None:
+    _display_phone, normalized_phone = normalize_phone(phone)
+    if not normalized_phone:
+        return None
+    return db.scalar(
+        select(Patient).where(
+            Patient.workspace_id == workspace_id,
+            Patient.phone_normalized == normalized_phone,
+        )
+    )
+
+
+def duplicate_patient_detail(patient: Patient) -> dict[str, str]:
+    patient_name = " ".join(
+        part.strip() for part in (patient.first_name, patient.last_name) if part and part.strip()
+    )
+    return {
+        "code": "patient_phone_exists",
+        "message": DUPLICATE_PATIENT_MESSAGE,
+        "patient_id": str(patient.id),
+        "patient_name": patient_name or patient.first_name,
+    }
+
+
 @router.post("/patients", response_model=PatientRead, status_code=status.HTTP_201_CREATED)
 def create_patient(
     payload: PatientCreate,
@@ -291,6 +320,15 @@ def register_patient(
 ) -> Patient:
     """Create a reception patient and any declared opening balances atomically."""
     ensure_branch(db, access.workspace.id, payload.preferred_branch_id)
+    existing_patient = existing_patient_by_phone(
+        db, workspace_id=access.workspace.id, phone=payload.phone
+    )
+    if existing_patient is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=duplicate_patient_detail(existing_patient),
+        )
+
     registration_only_fields = {
         "phone",
         "marketing_consent",
@@ -342,15 +380,22 @@ def register_patient(
     except IntegrityError as exc:
         db.rollback()
         error_detail = str(exc.orig).lower()
-        detail = (
-            "A patient with this phone already exists in this workspace."
-            if "uq_patients_workspace_phone_normalized" in error_detail
+        is_phone_conflict = (
+            "uq_patients_workspace_phone_normalized" in error_detail
             or "patients.workspace_id, patients.phone_normalized" in error_detail
-            else "Registration conflicts with existing clinic data. Refresh and try again."
         )
+        if is_phone_conflict:
+            existing_patient = existing_patient_by_phone(
+                db, workspace_id=access.workspace.id, phone=payload.phone
+            )
+            if existing_patient is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=duplicate_patient_detail(existing_patient),
+                ) from exc
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=detail,
+            detail="Registration conflicts with existing clinic data. Refresh and try again.",
         ) from exc
     except (PackageOfferError, PackageOperationError, PulseBillingError) as exc:
         db.rollback()

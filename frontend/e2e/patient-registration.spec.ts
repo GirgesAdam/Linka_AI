@@ -7,6 +7,10 @@ import { getActiveOffersForService, parseEgpAmountToMinor } from "../src/app/(da
 const root = resolve(__dirname, "..");
 const page = readFileSync(resolve(root, "src/app/(dashboard)/patients/page.tsx"), "utf8");
 const form = readFileSync(resolve(root, "src/app/(dashboard)/patients/patient-registration-form.tsx"), "utf8");
+const actions = readFileSync(resolve(root, "src/app/(dashboard)/patients/actions.ts"), "utf8");
+const api = readFileSync(resolve(root, "src/lib/tia/api.ts"), "utf8");
+const profilePage = readFileSync(resolve(root, "src/app/(dashboard)/patients/[patientId]/page.tsx"), "utf8");
+const normalizedApi = api.replace(/\r\n/g, "\n");
 
 test("package offers are service-first and only active offers for the chosen service are shown", () => {
   const offers = [
@@ -42,4 +46,20 @@ test("registration is opened from a modal and package/Pulse sections collapse in
   expect(form).toContain('name="initial_pulse_device_key"');
   expect(form).toContain('name="initial_pulses_remaining"');
   expect(form).toContain('name="customer_id"');
+});
+
+
+test("source-level duplicate phone contract maps only structured duplicate conflicts to a profile link", () => {
+  expect(normalizedApi).toContain("public detail?: unknown");
+  expect(normalizedApi).toContain("const detail = body?.detail");
+  expect(normalizedApi).toContain("technicalMessage,\n      detail,\n    );");
+  expect(actions).toContain("error.status !== 409");
+  expect(actions).toContain('detail.code !== "patient_phone_exists"');
+  expect(actions).toContain('typeof detail.patient_id !== "string"');
+  expect(actions).toContain('typeof detail.patient_name !== "string"');
+  expect(actions).toContain("\\u0631\\u0642\\u0645 \\u0627\\u0644\\u0645\\u0648\\u0628\\u0627\\u064a\\u0644 \\u062f\\u0647 \\u0645\\u0633\\u062c\\u0644 \\u0628\\u0627\\u0644\\u0641\\u0639\\u0644 \\u0644\\u0639\\u0645\\u064a\\u0644 \\u0645\\u0648\\u062c\\u0648\\u062f.");
+  expect(form).toContain("state.existingPatient.name");
+  expect(form).toContain('href={`/patients/${state.existingPatient.id}`}');
+  expect(profilePage.length).toBeGreaterThan(0);
+  expect(form).not.toContain("?phone=");
 });

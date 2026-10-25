@@ -519,3 +519,274 @@ def test_registration_with_multiple_pulse_balances_creates_no_payment_transactio
         }
         assert all(pack.purchase_transaction_id is None for pack in pulse_packs)
         assert db.scalar(select(func.count()).select_from(PaymentTransaction)) == 0
+
+
+def test_duplicate_registration_returns_existing_patient_link_target_without_new_row() -> None:
+    from fastapi import HTTPException
+
+    from app.api.routes.crm import DUPLICATE_PATIENT_MESSAGE, register_patient
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+
+    with Session(engine) as db:
+        existing = Patient(
+            workspace_id=workspace_id,
+            first_name="Mona",
+            last_name="Ali",
+            phone="01012345678",
+            phone_normalized="01012345678",
+        )
+        db.add(existing)
+        db.commit()
+        existing_id = existing.id
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        with pytest.raises(HTTPException) as error:
+            register_patient(
+                PatientRegistrationCreate(first_name="Duplicate", phone="01012345678"),
+                access,
+                db,
+            )
+
+        assert error.value.status_code == 409
+        assert DUPLICATE_PATIENT_MESSAGE == "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f."
+        assert error.value.detail == {
+            "code": "patient_phone_exists",
+            "message": DUPLICATE_PATIENT_MESSAGE,
+            "patient_id": str(existing_id),
+            "patient_name": "Mona Ali",
+        }
+        assert db.scalar(select(func.count()).select_from(Patient)) == 1
+
+
+def test_duplicate_phone_lookup_is_scoped_to_current_workspace() -> None:
+    from app.api.routes.crm import register_patient
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+    other_workspace_id = uuid4()
+
+    with Session(engine) as db:
+        db.add(
+            Patient(
+                workspace_id=other_workspace_id,
+                first_name="Other",
+                last_name="Workspace",
+                phone="01112345678",
+                phone_normalized="01112345678",
+            )
+        )
+        db.commit()
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        created = register_patient(
+            PatientRegistrationCreate(first_name="New", phone="01112345678"),
+            access,
+            db,
+        )
+
+        assert created.workspace_id == workspace_id
+        assert created.first_name == "New"
+        assert db.scalar(select(func.count()).select_from(Patient)) == 2
+
+
+
+def test_integrity_error_race_fallback_returns_current_workspace_patient(monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    from app.api.routes import crm as crm_routes
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+    other_workspace_id = uuid4()
+    phone = "01077777777"
+
+    with Session(engine) as db:
+        canonical = Patient(
+            workspace_id=workspace_id,
+            first_name="Mona",
+            last_name="Ali",
+            phone=phone,
+            phone_normalized=phone,
+        )
+        foreign = Patient(
+            workspace_id=other_workspace_id,
+            first_name="Foreign",
+            last_name="Patient",
+            phone=phone,
+            phone_normalized=phone,
+        )
+        db.add_all([canonical, foreign])
+        db.commit()
+        canonical_id = canonical.id
+        foreign_id = foreign.id
+
+        original_lookup = crm_routes.existing_patient_by_phone
+        lookup_calls = 0
+
+        def race_lookup(db, *, workspace_id, phone):
+            nonlocal lookup_calls
+            lookup_calls += 1
+            if lookup_calls == 1:
+                return None
+            return original_lookup(db, workspace_id=workspace_id, phone=phone)
+
+        monkeypatch.setattr(crm_routes, "existing_patient_by_phone", race_lookup)
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        with pytest.raises(HTTPException) as error:
+            crm_routes.register_patient(
+                PatientRegistrationCreate(first_name="Race", phone=phone),
+                access,
+                db,
+            )
+
+        assert lookup_calls == 2
+        assert error.value.status_code == 409
+        assert error.value.detail == {
+            "code": "patient_phone_exists",
+            "message": crm_routes.DUPLICATE_PATIENT_MESSAGE,
+            "patient_id": str(canonical_id),
+            "patient_name": "Mona Ali",
+        }
+        assert error.value.detail["patient_id"] != str(foreign_id)
+        assert error.value.detail["patient_name"] != "Foreign Patient"
+        assert db.scalar(select(func.count()).select_from(Patient)) == 2
+        assert db.scalar(select(func.count()).select_from(PatientPackage)) == 0
+        assert db.scalar(select(func.count()).select_from(PatientPulsePack)) == 0
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction)) == 0
+
+
+def test_phone_conflict_fallback_does_not_expose_other_workspace_patient(monkeypatch) -> None:
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    from app.api.routes import crm as crm_routes
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+    other_workspace_id = uuid4()
+    phone = "01177777777"
+
+    with Session(engine) as db:
+        foreign = Patient(
+            workspace_id=other_workspace_id,
+            first_name="Foreign",
+            last_name="Patient",
+            phone=phone,
+            phone_normalized=phone,
+        )
+        db.add(foreign)
+        db.commit()
+        foreign_id = foreign.id
+
+        original_lookup = crm_routes.existing_patient_by_phone
+        lookup_calls = 0
+
+        def scoped_lookup(db, *, workspace_id, phone):
+            nonlocal lookup_calls
+            lookup_calls += 1
+            if lookup_calls == 1:
+                return None
+            return original_lookup(db, workspace_id=workspace_id, phone=phone)
+
+        original_flush = db.flush
+        flush_calls = 0
+
+        def force_phone_conflict(*args, **kwargs):
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 1:
+                raise IntegrityError(
+                    "INSERT INTO patients ...",
+                    {},
+                    Exception("UNIQUE constraint failed: patients.workspace_id, patients.phone_normalized"),
+                )
+            return original_flush(*args, **kwargs)
+
+        monkeypatch.setattr(crm_routes, "existing_patient_by_phone", scoped_lookup)
+        monkeypatch.setattr(db, "flush", force_phone_conflict)
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        with pytest.raises(HTTPException) as error:
+            crm_routes.register_patient(
+                PatientRegistrationCreate(first_name="New", phone=phone),
+                access,
+                db,
+            )
+
+        assert error.value.status_code == 409
+        assert error.value.detail == "Registration conflicts with existing clinic data. Refresh and try again."
+        assert str(foreign_id) not in str(error.value.detail)
+        assert "Foreign Patient" not in str(error.value.detail)
+        assert db.scalar(select(func.count()).select_from(Patient)) == 1
+        assert db.scalar(select(func.count()).select_from(PatientPackage)) == 0
+        assert db.scalar(select(func.count()).select_from(PatientPulsePack)) == 0
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction)) == 0
+
+
+def test_unrelated_integrity_error_stays_generic_without_patient_metadata(monkeypatch) -> None:
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    from app.api.routes import crm as crm_routes
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+
+    with Session(engine) as db:
+        original_flush = db.flush
+        flush_calls = 0
+
+        def force_unrelated_conflict(*args, **kwargs):
+            nonlocal flush_calls
+            flush_calls += 1
+            if flush_calls == 1:
+                raise IntegrityError(
+                    "INSERT INTO patients ...",
+                    {},
+                    Exception("some_unrelated_registration_constraint"),
+                )
+            return original_flush(*args, **kwargs)
+
+        monkeypatch.setattr(crm_routes, "existing_patient_by_phone", lambda *args, **kwargs: None)
+        monkeypatch.setattr(db, "flush", force_unrelated_conflict)
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        with pytest.raises(HTTPException) as error:
+            crm_routes.register_patient(
+                PatientRegistrationCreate(first_name="Conflict", phone="01277777777"),
+                access,
+                db,
+            )
+
+        assert error.value.status_code == 409
+        assert error.value.detail == "Registration conflicts with existing clinic data. Refresh and try again."
+        assert not isinstance(error.value.detail, dict)
+        assert "patient_id" not in str(error.value.detail)
+        assert "patient_name" not in str(error.value.detail)
+        assert db.scalar(select(func.count()).select_from(Patient)) == 0
+        assert db.scalar(select(func.count()).select_from(PatientPackage)) == 0
+        assert db.scalar(select(func.count()).select_from(PatientPulsePack)) == 0
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction)) == 0

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
 import { Plus, Trash2, UserRoundPlus, X } from "lucide-react";
 
@@ -9,7 +10,10 @@ import type { ClinicLaserDevice, Service, ServicePackageOffer } from "@/lib/type
 import { getActiveOffersForService, parseEgpAmountToMinor } from "./registration-utils";
 import { registerPatientAction } from "./actions";
 
-type RegistrationState = { error: string | null };
+type RegistrationState = {
+  error: string | null;
+  existingPatient?: { id: string; name: string } | null;
+};
 type PulseRow = { id: number; deviceKey: string; pulsesRemaining: string };
 
 const copy = {
@@ -58,7 +62,7 @@ export function PatientRegistrationForm({
 }) {
   const [state, formAction, pending] = useActionState<RegistrationState, FormData>(
     registerPatientAction,
-    { error: null },
+    { error: null, existingPatient: null },
   );
   const [isOpen, setIsOpen] = useState(false);
   const [selectedServiceId, setSelectedServiceId] = useState("");
@@ -342,9 +346,17 @@ export function PatientRegistrationForm({
               </details>
 
               {state.error && (
-                <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
-                  {state.error}
-                </p>
+                <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+                  <p>{state.error}</p>
+                  {state.existingPatient && (
+                    <Link
+                      href={`/patients/${state.existingPatient.id}`}
+                      className="mt-2 inline-block font-bold text-[var(--interactive)] underline underline-offset-2"
+                    >
+                      {state.existingPatient.name}
+                    </Link>
+                  )}
+                </div>
               )}
 
               <div className="flex justify-end gap-2">
