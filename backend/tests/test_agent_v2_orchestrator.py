@@ -1210,13 +1210,16 @@ def _run_ra_g6_unpresented_exact_time_case(
     device_auto_resolved: bool = False,
     stale_reference_selection: bool = False,
     narrow_exact_time: str | None = None,
+    booking_authorized: bool = True,
+    operation_type: str = "continue_active",
+    execution_intent: str = "execute",
 ):
     task = BookingTaskState(
         status="awaiting_slot",
         write_authorization=WriteAuthorization(
             operation="booking",
-            authorized=True,
-            source_turn_id="turn-initial",
+            authorized=booking_authorized,
+            source_turn_id="turn-initial" if booking_authorized else None,
             granted_at=_NOW,
         ),
         constraints=CustomerConstraints(
@@ -1332,14 +1335,14 @@ def _run_ra_g6_unpresented_exact_time_case(
     )
     interpreted = TiaTurnUnderstanding(
         operations=[TurnOperation(
-            type="continue_active",
+            type=operation_type,
             entities=TurnEntities(time=TimeConstraint(
                 mode="exact" if exact_time_requested else "after",
                 start_time="20:00",
                 start_time_ambiguity="none",
             )),
-            execution_intent="execute",
-            active_task_relationship="continue",
+            execution_intent=execution_intent,
+            active_task_relationship=("continue" if operation_type == "continue_active" else "unspecified"),
             continues_previous=True,
             grouped_booking_action="preserve_group",
         )]
@@ -1500,6 +1503,33 @@ def _run_ra_g6_unpresented_exact_time_case(
     })
     result = runtime.orchestrate_v2_turn(**args)
     return result, read_calls, saved
+
+
+def test_review_first_natural_exact_time_advances_to_verified_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        booking_authorized=False,
+        operation_type="book",
+        execution_intent="informational",
+    )
+
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.status == "awaiting_confirmation"
+    assert result.active_task.write_authorization.authorized is False
+    assert result.active_task.proposal is not None
+    assert result.active_task.proposal.service_ids == ["service-a", "service-b"]
+    assert result.active_task.proposal.doctor_id == "doctor-1"
+    assert result.active_task.proposal.device_key == "device-1"
+    assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
+    assert result.outcomes[-1].response_goal == "booking_proposal"
+    assert saved and saved[-1].write_authorization.authorized is False
 
 
 def test_ra_g6_unpresented_exact_time_produces_write_ready_booking_proposal(

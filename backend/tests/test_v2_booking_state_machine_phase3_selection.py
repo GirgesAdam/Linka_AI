@@ -28,6 +28,7 @@ from app.services.agent_v2.orchestrator import (
 from app.services.agent_v2.planner import (
     PlanStep,
     VerificationFacts,
+    WriteIntent,
     advance_step_after_verification,
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
@@ -236,6 +237,116 @@ def test_group_scope_and_resource_incompatibility_do_not_progress_to_fresh_booki
     assert device_step.disposition == "clarify"
     assert device_step.clarification_field == "device"
     assert device_step.write_intent is None
+
+
+def test_marked_review_first_candidate_with_non_booking_operation_fails_closed() -> None:
+    candidate = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=False,
+            parameters={"service_id": A},
+            requires_verification=True,
+        ),
+        response_goal="booking_proposal",
+        facts={
+            "requested_service_ids": [A],
+            "booking_proposal_required": True,
+            "_verified_booking_proposal_candidate": True,
+        },
+    )
+    prepared, proposal = _prepare_booking_proposal(
+        candidate,
+        operation=TurnOperation(
+            type="availability",
+            entities=TurnEntities(),
+            execution_intent="informational",
+        ),
+        reads=ReadExecutionBundle(),
+        current_task=_task(grouped=False),
+        db=object(),
+        workspace=SimpleNamespace(id="workspace", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id="patient"),
+        catalog=_catalog(grouped=False),
+        now=NOW,
+        turn_id="invalid-candidate-operation",
+        additional_service_resolver=lambda _proposal: [],
+    )
+
+    assert proposal is None
+    assert prepared.disposition == "blocked"
+    assert prepared.write_intent is None
+    assert prepared.response_goal == "clarification"
+    assert prepared.facts["booking_proposal_candidate_invalid"] is True
+
+
+def test_verified_review_first_proposal_builder_rejection_fails_closed() -> None:
+    slot = _slot(service_id=A)
+    reads = ReadExecutionBundle(
+        results=[ReadResult(kind="availability", ok=True, payload={"slots": [slot]})],
+        verification=VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={
+                "service_id": A,
+                "branch_id": BRANCH,
+                "doctor_id": DOCTOR,
+                "device_key": DEVICE,
+                "start_at": slot["start_at"],
+            },
+        ),
+    )
+    candidate = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=False,
+            parameters={
+                "service_id": A,
+                "branch_id": BRANCH,
+                "doctor_id": DOCTOR,
+                "device_key": DEVICE,
+                "start_at": slot["start_at"],
+            },
+            requires_verification=True,
+        ),
+        state_action="update_active",
+        response_goal="booking_proposal",
+        facts={
+            "requested_service_ids": [A, B],
+            "booking_proposal_required": True,
+            "_verified_booking_proposal_candidate": True,
+        },
+    )
+
+    prepared, proposal = _prepare_booking_proposal(
+        candidate,
+        operation=TurnOperation(
+            type="book",
+            entities=TurnEntities(),
+            execution_intent="informational",
+        ),
+        reads=reads,
+        current_task=_task(),
+        db=object(),
+        workspace=SimpleNamespace(id="workspace", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id="patient"),
+        catalog=_catalog(doctor_common=False),
+        now=NOW,
+        turn_id="proposal-rejected",
+        additional_service_resolver=lambda _proposal: pytest.fail(
+            "invalid proposal must reject before additional service resolution"
+        ),
+    )
+
+    assert proposal is None
+    assert prepared.disposition == "blocked"
+    assert prepared.facts["booking_proposal_main_service_mismatch"] is True
+    assert prepared.write_intent is None
+    assert prepared.response_goal == "clarification"
 
 
 def test_disappeared_slot_clears_old_authority_and_presents_only_fresh_alternatives() -> None:

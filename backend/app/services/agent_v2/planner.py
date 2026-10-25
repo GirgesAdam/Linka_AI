@@ -1909,20 +1909,28 @@ def advance_step_after_verification(
                 }
             )
         return step
-    if not step.write_intent.authorized:
+    intent = step.write_intent
+    kind = intent.kind
+    exact_booking_proposal_candidate = (
+        kind == "booking"
+        and not intent.authorized
+        and step.facts.get("booking_proposal_required") is True
+        and bool(step.facts.get("exact_time_requested"))
+    )
+    if not intent.authorized and not exact_booking_proposal_candidate:
         return step
     if verification.requires_human:
         return step.model_copy(
             update={
                 "disposition": "handoff",
                 "response_goal": "handoff",
+                "write_intent": None if exact_booking_proposal_candidate else intent,
                 "facts": {**step.facts, **verification.verified_parameters},
             }
         )
 
-    kind = step.write_intent.kind
     verified_parameters = {
-        **step.write_intent.parameters,
+        **intent.parameters,
         **verification.verified_parameters,
     }
 
@@ -1940,19 +1948,38 @@ def advance_step_after_verification(
                         "disposition": "clarify",
                         "clarification_field": "device",
                         "response_goal": "clarification",
+                        "write_intent": None if exact_booking_proposal_candidate else intent,
+                    }
+                )
+            if exact_booking_proposal_candidate:
+                return step.model_copy(
+                    update={
+                        "disposition": "respond",
+                        "response_goal": "booking_proposal",
+                        "write_intent": intent.model_copy(
+                            update={"parameters": verified_parameters}
+                        ),
+                        "facts": {
+                            **step.facts,
+                            "_verified_booking_proposal_candidate": True,
+                        },
                     }
                 )
             return step.model_copy(
                 update={
                     "disposition": "write_ready",
-                    "write_intent": step.write_intent.model_copy(
+                    "write_intent": intent.model_copy(
                         update={"parameters": verified_parameters}
                     ),
                 }
             )
         if count == 0:
             return step.model_copy(
-                update={"disposition": "blocked", "response_goal": "requested_time_unavailable"}
+                update={
+                    "disposition": "blocked",
+                    "response_goal": "requested_time_unavailable",
+                    "write_intent": None if exact_booking_proposal_candidate else intent,
+                }
             )
         if count is not None and count > 1:
             field = _slot_ambiguity_field(step)
@@ -1961,6 +1988,7 @@ def advance_step_after_verification(
                     "disposition": "clarify",
                     "clarification_field": field,
                     "response_goal": "clarification",
+                    "write_intent": None if exact_booking_proposal_candidate else intent,
                 }
             )
         return step

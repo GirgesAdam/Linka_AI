@@ -279,8 +279,29 @@ def _prepare_booking_proposal(
 ) -> tuple[PlanStep, BookingProposal | None]:
     intent = step.write_intent
     requested_raw = step.facts.get("requested_service_ids")
+    marked_non_write_candidate = step.facts.get("_verified_booking_proposal_candidate") is True
+    verified_non_write_candidate = (
+        marked_non_write_candidate
+        and step.disposition == "respond"
+        and intent is not None
+        and intent.kind == "booking"
+        and not intent.authorized
+        and operation is not None
+        and operation.type == "book"
+        and step.facts.get("booking_proposal_required") is True
+        and isinstance(requested_raw, list)
+    )
+    if marked_non_write_candidate and not verified_non_write_candidate:
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {**step.facts, "booking_proposal_candidate_invalid": True},
+            }
+        ), None
     if (
-        step.disposition != "write_ready"
+        (step.disposition != "write_ready" and not verified_non_write_candidate)
         or intent is None
         or intent.kind != "booking"
         or step.facts.get("booking_proposal_required") is not True
