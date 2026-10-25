@@ -542,7 +542,7 @@ def _attach_verified_booking_proposal_to_task(
     task: BookingTaskState,
     *,
     proposal: BookingProposal,
-    selected_option_ref: str,
+    selected_option_ref: str | None,
     catalog: dict[str, Any],
     timezone_name: str,
 ) -> BookingTaskState:
@@ -3821,20 +3821,17 @@ def orchestrate_v2_turn(
             pending_proposal_for_step is not None
             and isinstance(transition.active_task, BookingTaskState)
         ):
-            proposal_base = transition.active_task
-            if advanced.facts.get("verified_booking_slot_selection") is True:
-                proposal_task = _attach_verified_booking_proposal_to_task(
-                    proposal_base,
-                    proposal=pending_proposal_for_step,
-                    selected_option_ref=str(advanced.facts.get("selected_option_ref") or ""),
-                    catalog=canonical_catalog,
-                    timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
-                )
-            else:
-                proposal_task = attach_booking_proposal(
-                    proposal_base,
-                    proposal=pending_proposal_for_step,
-                )
+            proposal_task = _attach_verified_booking_proposal_to_task(
+                transition.active_task,
+                proposal=pending_proposal_for_step,
+                selected_option_ref=(
+                    str(advanced.facts.get("selected_option_ref") or "")
+                    if advanced.facts.get("verified_booking_slot_selection") is True
+                    else None
+                ),
+                catalog=canonical_catalog,
+                timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
+            )
             transition = transition.__class__(
                 active_task=proposal_task,
                 changed=True,
@@ -3931,9 +3928,12 @@ def orchestrate_v2_turn(
                 pending_proposal_for_step is not None
                 and isinstance(continuation_transition.active_task, BookingTaskState)
             ):
-                proposal_task = attach_booking_proposal(
+                proposal_task = _attach_verified_booking_proposal_to_task(
                     continuation_transition.active_task,
                     proposal=pending_proposal_for_step,
+                    selected_option_ref=None,
+                    catalog=canonical_catalog,
+                    timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
                 )
                 continuation_transition = continuation_transition.__class__(
                     active_task=proposal_task,

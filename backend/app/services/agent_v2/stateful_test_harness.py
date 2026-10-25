@@ -274,27 +274,22 @@ def _execute_step(
 ) -> tuple[V2HarnessStepTrace, TurnOutcome, ActiveTaskState | None]:
     bundle = execute_fixture_reads(step, fixture) if step.reads else ReadExecutionBundle()
     advanced = _advance(step, bundle)
-    pending_proposal = None
-    if (
-        isinstance(current_task, BookingTaskState)
-        and advanced.facts.get("verified_booking_slot_selection") is True
-    ):
-        advanced, pending_proposal = _prepare_booking_proposal(
-            advanced,
-            operation=operation,
-            reads=bundle,
-            current_task=current_task,
-            db=object(),
-            workspace=SimpleNamespace(id="fixture-workspace", timezone=timezone_name),
-            patient=SimpleNamespace(id="fixture-patient"),
+    advanced, pending_proposal = _prepare_booking_proposal(
+        advanced,
+        operation=operation,
+        reads=bundle,
+        current_task=current_task,
+        db=object(),
+        workspace=SimpleNamespace(id="fixture-workspace", timezone=timezone_name),
+        patient=SimpleNamespace(id="fixture-patient"),
+        catalog=fixture.catalog,
+        now=local_now,
+        turn_id=turn_id,
+        additional_service_resolver=lambda proposal: _fixture_additional_service_resolver(
+            proposal,
             catalog=fixture.catalog,
-            now=local_now,
-            turn_id=turn_id,
-            additional_service_resolver=lambda proposal: _fixture_additional_service_resolver(
-                proposal,
-                catalog=fixture.catalog,
-            ),
-        )
+        ),
+    )
     transition = apply_step_state(
         current_task,
         step=advanced,
@@ -310,7 +305,11 @@ def _execute_step(
         task_after_transition = _attach_verified_booking_proposal_to_task(
             task_after_transition,
             proposal=pending_proposal,
-            selected_option_ref=str(advanced.facts.get("selected_option_ref") or ""),
+            selected_option_ref=(
+                str(advanced.facts.get("selected_option_ref") or "")
+                if advanced.facts.get("verified_booking_slot_selection") is True
+                else None
+            ),
             catalog=fixture.catalog,
             timezone_name=timezone_name,
         )
