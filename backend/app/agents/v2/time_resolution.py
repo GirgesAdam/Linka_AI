@@ -415,40 +415,8 @@ def resolve_bare_clock_constraint(
             requested_date=requested_date,
         )
 
-    if hour_12 <= 9:
-        pm_candidate = candidate_minutes[1]
-        if pm_candidate in valid_minutes:
-            chosen = pm_candidate
-        elif candidate_minutes[0] in valid_minutes:
-            chosen = candidate_minutes[0]
-        else:
-            return BareClockResolution(
-                status="outside_operating_hours",
-                constraint=constraint,
-                candidate_clocks=candidate_clocks,
-                valid_operating_hour_candidates=valid_clocks,
-                operating_hours=operating_hours,
-                branch_id=resolved_branch,
-                requested_date=requested_date,
-            )
-        resolved = constraint.model_copy(
-            update={
-                "start_time": _clock(chosen),
-                "start_time_ambiguity": "none",
-                "spoken_period_hint": "none",
-            }
-        )
-        return BareClockResolution(
-            status="resolved",
-            constraint=resolved,
-            candidate_clocks=candidate_clocks,
-            valid_operating_hour_candidates=valid_clocks,
-            operating_hours=operating_hours,
-            branch_id=resolved_branch,
-            requested_date=requested_date,
-        )
-
-    # 10 and 11 are the only genuinely ambiguous bare product clocks.
+    # Clinic/business facts may eliminate one interpretation, but when both AM and PM
+    # remain feasible the clock is genuinely ambiguous. Never invent a PM preference.
     if len(valid_minutes) == 1:
         resolved = constraint.model_copy(
             update={

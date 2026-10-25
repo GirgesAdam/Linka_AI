@@ -10,6 +10,7 @@ from app.services.agent_v2.live_chat import (
     _recent_verified_action_context_from_outbounds,
     _safe_action_context_passthrough,
     _verified_action_context_from_turn,
+    _verified_read_context_from_turn,
 )
 
 
@@ -40,6 +41,53 @@ def test_safe_read_context_exposes_only_verified_availability_summary() -> None:
     assert "availability_presented_window_keys" not in recent
     assert "availability_presentation_has_more" not in recent
     assert "internal_note" not in recent
+
+
+def test_private_reschedule_source_facts_never_enter_recent_verified_read() -> None:
+    step = SimpleNamespace(
+        disposition="read",
+        write_intent=None,
+        reads=[SimpleNamespace(kind="availability", parameters={})],
+        facts={
+            "service_id": "service-1",
+            "_source_appointment_start_at": "2026-09-17T16:00:00+00:00",
+            "_source_appointment_start_local": "2026-09-17T19:00:00+03:00",
+            "_source_appointment_branch_id": "branch-main",
+        },
+        operation_type="reschedule",
+        operation_index=0,
+    )
+    turn = SimpleNamespace(
+        outcomes=(),
+        plan=SimpleNamespace(steps=(step,)),
+        traces=(),
+        understanding=SimpleNamespace(operations=()),
+    )
+
+    read_context = _verified_read_context_from_turn(
+        SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        turn=turn,
+    )
+
+    assert read_context == {
+        "operation_type": "reschedule",
+        "service_id": "service-1",
+    }
+    assert all(not key.startswith("_") for key in read_context)
+
+    semantic = build_semantic_context(
+        {
+            "services": [{"id": "service-1", "name": "استشارة"}],
+            "doctors": [],
+            "branches": [],
+        }
+    )
+    recent = with_safe_read_context(
+        semantic,
+        read_context=read_context,
+    ).model_input["recent_verified_read"]
+    assert all(not key.startswith("_") for key in recent)
 
 
 def test_zero_verified_options_is_exposed_as_false_condition() -> None:

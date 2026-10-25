@@ -54,6 +54,7 @@ from app.services.agent_v2.compound_turn_policy import (
     apply_compound_runtime_cursor,
     completed_compound_booking_end,
     compound_anchor_key,
+    compound_visit_group,
     compound_write_group,
     normalize_compound_turn_plan,
     resolve_compound_followup_after_reads,
@@ -279,8 +280,29 @@ def _prepare_booking_proposal(
 ) -> tuple[PlanStep, BookingProposal | None]:
     intent = step.write_intent
     requested_raw = step.facts.get("requested_service_ids")
+    marked_non_write_candidate = step.facts.get("_verified_booking_proposal_candidate") is True
+    verified_non_write_candidate = (
+        marked_non_write_candidate
+        and step.disposition == "respond"
+        and intent is not None
+        and intent.kind == "booking"
+        and not intent.authorized
+        and operation is not None
+        and operation.type == "book"
+        and step.facts.get("booking_proposal_required") is True
+        and isinstance(requested_raw, list)
+    )
+    if marked_non_write_candidate and not verified_non_write_candidate:
+        return step.model_copy(
+            update={
+                "disposition": "blocked",
+                "write_intent": None,
+                "response_goal": "clarification",
+                "facts": {**step.facts, "booking_proposal_candidate_invalid": True},
+            }
+        ), None
     if (
-        step.disposition != "write_ready"
+        (step.disposition != "write_ready" and not verified_non_write_candidate)
         or intent is None
         or intent.kind != "booking"
         or step.facts.get("booking_proposal_required") is not True
@@ -478,6 +500,14 @@ def _prepare_booking_proposal(
         operation is not None
         and operation.type == "book"
         and operation.execution_intent == "execute"
+        and (
+            current_task is None
+            or (
+                operation.active_task_relationship == "continue"
+                and set(operation.active_task_explicit_fields) != {"time"}
+                and set(operation.active_task_corrected_fields) != {"time"}
+            )
+        )
     )
     auto_execute_authorized_booking = intent.authorized and (
         explicit_booking_authorized
@@ -521,7 +551,7 @@ def _attach_verified_booking_proposal_to_task(
     task: BookingTaskState,
     *,
     proposal: BookingProposal,
-    selected_option_ref: str,
+    selected_option_ref: str | None,
     catalog: dict[str, Any],
     timezone_name: str,
 ) -> BookingTaskState:
@@ -560,26 +590,64 @@ def _prepare_cross_category_compound_proposal(
     now: datetime,
     turn_id: str,
 ) -> tuple[TurnPlan, BookingTaskState | None]:
+    def _verified_review_candidate(step: PlanStep) -> bool:
+        return (
+            step.write_intent is None
+            and step.facts.get("compound_visit_independent_category_resources") is True
+            and step.facts.get("compound_visit_preflight_resolved") is True
+            and step.facts.get("compound_verified_start_at") not in (None, "")
+            and step.facts.get("compound_verified_end_at") not in (None, "")
+            and compound_visit_group(step) is not None
+        )
+
     bookings = [
         step
         for step in plan.steps
-        if step.write_intent is not None
-        and step.write_intent.kind == "booking"
-        and step.facts.get("compound_visit_independent_category_resources") is True
-        and compound_write_group(step) is not None
+        if step.facts.get("compound_visit_independent_category_resources") is True
+        and (
+            (
+                step.write_intent is not None
+                and step.write_intent.kind == "booking"
+                and compound_write_group(step) is not None
+            )
+            or _verified_review_candidate(step)
+        )
     ]
     if len(bookings) < 2:
         return plan, None
-    group_keys = {compound_write_group(step) for step in bookings}
-    if len(group_keys) != 1:
+
+    def _proposal_group_key(step: PlanStep) -> str | None:
+        return compound_write_group(step) or (
+            compound_visit_group(step) if _verified_review_candidate(step) else None
+        )
+
+    group_keys = {_proposal_group_key(step) for step in bookings}
+    if None in group_keys or len(group_keys) != 1:
         return plan, None
+
+    def _proposal_parameters(step: PlanStep) -> dict[str, object]:
+        if step.write_intent is not None and step.write_intent.kind == "booking":
+            return dict(step.write_intent.parameters)
+        return {
+            key: step.facts.get(key)
+            for key in (
+                "service_id",
+                "branch_id",
+                "doctor_id",
+                "device_key",
+                "date",
+                "time",
+                "package_usage",
+                "package_id",
+            )
+            if step.facts.get(key) is not None
+        }
 
     visits: list[BookingProposalVisit] = []
     all_services: list[str] = []
     service_devices: dict[str, str] = {}
     for step in bookings:
-        assert step.write_intent is not None
-        params = step.write_intent.parameters
+        params = _proposal_parameters(step)
         main_service_id = str(params.get("service_id") or "")
         branch_id = str(params.get("branch_id") or "")
         doctor_id = str(params.get("doctor_id") or "")
@@ -677,7 +745,7 @@ def _prepare_cross_category_compound_proposal(
         created_at=now,
         expires_at=now + timedelta(minutes=15),
     )
-    first_params = bookings[0].write_intent.parameters if bookings[0].write_intent else {}
+    first_params = _proposal_parameters(bookings[0])
     constraints = CustomerConstraints.model_validate(
         {
             "service_id": first.main_service_id,
@@ -973,6 +1041,99 @@ def _verified_booking_selection_plan(
         },
     )
     return TurnPlan(steps=[step]), validated_context
+
+
+def _current_review_proposal_reference_plan(
+    task: ActiveTaskState | None,
+    *,
+    decision: object | None,
+    availability_context: dict[str, Any] | None,
+    catalog: dict[str, Any],
+    now: datetime,
+) -> TurnPlan | None:
+    """Re-present one current review-first proposal when the same verified target is restated.
+
+    This is deliberately non-authorizing: it accepts only a current proposal, a concrete
+    server-owned option reference, and an exact date/time identical to the durable task.
+    Any correction, stale proposal, missing option, or target mismatch falls through to
+    normal verification/planning.
+    """
+    if (
+        not isinstance(task, BookingTaskState)
+        or task.status != "awaiting_confirmation"
+        or task.proposal is None
+        or task.write_authorization.authorized
+        or not task.proposal.is_current(task_version=task.version, now=now)
+        or decision is None
+        or getattr(decision, "action", None) != "select_presented_option"
+        or getattr(decision, "selection_scope", "none") != "none"
+    ):
+        return None
+    option_ref = str(getattr(decision, "option_ref", None) or "")
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not option_ref or not isinstance(raw_options, list):
+        return None
+    matches = [
+        option
+        for option in raw_options
+        if isinstance(option, dict) and str(option.get("option_ref") or "") == option_ref
+    ]
+    if len(matches) != 1:
+        return None
+    exact_time = _reference_option_time(decision, availability_context)
+    if exact_time is None:
+        return None
+    date_constraint = _grouped_reference_date(availability_context, exact_time=exact_time)
+    task_date = task.constraints.date
+    task_time = task.constraints.time
+    if (
+        date_constraint is None
+        or task_date is None
+        or task_date.mode != "exact"
+        or task_date.start_date != date_constraint.start_date
+        or task_time is None
+        or task_time.mode != "exact"
+        or task_time.start_time != exact_time
+    ):
+        return None
+    proposal = task.proposal
+    summary: dict[str, object] = {
+        "services": _service_names(catalog, list(proposal.service_ids)),
+        "start_at": proposal.start_at.isoformat(),
+        "end_at": proposal.end_at.isoformat(),
+    }
+    if proposal.visits:
+        summary["visits"] = [
+            {
+                "services": _service_names(catalog, list(visit.service_ids)),
+                "start_at": visit.start_at.isoformat(),
+                "end_at": visit.end_at.isoformat(),
+                "doctor_id": visit.doctor_id,
+                "branch_id": visit.branch_id,
+                "device_key": visit.device_key,
+            }
+            for visit in proposal.visits
+        ]
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        reads=[],
+        write_intent=None,
+        state_action="none",
+        response_goal="booking_proposal",
+        facts={
+            "requested_service_ids": list(task.requested_service_ids),
+            "date": date_constraint.model_dump(mode="json"),
+            "time": TimeConstraint(
+                mode="exact", start_time=exact_time, start_time_ambiguity="none"
+            ).model_dump(mode="json"),
+            "selected_option_ref": option_ref,
+            "verified_availability_reference": True,
+            "booking_proposal_summary": summary,
+        },
+    )
+    return TurnPlan(steps=[step])
 
 
 def _grouped_visit_reference_understanding(
@@ -2934,6 +3095,13 @@ def orchestrate_v2_turn(
         else None
     )
     selection_time = explicit_user_time or exact_reference_time or carried_pending_time
+    current_review_proposal_plan = _current_review_proposal_reference_plan(
+        initial_task,
+        decision=decision,
+        availability_context=availability_reference_context,
+        catalog=canonical_catalog,
+        now=local_now,
+    )
     verified_booking_selection = _verified_booking_selection_plan(
         initial_task,
         decision=decision,
@@ -2949,10 +3117,26 @@ def orchestrate_v2_turn(
             availability_context=availability_reference_context,
             catalog=canonical_catalog,
         )
-        if decision is not None and decision.action == "clarify"
+        if decision is not None
+        and decision.action in {"clarify", "select_presented_option"}
         else None
     )
-    if verified_booking_selection is not None:
+    if current_review_proposal_plan is not None:
+        reference_plan_override = current_review_proposal_plan
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="book",
+                    entities=TurnEntities(),
+                    selection=Selection(kind="ref", ref=str(decision.option_ref)),
+                    execution_intent="informational",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+        full_interpreter_called = False
+    elif verified_booking_selection is not None:
         reference_plan_override, availability_reference_context = verified_booking_selection
         understanding = TiaTurnUnderstanding(
             operations=[
@@ -3800,20 +3984,17 @@ def orchestrate_v2_turn(
             pending_proposal_for_step is not None
             and isinstance(transition.active_task, BookingTaskState)
         ):
-            proposal_base = transition.active_task
-            if advanced.facts.get("verified_booking_slot_selection") is True:
-                proposal_task = _attach_verified_booking_proposal_to_task(
-                    proposal_base,
-                    proposal=pending_proposal_for_step,
-                    selected_option_ref=str(advanced.facts.get("selected_option_ref") or ""),
-                    catalog=canonical_catalog,
-                    timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
-                )
-            else:
-                proposal_task = attach_booking_proposal(
-                    proposal_base,
-                    proposal=pending_proposal_for_step,
-                )
+            proposal_task = _attach_verified_booking_proposal_to_task(
+                transition.active_task,
+                proposal=pending_proposal_for_step,
+                selected_option_ref=(
+                    str(advanced.facts.get("selected_option_ref") or "")
+                    if advanced.facts.get("verified_booking_slot_selection") is True
+                    else None
+                ),
+                catalog=canonical_catalog,
+                timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
+            )
             transition = transition.__class__(
                 active_task=proposal_task,
                 changed=True,
@@ -3910,9 +4091,12 @@ def orchestrate_v2_turn(
                 pending_proposal_for_step is not None
                 and isinstance(continuation_transition.active_task, BookingTaskState)
             ):
-                proposal_task = attach_booking_proposal(
+                proposal_task = _attach_verified_booking_proposal_to_task(
                     continuation_transition.active_task,
                     proposal=pending_proposal_for_step,
+                    selected_option_ref=None,
+                    catalog=canonical_catalog,
+                    timezone_name=getattr(workspace, "timezone", "Africa/Cairo"),
                 )
                 continuation_transition = continuation_transition.__class__(
                     active_task=proposal_task,

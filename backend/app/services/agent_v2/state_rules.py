@@ -16,6 +16,8 @@ from app.services.agent_v2.state import (
     RescheduleTaskState,
 )
 
+TIME_CORRECTION_AUTHORITY_FACT = "_time_correction_authority"
+
 
 def _booking_derived(
     state: BookingTaskState,
@@ -406,7 +408,7 @@ def invalidate_booking_slot_selection(state: BookingTaskState) -> BookingTaskSta
 def apply_verified_booking_slot_selection(
     state: BookingTaskState,
     *,
-    selected_slot_ref: str,
+    selected_slot_ref: str | None,
     main_service_id: str,
     branch_id: str,
     doctor_id: str,

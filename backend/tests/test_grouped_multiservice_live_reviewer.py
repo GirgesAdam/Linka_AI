@@ -384,15 +384,19 @@ def test_ra_g6_reviewer_rejects_false_success_reply() -> None:
 
 
 def _g5_payload(*, final_time: str = "18:00", final_start_at: str = "2026-10-17T15:00:00+00:00"):
-    ids = {"underarm": "svc-underarm", "bikini": "svc-bikini", "doctor": "doc-maryam"}
+    ids = {"underarm": "svc-underarm", "bikini": "svc-bikini", "doctor": "doc-maryam", "branch": "branch-main"}
     expected = [ids["underarm"], ids["bikini"]]
 
     def task(time_value: str):
         return {
             "status": "awaiting_confirmation",
+            "version": 10,
             "requested_service_ids": expected,
-            "constraints": {"time": {"mode": "exact", "start_time": time_value}},
-            "write_authorization": {"authorized": True},
+            "constraints": {
+                "branch_id": ids["branch"],
+                "time": {"mode": "exact", "start_time": time_value},
+            },
+            "write_authorization": {"authorized": False},
             "derived": {"commercial_basis_presented_key": "svc-underarm|candela_gentle|standalone"},
         }
 
@@ -402,17 +406,21 @@ def _g5_payload(*, final_time: str = "18:00", final_start_at: str = "2026-10-17T
             "main_service_id": ids["underarm"],
             "additional_service_ids": [ids["bikini"]],
             "doctor_id": ids["doctor"],
+            "branch_id": ids["branch"],
             "device_key": "candela_gentle",
             "start_at": start_at,
+            "task_version": 10,
+            "proposal_version": 2,
         }
 
     records = [
-        {"requested_service_ids": expected, "active_task": {"requested_service_ids": expected}, "pending_write": None},
+        {"requested_service_ids": expected, "active_task": {"requested_service_ids": expected}, "pending_write": None, "db_state_after": {"appointments": 0}},
         {
             "requested_service_ids": expected,
             "active_task": task("18:00"),
             "proposal": proposal("2026-10-17T15:00:00+00:00"),
             "pending_write": None,
+            "db_state_after": {"appointments": 0},
             "reply": "السعر الإجمالي 1000 جنيه. الموعد المقترح قبل التأكيد.",
         },
         {
@@ -420,6 +428,7 @@ def _g5_payload(*, final_time: str = "18:00", final_start_at: str = "2026-10-17T
             "active_task": task(final_time),
             "proposal": proposal(final_start_at),
             "pending_write": None,
+            "db_state_after": {"appointments": 0},
             "reply": "الموعد المقترح جاهز قبل التأكيد النهائي.",
         },
     ]
@@ -468,5 +477,66 @@ def test_ra_g5_reviewer_rejects_time_only_correction_that_loses_commercial_autho
         final_start_at="2026-10-17T16:00:00+00:00",
     )
     records[2]["active_task"]["derived"]["commercial_basis_presented_key"] = None
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_missing_proposal() -> None:
+    records, ids = _g5_payload()
+    records[2]["proposal"] = None
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_collecting_status() -> None:
+    records, ids = _g5_payload()
+    records[2]["active_task"]["status"] = "collecting"
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_preconfirmation_authorization() -> None:
+    records, ids = _g5_payload()
+    records[2]["active_task"]["write_authorization"]["authorized"] = True
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+@pytest.mark.parametrize("appointments", [1, 2])
+def test_ra_g5_reviewer_rejects_any_preconfirmation_appointment_write(appointments: int) -> None:
+    records, ids = _g5_payload()
+    records[2]["db_state_after"]["appointments"] = appointments
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_service_loss() -> None:
+    records, ids = _g5_payload()
+    records[2]["proposal"]["service_ids"] = [ids["underarm"]]
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("doctor_id", "wrong-doctor"), ("device_key", "wrong-device"), ("branch_id", "wrong-branch")],
+)
+def test_ra_g5_reviewer_rejects_wrong_proposal_identity(field: str, value: str) -> None:
+    records, ids = _g5_payload()
+    records[2]["proposal"][field] = value
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_wrong_time() -> None:
+    records, ids = _g5_payload()
+    records[2]["proposal"]["start_at"] = "2026-10-17T17:00:00+00:00"
+    with pytest.raises(AssertionError):
+        validate_g5(records, ids)
+
+
+def test_ra_g5_reviewer_rejects_stale_proposal_version() -> None:
+    records, ids = _g5_payload()
+    records[2]["proposal"]["task_version"] = 9
     with pytest.raises(AssertionError):
         validate_g5(records, ids)

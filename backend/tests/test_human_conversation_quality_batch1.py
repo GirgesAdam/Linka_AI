@@ -425,3 +425,22 @@ def test_ra_h3_reviewer_rejects_stale_or_mutated_proposal_write() -> None:
             final_task={"status": "awaiting_confirmation", "proposal": stale},
             last=_ra_h3_last(write="booking_proposal", completed=True),
         )
+
+
+def test_ra_h3_first_proposal_contract_is_durable_without_reference_context() -> None:
+    proposal = _ra_h3_proposal()
+    final_task = {
+        "status": "awaiting_confirmation",
+        "write_authorization": {"authorized": False},
+        "requested_service_ids": ["svc-underarm", "svc-bikini"],
+        "constraints": {"time": {"mode": "exact", "start_time": "20:00"}},
+        "proposal": {**proposal, "service_ids": ["svc-underarm", "svc-bikini"]},
+    }
+    assert _assert_ra_h3_final_transition(
+        pre_final_task={"status": "collecting", "proposal": None},
+        final_task=final_task,
+        last=_ra_h3_last(write=None, completed=False),
+    ) is False
+    assert final_task["write_authorization"]["authorized"] is False
+    assert set(final_task["proposal"]["service_ids"]) == {"svc-underarm", "svc-bikini"}
+    assert final_task["constraints"]["time"]["start_time"] == "20:00"

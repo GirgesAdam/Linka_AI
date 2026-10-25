@@ -334,6 +334,11 @@ SEMANTIC PRINCIPLES
   If the customer explicitly supplies a next-available date scope and an exact time in the same message, list
   both date and time. If the latest message only authorizes/acknowledges the change without restating either
   dimension, leave this list empty even if an inferred/default date or time entity is emitted.
+  active_task_corrected_fields is narrower provenance: include date and/or time only when the latest customer
+  message explicitly rejects, replaces, or corrects that active-task dimension. A repeated, confirmed, or
+  restated current value is explicit but is not corrected. Every active_task_corrected_fields item must also
+  appear in active_task_explicit_fields. This distinction is semantic; do not infer it from particular words,
+  language-specific phrases, or textual position.
 - For an active reschedule continuation, when the latest customer turn explicitly asks for the next
   occurrence of a named weekday relative to the current active reschedule date, set
   active_task_relative_date with relation=next_occurrence and that weekday, include date in

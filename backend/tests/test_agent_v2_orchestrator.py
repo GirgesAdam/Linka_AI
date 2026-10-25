@@ -30,6 +30,8 @@ from app.services.agent_v2.planner import (
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
 from app.services.agent_v2.state import (
+    BookingProposal,
+    BookingProposalVisit,
     BookingTaskState,
     CustomerConstraints,
     OptionChoice,
@@ -1210,13 +1212,16 @@ def _run_ra_g6_unpresented_exact_time_case(
     device_auto_resolved: bool = False,
     stale_reference_selection: bool = False,
     narrow_exact_time: str | None = None,
+    booking_authorized: bool = True,
+    operation_type: str = "continue_active",
+    execution_intent: str = "execute",
 ):
     task = BookingTaskState(
         status="awaiting_slot",
         write_authorization=WriteAuthorization(
             operation="booking",
-            authorized=True,
-            source_turn_id="turn-initial",
+            authorized=booking_authorized,
+            source_turn_id="turn-initial" if booking_authorized else None,
             granted_at=_NOW,
         ),
         constraints=CustomerConstraints(
@@ -1332,14 +1337,14 @@ def _run_ra_g6_unpresented_exact_time_case(
     )
     interpreted = TiaTurnUnderstanding(
         operations=[TurnOperation(
-            type="continue_active",
+            type=operation_type,
             entities=TurnEntities(time=TimeConstraint(
                 mode="exact" if exact_time_requested else "after",
                 start_time="20:00",
                 start_time_ambiguity="none",
             )),
-            execution_intent="execute",
-            active_task_relationship="continue",
+            execution_intent=execution_intent,
+            active_task_relationship=("continue" if operation_type == "continue_active" else "unspecified"),
             continues_previous=True,
             grouped_booking_action="preserve_group",
         )]
@@ -1500,6 +1505,33 @@ def _run_ra_g6_unpresented_exact_time_case(
     })
     result = runtime.orchestrate_v2_turn(**args)
     return result, read_calls, saved
+
+
+def test_review_first_natural_exact_time_advances_to_verified_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, read_calls, saved = _run_ra_g6_unpresented_exact_time_case(
+        monkeypatch,
+        booking_authorized=False,
+        operation_type="book",
+        execution_intent="informational",
+    )
+
+    assert read_calls == [
+        ["service_catalog_set", "availability"],
+        ["service_catalog_set", "availability"],
+    ]
+    assert result.pending_write is None
+    assert isinstance(result.active_task, BookingTaskState)
+    assert result.active_task.status == "awaiting_confirmation"
+    assert result.active_task.write_authorization.authorized is False
+    assert result.active_task.proposal is not None
+    assert result.active_task.proposal.service_ids == ["service-a", "service-b"]
+    assert result.active_task.proposal.doctor_id == "doctor-1"
+    assert result.active_task.proposal.device_key == "device-1"
+    assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
+    assert result.outcomes[-1].response_goal == "booking_proposal"
+    assert saved and saved[-1].write_authorization.authorized is False
 
 
 def test_ra_g6_unpresented_exact_time_produces_write_ready_booking_proposal(
@@ -1801,3 +1833,371 @@ def test_orchestrator_rejects_out_of_scope_booking_slot_without_authorizing_or_r
     assert result.active_task.write_authorization.authorized is False
     assert write_calls == []
     assert all(trace.disposition_after != "write_ready" for trace in result.traces)
+
+
+def test_grouped_presented_option_selection_resolves_current_20_clock_without_full_interpreter() -> None:
+    env = V2FixtureEnvironment()
+    for doctor in env.catalog.get("doctors", []):
+        if isinstance(doctor, dict):
+            doctor["branch_ids"] = ["single-location"]
+    task = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            branch_id="single-location",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+        service_device_keys={
+            "svc-underarm": "candela_gentle",
+            "svc-bikini": "candela_gentle",
+        },
+    )
+    slot = next(
+        dict(row)
+        for row in env.slots
+        if row.get("service_id") == "svc-bikini"
+        and row.get("doctor_id") == "doc-maryam"
+        and str(row.get("start_local") or "")[11:16] == "20:00"
+    )
+    context = {
+        "requested_service_ids": ["svc-underarm", "svc-bikini"],
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "start_local": slot["start_local"],
+                "start_time_24h": "20:00",
+                "doctor_name": slot.get("doctor_name"),
+                "laser_device_name": slot.get("laser_device_name"),
+                "slot": slot,
+            }
+        ],
+    }
+
+    result = runtime._grouped_visit_reference_understanding(
+        task,
+        decision=ReferenceDecision(
+            action="select_presented_option",
+            option_ref="opt_1",
+            exact_time="20:00",
+            selection_scope="none",
+        ),
+        availability_context=context,
+        catalog=env.catalog,
+    )
+
+    assert result is not None
+    understanding, updated_task = result
+    operation = understanding.operations[0]
+    assert operation.entities.time == TimeConstraint(
+        mode="exact", start_time="20:00", start_time_ambiguity="none"
+    )
+    assert updated_task.constraints.doctor_id == "doc-maryam"
+    assert updated_task.constraints.branch_id == "single-location"
+    assert updated_task.constraints.device_key == "candela_gentle"
+    assert updated_task.write_authorization.authorized is False
+
+
+def test_cross_category_review_continuation_rebuilds_proposal_from_fresh_verified_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 17, 15, 0)
+    laser_visit = BookingProposalVisit(
+        service_ids=["svc-underarm", "svc-bikini"],
+        main_service_id="svc-bikini",
+        additional_service_ids=["svc-underarm"],
+        branch_id="branch-main",
+        doctor_id="doc-maryam",
+        start_at=start,
+        end_at=start + timedelta(minutes=30),
+        device_key="candela_gentle",
+        additional_service_device_keys={"svc-underarm": "candela_gentle"},
+    )
+    derm_visit = BookingProposalVisit(
+        service_ids=["svc-dermatology"],
+        main_service_id="svc-dermatology",
+        branch_id="branch-main",
+        doctor_id="doc-derm",
+        start_at=start + timedelta(minutes=30),
+        end_at=start + timedelta(minutes=60),
+    )
+    current = BookingTaskState(
+        status="awaiting_confirmation",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            doctor_id="doc-maryam",
+            branch_id="branch-main",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+            time=TimeConstraint(mode="exact", start_time="18:00"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini", "svc-dermatology"],
+        service_device_keys={
+            "svc-underarm": "candela_gentle",
+            "svc-bikini": "candela_gentle",
+        },
+        proposal=BookingProposal(
+            proposal_id="old-proposal",
+            patient_id="patient-1",
+            service_ids=["svc-underarm", "svc-bikini", "svc-dermatology"],
+            main_service_id="svc-bikini",
+            additional_service_ids=["svc-underarm"],
+            branch_id="branch-main",
+            doctor_id="doc-maryam",
+            start_at=laser_visit.start_at,
+            end_at=laser_visit.end_at,
+            device_key="candela_gentle",
+            additional_service_device_keys={"svc-underarm": "candela_gentle"},
+            visits=[laser_visit, derm_visit],
+            task_version=7,
+            proposal_version=1,
+            created_at=_NOW,
+            expires_at=_NOW + timedelta(minutes=15),
+        ),
+        version=7,
+    )
+    shared = {
+        "compound_visit_group": "persisted-group:7",
+        "compound_visit_grouped": True,
+        "compound_visit_preflight_resolved": True,
+        "compound_visit_independent_category_resources": True,
+        "exact_time_requested": True,
+        "branch_id": "branch-main",
+        "date": {"mode": "exact", "start_date": "2026-10-17"},
+        "package_usage": "unspecified",
+    }
+    plan = TurnPlan(
+        steps=[
+            PlanStep(
+                operation_index=0,
+                operation_type="book",
+                disposition="read",
+                reads=[],
+                state_action="none",
+                response_goal="present_availability",
+                facts={
+                    **shared,
+                    "service_id": "svc-bikini",
+                    "requested_service_ids": ["svc-underarm", "svc-bikini"],
+                    "doctor_id": "doc-maryam",
+                    "device_key": "candela_gentle",
+                    "time": {"mode": "exact", "start_time": "18:00"},
+                    "compound_verified_start_at": start.isoformat(),
+                    "compound_verified_end_at": (start + timedelta(minutes=30)).isoformat(),
+                },
+            ),
+            PlanStep(
+                operation_index=1,
+                operation_type="book",
+                disposition="read",
+                reads=[],
+                state_action="none",
+                response_goal="present_availability",
+                facts={
+                    **shared,
+                    "service_id": "svc-dermatology",
+                    "doctor_id": "doc-derm",
+                    "time": {"mode": "exact", "start_time": "18:30"},
+                    "compound_verified_start_at": (start + timedelta(minutes=30)).isoformat(),
+                    "compound_verified_end_at": (start + timedelta(minutes=60)).isoformat(),
+                },
+            ),
+        ]
+    )
+
+    categories = {
+        "svc-underarm": "laser",
+        "svc-bikini": "laser",
+        "svc-dermatology": "dermatology",
+    }
+    monkeypatch.setattr(runtime, "service_operational_category", lambda _c, sid: categories[sid])
+    monkeypatch.setattr(runtime, "select_main_service_id", lambda _c, ids, device_key=None: list(ids)[-1])
+    monkeypatch.setattr(
+        runtime,
+        "common_doctor_ids",
+        lambda _c, ids, branch_id=None: {"doc-maryam"} if len(ids) > 1 else {"doc-derm"},
+    )
+    monkeypatch.setattr(
+        runtime,
+        "laser_service_ids",
+        lambda _c, ids: [sid for sid in ids if categories[sid] == "laser"],
+    )
+    monkeypatch.setattr(runtime, "common_laser_device_keys", lambda _c, ids: {"candela_gentle"})
+    monkeypatch.setattr(runtime, "_service_names", lambda _c, ids: list(ids))
+
+    updated_plan, task = runtime._prepare_cross_category_compound_proposal(
+        plan,
+        current_task=current,
+        workspace=SimpleNamespace(id="workspace-1"),
+        patient=SimpleNamespace(id="patient-1"),
+        catalog={},
+        now=_NOW,
+        turn_id="turn-review-repeat",
+    )
+
+    assert task is not None
+    assert task.status == "awaiting_confirmation"
+    assert task.write_authorization.authorized is False
+    assert task.proposal is not None
+    assert task.proposal.proposal_version == 2
+    assert [visit.start_at for visit in task.proposal.visits] == [
+        start,
+        start + timedelta(minutes=30),
+    ]
+    assert updated_plan.steps[0].response_goal == "booking_proposal"
+    assert updated_plan.steps[0].write_intent is None
+
+
+def test_current_review_proposal_same_server_target_is_represented_without_authorization() -> None:
+    proposal = BookingProposal(
+        proposal_id="proposal-current",
+        patient_id="patient-1",
+        service_ids=["svc-underarm", "svc-bikini"],
+        main_service_id="svc-bikini",
+        additional_service_ids=["svc-underarm"],
+        branch_id="single-location",
+        doctor_id="doc-maryam",
+        start_at=datetime(2026, 9, 12, 20, 0),
+        end_at=datetime(2026, 9, 12, 20, 30),
+        device_key="candela_gentle",
+        additional_service_device_keys={"svc-underarm": "candela_gentle"},
+        task_version=7,
+        proposal_version=1,
+        created_at=_NOW,
+        expires_at=_NOW + timedelta(minutes=15),
+    )
+    task = BookingTaskState(
+        status="awaiting_confirmation",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            branch_id="single-location",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="20:00"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+        service_device_keys={"svc-underarm": "candela_gentle", "svc-bikini": "candela_gentle"},
+        proposal=proposal,
+        version=7,
+    )
+    context = {
+        "date": {"mode": "exact", "start_date": "2026-09-12"},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "start_time_24h": "20:00",
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "slot": {
+                    "service_id": "svc-bikini",
+                    "start_time_24h": "20:00",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                },
+            }
+        ],
+    }
+    plan = runtime._current_review_proposal_reference_plan(
+        task,
+        decision=ReferenceDecision(
+            action="select_presented_option", option_ref="opt_1", exact_time="20:00"
+        ),
+        availability_context=context,
+        catalog={},
+        now=_NOW,
+    )
+    assert plan is not None
+    assert plan.steps[0].response_goal == "booking_proposal"
+    assert plan.steps[0].write_intent is None
+    assert task.status == "awaiting_confirmation"
+    assert task.proposal is proposal
+    assert task.write_authorization.authorized is False
+
+    stale = task.model_copy(
+        update={
+            "proposal": proposal.model_copy(update={"expires_at": _NOW}),
+        }
+    )
+    assert runtime._current_review_proposal_reference_plan(
+        stale,
+        decision=ReferenceDecision(
+            action="select_presented_option", option_ref="opt_1", exact_time="20:00"
+        ),
+        availability_context=context,
+        catalog={},
+        now=_NOW,
+    ) is None
+
+
+def test_cross_category_initial_review_builds_full_proposal_from_verified_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 17, 7, 0)
+    current = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            branch_id="branch-main",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+        service_device_keys={"svc-underarm": "candela_gentle", "svc-bikini": "candela_gentle"},
+        version=5,
+    )
+    shared = {
+        "compound_visit_group": "compound:1,2",
+        "compound_visit_grouped": True,
+        "compound_visit_preflight_resolved": True,
+        "compound_visit_independent_category_resources": True,
+        "branch_id": "branch-main",
+        "date": {"mode": "exact", "start_date": "2026-10-17"},
+        "package_usage": "unspecified",
+    }
+    plan = TurnPlan(steps=[
+        PlanStep(
+            operation_index=1, operation_type="book", disposition="read", reads=[],
+            state_action="none", response_goal="present_availability",
+            facts={**shared, "service_id": "svc-bikini",
+                "requested_service_ids": ["svc-underarm", "svc-bikini"],
+                "doctor_id": "doc-maryam", "device_key": "candela_gentle",
+                "time": {"mode": "exact", "start_time": "10:00"},
+                "compound_verified_start_at": start.isoformat(),
+                "compound_verified_end_at": (start + timedelta(minutes=30)).isoformat()},
+        ),
+        PlanStep(
+            operation_index=2, operation_type="book", disposition="read", reads=[],
+            state_action="none", response_goal="present_availability",
+            facts={**shared, "service_id": "svc-dermatology", "doctor_id": "doc-derm",
+                "time": {"mode": "exact", "start_time": "10:30"},
+                "compound_verified_start_at": (start + timedelta(minutes=30)).isoformat(),
+                "compound_verified_end_at": (start + timedelta(minutes=60)).isoformat()},
+        ),
+    ])
+    categories = {"svc-underarm": "laser", "svc-bikini": "laser", "svc-dermatology": "dermatology"}
+    monkeypatch.setattr(runtime, "service_operational_category", lambda _c, sid: categories[sid])
+    monkeypatch.setattr(runtime, "select_main_service_id", lambda _c, ids, device_key=None: list(ids)[-1])
+    monkeypatch.setattr(runtime, "common_doctor_ids", lambda _c, ids, branch_id=None: {"doc-maryam"} if len(ids) > 1 else {"doc-derm"})
+    monkeypatch.setattr(runtime, "laser_service_ids", lambda _c, ids: [sid for sid in ids if categories[sid] == "laser"])
+    monkeypatch.setattr(runtime, "common_laser_device_keys", lambda _c, ids: {"candela_gentle"})
+    monkeypatch.setattr(runtime, "_service_names", lambda _c, ids: list(ids))
+
+    updated_plan, task = runtime._prepare_cross_category_compound_proposal(
+        plan, current_task=current, workspace=SimpleNamespace(id="workspace-1"),
+        patient=SimpleNamespace(id="patient-1"), catalog={}, now=_NOW, turn_id="initial-review"
+    )
+    assert task is not None
+    assert task.status == "awaiting_confirmation"
+    assert task.write_authorization.authorized is False
+    assert task.proposal is not None
+    assert task.proposal.service_ids == ["svc-underarm", "svc-bikini", "svc-dermatology"]
+    assert len(task.proposal.visits) == 2
+    assert updated_plan.steps[0].response_goal == "booking_proposal"
+    assert updated_plan.steps[0].write_intent is None

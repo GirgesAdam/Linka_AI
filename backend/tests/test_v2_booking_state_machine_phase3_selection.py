@@ -27,7 +27,9 @@ from app.services.agent_v2.orchestrator import (
 )
 from app.services.agent_v2.planner import (
     PlanStep,
+    ReadRequest,
     VerificationFacts,
+    WriteIntent,
     advance_step_after_verification,
 )
 from app.services.agent_v2.read_executor import ReadExecutionBundle, ReadResult
@@ -236,6 +238,116 @@ def test_group_scope_and_resource_incompatibility_do_not_progress_to_fresh_booki
     assert device_step.disposition == "clarify"
     assert device_step.clarification_field == "device"
     assert device_step.write_intent is None
+
+
+def test_marked_review_first_candidate_with_non_booking_operation_fails_closed() -> None:
+    candidate = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=False,
+            parameters={"service_id": A},
+            requires_verification=True,
+        ),
+        response_goal="booking_proposal",
+        facts={
+            "requested_service_ids": [A],
+            "booking_proposal_required": True,
+            "_verified_booking_proposal_candidate": True,
+        },
+    )
+    prepared, proposal = _prepare_booking_proposal(
+        candidate,
+        operation=TurnOperation(
+            type="availability",
+            entities=TurnEntities(),
+            execution_intent="informational",
+        ),
+        reads=ReadExecutionBundle(),
+        current_task=_task(grouped=False),
+        db=object(),
+        workspace=SimpleNamespace(id="workspace", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id="patient"),
+        catalog=_catalog(grouped=False),
+        now=NOW,
+        turn_id="invalid-candidate-operation",
+        additional_service_resolver=lambda _proposal: [],
+    )
+
+    assert proposal is None
+    assert prepared.disposition == "blocked"
+    assert prepared.write_intent is None
+    assert prepared.response_goal == "clarification"
+    assert prepared.facts["booking_proposal_candidate_invalid"] is True
+
+
+def test_verified_review_first_proposal_builder_rejection_fails_closed() -> None:
+    slot = _slot(service_id=A)
+    reads = ReadExecutionBundle(
+        results=[ReadResult(kind="availability", ok=True, payload={"slots": [slot]})],
+        verification=VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={
+                "service_id": A,
+                "branch_id": BRANCH,
+                "doctor_id": DOCTOR,
+                "device_key": DEVICE,
+                "start_at": slot["start_at"],
+            },
+        ),
+    )
+    candidate = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=False,
+            parameters={
+                "service_id": A,
+                "branch_id": BRANCH,
+                "doctor_id": DOCTOR,
+                "device_key": DEVICE,
+                "start_at": slot["start_at"],
+            },
+            requires_verification=True,
+        ),
+        state_action="update_active",
+        response_goal="booking_proposal",
+        facts={
+            "requested_service_ids": [A, B],
+            "booking_proposal_required": True,
+            "_verified_booking_proposal_candidate": True,
+        },
+    )
+
+    prepared, proposal = _prepare_booking_proposal(
+        candidate,
+        operation=TurnOperation(
+            type="book",
+            entities=TurnEntities(),
+            execution_intent="informational",
+        ),
+        reads=reads,
+        current_task=_task(),
+        db=object(),
+        workspace=SimpleNamespace(id="workspace", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id="patient"),
+        catalog=_catalog(doctor_common=False),
+        now=NOW,
+        turn_id="proposal-rejected",
+        additional_service_resolver=lambda _proposal: pytest.fail(
+            "invalid proposal must reject before additional service resolution"
+        ),
+    )
+
+    assert proposal is None
+    assert prepared.disposition == "blocked"
+    assert prepared.facts["booking_proposal_main_service_mismatch"] is True
+    assert prepared.write_intent is None
+    assert prepared.response_goal == "clarification"
 
 
 def test_disappeared_slot_clears_old_authority_and_presents_only_fresh_alternatives() -> None:
@@ -806,3 +918,113 @@ def test_explicit_booking_authority_survives_missing_date_and_writes_once_after_
     assert all(outcome.response_goal != "booking_proposal" for outcome in second.outcomes)
     assert second.reply == "Your underarm appointment is booked."
     assert "confirm" not in second.reply.lower()
+
+
+def test_stateful_natural_exact_time_candidate_persists_verified_proposal() -> None:
+    task = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id=B,
+            branch_id=BRANCH,
+            device_key=DEVICE,
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="20:00"),
+        ),
+        requested_service_ids=[A, B],
+        service_device_keys={A: DEVICE, B: DEVICE},
+        derived=DerivedBookingState(
+            commercial_basis_presented_key=f"{B}|{DEVICE}|standalone",
+            commercial_basis_presented_device_key=DEVICE,
+        ),
+        version=6,
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[
+            ReadRequest(
+                kind="availability",
+                parameters={
+                    "service_id": B,
+                    "branch_id": BRANCH,
+                    "device_key": DEVICE,
+                    "date": {"mode": "exact", "start_date": "2026-09-12"},
+                    "time": {"mode": "exact", "start_time": "20:00"},
+                },
+            )
+        ],
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=False,
+            parameters={
+                "service_id": B,
+                "branch_id": BRANCH,
+                "device_key": DEVICE,
+                "date": {"mode": "exact", "start_date": "2026-09-12"},
+                "time": {"mode": "exact", "start_time": "20:00"},
+                "requested_service_ids": [A, B],
+            },
+            requires_verification=True,
+        ),
+        state_action="update_active",
+        response_goal="present_availability",
+        facts={
+            "service_id": B,
+            "branch_id": BRANCH,
+            "device_key": DEVICE,
+            "date": {"mode": "exact", "start_date": "2026-09-12"},
+            "time": {"mode": "exact", "start_time": "20:00"},
+            "requested_service_ids": [A, B],
+            "multi_service_single_appointment": True,
+            "booking_proposal_required": True,
+            "exact_time_requested": True,
+            "service_requires_laser_device": True,
+        },
+    )
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="20:00")),
+        execution_intent="informational",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+        grouped_booking_action="preserve_group",
+    )
+    understanding = TiaTurnUnderstanding(operations=[operation])
+    env = V2FixtureEnvironment(
+        catalog=_catalog(grouped=True),
+        slots=[_slot(service_id=B)],
+    )
+    semantic_context = stateful_harness.build_semantic_context(env.catalog)
+
+    trace, outcome, final_task = stateful_harness._execute_step(
+        step=step,
+        operation=operation,
+        understanding=understanding,
+        semantic_context=semantic_context,
+        fixture=env,
+        current_task=task,
+        local_now=NOW,
+        timezone_name="Africa/Cairo",
+        turn_id="ra-h3-natural-exact-time",
+        simulate_writes=True,
+    )
+
+    assert outcome.response_goal == "booking_proposal"
+    assert trace.simulated_write is None
+    assert isinstance(final_task, BookingTaskState)
+    assert final_task.status == "awaiting_confirmation"
+    assert final_task.proposal is not None
+    assert final_task.proposal.service_ids == [A, B]
+    assert final_task.proposal.doctor_id == DOCTOR
+    assert final_task.proposal.branch_id == BRANCH
+    assert final_task.proposal.device_key == DEVICE
+    assert final_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
+    assert final_task.constraints.doctor_id == DOCTOR
+    assert final_task.constraints.branch_id == BRANCH
+    assert final_task.constraints.device_key == DEVICE
+    assert final_task.constraints.time == TimeConstraint(mode="exact", start_time="20:00")
+    assert final_task.derived.commercial_basis_presented_key == f"{B}|{DEVICE}|standalone"
+    assert final_task.derived.selected_slot_ref is None
+    assert final_task.write_authorization.authorized is False

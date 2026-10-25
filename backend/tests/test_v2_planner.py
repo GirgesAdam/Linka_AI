@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.agents.v2.semantic_context import build_semantic_context
 from app.agents.v2.turn_contract import (
     DateConstraint,
@@ -14,8 +16,10 @@ from app.agents.v2.turn_contract import (
 )
 from app.services.agent_v2.planner import (
     PlannerContext,
+    PlanStep,
     ReadRequest,
     VerificationFacts,
+    WriteIntent,
     advance_step_after_verification,
     plan_turn,
 )
@@ -85,6 +89,161 @@ def test_availability_can_never_create_booking_write_intent() -> None:
     assert step.disposition == "read"
     assert step.write_intent is None
     assert [item.kind for item in step.reads] == ["availability"]
+
+
+def test_active_booking_informational_availability_exact_time_stays_read_only() -> None:
+    active = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="service-underarm"),
+    )
+    operation = TurnOperation(
+        type="availability",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            date=DateConstraint(mode="exact", start_date="2026-09-17", end_date=None),
+            time=TimeConstraint(mode="exact", start_time="19:00", end_time=None),
+        ),
+        execution_intent="informational",
+    )
+    step = plan_turn(TiaTurnUnderstanding(operations=[operation]), _context(active_task=active)).steps[0]
+    advanced = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={
+                "service_id": "service-underarm",
+                "branch_id": "branch-1",
+                "doctor_id": "doctor-maryam",
+                "start_at": "2026-09-17T19:00:00+03:00",
+            },
+        ),
+    )
+
+    assert step.operation_type == "availability"
+    assert step.write_intent is None
+    assert advanced == step
+    assert advanced.disposition == "read"
+    assert advanced.response_goal == "present_availability"
+
+
+def _review_first_verified_booking_step(*, requires_device: bool = False) -> PlanStep:
+    parameters = {
+        "service_id": "service-underarm",
+        "branch_id": "branch-1",
+        "date": {"mode": "exact", "start_date": "2026-09-17", "end_date": None},
+        "time": {"mode": "exact", "start_time": "19:00", "end_time": None},
+    }
+    return PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        reads=[ReadRequest(kind="availability", parameters=dict(parameters))],
+        write_intent=WriteIntent(
+            kind="booking",
+            authorized=False,
+            parameters=dict(parameters),
+            requires_verification=True,
+        ),
+        state_action="update_active",
+        response_goal="present_availability",
+        facts={
+            **parameters,
+            "requested_service_ids": ["service-underarm"],
+            "booking_proposal_required": True,
+            "exact_time_requested": True,
+            "service_requires_laser_device": requires_device,
+        },
+    )
+
+
+def test_review_first_unique_verified_booking_becomes_non_write_proposal_candidate() -> None:
+    step = _review_first_verified_booking_step()
+    advanced = advance_step_after_verification(
+        step,
+        VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={
+                "service_id": "service-underarm",
+                "branch_id": "branch-1",
+                "doctor_id": "doctor-maryam",
+                "start_at": "2026-09-17T19:00:00+03:00",
+            },
+        ),
+    )
+
+    assert advanced.disposition == "respond"
+    assert advanced.response_goal == "booking_proposal"
+    assert advanced.facts["_verified_booking_proposal_candidate"] is True
+    assert advanced.write_intent is not None
+    assert advanced.write_intent.authorized is False
+    assert advanced.write_intent.parameters["start_at"] == "2026-09-17T19:00:00+03:00"
+
+
+@pytest.mark.parametrize(
+    ("match_count", "expected_disposition", "expected_goal"),
+    [
+        (0, "blocked", "requested_time_unavailable"),
+        (2, "clarify", "clarification"),
+    ],
+)
+def test_review_first_non_unique_verified_booking_fails_closed(
+    match_count: int,
+    expected_disposition: str,
+    expected_goal: str,
+) -> None:
+    advanced = advance_step_after_verification(
+        _review_first_verified_booking_step(),
+        VerificationFacts(exact_slot_match_count=match_count),
+    )
+
+    assert advanced.disposition == expected_disposition
+    assert advanced.response_goal == expected_goal
+    assert advanced.write_intent is None
+    assert advanced.facts.get("_verified_booking_proposal_candidate") is not True
+
+
+def test_review_first_verified_booking_missing_required_device_fails_closed() -> None:
+    advanced = advance_step_after_verification(
+        _review_first_verified_booking_step(requires_device=True),
+        VerificationFacts(
+            exact_slot_match_count=1,
+            verified_parameters={
+                "service_id": "service-underarm",
+                "branch_id": "branch-1",
+                "doctor_id": "doctor-maryam",
+                "start_at": "2026-09-17T19:00:00+03:00",
+            },
+        ),
+    )
+
+    assert advanced.disposition == "clarify"
+    assert advanced.clarification_field == "device"
+    assert advanced.write_intent is None
+
+
+@pytest.mark.parametrize("kind", ["cancel_appointment", "confirm_appointment", "reschedule"])
+def test_other_unauthorized_mutations_remain_verification_gated(kind: str) -> None:
+    step = PlanStep(
+        operation_index=0,
+        operation_type=kind,
+        disposition="read",
+        write_intent=WriteIntent(
+            kind=kind,
+            authorized=False,
+            parameters={},
+            requires_verification=True,
+        ),
+        response_goal="clarification",
+    )
+    advanced = advance_step_after_verification(
+        step,
+        VerificationFacts(appointment_match_count=1, exact_slot_match_count=1),
+    )
+
+    assert advanced == step
+    assert advanced.disposition != "write_ready"
+    assert advanced.write_intent is not None and advanced.write_intent.authorized is False
 
 
 def test_review_first_booking_persists_read_only_task_and_checks_availability() -> None:

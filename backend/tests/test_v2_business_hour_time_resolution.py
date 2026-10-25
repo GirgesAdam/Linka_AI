@@ -68,7 +68,25 @@ def test_bare_eight_resolves_to_evening_when_only_pm_is_inside_clinic_hours() ->
     assert constraint.start_time_ambiguity == "none"
 
 
-def test_bare_eight_prefers_pm_when_both_am_and_pm_are_inside_hours() -> None:
+def test_bare_eight_resolves_to_morning_when_only_am_is_inside_clinic_hours() -> None:
+    context = build_semantic_context(_catalog(start="07:00", end="12:00"))
+    turn = _turn(
+        TimeConstraint(
+            mode="exact",
+            start_time="08:00",
+            start_time_ambiguity="twelve_hour",
+        )
+    )
+
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "08:00"
+    assert constraint.start_time_ambiguity == "none"
+
+
+def test_bare_eight_clarifies_when_both_am_and_pm_are_inside_hours() -> None:
     context = build_semantic_context(_catalog(start="08:00", end="22:00"))
     turn = _turn(
         TimeConstraint(
@@ -82,8 +100,11 @@ def test_bare_eight_prefers_pm_when_both_am_and_pm_are_inside_hours() -> None:
 
     constraint = resolved.operations[0].entities.time
     assert constraint is not None
-    assert constraint.start_time == "20:00"
-    assert constraint.start_time_ambiguity == "none"
+    assert constraint.start_time == "08:00"
+    assert constraint.start_time_ambiguity == "twelve_hour"
+    classified = classify_operation_bare_clock(resolved.operations[0], context)
+    assert classified.status == "clarify_period"
+    assert classified.valid_operating_hour_candidates == ("08:00", "20:00")
 
 
 def test_bare_eight_neither_candidate_stays_unresolved_for_planner_unavailable_gate() -> None:
@@ -311,3 +332,42 @@ def test_explicit_pm_outside_hours_with_am_feasible_stays_unresolved_for_clarifi
     classified = classify_operation_bare_clock(resolved.operations[0], context)
     assert classified.status == "clarify_period"
     assert classified.valid_operating_hour_candidates == ("10:30",)
+
+
+def test_time_02_f_explicit_afternoon_daypart_normalizes_to_internal_17() -> None:
+    # Customer meaning: "بدل الساعة 4 خليها 5 العصر". The fixture below is the
+    # structured semantic clock, not a 24-hour customer-language parser fixture.
+    context = build_semantic_context(_catalog(start="10:00", end="22:00"))
+    turn = _turn(
+        TimeConstraint(
+            mode="exact",
+            start_time="05:00",
+            start_time_ambiguity="twelve_hour",
+            spoken_period_hint="pm",
+        )
+    )
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "17:00"
+    assert constraint.start_time_ambiguity == "none"
+
+
+def test_time_02_g_clinic_hours_resolve_bare_three_to_afternoon_without_clarification() -> None:
+    # Customer meaning: "أنا معادي الساعة 2 الضهر، خليه 3". With only afternoon
+    # clinic hours valid, the replacement clock deterministically resolves to 15:00.
+    context = build_semantic_context(_catalog(start="10:00", end="22:00"))
+    turn = _turn(
+        TimeConstraint(
+            mode="exact",
+            start_time="03:00",
+            start_time_ambiguity="twelve_hour",
+        )
+    )
+    resolved = resolve_turn_times_by_clinic_hours(turn, context)
+    constraint = resolved.operations[0].entities.time
+    assert constraint is not None
+    assert constraint.start_time == "15:00"
+    assert constraint.start_time_ambiguity == "none"
+    classified = classify_operation_bare_clock(resolved.operations[0], context)
+    assert classified.status == "not_applicable"

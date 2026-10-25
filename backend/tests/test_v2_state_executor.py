@@ -21,6 +21,7 @@ from app.services.agent_v2.state import (
     WriteAuthorization,
 )
 from app.services.agent_v2.state_executor import (
+    _promote_booking_authorization_for_explicit_continuation,
     apply_step_state,
     complete_state_after_action,
 )
@@ -1233,3 +1234,23 @@ def test_reschedule_verified_same_clock_selection_applies_canonical_time() -> No
     assert updated.target == state.target
     assert updated.replacement.time == canonical
     assert updated.replacement.time.spoken_period_hint == "none"
+
+
+def test_execute_continuation_with_explicit_time_does_not_grant_booking_authority() -> None:
+    state = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(service_id="svc-bikini"),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+    )
+    operation = TurnOperation(
+        type="book",
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="20:00")),
+    )
+    updated = _promote_booking_authorization_for_explicit_continuation(
+        state, operation=operation, turn_id="turn-target", now=NOW
+    )
+    assert updated.write_authorization.authorized is False
