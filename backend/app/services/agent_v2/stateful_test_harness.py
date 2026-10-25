@@ -420,7 +420,7 @@ def run_v2_stateful_fixture_turn(
                 catalog=fixture.catalog,
             )
             if reference_plan_override is None
-            and reference_interpretation.decision.action == "clarify"
+            and reference_interpretation.decision.action in {"clarify", "select_presented_option"}
             else None
         )
         if grouped_reference is not None:

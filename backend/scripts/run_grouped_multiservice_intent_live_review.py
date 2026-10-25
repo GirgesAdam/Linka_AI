@@ -775,6 +775,15 @@ def validate_g5(records, ids):
     commercial_start = datetime.fromisoformat(str(commercial_proposal["start_at"]))
     assert commercial_start.astimezone(CAIRO).strftime("%H:%M") == "18:00"
     assert commercial.get("pending_write") is None
+    commercial_authorization = active_task.get("write_authorization")
+    assert isinstance(commercial_authorization, dict)
+    assert commercial_authorization.get("authorized") is False
+    commercial_constraints = active_task.get("constraints") or {}
+    assert commercial_proposal.get("branch_id") == commercial_constraints.get("branch_id")
+    assert commercial_proposal.get("task_version") == active_task.get("version")
+    assert isinstance(commercial_proposal.get("proposal_version"), int)
+    assert commercial_proposal.get("proposal_version") >= 1
+    assert ((commercial.get("db_state_after") or {}).get("appointments") or 0) == 0
     derived = active_task.get("derived")
     assert isinstance(derived, dict)
     commercial_key = derived.get("commercial_basis_presented_key")
@@ -795,13 +804,19 @@ def validate_g5(records, ids):
     assert final_commercial_key == commercial_key
     final_authorization = final_task.get("write_authorization")
     assert isinstance(final_authorization, dict)
-    assert final_authorization.get("authorized") is True
+    assert final_authorization.get("authorized") is False
     proposal = final.get("proposal")
     assert isinstance(proposal, dict), "RA-G5 must remain proposal-only before any clinic write"
     assert set(proposal.get("service_ids") or []) == expected
     assert len(proposal.get("additional_service_ids") or []) == 1
     assert proposal.get("doctor_id") == ids["doctor"]
     assert proposal.get("device_key") == "candela_gentle"
+    final_constraints = final_task.get("constraints") or {}
+    assert proposal.get("branch_id") == final_constraints.get("branch_id")
+    assert proposal.get("task_version") == final_task.get("version")
+    assert isinstance(proposal.get("proposal_version"), int)
+    assert proposal.get("proposal_version") >= 1
+    assert ((final.get("db_state_after") or {}).get("appointments") or 0) == 0
     final_start = datetime.fromisoformat(str(proposal["start_at"]))
     final_time = ((final_task.get("constraints") or {}).get("time") or {})
     if final_time.get("mode") == "exact" and final_time.get("start_time"):

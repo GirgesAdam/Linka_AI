@@ -2970,7 +2970,8 @@ def orchestrate_v2_turn(
             availability_context=availability_reference_context,
             catalog=canonical_catalog,
         )
-        if decision is not None and decision.action == "clarify"
+        if decision is not None
+        and decision.action in {"clarify", "select_presented_option"}
         else None
     )
     if verified_booking_selection is not None:

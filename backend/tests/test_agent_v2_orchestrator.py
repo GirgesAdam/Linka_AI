@@ -1831,3 +1831,71 @@ def test_orchestrator_rejects_out_of_scope_booking_slot_without_authorizing_or_r
     assert result.active_task.write_authorization.authorized is False
     assert write_calls == []
     assert all(trace.disposition_after != "write_ready" for trace in result.traces)
+
+
+def test_grouped_presented_option_selection_resolves_current_20_clock_without_full_interpreter() -> None:
+    env = V2FixtureEnvironment()
+    for doctor in env.catalog.get("doctors", []):
+        if isinstance(doctor, dict):
+            doctor["branch_ids"] = ["single-location"]
+    task = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            branch_id="single-location",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+        service_device_keys={
+            "svc-underarm": "candela_gentle",
+            "svc-bikini": "candela_gentle",
+        },
+    )
+    slot = next(
+        dict(row)
+        for row in env.slots
+        if row.get("service_id") == "svc-bikini"
+        and row.get("doctor_id") == "doc-maryam"
+        and str(row.get("start_local") or "")[11:16] == "20:00"
+    )
+    context = {
+        "requested_service_ids": ["svc-underarm", "svc-bikini"],
+        "date": {"mode": "exact", "start_date": "2026-09-12", "end_date": None},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "start_local": slot["start_local"],
+                "start_time_24h": "20:00",
+                "doctor_name": slot.get("doctor_name"),
+                "laser_device_name": slot.get("laser_device_name"),
+                "slot": slot,
+            }
+        ],
+    }
+
+    result = runtime._grouped_visit_reference_understanding(
+        task,
+        decision=ReferenceDecision(
+            action="select_presented_option",
+            option_ref="opt_1",
+            exact_time="20:00",
+            selection_scope="none",
+        ),
+        availability_context=context,
+        catalog=env.catalog,
+    )
+
+    assert result is not None
+    understanding, updated_task = result
+    operation = understanding.operations[0]
+    assert operation.entities.time == TimeConstraint(
+        mode="exact", start_time="20:00", start_time_ambiguity="none"
+    )
+    assert updated_task.constraints.doctor_id == "doc-maryam"
+    assert updated_task.constraints.branch_id == "single-location"
+    assert updated_task.constraints.device_key == "candela_gentle"
+    assert updated_task.write_authorization.authorized is False
