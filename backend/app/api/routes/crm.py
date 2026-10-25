@@ -297,8 +297,9 @@ def register_patient(
         "whatsapp_opt_in",
         "initial_package_offer_id",
         "initial_package_sessions_remaining",
-        "initial_pulse_device_key",
-        "initial_pulses_remaining",
+        "initial_package_amount_paid_minor",
+        "initial_package_payment_method",
+        "initial_pulse_balances",
     }
     data = payload.model_dump(exclude=registration_only_fields)
     patient = Patient(
@@ -324,15 +325,17 @@ def register_patient(
                 patient_id=patient.id,
                 offer_id=payload.initial_package_offer_id,
                 sessions_remaining=int(payload.initial_package_sessions_remaining),
+                amount_paid_minor=payload.initial_package_amount_paid_minor,
+                payment_method=payload.initial_package_payment_method,
                 created_by_user_id=access.user.id,
             )
-        if payload.initial_pulse_device_key is not None:
+        for pulse_balance in payload.initial_pulse_balances:
             create_patient_pulse_opening_balance(
                 db,
                 workspace_id=access.workspace.id,
                 patient_id=patient.id,
-                device_key=payload.initial_pulse_device_key,
-                pulses_remaining=int(payload.initial_pulses_remaining),
+                device_key=pulse_balance.device_key,
+                pulses_remaining=pulse_balance.pulses_remaining,
                 created_by_user_id=access.user.id,
             )
         db.commit()

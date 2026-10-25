@@ -79,5 +79,51 @@ def test_reception_registration_requires_pulse_device_and_remaining_pulses_toget
         PatientRegistrationCreate(
             first_name="Ada",
             phone="01012345678",
-            initial_pulses_remaining=500,
+            initial_pulse_balances=[{"device_key": "candela"}],
         )
+
+
+def test_reception_registration_accepts_multiple_distinct_pulse_balances() -> None:
+    patient = PatientRegistrationCreate(
+        first_name="Ada",
+        phone="01512345678",
+        initial_pulse_balances=[
+            {"device_key": "candela", "pulses_remaining": 500},
+            {"device_key": "alma", "pulses_remaining": 750},
+        ],
+    )
+    assert [(item.device_key, item.pulses_remaining) for item in patient.initial_pulse_balances] == [
+        ("candela", 500),
+        ("alma", 750),
+    ]
+
+
+def test_reception_registration_rejects_duplicate_pulse_device_balances() -> None:
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(
+            first_name="Ada",
+            phone="01012345678",
+            initial_pulse_balances=[
+                {"device_key": "Candela", "pulses_remaining": 500},
+                {"device_key": "candela", "pulses_remaining": 250},
+            ],
+        )
+
+
+def test_reception_registration_rejects_payment_without_package_offer() -> None:
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(
+            first_name="Ada",
+            phone="01012345678",
+            initial_package_amount_paid_minor=100,
+        )
+
+
+def test_reception_registration_preserves_optional_customer_id() -> None:
+    patient = PatientRegistrationCreate(
+        first_name="Ada",
+        phone="01012345678",
+        customer_id="000012",
+    )
+    assert patient.customer_id == "000012"
+    assert patient.initial_pulse_balances == []

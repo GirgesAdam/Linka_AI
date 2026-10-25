@@ -10,7 +10,7 @@ from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.package_offers import ServicePackageOfferRead
 from app.services.inventory import InventoryOperationError, configured_device_price
-from app.services.patient_packages import create_patient_package
+from app.services.patient_packages import create_patient_package, record_package_payment
 
 
 class PackageOfferError(ValueError):
@@ -281,9 +281,16 @@ def create_patient_package_opening_balance(
     patient_id: UUID,
     offer_id: UUID,
     sessions_remaining: int,
+    amount_paid_minor: int | None = None,
+    payment_method: str = "cash",
     created_by_user_id: UUID | None,
 ) -> PatientPackage:
-    """Record an existing session balance without inventing a package sale or payment."""
+    """Record an existing session balance and its declared package payment facts.
+
+    The offer's price remains the package sale price. The shared package service
+    creates at most one payment transaction for a positive amount and enforces
+    the existing payment-domain write authority. A zero amount creates no payment.
+    """
     if sessions_remaining <= 0:
         raise PackageOfferError("Opening package balance must be positive.")
 
@@ -329,20 +336,25 @@ def create_patient_package_opening_balance(
             )
         except InventoryOperationError as exc:
             raise PackageOfferError(str(exc)) from exc
-        if device_price is None:
+        if device_price is None or device_price.price_minor is None:
             raise PackageOfferError("Package laser device is not configured for this service.")
         standalone_price = int(device_price.price_minor)
 
-    return create_patient_package(
+    package_name = (
+        f"{service.name} - {offer.device_name} - {offer.sessions_count} sessions"
+        if offer.device_name
+        else f"{service.name} - {offer.sessions_count} sessions"
+    )
+    package = create_patient_package(
         db,
         workspace_id=workspace_id,
         patient_id=patient_id,
         service_id=service.id,
-        name=service.name,
+        name=package_name,
         sessions_purchased=int(offer.sessions_count),
         opening_sessions_remaining=sessions_remaining,
         sessions_total_known=True,
-        sale_price_minor=0,
+        sale_price_minor=int(offer.price_minor),
         amount_paid_minor=0,
         payment_method="unknown",
         created_by_user_id=created_by_user_id,
@@ -351,3 +363,14 @@ def create_patient_package_opening_balance(
         laser_device_name=offer.device_name,
         standalone_session_price_minor_at_purchase=standalone_price,
     )
+    effective_payment = int(offer.price_minor) if amount_paid_minor is None else int(amount_paid_minor)
+    if effective_payment > 0:
+        record_package_payment(
+            db,
+            workspace_id=workspace_id,
+            package_id=package.id,
+            amount_minor=effective_payment,
+            payment_method=payment_method,
+            created_by_user_id=created_by_user_id,
+        )
+    return package

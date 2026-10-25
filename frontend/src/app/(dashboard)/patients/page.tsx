@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { labelForSource, labelForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
-import type { ClinicLaserDevice, Patient, ServicePackageOffer } from "@/lib/types";
+import type { ClinicLaserDevice, Patient, Service, ServicePackageOffer } from "@/lib/types";
 import { PatientRegistrationForm } from "./patient-registration-form";
 
 function statusDescription(patient: Patient) {
@@ -25,10 +25,11 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
   const query = new URLSearchParams({ limit: "100" });
   if (q) query.set("q", q);
   const hasActiveFilters = Boolean(q);
-  const [patients, packageOffers, laserDevices] = await Promise.all([
+  const [patients, packageOffers, laserDevices, services] = await Promise.all([
     tiaRequest<Patient[]>(`/crm/patients?${query.toString()}`),
     tiaRequest<ServicePackageOffer[]>("/booking/package-offers?active_only=true").catch(() => [] as ServicePackageOffer[]),
     tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => [] as ClinicLaserDevice[]),
+    tiaRequest<Service[]>("/clinic/services").catch(() => [] as Service[]),
   ]);
 
   return (
@@ -38,6 +39,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
       <PatientRegistrationForm
         offers={packageOffers.filter((offer) => offer.is_active)}
         devices={laserDevices.filter((device) => device.is_active)}
+        services={services.filter((service) => service.is_active)}
       />
 
       <form className="mb-4 flex max-w-2xl gap-2">
