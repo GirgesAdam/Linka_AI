@@ -8,6 +8,7 @@ const root = resolve(__dirname, "..");
 const page = readFileSync(resolve(root, "src/app/(dashboard)/patients/page.tsx"), "utf8");
 const form = readFileSync(resolve(root, "src/app/(dashboard)/patients/patient-registration-form.tsx"), "utf8");
 const actions = readFileSync(resolve(root, "src/app/(dashboard)/patients/actions.ts"), "utf8");
+const openingEditor = readFileSync(resolve(root, "src/app/(dashboard)/patients/patient-opening-data-editor.tsx"), "utf8");
 const api = readFileSync(resolve(root, "src/lib/tia/api.ts"), "utf8");
 const profilePage = readFileSync(resolve(root, "src/app/(dashboard)/patients/[patientId]/page.tsx"), "utf8");
 const normalizedApi = api.replace(/\r\n/g, "\n");
@@ -62,4 +63,30 @@ test("source-level duplicate phone contract maps only structured duplicate confl
   expect(form).toContain('href={`/patients/${state.existingPatient.id}`}');
   expect(profilePage.length).toBeGreaterThan(0);
   expect(form).not.toContain("?phone=");
+});
+
+
+test("source-level existing-patient opening-data flow loads canonical values before explicit save", () => {
+  expect(form).toContain("<PatientOpeningDataEditor");
+  expect(form).toContain("state.existingPatient &&");
+  expect(openingEditor).toContain("استكمال / تحديث بيانات العميل");
+  expect(openingEditor).toContain("loadPatientOpeningDataAction(patientId)");
+  expect(openingEditor).toContain("setCustomerId(data.customer_id || \"\")");
+  expect(openingEditor).toContain("String(data.package.sessions_remaining)");
+  expect(openingEditor).toContain("String(balance.opening_pulses)");
+  expect(openingEditor).toContain("savePatientOpeningDataAction(patientId");
+  expect(openingEditor).toContain("تم تحديث بيانات العميل.");
+  expect(actions).toContain("`/crm/patients/${patientId}/opening-data`");
+  expect(actions).toContain('{ method: "PUT", body: JSON.stringify(payload) }');
+});
+
+test("source-level opening-data editor cannot mutate accounting and leaves patient profile UI unchanged", () => {
+  expect(openingEditor).not.toContain("amount_paid");
+  expect(openingEditor).not.toContain("payment_method");
+  expect(openingEditor).not.toContain("refund");
+  expect(openingEditor).toContain("replaceableIdentity");
+  expect(openingEditor).toContain("currentPackage.current_remaining");
+  expect(profilePage).not.toContain("PatientOpeningDataEditor");
+  expect(profilePage).not.toContain("opening-data");
+  expect(profilePage).not.toContain("استكمال / تحديث بيانات العميل");
 });

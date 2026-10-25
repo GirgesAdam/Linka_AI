@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import type { ClinicLaserDevice, Service, ServicePackageOffer } from "@/lib/types";
 import { getActiveOffersForService, parseEgpAmountToMinor } from "./registration-utils";
 import { registerPatientAction } from "./actions";
+import { PatientOpeningDataEditor } from "./patient-opening-data-editor";
 
 type RegistrationState = {
   error: string | null;
@@ -357,6 +358,15 @@ export function PatientRegistrationForm({
                     </Link>
                   )}
                 </div>
+              )}
+
+              {state.existingPatient && (
+                <PatientOpeningDataEditor
+                  patientId={state.existingPatient.id}
+                  offers={offers}
+                  devices={devices}
+                  services={services}
+                />
               )}
 
               <div className="flex justify-end gap-2">

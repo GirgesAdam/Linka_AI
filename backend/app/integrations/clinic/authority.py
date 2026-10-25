@@ -24,6 +24,8 @@ PATIENT_EXTERNAL_SYNC_FIELDS = (
     "preferred_language",
     "source",
 )
+PATIENT_EXPLICIT_AUTHORITY_FIELDS = ("customer_id",)
+PATIENT_AUTHORITY_FIELDS = PATIENT_EXTERNAL_SYNC_FIELDS + PATIENT_EXPLICIT_AUTHORITY_FIELDS
 
 
 class ClinicIntegrationAuthorityError(ValueError):
@@ -85,7 +87,7 @@ def normalize_authority_policy(raw: object, *, mode: str) -> dict[str, Any]:
         fields: dict[str, AuthorityOwner] = {}
         for field_name, field_owner_raw in fields_raw.items():
             field_name = str(field_name).strip()
-            if field_name not in PATIENT_EXTERNAL_SYNC_FIELDS:
+            if field_name not in PATIENT_AUTHORITY_FIELDS:
                 raise ClinicIntegrationAuthorityError("Patient authority policy contains an unsupported field.")
             field_owner = str(field_owner_raw).strip().lower()
             if field_owner not in AUTHORITY_OWNERS:
@@ -113,10 +115,14 @@ def patient_field_authority_owner(
     integration: ClinicIntegration,
     field_name: str,
 ) -> AuthorityOwner:
-    if field_name not in PATIENT_EXTERNAL_SYNC_FIELDS:
+    if field_name not in PATIENT_AUTHORITY_FIELDS:
         return "tia"
     policy = integration_authority_policy(integration)["patients"]
-    return policy["fields"].get(field_name, policy["owner"])
+    if field_name in policy["fields"]:
+        return policy["fields"][field_name]
+    if field_name in PATIENT_EXTERNAL_SYNC_FIELDS:
+        return policy["owner"]
+    return "tia"
 
 
 def external_patient_fields(integration: ClinicIntegration) -> frozenset[str]:
@@ -154,7 +160,7 @@ def require_tia_patient_fields_writable(
     patient_id: UUID,
     fields: set[str],
 ) -> None:
-    managed = set(fields) & set(PATIENT_EXTERNAL_SYNC_FIELDS)
+    managed = set(fields) & set(PATIENT_AUTHORITY_FIELDS)
     if not managed:
         return
     link = db.scalar(
