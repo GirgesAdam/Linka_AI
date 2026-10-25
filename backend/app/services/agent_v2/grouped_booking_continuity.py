@@ -576,7 +576,24 @@ def restore_grouped_booking_understanding(
         and len(representative_set) > 1
         and {str(service_id) for service_id in representative_set} == service_ids
     )
-    if representative_is_full_group:
+    service_entity = operation.entities.service
+    context_only_representative = (
+        operation.grouped_booking_action == "preserve_group"
+        and "service" not in set(operation.active_task_explicit_fields)
+        and service_entity is not None
+        and service_entity.ref is not None
+        and not service_entity.text
+        and not service_entity.candidate_refs
+        and target_service is not None
+        and str(target_service) in service_ids
+    )
+    if representative_is_full_group or context_only_representative:
+        # A textless technical service ref can be carried by the interpreter simply to
+        # anchor the durable grouped task. When the customer explicitly changes only
+        # visit-level constraints (date/time/etc.), applying those changes to that one
+        # representative would split the group and let stale peer constraints win on
+        # recollapse. Preserve-group semantics therefore apply the patch to all durable
+        # components unless service itself was explicit.
         target_service = None
     if target_service is not None and str(target_service) not in service_ids:
         return turn, {}

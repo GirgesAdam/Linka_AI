@@ -1139,6 +1139,67 @@ def test_ra_g5_same_category_continuation_collapses_before_compound_sequencing()
     assert common_laser_device_keys(catalog, [A, B]) == ["v1"]
 
 
+def test_ra_g5_informational_book_continuation_preserves_explicit_exact_target() -> None:
+    catalog = _catalog(common_devices=1)
+    context = build_semantic_context(catalog)
+    refs = _refs(context)
+    state = _start_state(_grouped_availability(context, [A, B]), catalog)
+    assert state.constraints.date is not None
+    assert state.constraints.date.mode == "next_available"
+    continuation = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="informational",
+                active_task_relationship="continue",
+                active_task_explicit_fields=["date", "time"],
+                active_task_corrected_fields=["date"],
+                grouped_booking_action="preserve_group",
+                continues_previous=True,
+                entities=TurnEntities(
+                    # Live RA-G5 returns a textless technical ref for the durable
+                    # representative service while the customer changes only date/time.
+                    service=EntityReference(ref=refs[B]),
+                    date=DateConstraint(mode="exact", start_date="2026-10-17"),
+                    time=TimeConstraint(mode="exact", start_time="18:00"),
+                ),
+            )
+        ]
+    )
+
+    normalized, service_sets = collapse_booking_service_sets(
+        continuation,
+        semantic_context=context,
+        catalog=catalog,
+        active_task=state,
+    )
+    normalized, _ = expand_multi_service_operations(
+        normalized, semantic_context=context, booking_service_sets=service_sets
+    )
+    normalized, restored_groups = restore_grouped_booking_understanding(
+        normalized,
+        active_task=state,
+        context=context,
+        booking_service_sets=service_sets,
+        catalog=catalog,
+    )
+    if restored_groups:
+        normalized, restored_sets, _ = recollapse_restored_booking_visit_groups(
+            normalized,
+            semantic_context=context,
+            catalog=catalog,
+            restored_visit_groups=restored_groups,
+        )
+        service_sets = {**service_sets, **restored_sets}
+
+    assert len(normalized.operations) == 1
+    operation = normalized.operations[0]
+    assert operation.entities.date is not None
+    assert operation.entities.date.mode == "exact"
+    assert operation.entities.date.start_date == "2026-10-17"
+    assert operation.entities.time is not None
+    assert operation.entities.time.start_time == "18:00"
+
 def test_same_turn_same_category_availability_operations_collapse_to_one_service_set() -> None:
     catalog = _catalog(common_devices=1)
     context = build_semantic_context(catalog)

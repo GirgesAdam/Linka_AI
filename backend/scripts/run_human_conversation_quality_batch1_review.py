@@ -322,11 +322,16 @@ def ra_h3_long_continuation() -> None:
         final_digits = _ascii_decimal_digits(final_reply)
         assert "12" in final_digits
         assert "20" in final_digits or "8" in final_digits
-    assert last.availability_reference_context is not None
-    assert set(last.availability_reference_context.get("requested_service_ids", [])) == {
-        "svc-underarm",
-        "svc-bikini",
-    }
+    if not confirmed:
+        authorization = final_task.get("write_authorization")
+        assert isinstance(authorization, dict)
+        assert authorization.get("authorized") is False
+        proposal = final_task.get("proposal")
+        assert isinstance(proposal, dict)
+        assert set(proposal.get("service_ids") or []) == {"svc-underarm", "svc-bikini"}
+        final_time = ((final_task.get("constraints") or {}).get("time") or {})
+        assert final_time.get("mode") == "exact"
+        assert final_time.get("start_time") == "20:00"
     _assert_no_marker(transcript)
 
 
