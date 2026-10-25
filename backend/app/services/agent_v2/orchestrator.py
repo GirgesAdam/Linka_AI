@@ -584,10 +584,7 @@ def _prepare_cross_category_compound_proposal(
 ) -> tuple[TurnPlan, BookingTaskState | None]:
     def _verified_review_candidate(step: PlanStep) -> bool:
         return (
-            current_task is not None
-            and current_task.proposal is not None
-            and bool(current_task.proposal.visits)
-            and step.write_intent is None
+            step.write_intent is None
             and step.facts.get("compound_visit_independent_category_resources") is True
             and step.facts.get("compound_visit_preflight_resolved") is True
             and step.facts.get("compound_verified_start_at") not in (None, "")
@@ -1036,6 +1033,99 @@ def _verified_booking_selection_plan(
         },
     )
     return TurnPlan(steps=[step]), validated_context
+
+
+def _current_review_proposal_reference_plan(
+    task: ActiveTaskState | None,
+    *,
+    decision: object | None,
+    availability_context: dict[str, Any] | None,
+    catalog: dict[str, Any],
+    now: datetime,
+) -> TurnPlan | None:
+    """Re-present one current review-first proposal when the same verified target is restated.
+
+    This is deliberately non-authorizing: it accepts only a current proposal, a concrete
+    server-owned option reference, and an exact date/time identical to the durable task.
+    Any correction, stale proposal, missing option, or target mismatch falls through to
+    normal verification/planning.
+    """
+    if (
+        not isinstance(task, BookingTaskState)
+        or task.status != "awaiting_confirmation"
+        or task.proposal is None
+        or task.write_authorization.authorized
+        or not task.proposal.is_current(task_version=task.version, now=now)
+        or decision is None
+        or getattr(decision, "action", None) != "select_presented_option"
+        or getattr(decision, "selection_scope", "none") != "none"
+    ):
+        return None
+    option_ref = str(getattr(decision, "option_ref", None) or "")
+    raw_options = (availability_context or {}).get("availability_reference_options")
+    if not option_ref or not isinstance(raw_options, list):
+        return None
+    matches = [
+        option
+        for option in raw_options
+        if isinstance(option, dict) and str(option.get("option_ref") or "") == option_ref
+    ]
+    if len(matches) != 1:
+        return None
+    exact_time = _reference_option_time(decision, availability_context)
+    if exact_time is None:
+        return None
+    date_constraint = _grouped_reference_date(availability_context, exact_time=exact_time)
+    task_date = task.constraints.date
+    task_time = task.constraints.time
+    if (
+        date_constraint is None
+        or task_date is None
+        or task_date.mode != "exact"
+        or task_date.start_date != date_constraint.start_date
+        or task_time is None
+        or task_time.mode != "exact"
+        or task_time.start_time != exact_time
+    ):
+        return None
+    proposal = task.proposal
+    summary: dict[str, object] = {
+        "services": _service_names(catalog, list(proposal.service_ids)),
+        "start_at": proposal.start_at.isoformat(),
+        "end_at": proposal.end_at.isoformat(),
+    }
+    if proposal.visits:
+        summary["visits"] = [
+            {
+                "services": _service_names(catalog, list(visit.service_ids)),
+                "start_at": visit.start_at.isoformat(),
+                "end_at": visit.end_at.isoformat(),
+                "doctor_id": visit.doctor_id,
+                "branch_id": visit.branch_id,
+                "device_key": visit.device_key,
+            }
+            for visit in proposal.visits
+        ]
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="respond",
+        reads=[],
+        write_intent=None,
+        state_action="none",
+        response_goal="booking_proposal",
+        facts={
+            "requested_service_ids": list(task.requested_service_ids),
+            "date": date_constraint.model_dump(mode="json"),
+            "time": TimeConstraint(
+                mode="exact", start_time=exact_time, start_time_ambiguity="none"
+            ).model_dump(mode="json"),
+            "selected_option_ref": option_ref,
+            "verified_availability_reference": True,
+            "booking_proposal_summary": summary,
+        },
+    )
+    return TurnPlan(steps=[step])
 
 
 def _grouped_visit_reference_understanding(
@@ -2997,6 +3087,13 @@ def orchestrate_v2_turn(
         else None
     )
     selection_time = explicit_user_time or exact_reference_time or carried_pending_time
+    current_review_proposal_plan = _current_review_proposal_reference_plan(
+        initial_task,
+        decision=decision,
+        availability_context=availability_reference_context,
+        catalog=canonical_catalog,
+        now=local_now,
+    )
     verified_booking_selection = _verified_booking_selection_plan(
         initial_task,
         decision=decision,
@@ -3016,7 +3113,22 @@ def orchestrate_v2_turn(
         and decision.action in {"clarify", "select_presented_option"}
         else None
     )
-    if verified_booking_selection is not None:
+    if current_review_proposal_plan is not None:
+        reference_plan_override = current_review_proposal_plan
+        understanding = TiaTurnUnderstanding(
+            operations=[
+                TurnOperation(
+                    type="book",
+                    entities=TurnEntities(),
+                    selection=Selection(kind="ref", ref=str(decision.option_ref)),
+                    execution_intent="informational",
+                    active_task_relationship="continue",
+                    continues_previous=True,
+                )
+            ]
+        )
+        full_interpreter_called = False
+    elif verified_booking_selection is not None:
         reference_plan_override, availability_reference_context = verified_booking_selection
         understanding = TiaTurnUnderstanding(
             operations=[

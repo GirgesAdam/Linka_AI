@@ -36,6 +36,7 @@ from app.services.agent_v2.grouped_booking_continuity import (
 )
 from app.services.agent_v2.orchestrator import (
     _attach_verified_booking_proposal_to_task,
+    _current_review_proposal_reference_plan,
     _grouped_visit_reference_understanding,
     _prepare_booking_proposal,
     _verified_booking_selection_plan,
@@ -402,6 +403,15 @@ def run_v2_stateful_fixture_turn(
             latest_customer_text=latest_customer_text,
             availability_context=availability_reference_context,
         )
+        current_review_proposal_plan = _current_review_proposal_reference_plan(
+            active_task,
+            decision=reference_interpretation.decision,
+            availability_context=availability_reference_context,
+            catalog=fixture.catalog,
+            now=local_now,
+        )
+        if current_review_proposal_plan is not None:
+            reference_plan_override = current_review_proposal_plan
         verified_selection = _verified_booking_selection_plan(
             active_task,
             decision=reference_interpretation.decision,
@@ -410,7 +420,7 @@ def run_v2_stateful_fixture_turn(
             selection_time=reference_interpretation.decision.exact_time,
             now=local_now,
         )
-        if verified_selection is not None:
+        if reference_plan_override is None and verified_selection is not None:
             reference_plan_override, availability_reference_context = verified_selection
         grouped_reference = (
             _grouped_visit_reference_understanding(

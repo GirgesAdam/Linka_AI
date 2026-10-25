@@ -2052,3 +2052,152 @@ def test_cross_category_review_continuation_rebuilds_proposal_from_fresh_verifie
     ]
     assert updated_plan.steps[0].response_goal == "booking_proposal"
     assert updated_plan.steps[0].write_intent is None
+
+
+def test_current_review_proposal_same_server_target_is_represented_without_authorization() -> None:
+    proposal = BookingProposal(
+        proposal_id="proposal-current",
+        patient_id="patient-1",
+        service_ids=["svc-underarm", "svc-bikini"],
+        main_service_id="svc-bikini",
+        additional_service_ids=["svc-underarm"],
+        branch_id="single-location",
+        doctor_id="doc-maryam",
+        start_at=datetime(2026, 9, 12, 20, 0),
+        end_at=datetime(2026, 9, 12, 20, 30),
+        device_key="candela_gentle",
+        additional_service_device_keys={"svc-underarm": "candela_gentle"},
+        task_version=7,
+        proposal_version=1,
+        created_at=_NOW,
+        expires_at=_NOW + timedelta(minutes=15),
+    )
+    task = BookingTaskState(
+        status="awaiting_confirmation",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            branch_id="single-location",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+            time=TimeConstraint(mode="exact", start_time="20:00"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+        service_device_keys={"svc-underarm": "candela_gentle", "svc-bikini": "candela_gentle"},
+        proposal=proposal,
+        version=7,
+    )
+    context = {
+        "date": {"mode": "exact", "start_date": "2026-09-12"},
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "start_time_24h": "20:00",
+                "start_local": "2026-09-12T20:00:00+03:00",
+                "slot": {
+                    "service_id": "svc-bikini",
+                    "start_time_24h": "20:00",
+                    "start_local": "2026-09-12T20:00:00+03:00",
+                },
+            }
+        ],
+    }
+    plan = runtime._current_review_proposal_reference_plan(
+        task,
+        decision=ReferenceDecision(
+            action="select_presented_option", option_ref="opt_1", exact_time="20:00"
+        ),
+        availability_context=context,
+        catalog={},
+        now=_NOW,
+    )
+    assert plan is not None
+    assert plan.steps[0].response_goal == "booking_proposal"
+    assert plan.steps[0].write_intent is None
+    assert task.status == "awaiting_confirmation"
+    assert task.proposal is proposal
+    assert task.write_authorization.authorized is False
+
+    stale = task.model_copy(
+        update={
+            "proposal": proposal.model_copy(update={"expires_at": _NOW}),
+        }
+    )
+    assert runtime._current_review_proposal_reference_plan(
+        stale,
+        decision=ReferenceDecision(
+            action="select_presented_option", option_ref="opt_1", exact_time="20:00"
+        ),
+        availability_context=context,
+        catalog={},
+        now=_NOW,
+    ) is None
+
+
+def test_cross_category_initial_review_builds_full_proposal_from_verified_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = datetime(2026, 10, 17, 7, 0)
+    current = BookingTaskState(
+        status="collecting",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-bikini",
+            branch_id="branch-main",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-10-17"),
+        ),
+        requested_service_ids=["svc-underarm", "svc-bikini"],
+        service_device_keys={"svc-underarm": "candela_gentle", "svc-bikini": "candela_gentle"},
+        version=5,
+    )
+    shared = {
+        "compound_visit_group": "compound:1,2",
+        "compound_visit_grouped": True,
+        "compound_visit_preflight_resolved": True,
+        "compound_visit_independent_category_resources": True,
+        "branch_id": "branch-main",
+        "date": {"mode": "exact", "start_date": "2026-10-17"},
+        "package_usage": "unspecified",
+    }
+    plan = TurnPlan(steps=[
+        PlanStep(
+            operation_index=1, operation_type="book", disposition="read", reads=[],
+            state_action="none", response_goal="present_availability",
+            facts={**shared, "service_id": "svc-bikini",
+                "requested_service_ids": ["svc-underarm", "svc-bikini"],
+                "doctor_id": "doc-maryam", "device_key": "candela_gentle",
+                "time": {"mode": "exact", "start_time": "10:00"},
+                "compound_verified_start_at": start.isoformat(),
+                "compound_verified_end_at": (start + timedelta(minutes=30)).isoformat()},
+        ),
+        PlanStep(
+            operation_index=2, operation_type="book", disposition="read", reads=[],
+            state_action="none", response_goal="present_availability",
+            facts={**shared, "service_id": "svc-dermatology", "doctor_id": "doc-derm",
+                "time": {"mode": "exact", "start_time": "10:30"},
+                "compound_verified_start_at": (start + timedelta(minutes=30)).isoformat(),
+                "compound_verified_end_at": (start + timedelta(minutes=60)).isoformat()},
+        ),
+    ])
+    categories = {"svc-underarm": "laser", "svc-bikini": "laser", "svc-dermatology": "dermatology"}
+    monkeypatch.setattr(runtime, "service_operational_category", lambda _c, sid: categories[sid])
+    monkeypatch.setattr(runtime, "select_main_service_id", lambda _c, ids, device_key=None: list(ids)[-1])
+    monkeypatch.setattr(runtime, "common_doctor_ids", lambda _c, ids, branch_id=None: {"doc-maryam"} if len(ids) > 1 else {"doc-derm"})
+    monkeypatch.setattr(runtime, "laser_service_ids", lambda _c, ids: [sid for sid in ids if categories[sid] == "laser"])
+    monkeypatch.setattr(runtime, "common_laser_device_keys", lambda _c, ids: {"candela_gentle"})
+    monkeypatch.setattr(runtime, "_service_names", lambda _c, ids: list(ids))
+
+    updated_plan, task = runtime._prepare_cross_category_compound_proposal(
+        plan, current_task=current, workspace=SimpleNamespace(id="workspace-1"),
+        patient=SimpleNamespace(id="patient-1"), catalog={}, now=_NOW, turn_id="initial-review"
+    )
+    assert task is not None
+    assert task.status == "awaiting_confirmation"
+    assert task.write_authorization.authorized is False
+    assert task.proposal is not None
+    assert task.proposal.service_ids == ["svc-underarm", "svc-bikini", "svc-dermatology"]
+    assert len(task.proposal.visits) == 2
+    assert updated_plan.steps[0].response_goal == "booking_proposal"
+    assert updated_plan.steps[0].write_intent is None
