@@ -66,7 +66,9 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
                   </Badge>
                 </div>
                 <div className="mt-2 text-xs text-slate-600">
-                  {formatMoney(pack.amount_paid_minor, pack.currency)} مدفوع من {formatMoney(pack.sale_price_minor, pack.currency)}
+                  {pack.purchase_transaction_id === null && pack.pulse_pack_offer_id === null && pack.sale_price_minor === 0
+                    ? "رصيد افتتاحي — لا توجد بيانات مالية مسجلة"
+                    : `${formatMoney(pack.amount_paid_minor, pack.currency)} مدفوع من ${formatMoney(pack.sale_price_minor, pack.currency)}`}
                 </div>
                 {pack.effective_status === "active" && pack.balance_due_minor > 0 && (
                   <form action={recordPatientPulsePackPayment} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">

@@ -18,7 +18,6 @@ from app.models.appointment_additional_service import AppointmentAdditionalServi
 from app.models.branch import Branch
 from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
-from app.models.patient import Patient
 from app.models.patient_package import PatientPackage
 from app.models.pulse_billing import (
     PatientPulsePack,
@@ -142,21 +141,19 @@ def _seed_legacy_rows(url: str) -> dict[str, object]:
                 job_title="doctor",
                 is_active=True,
             )
-            patient = Patient(
-                workspace_id=workspace.id,
-                first_name="Legacy",
-                last_name="Patient",
-                phone="01044444444",
-                phone_normalized="+201044444444",
-                gender="female",
-                preferred_language="ar",
-                preferred_branch_id=branch.id,
-                source="referral",
-                status="active",
-                marketing_consent=False,
-            )
-            db.add_all([service, staff, patient])
+            patient_id = uuid4()
+            db.add_all([service, staff])
             db.flush()
+            # This test intentionally seeds revision 0086, before customer_id exists.
+            db.execute(
+                text(
+                    "INSERT INTO patients (id, workspace_id, first_name, last_name, phone, "
+                    "phone_normalized, gender, preferred_language, preferred_branch_id, source, status, marketing_consent) "
+                    "VALUES (:id, :workspace_id, 'Legacy', 'Patient', '01044444444', '+201044444444', "
+                    "'female', 'ar', :branch_id, 'referral', 'active', false)"
+                ),
+                {"id": patient_id, "workspace_id": workspace.id, "branch_id": branch.id},
+            )
 
             doctor = Doctor(
                 workspace_id=workspace.id,
@@ -229,7 +226,7 @@ def _seed_legacy_rows(url: str) -> dict[str, object]:
 
             package = PatientPackage(
                 workspace_id=workspace.id,
-                patient_id=patient.id,
+                patient_id=patient_id,
                 service_id=service.id,
                 purchase_transaction_id=None,
                 package_offer_id=None,
@@ -253,7 +250,7 @@ def _seed_legacy_rows(url: str) -> dict[str, object]:
             )
             pulse_pack = PatientPulsePack(
                 workspace_id=workspace.id,
-                patient_id=patient.id,
+                patient_id=patient_id,
                 pulse_pack_offer_id=pulse_offer.id,
                 origin_appointment_id=None,
                 purchase_transaction_id=None,
@@ -275,7 +272,7 @@ def _seed_legacy_rows(url: str) -> dict[str, object]:
             start_at = datetime(2026, 1, 3, 10, 0, tzinfo=UTC)
             appointment = Appointment(
                 workspace_id=workspace.id,
-                patient_id=patient.id,
+                patient_id=patient_id,
                 branch_id=branch.id,
                 doctor_id=doctor.id,
                 doctor_assignment_known=True,
