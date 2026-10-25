@@ -63,6 +63,7 @@ def _separate_book(
     date: DateConstraint | None = None,
     branch_ref: str | None = None,
     grouped_booking_action: str = "preserve_group",
+    execution_intent: str = "execute",
 ) -> TurnOperation:
     return TurnOperation(
         type="book",
@@ -71,9 +72,22 @@ def _separate_book(
             branch=EntityReference(ref=branch_ref) if branch_ref else None,
             date=date,
         ),
-        execution_intent="execute",
+        execution_intent=execution_intent,
         grouped_booking_action=grouped_booking_action,
     )
+
+
+def test_separate_informational_book_operations_form_review_visit_group() -> None:
+    date = DateConstraint(mode="exact", start_date="2026-10-17")
+    turn = TiaTurnUnderstanding(
+        operations=[
+            _separate_book("S1", date=date, execution_intent="informational"),
+            _separate_book("S2", date=date, execution_intent="informational"),
+        ]
+    )
+    expanded, groups = expand_multi_service_operations(turn)
+    assert expanded.operations == turn.operations
+    assert groups == {0: "semantic-multi-book:0", 1: "semantic-multi-book:0"}
 
 
 def test_separate_book_operations_with_same_missing_anchor_form_one_visit_group() -> None:

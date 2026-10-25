@@ -500,6 +500,14 @@ def _prepare_booking_proposal(
         operation is not None
         and operation.type == "book"
         and operation.execution_intent == "execute"
+        and (
+            current_task is None
+            or (
+                operation.active_task_relationship == "continue"
+                and set(operation.active_task_explicit_fields) != {"time"}
+                and set(operation.active_task_corrected_fields) != {"time"}
+            )
+        )
     )
     auto_execute_authorized_booking = intent.authorized and (
         explicit_booking_authorized

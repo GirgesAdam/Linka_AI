@@ -201,6 +201,8 @@ def _promote_booking_authorization_for_explicit_continuation(
         operation.type != "book"
         or operation.execution_intent != "execute"
         or operation.active_task_relationship != "continue"
+        or set(operation.active_task_explicit_fields) == {"time"}
+        or set(operation.active_task_corrected_fields) == {"time"}
     ):
         return state
     return state.model_copy(
