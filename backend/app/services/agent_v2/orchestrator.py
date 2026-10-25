@@ -54,6 +54,7 @@ from app.services.agent_v2.compound_turn_policy import (
     apply_compound_runtime_cursor,
     completed_compound_booking_end,
     compound_anchor_key,
+    compound_visit_group,
     compound_write_group,
     normalize_compound_turn_plan,
     resolve_compound_followup_after_reads,
@@ -581,26 +582,67 @@ def _prepare_cross_category_compound_proposal(
     now: datetime,
     turn_id: str,
 ) -> tuple[TurnPlan, BookingTaskState | None]:
+    def _verified_review_candidate(step: PlanStep) -> bool:
+        return (
+            current_task is not None
+            and current_task.proposal is not None
+            and bool(current_task.proposal.visits)
+            and step.write_intent is None
+            and step.facts.get("compound_visit_independent_category_resources") is True
+            and step.facts.get("compound_visit_preflight_resolved") is True
+            and step.facts.get("compound_verified_start_at") not in (None, "")
+            and step.facts.get("compound_verified_end_at") not in (None, "")
+            and compound_visit_group(step) is not None
+        )
+
     bookings = [
         step
         for step in plan.steps
-        if step.write_intent is not None
-        and step.write_intent.kind == "booking"
-        and step.facts.get("compound_visit_independent_category_resources") is True
-        and compound_write_group(step) is not None
+        if step.facts.get("compound_visit_independent_category_resources") is True
+        and (
+            (
+                step.write_intent is not None
+                and step.write_intent.kind == "booking"
+                and compound_write_group(step) is not None
+            )
+            or _verified_review_candidate(step)
+        )
     ]
     if len(bookings) < 2:
         return plan, None
-    group_keys = {compound_write_group(step) for step in bookings}
-    if len(group_keys) != 1:
+
+    def _proposal_group_key(step: PlanStep) -> str | None:
+        return compound_write_group(step) or (
+            compound_visit_group(step) if _verified_review_candidate(step) else None
+        )
+
+    group_keys = {_proposal_group_key(step) for step in bookings}
+    if None in group_keys or len(group_keys) != 1:
         return plan, None
+
+    def _proposal_parameters(step: PlanStep) -> dict[str, object]:
+        if step.write_intent is not None and step.write_intent.kind == "booking":
+            return dict(step.write_intent.parameters)
+        return {
+            key: step.facts.get(key)
+            for key in (
+                "service_id",
+                "branch_id",
+                "doctor_id",
+                "device_key",
+                "date",
+                "time",
+                "package_usage",
+                "package_id",
+            )
+            if step.facts.get(key) is not None
+        }
 
     visits: list[BookingProposalVisit] = []
     all_services: list[str] = []
     service_devices: dict[str, str] = {}
     for step in bookings:
-        assert step.write_intent is not None
-        params = step.write_intent.parameters
+        params = _proposal_parameters(step)
         main_service_id = str(params.get("service_id") or "")
         branch_id = str(params.get("branch_id") or "")
         doctor_id = str(params.get("doctor_id") or "")
@@ -698,7 +740,7 @@ def _prepare_cross_category_compound_proposal(
         created_at=now,
         expires_at=now + timedelta(minutes=15),
     )
-    first_params = bookings[0].write_intent.parameters if bookings[0].write_intent else {}
+    first_params = _proposal_parameters(bookings[0])
     constraints = CustomerConstraints.model_validate(
         {
             "service_id": first.main_service_id,

@@ -323,9 +323,8 @@ def ra_h3_long_continuation() -> None:
         assert "12" in final_digits
         assert "20" in final_digits or "8" in final_digits
     if not confirmed:
-        authorization = final_task.get("write_authorization")
-        assert isinstance(authorization, dict)
-        assert authorization.get("authorized") is False
+        assert last.active_task is not None
+        assert last.active_task.write_authorization.authorized is False
         proposal = final_task.get("proposal")
         assert isinstance(proposal, dict)
         assert set(proposal.get("service_ids") or []) == {"svc-underarm", "svc-bikini"}
