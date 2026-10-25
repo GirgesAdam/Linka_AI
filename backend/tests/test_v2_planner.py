@@ -87,6 +87,41 @@ def test_availability_can_never_create_booking_write_intent() -> None:
     assert [item.kind for item in step.reads] == ["availability"]
 
 
+def test_review_first_booking_persists_read_only_task_and_checks_availability() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(
+            service=EntityReference(text=None, ref="S1", candidate_refs=[]),
+            date=DateConstraint(mode="exact", start_date="2026-09-17", end_date=None),
+            time=TimeConstraint(mode="exact", start_time="19:00", end_time=None),
+        ),
+        execution_intent="informational",
+    )
+    step = plan_turn(TiaTurnUnderstanding(operations=[operation]), _context()).steps[0]
+
+    assert step.disposition == "read"
+    assert step.state_action == "start_booking"
+    assert step.write_intent is None
+    assert step.response_goal == "present_availability"
+    assert [item.kind for item in step.reads] == ["availability"]
+
+
+def test_review_first_booking_with_missing_date_asks_only_for_date_and_retains_task() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(service=EntityReference(text=None, ref="S1", candidate_refs=[])),
+        execution_intent="informational",
+        fresh_task=True,
+    )
+    step = plan_turn(TiaTurnUnderstanding(operations=[operation]), _context()).steps[0]
+
+    assert step.disposition == "clarify"
+    assert step.state_action == "start_booking"
+    assert step.clarification_field == "date"
+    assert step.write_intent is None
+    assert step.reads == []
+
+
 def test_appointment_list_preserves_temporal_scope_in_read_request() -> None:
     turn = TiaTurnUnderstanding(
         operations=[

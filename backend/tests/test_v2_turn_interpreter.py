@@ -150,6 +150,10 @@ def test_interpreter_messages_preserve_native_conversation_roles() -> None:
     assert "then availability" in str(messages[0].content)
     assert "review its details before" in system_prompt
     assert "until that exact proposal is" in system_prompt
+    assert "retain this authorization across continuations" in system_prompt
+    assert "without redundant confirmation" in system_prompt
+    assert "selection alone must not grant it" in system_prompt
+    assert "use `book` with `execution_intent=informational`" in system_prompt
     assert "one trip, one" in system_prompt
     assert "a short reply selecting a time" in system_prompt
     assert "Preserve identity provenance in each EntityReference" in system_prompt

@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.payments import PaymentMethod
+
 PatientStatus = Literal["active", "inactive", "blocked"]
 PatientSource = Literal[
     "whatsapp",
@@ -95,6 +97,7 @@ class PatientCreate(BaseModel):
     first_name: str = Field(max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
+    customer_id: str | None = None
     gender: str | None = Field(default=None, max_length=32)
     birth_date: date | None = None
     preferred_language: str = Field(default="ar", min_length=2, max_length=10)
@@ -127,10 +130,60 @@ class PatientCreate(BaseModel):
         return value
 
 
+class InitialPulseBalanceCreate(BaseModel):
+    device_key: str = Field(min_length=1, max_length=40)
+    pulses_remaining: int = Field(gt=0, le=1_000_000_000)
+
+    @field_validator("device_key", mode="before")
+    @classmethod
+    def normalize_device_key(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class PatientRegistrationCreate(PatientCreate):
+    """Reception registration contract with optional opening entitlements and payment."""
+
+    phone: str = Field(min_length=1, max_length=40)
+    initial_package_offer_id: UUID | None = None
+    initial_package_sessions_remaining: int | None = Field(default=None, gt=0, le=10000)
+    initial_package_amount_paid_minor: int | None = Field(default=None, ge=0)
+    initial_package_payment_method: PaymentMethod = "cash"
+    initial_pulse_balances: list[InitialPulseBalanceCreate] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+    @model_validator(mode="after")
+    def validate_registration_fields(self) -> PatientRegistrationCreate:
+        compact_phone = re.sub(r"[\s().-]", "", self.phone)
+        if not re.fullmatch(r"01[0125]\d{8}", compact_phone):
+            raise ValueError(
+                "Phone must be an 11-digit Egyptian mobile starting with 010, 011, 012, or 015."
+            )
+        if (self.initial_package_offer_id is None) != (
+            self.initial_package_sessions_remaining is None
+        ):
+            raise ValueError(
+                "Choose a package offer and enter its remaining sessions together."
+            )
+        if self.initial_package_offer_id is None and self.initial_package_amount_paid_minor is not None:
+            raise ValueError("A package payment requires a selected package offer.")
+        seen_device_keys: set[str] = set()
+        for balance in self.initial_pulse_balances:
+            key = balance.device_key.casefold()
+            if key in seen_device_keys:
+                raise ValueError("Each laser device may only have one opening pulse balance.")
+            seen_device_keys.add(key)
+        return self
+
+
 class PatientUpdate(BaseModel):
     first_name: str | None = Field(default=None, max_length=120)
     last_name: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=40)
+    customer_id: str | None = None
     gender: str | None = Field(default=None, max_length=32)
     birth_date: date | None = None
     preferred_language: str | None = Field(default=None, min_length=2, max_length=10)
@@ -344,8 +397,12 @@ class PatientCRMStats(BaseModel):
     last_appointment_at: datetime | None = None
 
 
+class PatientProfilePatientRead(PatientRead):
+    customer_id: str | None = None
+
+
 class PatientProfileRead(BaseModel):
-    patient: PatientRead
+    patient: PatientProfilePatientRead
     stats: PatientCRMStats
     tags: list[PatientTagRead]
     notes: list[PatientNoteRead]

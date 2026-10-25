@@ -19,9 +19,13 @@ type PackageOffer = {
 };
 
 type PatientPackage = {
+  purchase_transaction_id: string | null;
+  package_offer_id: string | null;
   id: string;
   name: string;
   sessions_purchased: number;
+  opening_sessions_remaining: number | null;
+  sessions_total_known: boolean;
   sessions_reserved: number;
   sessions_consumed: number;
   sessions_remaining: number;
@@ -102,12 +106,15 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
                   <div className="rounded-lg bg-[var(--surface-2)] p-2">
                     <div className="text-xs text-[var(--muted)]">الحساب</div>
                     <div className="mt-1 font-bold">
-                      {formatMoney(item.amount_paid_minor, item.currency)} مدفوع من {formatMoney(item.sale_price_minor, item.currency)}
+                      {item.package_offer_id !== null || item.purchase_transaction_id !== null || item.sale_price_minor > 0
+                        ? formatMoney(item.amount_paid_minor, item.currency) + " \u0645\u062f\u0641\u0648\u0639 \u0645\u0646 " + formatMoney(item.sale_price_minor, item.currency)
+                        : "\u0631\u0635\u064a\u062f \u0627\u0641\u062a\u062a\u0627\u062d\u064a \u2014 \u0644\u0627 \u062a\u0648\u062c\u062f \u0628\u064a\u0627\u0646\u0627\u062a \u0645\u0627\u0644\u064a\u0629 \u0645\u0633\u062c\u0644\u0629"}
                     </div>
-                    <div className="mt-1 text-[11px] text-[var(--muted)]">
-                      المتبقي {formatMoney(item.balance_due_minor, item.currency)}
-                      {item.amount_refunded_minor > 0 ? ` · مرتجع ${formatMoney(item.amount_refunded_minor, item.currency)}` : ""}
-                    </div>
+                    {(item.package_offer_id !== null || item.purchase_transaction_id !== null || item.sale_price_minor > 0) && (
+                      <div className="mt-1 text-[11px] text-[var(--muted)]">
+                        {"\u0627\u0644\u0645\u062a\u0628\u0642\u064a " + formatMoney(item.balance_due_minor, item.currency) + (item.amount_refunded_minor > 0 ? " \u00b7 \u0645\u0631\u062a\u062c\u0639 " + formatMoney(item.amount_refunded_minor, item.currency) : "")}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -137,7 +144,7 @@ export async function PatientPackagePanel({ patientId }: { patientId: string }) 
                   </details>
                 )}
 
-                {canCancelPackages && item.effective_status === "active" && item.cancellation_default_charge_minor != null && (
+                {canCancelPackages && !(item.opening_sessions_remaining !== null && item.purchase_transaction_id === null && item.package_offer_id === null && item.sale_price_minor === 0) && item.effective_status === "active" && item.cancellation_default_charge_minor != null && (
                   <PackageCancellationForm
                     patientId={patientId}
                     packageId={item.id}

@@ -2,7 +2,9 @@
 
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { tiaRequest } from "@/lib/tia/api";
+import { parseEgpAmountToMinor } from "./registration-utils";
 
 function revalidatePatient(patientId: string) {
   revalidatePath(`/patients/${patientId}`);
@@ -36,6 +38,18 @@ export async function addPatientNote(formData: FormData) {
       content,
       is_pinned: true,
     }),
+  });
+  revalidatePatient(patientId);
+}
+
+export async function updatePatientCustomerId(formData: FormData) {
+  const patientId = String(formData.get("patient_id") || "").trim();
+  const customerId = String(formData.get("customer_id") || "");
+  if (!patientId) return;
+
+  await tiaRequest(`/crm/patients/${patientId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ customer_id: customerId.trim() ? customerId : null }),
   });
   revalidatePatient(patientId);
 }
@@ -174,4 +188,99 @@ export async function recordPatientPulsePackPayment(formData: FormData) {
     body: JSON.stringify({ amount_minor: amountMinor, payment_method: paymentMethod }),
   });
   revalidatePackageViews(patientId);
+}
+
+
+export async function registerPatientAction(
+  _previousState: { error: string | null },
+  formData: FormData,
+): Promise<{ error: string | null }> {
+  const firstName = String(formData.get("first_name") || "").trim();
+  const lastName = String(formData.get("last_name") || "").trim();
+  const phone = String(formData.get("phone") || "").trim();
+  const customerId = String(formData.get("customer_id") || "").trim();
+  const offerId = String(formData.get("initial_package_offer_id") || "").trim();
+  const sessionsRaw = String(formData.get("initial_package_sessions_remaining") || "").trim();
+  const amountPaidRaw = String(formData.get("initial_package_amount_paid_egp") || "").trim();
+  const paymentMethod = String(formData.get("initial_package_payment_method") || "cash");
+  const deviceKeys = formData.getAll("initial_pulse_device_key").map((value) => String(value || "").trim());
+  const pulseCounts = formData.getAll("initial_pulses_remaining").map((value) => String(value || "").trim());
+
+  if (!firstName) return { error: "\u0623\u062f\u062e\u0644 \u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u0623\u0648\u0644." };
+  if (!/^01[0125][0-9]{8}$/.test(phone)) {
+    return { error: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 11 \u0631\u0642\u0645\u064b\u0627 \u0648\u064a\u0628\u062f\u0623 \u0628\u0640 010 \u0623\u0648 011 \u0623\u0648 012 \u0623\u0648 015." };
+  }
+  if (Boolean(offerId) !== Boolean(sessionsRaw)) {
+    return { error: "\u0627\u062e\u062a\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0648\u0623\u062f\u062e\u0644 \u0639\u062f\u062f \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629 \u0645\u0639\u064b\u0627." };
+  }
+  if (sessionsRaw && (!/^[0-9]+$/.test(sessionsRaw) || Number(sessionsRaw) <= 0)) {
+    return { error: "\u0639\u062f\u062f \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629 \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0639\u062f\u062f\u064b\u0627 \u0635\u062d\u064a\u062d\u064b\u0627 \u0623\u0643\u0628\u0631 \u0645\u0646 \u0635\u0641\u0631." };
+  }
+  if (offerId && !amountPaidRaw) {
+    return { error: "\u0623\u062f\u062e\u0644 \u0627\u0644\u0645\u0628\u0644\u063a \u0627\u0644\u0645\u062f\u0641\u0648\u0639\u060c \u0648\u064a\u0645\u0643\u0646 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0635\u0641\u0631\u064b\u0627." };
+  }
+  if (!offerId && (sessionsRaw || amountPaidRaw)) {
+    return { error: "\u0627\u062e\u062a\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0642\u0628\u0644 \u0625\u062f\u062e\u0627\u0644 \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0623\u0648 \u0627\u0644\u0645\u062f\u0641\u0648\u0639\u0627\u062a." };
+  }
+
+  let amountPaidMinor: number | null = null;
+  if (offerId) {
+    try {
+      amountPaidMinor = parseEgpAmountToMinor(amountPaidRaw);
+    } catch {
+      return { error: "\u0623\u062f\u062e\u0644 \u0645\u0628\u0644\u063a\u064b\u0627 \u0635\u062d\u064a\u062d\u064b\u0627 \u0628\u0627\u0644\u062c\u0646\u064a\u0647 \u0648\u0628\u062d\u062f \u0623\u0642\u0635\u0649 \u0645\u0646 \u062e\u0627\u0646\u062a\u064a\u0646 \u0639\u0634\u0631\u064a\u062a\u064a\u0646." };
+    }
+    if (!["cash", "visa", "instapay"].includes(paymentMethod)) {
+      return { error: "\u0627\u062e\u062a\u0631 \u0637\u0631\u064a\u0642\u0629 \u062f\u0641\u0639 \u0635\u062d\u064a\u062d\u0629." };
+    }
+  }
+
+  if (deviceKeys.length !== pulseCounts.length) {
+    return { error: "\u0623\u0639\u062f \u0645\u0631\u0627\u062c\u0639\u0629 \u0623\u0631\u0635\u062f\u0629 Pulse." };
+  }
+  const pulseBalances: Array<{ device_key: string; pulses_remaining: number }> = [];
+  const seenDevices = new Set<string>();
+  for (let index = 0; index < deviceKeys.length; index += 1) {
+    const deviceKey = deviceKeys[index];
+    const pulsesRaw = pulseCounts[index];
+    if (!deviceKey && !pulsesRaw) continue;
+    if (!deviceKey || !pulsesRaw) {
+      return { error: "\u0627\u062e\u062a\u0631 \u062c\u0647\u0627\u0632 \u0627\u0644\u0644\u064a\u0632\u0631 \u0648\u0623\u062f\u062e\u0644 \u0631\u0635\u064a\u062f\u0647 \u0645\u0639\u064b\u0627." };
+    }
+    if (!/^[0-9]+$/.test(pulsesRaw) || Number(pulsesRaw) <= 0 || Number(pulsesRaw) > 1_000_000_000) {
+      return { error: "\u0639\u062f\u062f \u0627\u0644\u0646\u0628\u0636\u0627\u062a \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0639\u062f\u062f\u064b\u0627 \u0635\u062d\u064a\u062d\u064b\u0627 \u0623\u0643\u0628\u0631 \u0645\u0646 \u0635\u0641\u0631." };
+    }
+    const normalizedDeviceKey = deviceKey.toLocaleLowerCase();
+    if (seenDevices.has(normalizedDeviceKey)) {
+      return { error: "\u0644\u0627 \u062a\u0643\u0631\u0631 \u0646\u0641\u0633 \u0627\u0644\u062c\u0647\u0627\u0632 \u0641\u064a \u0623\u0631\u0635\u062f\u0629 Pulse." };
+    }
+    seenDevices.add(normalizedDeviceKey);
+    pulseBalances.push({ device_key: deviceKey, pulses_remaining: Number(pulsesRaw) });
+  }
+
+  let patient: { id: string };
+  try {
+    patient = await tiaRequest<{ id: string }>("/crm/patients/register", {
+      method: "POST",
+      body: JSON.stringify({
+        first_name: firstName,
+        last_name: lastName || null,
+        phone,
+        customer_id: customerId || null,
+        source: "walk_in",
+        initial_package_offer_id: offerId || null,
+        initial_package_sessions_remaining: sessionsRaw ? Number(sessionsRaw) : null,
+        initial_package_amount_paid_minor: amountPaidMinor,
+        initial_package_payment_method: paymentMethod,
+        initial_pulse_balances: pulseBalances,
+      }),
+    });
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "\u062a\u0639\u0630\u0631 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0639\u0645\u064a\u0644. \u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.",
+    };
+  }
+
+  revalidatePath("/patients");
+  redirect("/patients/" + patient.id);
 }

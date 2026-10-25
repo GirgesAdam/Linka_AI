@@ -266,6 +266,7 @@ def _proposal_matches_current_exact_time(
 def _prepare_booking_proposal(
     step: PlanStep,
     *,
+    operation: TurnOperation | None = None,
     reads: ReadExecutionBundle,
     current_task: ActiveTaskState | None,
     db: Session,
@@ -473,6 +474,39 @@ def _prepare_booking_proposal(
         "branch_name": slot.get("branch_name"),
         "device_name": slot.get("laser_device_name"),
     }
+    explicit_booking_authorized = (
+        operation is not None
+        and operation.type == "book"
+        and operation.execution_intent == "execute"
+    )
+    auto_execute_authorized_booking = intent.authorized and (
+        explicit_booking_authorized
+        or current_task is None
+        or step.state_action in {"start_booking", "replace_active"}
+        or (
+            isinstance(current_task, BookingTaskState)
+            and current_task.write_authorization.authorized
+        )
+    )
+    if auto_execute_authorized_booking:
+        return step.model_copy(
+            update={
+                "disposition": "write_ready",
+                "write_intent": WriteIntent(
+                    kind="booking_proposal",
+                    authorized=True,
+                    parameters={
+                        **intent.parameters,
+                        "proposal_id": proposal.proposal_id,
+                        "proposal": proposal.model_dump(mode="json"),
+                    },
+                    requires_verification=False,
+                ),
+                "response_goal": "booking_completed",
+                "facts": {**step.facts, "booking_proposal_summary": summary},
+            }
+        ), proposal
+
     return step.model_copy(
         update={
             "disposition": "respond",
@@ -3048,6 +3082,49 @@ def orchestrate_v2_turn(
                     )
                 ]
             )
+        elif isinstance(initial_task, BookingTaskState) and (
+            validated_reference_context is not None or ambiguous_current_reference
+        ):
+            # The specialized booking validator is authoritative for slot selection.
+            # A valid reference is not enough to execute a selection it did not accept.
+            understanding = TiaTurnUnderstanding(
+                operations=[
+                    TurnOperation(
+                        type="book",
+                        entities=TurnEntities(),
+                        execution_intent="informational",
+                        active_task_relationship="continue",
+                        continues_previous=True,
+                    )
+                ]
+            )
+            reference_plan_override = TurnPlan(
+                steps=[
+                    PlanStep(
+                        operation_index=0,
+                        operation_type="book",
+                        disposition="clarify",
+                        state_action="none",
+                        response_goal="clarification",
+                        clarification_field=(
+                            dimensions[0]
+                            if ambiguous_current_reference and dimensions
+                            else "availability_reference"
+                        ),
+                        facts={
+                            "booking_selection_rejected": True,
+                            "booking_selection_rejection_reason": (
+                                "ambiguous_booking_reference"
+                                if ambiguous_current_reference
+                                else "booking_selection_validation_failed"
+                            ),
+                            "selected_option_ref": decision.option_ref,
+                        },
+                    )
+                ]
+            )
+            if validated_reference_context is not None:
+                availability_reference_context = validated_reference_context
         else:
             if initial_task is not None and validated_reference_context is not None:
                 availability_reference_context = validated_reference_context
@@ -3533,18 +3610,23 @@ def orchestrate_v2_turn(
             operation=operation,
             verified_appointment_parameters=same_turn_verified_appointment,
         )
-        effective_step = adapt_matching_active_task_step(
-            planned_step,
-            operation=operation,
-            active_task=current_task,
-            context=semantic_context,
-            now=local_now,
-        )
-        effective_step = persist_initial_task_intent(
-            effective_step,
-            operation=operation,
-            context=semantic_context,
-        )
+        if planned_step.facts.get("booking_selection_rejected") is True:
+            # A rejected server-owned selection is terminal for this turn. Do not let
+            # generic task progression reinterpret it as a booking continuation.
+            effective_step = planned_step
+        else:
+            effective_step = adapt_matching_active_task_step(
+                planned_step,
+                operation=operation,
+                active_task=current_task,
+                context=semantic_context,
+                now=local_now,
+            )
+            effective_step = persist_initial_task_intent(
+                effective_step,
+                operation=operation,
+                context=semantic_context,
+            )
         if isinstance(planned_step.facts.get("requested_service_ids"), list):
             effective_step = effective_step.model_copy(
                 update={
@@ -3687,6 +3769,7 @@ def orchestrate_v2_turn(
         advanced = _auto_resolve_single_booking_device(advanced, reads)
         advanced, pending_proposal_for_step = _prepare_booking_proposal(
             advanced,
+            operation=operation,
             reads=reads,
             current_task=current_task,
             db=db,
@@ -3804,6 +3887,7 @@ def orchestrate_v2_turn(
             operation_reads[effective_step.operation_index] = reads
             advanced, pending_proposal_for_step = _prepare_booking_proposal(
                 advanced,
+                operation=operation,
                 reads=reads,
                 current_task=current_task,
                 db=db,

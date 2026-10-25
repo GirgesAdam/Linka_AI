@@ -38,6 +38,7 @@ from app.services.agent_v2.state import (
 )
 from app.services.agent_v2.state_executor import StateTransition
 from app.services.agent_v2.state_persistence import PersistedActiveTask, V2StateConflictError
+from app.services.agent_v2.test_harness import V2FixtureEnvironment
 
 _NOW = datetime(2026, 9, 12, 1, 0, 0)
 
@@ -1501,7 +1502,7 @@ def _run_ra_g6_unpresented_exact_time_case(
     return result, read_calls, saved
 
 
-def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
+def test_ra_g6_unpresented_exact_time_produces_write_ready_booking_proposal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result, read_calls, saved = _run_ra_g6_unpresented_exact_time_case(monkeypatch)
@@ -1512,7 +1513,11 @@ def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
         ["service_catalog_set", "availability"],
         ["service_catalog_set", "availability"],
     ]
-    assert result.pending_write is None
+    assert result.pending_write is not None
+    assert result.pending_write.step.disposition == "write_ready"
+    assert result.pending_write.step.write_intent is not None
+    assert result.pending_write.step.write_intent.kind == "booking_proposal"
+    assert result.pending_write.step.response_goal == "booking_completed"
     assert isinstance(result.active_task, BookingTaskState)
     assert result.active_task.requested_service_ids == ["service-a", "service-b"]
     assert result.active_task.status == "awaiting_confirmation"
@@ -1521,11 +1526,11 @@ def test_ra_g6_unpresented_exact_time_continues_to_same_turn_booking_proposal(
     assert result.active_task.proposal.doctor_id == "doctor-1"
     assert result.active_task.proposal.device_key == "device-1"
     assert result.active_task.proposal.start_at.isoformat() == "2026-09-12T20:00:00+03:00"
-    assert result.outcomes[-1].response_goal == "booking_proposal"
+    assert result.active_task.write_authorization.authorized is True
     assert saved and saved[-1].proposal is not None
 
 
-def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter(
+def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter_and_write_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result, read_calls, _saved = _run_ra_g6_unpresented_exact_time_case(
@@ -1535,7 +1540,9 @@ def test_unpresented_exact_clock_new_search_delegates_to_full_interpreter(
 
     assert result.reference_action == "new_search"
     assert result.full_interpreter_called is True
-    assert result.pending_write is None
+    assert result.pending_write is not None
+    assert result.pending_write.step.write_intent is not None
+    assert result.pending_write.step.write_intent.kind == "booking_proposal"
     assert read_calls == [
         ["service_catalog_set", "availability"],
         ["service_catalog_set", "availability"],
@@ -1666,3 +1673,131 @@ def test_h3b_grouped_reference_rejects_resource_not_common_to_service_set() -> N
     assert result is None
     assert task.constraints.device_key is None
     assert task.write_authorization.authorized is False
+
+
+def test_orchestrator_rejects_out_of_scope_booking_slot_without_authorizing_or_replacing_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = V2FixtureEnvironment()
+    selected_slot = next(
+        dict(row)
+        for row in env.slots
+        if row.get("service_id") == "svc-bikini"
+        and row.get("doctor_id") == "doc-maryam"
+        and str(row.get("start_local") or "")[11:16] == "20:00"
+    )
+    selected_slot["device_key"] = selected_slot.get("laser_device_key")
+    task = BookingTaskState(
+        status="awaiting_slot",
+        write_authorization=WriteAuthorization(operation="booking", authorized=False),
+        constraints=CustomerConstraints(
+            service_id="svc-underarm",
+            branch_id="single-location",
+            doctor_id="doc-maryam",
+            device_key="candela_gentle",
+            date=DateConstraint(mode="exact", start_date="2026-09-12"),
+        ),
+        requested_service_ids=["svc-underarm"],
+        service_device_keys={"svc-underarm": "candela_gentle"},
+        option_snapshot=OptionSnapshot(
+            snapshot_id="scope-rejection-snapshot",
+            purpose="booking_slot",
+            task_version=4,
+            created_at=_NOW - timedelta(minutes=5),
+            expires_at=_NOW + timedelta(minutes=10),
+            options=[
+                OptionChoice(ref="slot-bikini", label="20:00", payload=selected_slot)
+            ],
+        ),
+        version=4,
+    )
+    persisted = PersistedActiveTask(active_task=task, flow_id=uuid4(), flow_version=7)
+    reference_context = {
+        "operation_type": "availability",
+        "requested_service_ids": ["svc-underarm"],
+        "date": {
+            "mode": "exact",
+            "start_date": "2026-09-12",
+            "end_date": None,
+        },
+        "availability_reference_options": [
+            {
+                "option_ref": "opt_1",
+                "index": 1,
+                "concrete": True,
+                "service_id": "svc-bikini",
+                "start_time_24h": "20:00",
+                "start_local": selected_slot["start_local"],
+                "slot": selected_slot,
+            }
+        ],
+    }
+    monkeypatch.setattr(runtime, "load_active_task", lambda *args, **kwargs: persisted)
+    monkeypatch.setattr(
+        runtime,
+        "interpret_availability_reference_turn",
+        lambda **kwargs: ReferenceInterpretation(
+            decision=ReferenceDecision(
+                action="select_presented_option",
+                option_ref="opt_1",
+                exact_time=None,
+                selection_scope="none",
+            ),
+            model_name="deterministic-test",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "interpret_customer_turn_v2",
+        lambda **kwargs: pytest.fail(
+            "a current but out-of-scope selection must be rejected before generic interpretation"
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "execute_step_reads",
+        lambda *args, **kwargs: ReadExecutionBundle(),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "compose_v2_customer_reply",
+        lambda **kwargs: (
+            "Please choose an available time for the requested service.",
+            "deterministic-test",
+        ),
+    )
+
+    write_calls: list[PlanStep] = []
+
+    def execute_write(step: PlanStep) -> dict[str, object]:
+        write_calls.append(step)
+        return {
+            "ok": True,
+            "write_kind": step.write_intent.kind if step.write_intent else None,
+        }
+
+    args = _runtime_args()
+    args.update(
+        {
+            "catalog": env.catalog,
+            "history": [HumanMessage(content="Choose the first available time")],
+            "availability_reference_context": reference_context,
+            "write_executor": execute_write,
+        }
+    )
+    result = runtime.orchestrate_v2_turn(**args)
+
+    assert result.reference_action == "select_presented_option"
+    assert result.full_interpreter_called is False
+    assert result.pending_write is None
+    assert result.plan.steps[0].disposition == "clarify"
+    assert result.plan.steps[0].facts["booking_selection_rejected"] is True
+    assert result.plan.steps[0].facts["booking_selection_rejection_reason"] == "booking_selection_validation_failed"
+    assert result.plan.steps[0].facts["selected_option_ref"] == "opt_1"
+    assert result.outcomes[-1].response_goal == "clarification"
+    assert result.active_task == task
+    assert result.active_task.constraints.service_id == "svc-underarm"
+    assert result.active_task.requested_service_ids == ["svc-underarm"]
+    assert result.active_task.write_authorization.authorized is False
+    assert write_calls == []
+    assert all(trace.disposition_after != "write_ready" for trace in result.traces)

@@ -21,6 +21,7 @@ permissions:
 
 jobs:
   standalone:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: RA-G standalone #241
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -127,6 +128,7 @@ jobs:
           retention-days: 7
 
   batch1-compatibility:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: RA-G Batch-1 compatibility overlay
     runs-on: ubuntu-latest
     timeout-minutes: 40
