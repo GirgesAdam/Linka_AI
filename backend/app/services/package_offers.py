@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.patient_package import PatientPackage
 from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.package_offers import ServicePackageOfferRead
@@ -270,4 +271,83 @@ def purchase_package_offer(
         laser_device_key=offer.device_key,
         laser_device_name=offer.device_name,
         standalone_session_price_minor_at_purchase=standalone_price_minor,
+    )
+
+
+def create_patient_package_opening_balance(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    offer_id: UUID,
+    sessions_remaining: int,
+    created_by_user_id: UUID | None,
+) -> PatientPackage:
+    """Record an existing session balance without inventing a package sale or payment."""
+    if sessions_remaining <= 0:
+        raise PackageOfferError("Opening package balance must be positive.")
+
+    offer = db.scalar(
+        select(ServicePackageOffer)
+        .where(
+            ServicePackageOffer.workspace_id == workspace_id,
+            ServicePackageOffer.id == offer_id,
+            ServicePackageOffer.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    if offer is None:
+        raise PackageOfferNotFound("Active package offer not found.")
+    if sessions_remaining > int(offer.sessions_count):
+        raise PackageOfferError(
+            "Remaining sessions cannot exceed the total sessions defined by the package offer."
+        )
+
+    service = db.scalar(
+        select(Service).where(
+            Service.workspace_id == workspace_id,
+            Service.id == offer.service_id,
+            Service.is_active.is_(True),
+        )
+    )
+    if service is None:
+        raise PackageOfferNotFound("Package service not found or inactive.")
+
+    if service.requires_laser_device and offer.device_key is None:
+        raise PackageOfferError("Laser package offer must specify a device.")
+    if not service.requires_laser_device and offer.device_key is not None:
+        raise PackageOfferError("Non-laser package offer must not specify a device.")
+
+    standalone_price = int(service.price_minor or 0)
+    if offer.device_key is not None:
+        try:
+            device_price = configured_device_price(
+                db,
+                workspace_id=workspace_id,
+                service_id=service.id,
+                device_key=offer.device_key,
+            )
+        except InventoryOperationError as exc:
+            raise PackageOfferError(str(exc)) from exc
+        if device_price is None:
+            raise PackageOfferError("Package laser device is not configured for this service.")
+        standalone_price = int(device_price.price_minor)
+
+    return create_patient_package(
+        db,
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        service_id=service.id,
+        name=service.name,
+        sessions_purchased=int(offer.sessions_count),
+        opening_sessions_remaining=sessions_remaining,
+        sessions_total_known=True,
+        sale_price_minor=0,
+        amount_paid_minor=0,
+        payment_method="unknown",
+        created_by_user_id=created_by_user_id,
+        package_offer_id=offer.id,
+        laser_device_key=offer.device_key,
+        laser_device_name=offer.device_name,
+        standalone_session_price_minor_at_purchase=standalone_price,
     )

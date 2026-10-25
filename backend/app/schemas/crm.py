@@ -128,6 +128,44 @@ class PatientCreate(BaseModel):
         return value
 
 
+class PatientRegistrationCreate(PatientCreate):
+    """Reception registration contract with optional opening entitlements."""
+
+    phone: str = Field(min_length=1, max_length=40)
+    initial_package_offer_id: UUID | None = None
+    initial_package_sessions_remaining: int | None = Field(default=None, gt=0, le=10000)
+    initial_pulse_device_key: str | None = Field(default=None, min_length=1, max_length=40)
+    initial_pulses_remaining: int | None = Field(default=None, gt=0, le=1_000_000_000)
+
+    @field_validator("initial_pulse_device_key", mode="before")
+    @classmethod
+    def normalize_opening_pulse_device_key(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @model_validator(mode="after")
+    def validate_registration_fields(self) -> PatientRegistrationCreate:
+        compact_phone = re.sub(r"[\s().-]", "", self.phone)
+        if not re.fullmatch(r"01[0125]\d{8}", compact_phone):
+            raise ValueError(
+                "Phone must be an 11-digit Egyptian mobile starting with 010, 011, 012, or 015."
+            )
+        if (self.initial_package_offer_id is None) != (
+            self.initial_package_sessions_remaining is None
+        ):
+            raise ValueError(
+                "Choose a package offer and enter its remaining sessions together."
+            )
+        if (self.initial_pulse_device_key is None) != (
+            self.initial_pulses_remaining is None
+        ):
+            raise ValueError(
+                "Choose a laser device and enter its remaining pulses together."
+            )
+        return self
+
+
 class PatientUpdate(BaseModel):
     first_name: str | None = Field(default=None, max_length=120)
     last_name: str | None = Field(default=None, max_length=120)

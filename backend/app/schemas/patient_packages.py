@@ -44,6 +44,8 @@ class PatientPackageRead(BaseModel):
     service_id: UUID
     purchase_transaction_id: UUID | None
     package_offer_id: UUID | None = None
+    opening_sessions_remaining: int | None = None
+    sessions_total_known: bool = True
     external_id: str | None
     name: str
     sessions_purchased: int

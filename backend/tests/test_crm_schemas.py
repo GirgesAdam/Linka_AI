@@ -5,6 +5,7 @@ from app.schemas.crm import (
     ConversationRead,
     MessageCreate,
     PatientCreate,
+    PatientRegistrationCreate,
     normalize_patient_identity_phone,
     normalize_phone,
 )
@@ -50,3 +51,33 @@ def test_text_message_requires_content() -> None:
 def test_conversation_read_requires_phase4_ownership_fields() -> None:
     required = {"owner_type", "unread_count", "ownership_changed_at"}
     assert required.issubset(ConversationRead.model_fields)
+
+
+@pytest.mark.parametrize("phone", ["01012345678", "01112345678", "01212345678", "01512345678"])
+def test_reception_registration_accepts_supported_egyptian_mobile_prefixes(phone: str) -> None:
+    patient = PatientRegistrationCreate(first_name="Ada", phone=phone)
+    assert patient.phone == phone
+
+
+@pytest.mark.parametrize("phone", ["01312345678", "0101234567", "010123456789"])
+def test_reception_registration_rejects_unsupported_or_invalid_mobile_numbers(phone: str) -> None:
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(first_name="Ada", phone=phone)
+
+
+def test_reception_registration_requires_package_offer_and_remaining_sessions_together() -> None:
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(
+            first_name="Ada",
+            phone="01012345678",
+            initial_package_offer_id="00000000-0000-0000-0000-000000000001",
+        )
+
+
+def test_reception_registration_requires_pulse_device_and_remaining_pulses_together() -> None:
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(
+            first_name="Ada",
+            phone="01012345678",
+            initial_pulses_remaining=500,
+        )

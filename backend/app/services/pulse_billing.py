@@ -1706,3 +1706,70 @@ def release_appointment_pulse_usage(
             "additional_service_lines": len(additional_lines),
         },
     )
+
+
+def create_patient_pulse_opening_balance(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    device_key: str,
+    pulses_remaining: int,
+    created_by_user_id: UUID | None,
+) -> PatientPulsePack:
+    """Record an existing pulse balance without creating a payment transaction."""
+    if pulses_remaining <= 0:
+        raise PulseBillingError("Opening pulse balance must be positive.")
+
+    patient = db.scalar(
+        select(Patient)
+        .where(
+            Patient.workspace_id == workspace_id,
+            Patient.id == patient_id,
+        )
+        .with_for_update()
+    )
+    if patient is None:
+        raise PulseBillingNotFound("Patient not found.")
+
+    device = _active_clinic_laser_device(
+        db,
+        workspace_id=workspace_id,
+        device_key=device_key,
+    )
+    pack = PatientPulsePack(
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        pulse_pack_offer_id=None,
+        origin_appointment_id=None,
+        purchase_transaction_id=None,
+        created_by_user_id=created_by_user_id,
+        device_key=device.device_key,
+        device_name=device.name,
+        pulses_purchased=pulses_remaining,
+        sale_price_minor=0,
+        standalone_pulse_price_minor_at_purchase=None,
+        currency="EGP",
+        purchased_at=datetime.now(UTC),
+        expires_at=None,
+        status="active",
+        idempotency_key=None,
+    )
+    db.add(pack)
+    db.flush()
+    record_activity_event(
+        db,
+        workspace_id=workspace_id,
+        actor_type="staff",
+        actor_user_id=created_by_user_id,
+        action="pulse_pack.opening_balance_created",
+        entity_type="patient_pulse_pack",
+        entity_id=pack.id,
+        summary="Existing pulse balance recorded",
+        metadata={
+            "device_key": device.device_key,
+            "pulses_remaining": pulses_remaining,
+            "has_payment": False,
+        },
+    )
+    return pack

@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { labelForSource, labelForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
-import type { Patient } from "@/lib/types";
+import type { ClinicLaserDevice, Patient, ServicePackageOffer } from "@/lib/types";
+import { PatientRegistrationForm } from "./patient-registration-form";
 
 function statusDescription(patient: Patient) {
   if (patient.status === "active") return "نشط";
@@ -24,11 +25,20 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
   const query = new URLSearchParams({ limit: "100" });
   if (q) query.set("q", q);
   const hasActiveFilters = Boolean(q);
-  const patients = await tiaRequest<Patient[]>(`/crm/patients?${query.toString()}`);
+  const [patients, packageOffers, laserDevices] = await Promise.all([
+    tiaRequest<Patient[]>(`/crm/patients?${query.toString()}`),
+    tiaRequest<ServicePackageOffer[]>("/booking/package-offers?active_only=true").catch(() => [] as ServicePackageOffer[]),
+    tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => [] as ClinicLaserDevice[]),
+  ]);
 
   return (
     <>
       <PageHeader title="العملاء" description="ابحث عن أي عميل وافتح ملفه لمراجعة بيانات التواصل والمواعيد والمتابعات." />
+
+      <PatientRegistrationForm
+        offers={packageOffers.filter((offer) => offer.is_active)}
+        devices={laserDevices.filter((device) => device.is_active)}
+      />
 
       <form className="mb-4 flex max-w-2xl gap-2">
         <div className="relative flex-1">
