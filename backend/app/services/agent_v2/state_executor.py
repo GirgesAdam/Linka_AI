@@ -832,6 +832,17 @@ def apply_step_state(
                 turn_id=turn_id,
                 now=now,
             )
+            if operation.type == "book" and operation.execution_intent == "informational":
+                current = current.model_copy(
+                    update={
+                        "write_authorization": _authorization(
+                            operation="booking",
+                            turn_id=turn_id,
+                            now=now,
+                            authorized=False,
+                        )
+                    }
+                )
             current = _preserve_verified_window_snapshot(
                 before_booking,
                 current,
@@ -1052,11 +1063,15 @@ def complete_state_after_action(
     """Clear a completed booking/reschedule task only after a verified successful write result."""
     if active_task is None or step.write_intent is None:
         return StateTransition(active_task=active_task, changed=False, reason="no_active_write_task")
-    if step.write_intent.kind not in {"booking", "reschedule"}:
+    if step.write_intent.kind not in {"booking", "booking_proposal", "reschedule"}:
         return StateTransition(active_task=active_task, changed=False, reason="unrelated_write")
     if not isinstance(action_result, dict) or action_result.get("ok") is not True:
         return StateTransition(active_task=active_task, changed=False, reason="write_not_completed")
-    expected = "booking" if step.write_intent.kind == "booking" else "reschedule"
+    expected = (
+        "booking"
+        if step.write_intent.kind in {"booking", "booking_proposal"}
+        else "reschedule"
+    )
     if active_task.task_type != expected:
         return StateTransition(active_task=active_task, changed=False, reason="task_write_mismatch")
     return StateTransition(active_task=None, changed=True, reason="write_completed")

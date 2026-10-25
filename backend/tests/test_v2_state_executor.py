@@ -541,6 +541,95 @@ def test_successful_booking_clears_task_but_failed_write_preserves_it() -> None:
     assert succeeded.changed is True
 
 
+def test_successful_direct_booking_proposal_clears_task_but_failed_write_preserves_it() -> None:
+    state = _booking_state()
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="write_ready",
+        state_action="start_booking",
+        write_intent=WriteIntent(
+            kind="booking_proposal",
+            authorized=True,
+            parameters={"proposal_id": "proposal-1", "proposal": {}},
+        ),
+    )
+
+    failed = complete_state_after_action(state, step=step, action_result={"ok": False})
+    succeeded = complete_state_after_action(state, step=step, action_result={"ok": True})
+
+    assert failed.active_task == state
+    assert failed.changed is False
+    assert succeeded.active_task is None
+    assert succeeded.changed is True
+
+
+def test_review_first_booking_starts_without_write_authorization() -> None:
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="informational",
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="start_booking",
+        reads=[ReadRequest(kind="availability", parameters={"service_id": "svc-underarm"})],
+        response_goal="present_availability",
+        facts={"service_id": "svc-underarm"},
+    )
+
+    transition = apply_step_state(
+        None,
+        step=step,
+        operation=operation,
+        reads=_availability_bundle(),
+        now=NOW,
+        turn_id="review-first-start",
+    )
+
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.constraints.service_id == "svc-underarm"
+    assert transition.active_task.write_authorization.authorized is False
+    assert transition.active_task.write_authorization.source_turn_id is None
+    assert transition.active_task.write_authorization.granted_at is None
+
+
+def test_review_first_booking_continuation_revokes_write_authorization() -> None:
+    state = _booking_state()
+    operation = TurnOperation(
+        type="book",
+        entities=TurnEntities(),
+        execution_intent="informational",
+        active_task_relationship="continue",
+        continues_previous=True,
+    )
+    step = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="read",
+        state_action="update_active",
+        response_goal="present_availability",
+        facts={},
+    )
+
+    transition = apply_step_state(
+        state,
+        step=step,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="review-first",
+    )
+
+    assert isinstance(transition.active_task, BookingTaskState)
+    assert transition.active_task.write_authorization.authorized is False
+    assert transition.active_task.write_authorization.source_turn_id is None
+    assert transition.active_task.write_authorization.granted_at is None
+    assert transition.active_task.constraints.service_id == state.constraints.service_id
+
+
 def test_reschedule_state_requires_exactly_one_verified_target() -> None:
     operation = _operation(
         operation_type="reschedule",

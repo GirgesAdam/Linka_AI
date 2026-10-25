@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.integrations.clinic.authority import ClinicIntegrationAuthorityError
 from app.services.agent_v2 import write_executor
 from app.services.agent_v2.planner import PlanStep, WriteIntent
+from app.services.agent_v2.state import BookingProposal
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
@@ -105,6 +106,63 @@ def test_verified_booking_executes_once_and_commits(monkeypatch) -> None:
     assert call["actor_type"] == "ai"
     assert call["created_by_user_id"] is None
     assert call["idempotency_key"] == key
+    db.commit.assert_called_once_with()
+    db.rollback.assert_not_called()
+
+
+def test_authorized_booking_proposal_executes_once_and_commits(monkeypatch) -> None:
+    db, workspace, patient = _context()
+    now = datetime.now(UTC)
+    start_at = now + timedelta(days=2)
+    service_id = str(uuid4())
+    proposal = BookingProposal(
+        proposal_id="proposal-direct-booking",
+        patient_id=str(patient.id),
+        service_ids=[service_id],
+        main_service_id=service_id,
+        branch_id=str(uuid4()),
+        doctor_id=str(uuid4()),
+        start_at=start_at,
+        end_at=start_at + timedelta(minutes=30),
+        task_version=1,
+        proposal_version=1,
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+    )
+    execute = MagicMock(
+        return_value={
+            "ok": True,
+            "write_kind": "booking_proposal",
+            "proposal_id": proposal.proposal_id,
+            "appointment_id": str(uuid4()),
+            "status": "confirmed",
+        }
+    )
+    authority = MagicMock()
+    monkeypatch.setattr(write_executor, "execute_booking_proposal", execute)
+    monkeypatch.setattr(write_executor, "require_tia_workspace_domain_write", authority)
+
+    result = write_executor.execute_write_ready_step(
+        db,
+        workspace=workspace,
+        patient=patient,
+        step=_step(
+            "booking_proposal",
+            {
+                "proposal_id": proposal.proposal_id,
+                "proposal": proposal.model_dump(mode="json"),
+            },
+        ),
+        idempotency_key="v2-direct-booking-proposal-1",
+    )
+
+    assert result["ok"] is True
+    assert result["write_kind"] == "booking_proposal"
+    assert result["proposal_id"] == proposal.proposal_id
+    authority.assert_called_once_with(db, workspace_id=workspace.id, domain="appointments")
+    execute.assert_called_once()
+    assert execute.call_args.kwargs["proposal"] == proposal
+    assert execute.call_args.kwargs["idempotency_key"] == "v2-direct-booking-proposal-1"
     db.commit.assert_called_once_with()
     db.rollback.assert_not_called()
 

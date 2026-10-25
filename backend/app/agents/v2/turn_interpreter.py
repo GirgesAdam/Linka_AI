@@ -199,14 +199,18 @@ SEMANTIC PRINCIPLES
   continuation_condition=always for ordinary continuations and unconditional nearest requests.
 - Separate booking-workflow intent from final appointment-write authorization. `book` means the
   customer wants to start or continue arranging a new appointment; `execution_intent=execute` means
-  start that workflow now. When the customer wants a visit and asks to review its details before
-  confirming, still use `book` with `execution_intent=execute`: the backend verifies availability and
-  presents a server-owned proposal, but must not create an Appointment until that exact proposal is
-  explicitly confirmed. Use `availability` with `execution_intent=informational` only when the customer
-  wants to inspect possible times without starting a booking task, or explicitly says not to start
-  booking now. A hypothetical about whether booking would be possible, without intent to arrange the
-  visit, remains informational. For non-book actions, questions, comparisons, hypotheticals, "should I"
-  choices, and requests to inspect consequences/options remain informational; mentions alone do not
+  the customer authorizes the existing safe write path to complete the booking as soon as required
+  details are complete and canonical availability validates. Ask only for missing or ambiguous details,
+  retain this authorization across continuations, and do not ask for a second confirmation merely because
+  a time was shown or selected. When the customer explicitly wants to review its details before
+  confirming, use `book` with `execution_intent=informational`: keep the workflow read-only until the
+  customer explicitly says to proceed. The backend may present verified availability or a server-owned
+  proposal, but must not create an Appointment until that exact proposal is explicitly confirmed when
+  such a proposal is pending. Use `availability` with `execution_intent=informational` when the
+  customer wants to inspect possible times without starting a booking task, explicitly says not to start
+  booking now, or asks hypothetically whether booking would be possible without arranging a visit. Do not
+  turn those requests into a booking task. For non-book actions, questions, comparisons, hypotheticals,
+  "should I" choices, and requests to inspect consequences/options remain informational; mentions alone do not
   authorize cancellation, rescheduling, purchasing, or other mutations.
 - Preserve multi-part requests as multiple operations in customer order when they are independently
   meaningful. Alternatives are not multiple operations. Emit each semantically identical operation
@@ -223,7 +227,10 @@ SEMANTIC PRINCIPLES
   Copy the shared date and any explicit starting-time constraint to every related operation. This is one
   compound booking workflow, not a set of unrelated availability questions. If no starting time is given,
   the backend may present read-only availability and retain the complete grouped task while the customer
-  chooses a start time; do not create an Appointment before explicit proposal confirmation.
+  chooses a start time. If the customer already authorized booking, selecting a valid start time should
+  continue through canonical verification and the existing write path without redundant confirmation.
+  Keep the task read-only only when the customer explicitly requested review before confirming or no
+  booking authorization exists.
 - For an active grouped booking, distinguish a pure service addition from a constraint-only edit. For a
   pure addition, emit grouped_booking_action=preserve_group and entities.service MUST identify the newly
   added service or services from supplied references. Do not omit a newly named service merely because
@@ -309,12 +316,16 @@ SEMANTIC PRINCIPLES
   cannot continue a booking. Do not infer replace merely because one constraint changes. Leave
   unspecified for side reads/social turns and when no active task applies.
 - If an unfinished booking task is active and the latest assistant reply asked the customer to choose a
-  time, a short reply selecting a time is a constraint-only continuation of that task. Emit `book` with
-  `execution_intent=execute`, `active_task_relationship=continue`, and `active_task_explicit_fields=["time"]`,
-  with the selected time as the new semantic value. For a grouped task, use `grouped_booking_action=preserve_group`
-  and do not reconstruct the services. Do not emit `availability` or ask whether to check availability again;
-  Appointment creation still
-  requires explicit confirmation of that proposal.
+  time, a short reply selecting a time is a constraint-only continuation of that task. Unless the customer
+  explicitly requested review before confirming, if the active task already carries booking write
+  authorization, emit `book` with `execution_intent=execute`,
+  `active_task_relationship=continue`, and `active_task_explicit_fields=["time"]`, with the selected time
+  as the new semantic value; the backend must revalidate the slot and use the existing write path without
+  redundant confirmation. For a grouped task, use `grouped_booking_action=preserve_group` and do not
+  reconstruct the services. Do not emit `availability` or ask whether to check availability again. If the
+  active task has no booking write authorization, selection alone must not grant it: keep the turn read-only
+  or use the existing pending-proposal flow. When the customer explicitly requests review before confirming,
+  keep `execution_intent=informational` until they explicitly say to proceed.
   For an active booking or reschedule continuation, active_task_explicit_fields must list date and/or time
   only when that dimension is explicitly supplied or corrected in the latest customer message. For a booking
   correction, emit only the NEW semantic value in entities; an older value mentioned only as the value being

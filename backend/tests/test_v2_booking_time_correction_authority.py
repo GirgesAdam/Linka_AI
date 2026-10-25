@@ -266,14 +266,17 @@ def test_t1_booking_time_correction_is_authoritative_and_invalidates_stale_state
     assert updated.derived.selected_slot_ref is None
 
 
-def test_t2_corrected_available_time_builds_matching_proposal(monkeypatch) -> None:
+def test_t2_corrected_available_time_executes_matching_authorized_booking(monkeypatch) -> None:
     advanced, proposal = _prepare(
         monkeypatch,
         _task("12:00", version=5),
         step_clock="12:00",
         available_clock="12:00",
     )
-    assert advanced.response_goal == "booking_proposal"
+    assert advanced.disposition == "write_ready"
+    assert advanced.response_goal == "booking_completed"
+    assert advanced.write_intent is not None
+    assert advanced.write_intent.kind == "booking_proposal"
     assert proposal is not None
     assert proposal.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M") == "12:00"
 
