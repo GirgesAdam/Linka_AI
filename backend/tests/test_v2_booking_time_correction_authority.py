@@ -581,6 +581,99 @@ def test_time_02_b_correct_new_booking_target_invalidates_old_and_requires_fresh
     assert proposal is not None
     assert proposal.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M") == "17:00"
 
+    writes: list[str] = []
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.require_tia_workspace_domain_write",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_execute(*_args, proposal: BookingProposal, **_kwargs):
+        writes.append(proposal.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M"))
+        return {"ok": True, "write_kind": "booking_proposal", "appointment_id": "appointment-1"}
+
+    monkeypatch.setattr(
+        "app.services.agent_v2.write_executor.execute_booking_proposal",
+        fake_execute,
+    )
+    result = execute_write_ready_step(
+        SimpleNamespace(begin_nested=lambda: nullcontext()),
+        workspace=SimpleNamespace(id="workspace-1", timezone="Africa/Cairo"),
+        patient=SimpleNamespace(id=PATIENT_ID, status="active"),
+        step=verified_step,
+        commit=False,
+    )
+    assert result["ok"] is True
+    assert writes == ["17:00"]
+
+
+def test_time_authority_post_collapsed_correction_retains_authorization_for_new_time(monkeypatch) -> None:
+    state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True)
+    base = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+    )
+    context = build_semantic_context(_catalog())
+
+    collapsed_operation = _correction_operation("16:00")
+    collapsed_step = adapt_matching_active_task_step(
+        base,
+        operation=collapsed_operation,
+        active_task=state,
+        context=context,
+        now=NOW,
+    )
+    collapsed = apply_step_state(
+        state,
+        step=collapsed_step,
+        operation=collapsed_operation,
+        reads=None,
+        now=NOW,
+        turn_id="collapsed-correction",
+    ).active_task
+
+    assert collapsed_step.disposition == "clarify"
+    assert isinstance(collapsed, BookingTaskState)
+    assert collapsed.constraints.time is None
+    assert collapsed.write_authorization == state.write_authorization
+    assert collapsed.write_authorization.authorized is True
+
+    corrected_operation = _correction_operation("17:00")
+    corrected_step = adapt_matching_active_task_step(
+        base,
+        operation=corrected_operation,
+        active_task=collapsed,
+        context=context,
+        now=NOW,
+    )
+    corrected = apply_step_state(
+        collapsed,
+        step=corrected_step,
+        operation=corrected_operation,
+        reads=None,
+        now=NOW,
+        turn_id="post-clarification-correction",
+    ).active_task
+
+    assert isinstance(corrected, BookingTaskState)
+    assert corrected.constraints.time is not None
+    assert corrected.constraints.time.start_time == "17:00"
+    assert corrected.write_authorization == state.write_authorization
+
+    verified_step, proposal = _prepare(
+        monkeypatch,
+        corrected,
+        step_clock="17:00",
+        available_clock="17:00",
+    )
+    assert verified_step.disposition == "write_ready"
+    assert verified_step.response_goal == "booking_completed"
+    assert verified_step.write_intent is not None
+    assert verified_step.write_intent.authorized is True
+    assert proposal is not None
+
 
 def test_time_authority_review_first_time_edit_stays_unauthorized() -> None:
     state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True).model_copy(
