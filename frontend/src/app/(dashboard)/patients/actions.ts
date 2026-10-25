@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { tiaRequest } from "@/lib/tia/api";
+import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import { parseEgpAmountToMinor } from "./registration-utils";
 
 function revalidatePatient(patientId: string) {
@@ -191,10 +191,26 @@ export async function recordPatientPulsePackPayment(formData: FormData) {
 }
 
 
+type RegistrationExistingPatient = { id: string; name: string };
+
+type RegistrationActionState = {
+  error: string | null;
+  existingPatient?: RegistrationExistingPatient | null;
+};
+
+function existingPatientFromRegistrationError(error: unknown): RegistrationExistingPatient | null {
+  if (!(error instanceof TiaApiError) || error.status !== 409) return null;
+  if (!error.detail || typeof error.detail !== "object" || Array.isArray(error.detail)) return null;
+  const detail = error.detail as Record<string, unknown>;
+  if (detail.code !== "patient_phone_exists") return null;
+  if (typeof detail.patient_id !== "string" || typeof detail.patient_name !== "string") return null;
+  return { id: detail.patient_id, name: detail.patient_name };
+}
+
 export async function registerPatientAction(
-  _previousState: { error: string | null },
+  _previousState: RegistrationActionState,
   formData: FormData,
-): Promise<{ error: string | null }> {
+): Promise<RegistrationActionState> {
   const firstName = String(formData.get("first_name") || "").trim();
   const lastName = String(formData.get("last_name") || "").trim();
   const phone = String(formData.get("phone") || "").trim();
@@ -276,8 +292,16 @@ export async function registerPatientAction(
       }),
     });
   } catch (error) {
+    const existingPatient = existingPatientFromRegistrationError(error);
+    if (existingPatient) {
+      return {
+        error: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f.",
+        existingPatient,
+      };
+    }
     return {
       error: error instanceof Error ? error.message : "\u062a\u0639\u0630\u0631 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0639\u0645\u064a\u0644. \u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.",
+      existingPatient: null,
     };
   }
 

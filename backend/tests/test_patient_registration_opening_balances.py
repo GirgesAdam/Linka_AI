@@ -519,3 +519,81 @@ def test_registration_with_multiple_pulse_balances_creates_no_payment_transactio
         }
         assert all(pack.purchase_transaction_id is None for pack in pulse_packs)
         assert db.scalar(select(func.count()).select_from(PaymentTransaction)) == 0
+
+
+def test_duplicate_registration_returns_existing_patient_link_target_without_new_row() -> None:
+    from fastapi import HTTPException
+
+    from app.api.routes.crm import DUPLICATE_PATIENT_MESSAGE, register_patient
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+
+    with Session(engine) as db:
+        existing = Patient(
+            workspace_id=workspace_id,
+            first_name="Mona",
+            last_name="Ali",
+            phone="01012345678",
+            phone_normalized="01012345678",
+        )
+        db.add(existing)
+        db.commit()
+        existing_id = existing.id
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        with pytest.raises(HTTPException) as error:
+            register_patient(
+                PatientRegistrationCreate(first_name="Duplicate", phone="01012345678"),
+                access,
+                db,
+            )
+
+        assert error.value.status_code == 409
+        assert DUPLICATE_PATIENT_MESSAGE == "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f."
+        assert error.value.detail == {
+            "code": "patient_phone_exists",
+            "message": DUPLICATE_PATIENT_MESSAGE,
+            "patient_id": str(existing_id),
+            "patient_name": "Mona Ali",
+        }
+        assert db.scalar(select(func.count()).select_from(Patient)) == 1
+
+
+def test_duplicate_phone_lookup_is_scoped_to_current_workspace() -> None:
+    from app.api.routes.crm import register_patient
+    from app.schemas.crm import PatientRegistrationCreate
+
+    engine = _engine()
+    workspace_id = uuid4()
+    other_workspace_id = uuid4()
+
+    with Session(engine) as db:
+        db.add(
+            Patient(
+                workspace_id=other_workspace_id,
+                first_name="Other",
+                last_name="Workspace",
+                phone="01112345678",
+                phone_normalized="01112345678",
+            )
+        )
+        db.commit()
+        access = SimpleNamespace(
+            workspace=SimpleNamespace(id=workspace_id),
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+        created = register_patient(
+            PatientRegistrationCreate(first_name="New", phone="01112345678"),
+            access,
+            db,
+        )
+
+        assert created.workspace_id == workspace_id
+        assert created.first_name == "New"
+        assert db.scalar(select(func.count()).select_from(Patient)) == 2
