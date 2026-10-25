@@ -1866,6 +1866,62 @@ def test_rw7_redundant_full_group_time_only_preserves_durable_date() -> None:
     }
 
 
+def test_time_authority_grouped_time_correction_preserves_services_and_booking_authorization() -> None:
+    catalog, context, state, dermatology = _rw7_durable_continuation_fixture()
+    refs = _refs(context)
+    authorized = WriteAuthorization(
+        operation="booking",
+        authorized=True,
+        source_turn_id="group-book-authorized",
+        granted_at=NOW,
+    )
+    state = state.model_copy(update={"write_authorization": authorized})
+    turn = TiaTurnUnderstanding(
+        operations=[
+            TurnOperation(
+                type="book",
+                execution_intent="execute",
+                active_task_relationship="continue",
+                active_task_explicit_fields=["time"],
+                active_task_corrected_fields=["time"],
+                grouped_booking_action="preserve_group",
+                entities=TurnEntities(
+                    service=EntityReference(
+                        candidate_refs=[refs[A], refs[B], refs[dermatology]],
+                        candidate_mode="set",
+                    ),
+                    time=TimeConstraint(mode="exact", start_time="19:00"),
+                ),
+            )
+        ]
+    )
+
+    candidate = _rw7_candidate_from_turn(
+        turn,
+        catalog=catalog,
+        context=context,
+        state=state,
+    )
+
+    assert candidate.write_authorization == authorized
+    assert candidate.requested_service_ids == [A, B, dermatology]
+    assert candidate.grouped is not None
+    assert [component.service_id for component in candidate.grouped.components] == [
+        A,
+        B,
+        dermatology,
+    ]
+    assert {
+        component.time.start_time
+        for component in candidate.grouped.components
+        if component.time is not None
+    } == {"19:00"}
+    assert candidate.proposal is None
+    assert candidate.option_snapshot is None
+    assert candidate.derived.availability_snapshot_id is None
+    assert candidate.derived.selected_slot_ref is None
+
+
 def test_rw7_sparse_time_only_matches_redundant_full_group_result() -> None:
     catalog, context, state, dermatology = _rw7_durable_continuation_fixture()
     sparse = TiaTurnUnderstanding(

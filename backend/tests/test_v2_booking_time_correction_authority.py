@@ -553,6 +553,8 @@ def test_time_02_b_correct_new_booking_target_invalidates_old_and_requires_fresh
     assert updated.option_snapshot is None
     assert updated.derived.availability_snapshot_id is None
     assert updated.derived.selected_slot_ref is None
+    assert updated.write_authorization == state.write_authorization
+    assert updated.write_authorization.authorized is True
 
     progress = plan_active_task_progress(
         updated,
@@ -572,9 +574,146 @@ def test_time_02_b_correct_new_booking_target_invalidates_old_and_requires_fresh
         step_clock="17:00",
         available_clock="17:00",
     )
-    assert verified_step.response_goal == "booking_proposal"
+    assert verified_step.disposition == "write_ready"
+    assert verified_step.response_goal == "booking_completed"
+    assert verified_step.write_intent is not None
+    assert verified_step.write_intent.authorized is True
     assert proposal is not None
     assert proposal.start_at.astimezone(ZoneInfo("Africa/Cairo")).strftime("%H:%M") == "17:00"
+
+
+def test_time_authority_review_first_time_edit_stays_unauthorized() -> None:
+    state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True).model_copy(
+        update={"write_authorization": WriteAuthorization(operation="booking", authorized=False)}
+    )
+    operation = TurnOperation(
+        type="book",
+        execution_intent="informational",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+        active_task_corrected_fields=["time"],
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="17:00")),
+    )
+    base = PlanStep(
+        operation_index=0,
+        operation_type="book",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+    )
+
+    adapted = adapt_matching_active_task_step(
+        base,
+        operation=operation,
+        active_task=state,
+        context=build_semantic_context(_catalog()),
+        now=NOW,
+    )
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="review-first-time-edit",
+    ).active_task
+
+    assert adapted.write_intent is None
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "17:00"
+    assert updated.write_authorization.authorized is False
+    assert updated.write_authorization.source_turn_id is None
+    assert updated.proposal is None
+    assert updated.option_snapshot is None
+
+
+def test_time_authority_execute_continue_active_without_booking_authorization_stays_unauthorized() -> None:
+    state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True).model_copy(
+        update={"write_authorization": WriteAuthorization(operation="booking", authorized=False)}
+    )
+    operation = TurnOperation(
+        type="continue_active",
+        execution_intent="execute",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="17:00")),
+    )
+    base = PlanStep(
+        operation_index=0,
+        operation_type="continue_active",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+    )
+
+    adapted = adapt_matching_active_task_step(
+        base,
+        operation=operation,
+        active_task=state,
+        context=build_semantic_context(_catalog()),
+        now=NOW,
+    )
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="execute-continuation-no-book-auth",
+    ).active_task
+
+    assert adapted.write_intent is None
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "17:00"
+    assert updated.write_authorization.authorized is False
+    assert updated.proposal is None
+    assert updated.option_snapshot is None
+
+
+def test_time_authority_informational_continue_active_time_edit_never_gains_write_authority() -> None:
+    state = _task("16:00", proposal=_proposal("16:00"), with_snapshot=True).model_copy(
+        update={"write_authorization": WriteAuthorization(operation="booking", authorized=False)}
+    )
+    operation = TurnOperation(
+        type="continue_active",
+        execution_intent="informational",
+        active_task_relationship="continue",
+        active_task_explicit_fields=["time"],
+        entities=TurnEntities(time=TimeConstraint(mode="exact", start_time="17:00")),
+    )
+    base = PlanStep(
+        operation_index=0,
+        operation_type="continue_active",
+        disposition="state_update",
+        state_action="update_active",
+        response_goal="clarification",
+    )
+
+    adapted = adapt_matching_active_task_step(
+        base,
+        operation=operation,
+        active_task=state,
+        context=build_semantic_context(_catalog()),
+        now=NOW,
+    )
+    updated = apply_step_state(
+        state,
+        step=adapted,
+        operation=operation,
+        reads=None,
+        now=NOW,
+        turn_id="informational-continuation-time-edit",
+    ).active_task
+
+    assert adapted.write_intent is None
+    assert isinstance(updated, BookingTaskState)
+    assert updated.constraints.time is not None
+    assert updated.constraints.time.start_time == "17:00"
+    assert updated.write_authorization.authorized is False
+    assert updated.proposal is None
+    assert updated.option_snapshot is None
 
 
 def test_time_02_i_normal_proposal_confirmation_is_unchanged() -> None:

@@ -87,7 +87,7 @@ def _visible_dict(value: dict[str, Any]) -> dict[str, object]:
     currency = value.get("currency") or value.get("service_currency")
     visible: dict[str, object] = {}
     for key, item in value.items():
-        if key in _INTERNAL_KEYS or key.endswith("_ids"):
+        if key.startswith("_") or key in _INTERNAL_KEYS or key.endswith("_ids"):
             continue
         if key.endswith("_id"):
             continue

@@ -51,6 +51,24 @@ def _turn(operation: TurnOperation) -> TiaTurnUnderstanding:
     return TiaTurnUnderstanding(operations=[operation], safety_signals=[])
 
 
+def test_customer_visible_outcome_strips_private_canonical_source_facts() -> None:
+    outcome = TurnOutcome(
+        status="needs_input",
+        response_goal="clarification",
+        facts={
+            "needed": "time",
+            "_source_appointment_start_at": "2026-09-17T16:00:00+00:00",
+            "_source_appointment_start_local": "2026-09-17T19:00:00+03:00",
+            "_source_appointment_branch_id": "branch-main",
+        },
+    )
+
+    visible = customer_visible_outcome(outcome)
+
+    assert visible["facts"] == {"needed": "time"}
+    assert all(not str(key).startswith("_") for key in visible["facts"])
+
+
 def test_semantic_service_ambiguity_becomes_labeled_choices_without_ids() -> None:
     context = _semantic_context()
     operation = TurnOperation(

@@ -52,6 +52,7 @@ def _semantic_context():
                 }
             ],
             "doctors": [{"id": "doc-maryam", "name": "مريم"}],
+            "branches": [{"id": "branch-main", "name": "Main"}],
             "appointments": [
                 {
                     "appointment_id": "apt-1",
@@ -576,6 +577,15 @@ def _time_02_appointment_ref() -> str:
     )
 
 
+def _time_02_branch_ref() -> str:
+    context = _semantic_context()
+    return next(
+        ref
+        for ref, target in context.reference_map.items()
+        if target.kind == "branch" and target.canonical_id == "branch-main"
+    )
+
+
 def _time_02_reschedule_operation(*, source_clock: str, target_clock: str) -> TurnOperation:
     return TurnOperation(
         type="reschedule",
@@ -661,6 +671,38 @@ def test_time_02_c_wrong_old_reschedule_target_never_reaches_mutation(monkeypatc
     )
     assert result["ok"] is False
     assert result["error_code"] == "write_not_ready"
+
+
+def test_time_02_c_explicit_same_branch_does_not_disguise_source_time_as_new_target() -> None:
+    operation = TurnOperation(
+        type="reschedule",
+        source_appointment=AppointmentSelector(
+            appointment=EntityReference(ref=_time_02_appointment_ref()),
+            time=TimeConstraint(mode="exact", start_time="14:00"),
+        ),
+        entities=TurnEntities(
+            branch=EntityReference(ref=_time_02_branch_ref()),
+            date=DateConstraint(mode="exact", start_date="2026-09-14"),
+            time=TimeConstraint(mode="exact", start_time="14:00"),
+        ),
+        execution_intent="execute",
+        fresh_task=True,
+        fresh_task_explicit_fields=["date", "time"],
+    )
+    step = plan_turn(
+        TiaTurnUnderstanding(operations=[operation], safety_signals=[]),
+        _planner_context(),
+    ).steps[0]
+    assert step.facts["branch_id"] == "branch-main"
+
+    blocked = advance_step_after_verification(
+        step,
+        _time_02_verification(source_clock="14:00", target_clock="14:00"),
+    )
+
+    assert blocked.disposition == "clarify"
+    assert blocked.clarification_field == "time"
+    assert blocked.write_intent is None
 
 
 def test_time_02_d_correct_new_reschedule_target_can_promote_after_verification() -> None:
