@@ -134,7 +134,7 @@ def package_read(
     cancellation_consumed = consumed
     cancellation_default_charge: int | None
     if package.opening_sessions_remaining is not None:
-        if package.sessions_total_known:
+        if getattr(package, "sessions_total_known", True):
             cancellation_consumed += max(
                 0,
                 int(package.sessions_purchased) - int(package.opening_sessions_remaining),
@@ -173,6 +173,8 @@ def package_read(
         external_id=package.external_id,
         name=package.name,
         sessions_purchased=package.sessions_purchased,
+        opening_sessions_remaining=package.opening_sessions_remaining,
+        sessions_total_known=bool(getattr(package, "sessions_total_known", True)),
         sessions_reserved=reserved,
         sessions_consumed=consumed,
         sessions_remaining=remaining,
@@ -251,10 +253,16 @@ def create_patient_package(
     origin_appointment_id: UUID | None = None,
     laser_device_key: str | None = None,
     laser_device_name: str | None = None,
+    opening_sessions_remaining: int | None = None,
+    sessions_total_known: bool = True,
     standalone_session_price_minor_at_purchase: int | None = None,
 ) -> PatientPackage:
     if sessions_purchased <= 0:
         raise PackageOperationError("Package sessions must be positive.")
+    if opening_sessions_remaining is not None and not (
+        0 <= opening_sessions_remaining <= sessions_purchased
+    ):
+        raise PackageOperationError("Opening package balance must be within the purchased session count.")
     if sale_price_minor < 0:
         raise PackageOperationError("Package price cannot be negative.")
     effective_initial_payment = sale_price_minor if amount_paid_minor is None else amount_paid_minor
@@ -343,6 +351,8 @@ def create_patient_package(
         external_id=external_id,
         name=name.strip(),
         sessions_purchased=sessions_purchased,
+        opening_sessions_remaining=opening_sessions_remaining,
+        sessions_total_known=sessions_total_known,
         sale_price_minor=sale_price_minor,
         standalone_session_price_minor_at_purchase=standalone_snapshot,
         laser_device_key=laser_device_key,
@@ -363,10 +373,18 @@ def create_patient_package(
         workspace_id=workspace_id,
         actor_type=actor_type,
         actor_user_id=created_by_user_id,
-        action="package.created",
+        action=(
+            "package.opening_balance_created"
+            if opening_sessions_remaining is not None
+            else "package.created"
+        ),
         entity_type="patient_package",
         entity_id=package.id,
-        summary="Prepaid package created",
+        summary=(
+            "Existing package balance recorded"
+            if opening_sessions_remaining is not None
+            else "Prepaid package created"
+        ),
         metadata={
             "service_id": service_id,
             "package_offer_id": package_offer_id,
@@ -376,6 +394,8 @@ def create_patient_package(
             "amount_paid_minor": effective_initial_payment,
             "standalone_session_price_minor_at_purchase": standalone_snapshot,
             "has_payment": transaction is not None,
+            "opening_balance": opening_sessions_remaining is not None,
+            "opening_sessions_remaining": opening_sessions_remaining,
         },
     )
     return package

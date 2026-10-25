@@ -53,6 +53,7 @@ from app.schemas.crm import (
     PatientNoteRead,
     PatientProfileRead,
     PatientRead,
+    PatientRegistrationCreate,
     PatientSource,
     PatientStatus,
     PatientTagCreate,
@@ -107,8 +108,19 @@ from app.services.handoffs import (
     create_handoff,
     ensure_active_workspace_user,
 )
+from app.services.package_offers import (
+    PackageOfferError,
+    PackageOfferNotFound,
+    create_patient_package_opening_balance,
+)
 from app.services.patient_history import build_patient_history_context
+from app.services.patient_packages import PackageOperationError
 from app.services.patient_timeline import build_patient_profile
+from app.services.pulse_billing import (
+    PulseBillingError,
+    PulseBillingNotFound,
+    create_patient_pulse_opening_balance,
+)
 
 router = APIRouter()
 
@@ -263,6 +275,95 @@ def create_patient(
         patient.whatsapp_opt_in_source = "staff_recorded"
     db.add(patient)
     commit_or_conflict(db, "A patient with this phone already exists in this workspace.")
+    db.refresh(patient)
+    return patient
+
+
+@router.post(
+    "/patients/register",
+    response_model=PatientRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_patient(
+    payload: PatientRegistrationCreate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Patient:
+    """Create a reception patient and any declared opening balances atomically."""
+    ensure_branch(db, access.workspace.id, payload.preferred_branch_id)
+    registration_only_fields = {
+        "phone",
+        "marketing_consent",
+        "whatsapp_opt_in",
+        "initial_package_offer_id",
+        "initial_package_sessions_remaining",
+        "initial_package_amount_paid_minor",
+        "initial_package_payment_method",
+        "initial_pulse_balances",
+    }
+    data = payload.model_dump(exclude=registration_only_fields)
+    patient = Patient(
+        workspace_id=access.workspace.id,
+        marketing_consent=payload.marketing_consent,
+        whatsapp_opt_in=payload.whatsapp_opt_in,
+        **data,
+    )
+    apply_patient_contact_fields(patient, payload.phone)
+    if payload.marketing_consent:
+        patient.marketing_consent_at = datetime.now(UTC)
+    if payload.whatsapp_opt_in:
+        patient.whatsapp_opt_in_at = datetime.now(UTC)
+        patient.whatsapp_opt_in_source = "staff_recorded"
+
+    try:
+        db.add(patient)
+        db.flush()
+        if payload.initial_package_offer_id is not None:
+            create_patient_package_opening_balance(
+                db,
+                workspace_id=access.workspace.id,
+                patient_id=patient.id,
+                offer_id=payload.initial_package_offer_id,
+                sessions_remaining=int(payload.initial_package_sessions_remaining),
+                amount_paid_minor=payload.initial_package_amount_paid_minor,
+                payment_method=payload.initial_package_payment_method,
+                created_by_user_id=access.user.id,
+            )
+        for pulse_balance in payload.initial_pulse_balances:
+            create_patient_pulse_opening_balance(
+                db,
+                workspace_id=access.workspace.id,
+                patient_id=patient.id,
+                device_key=pulse_balance.device_key,
+                pulses_remaining=pulse_balance.pulses_remaining,
+                created_by_user_id=access.user.id,
+            )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        error_detail = str(exc.orig).lower()
+        detail = (
+            "A patient with this phone already exists in this workspace."
+            if "uq_patients_workspace_phone_normalized" in error_detail
+            or "patients.workspace_id, patients.phone_normalized" in error_detail
+            else "Registration conflicts with existing clinic data. Refresh and try again."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail,
+        ) from exc
+    except (PackageOfferError, PackageOperationError, PulseBillingError) as exc:
+        db.rollback()
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if isinstance(exc, (PackageOfferNotFound, PulseBillingNotFound))
+            else status.HTTP_422_UNPROCESSABLE_CONTENT
+        )
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
     db.refresh(patient)
     return patient
 

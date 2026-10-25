@@ -191,8 +191,14 @@ export interface AppointmentPaymentSummary {
 }
 export interface PatientPackage {
   id:string; workspace_id:string; patient_id:string; service_id:string; purchase_transaction_id:string|null; external_id:string|null;
-  name:string; sessions_purchased:number; sessions_reserved:number; sessions_consumed:number; sessions_remaining:number;
+  name:string; sessions_purchased:number; opening_sessions_remaining:number|null; sessions_total_known:boolean; sessions_reserved:number; sessions_consumed:number; sessions_remaining:number;
   sale_price_minor:number; standalone_session_price_minor_at_purchase:number|null; currency:string; purchased_at:string; expires_at:string|null; status:string; effective_status:string; source:string;
+  created_at:string; updated_at:string;
+}
+export interface ServicePackageOffer {
+  id:string; workspace_id:string; service_id:string; service_name:string;
+  device_key:string|null; device_name:string|null; sessions_count:number; price_minor:number;
+  currency:string; is_active:boolean; standalone_session_price_minor:number; savings_minor:number;
   created_at:string; updated_at:string;
 }
 export interface ClinicLaserDevice {
