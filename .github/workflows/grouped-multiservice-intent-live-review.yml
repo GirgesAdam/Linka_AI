@@ -2,6 +2,7 @@ name: Grouped Multi-Service Intent Live Review
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/grouped-multiservice-intent-live-review.yml
       - backend/scripts/run_grouped_multiservice_intent_live_review.py
