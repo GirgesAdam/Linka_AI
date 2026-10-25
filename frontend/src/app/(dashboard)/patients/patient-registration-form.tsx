@@ -29,7 +29,6 @@ const copy = {
   packageOffer: "\u0639\u0631\u0636 \u0627\u0644\u0628\u0627\u0643\u062f\u062c",
   noPackage: "\u0628\u062f\u0648\u0646 \u0631\u0635\u064a\u062f \u0628\u0627\u0643\u062f\u062c",
   noOffers: "\u0644\u0627 \u062a\u0648\u062c\u062f \u0639\u0631\u0648\u0636 \u0628\u0627\u0643\u062f\u062c \u0645\u0641\u0639\u0651\u0644\u0629 \u0644\u0647\u0630\u0647 \u0627\u0644\u062e\u062f\u0645\u0629.",
-  sessionsTotal: "\u0625\u062c\u0645\u0627\u0644\u064a \u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0628\u0627\u0643\u062f\u062c",
   sessionsRemaining: "\u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629",
   amountPaid: "\u0627\u0644\u0645\u0628\u0644\u063a \u0627\u0644\u0645\u062f\u0641\u0648\u0639 (\u062c\u0646\u064a\u0647)",
   packagePrice: "\u0633\u0639\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c",
@@ -214,11 +213,7 @@ export function PatientRegistrationForm({
                   )}
                   {selectedOffer && (
                     <>
-                      <div className="grid gap-2 rounded-lg bg-[var(--surface-2)] p-3 text-sm sm:grid-cols-3">
-                        <div>
-                          <div className="text-xs text-[var(--muted)]">{copy.sessionsTotal}</div>
-                          <div className="mt-1 font-bold">{selectedOffer.sessions_count}</div>
-                        </div>
+                      <div className="grid gap-2 rounded-lg bg-[var(--surface-2)] p-3 text-sm sm:grid-cols-2">
                         <div>
                           <div className="text-xs text-[var(--muted)]">{copy.packagePrice}</div>
                           <div className="mt-1 font-bold">{(selectedOffer.price_minor / 100).toFixed(2)} EGP</div>

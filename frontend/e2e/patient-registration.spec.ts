@@ -36,6 +36,8 @@ test("registration is opened from a modal and package/Pulse sections collapse in
   expect(form).toContain("setIsOpen(false)");
   expect((form.match(/<details /g) || []).length).toBe(2);
   expect(form).toContain('name="initial_package_sessions_remaining"');
+  expect(form).not.toContain("sessionsTotal");
+  expect(form).toContain("max={selectedOffer.sessions_count}");
   expect(form).not.toContain('name="initial_package_sessions_purchased"');
   expect(form).toContain('name="initial_pulse_device_key"');
   expect(form).toContain('name="initial_pulses_remaining"');
