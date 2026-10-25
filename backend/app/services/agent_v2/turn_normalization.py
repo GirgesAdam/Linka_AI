@@ -695,7 +695,7 @@ def _implicit_multi_book_visit_group(
     # Preserve one same-visit request when interpretation emits separate book ops.
     if len(operations) < 2:
         return {}
-    intents = {operation.execution_intent for operation in operations}
+    intents = {getattr(operation, "execution_intent", "execute") for operation in operations}
     if len(intents) != 1 or next(iter(intents)) not in {"execute", "informational"}:
         return {}
     if any(
