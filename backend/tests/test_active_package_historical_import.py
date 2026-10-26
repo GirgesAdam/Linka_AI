@@ -555,7 +555,9 @@ def test_historical_import_t1_template_adds_optional_customer_id_first() -> None
         assert "أكثر من ID مختلف" in readme_text
         assert "أكثر من باقة مختلفة" in readme_text
         assert "ترك المبلغ المدفوع فارغًا" in readme_text
-        assert "سعر الباقة كمبلغ مدفوع" in readme_text
+        assert "سعر الباقة والمبلغ المدفوع وتاريخ الشراء حقول اختيارية" in readme_text
+        assert "إذا تُرك السعر والمبلغ المدفوع فارغين معًا" in readme_text
+        assert "المطابقة تمامًا للخدمة والجهاز وعدد الجلسات" in readme_text
         assert [readme.cell(6, column).value for column in range(1, 12)] == expected_headers
         assert [sheet.cell(1, column).value for column in range(1, 12)] == expected_headers
         assert [sheet.cell(2, column).value for column in range(1, 12)] == [None] * 11
