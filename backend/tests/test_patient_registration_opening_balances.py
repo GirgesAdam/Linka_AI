@@ -140,8 +140,8 @@ def test_reception_registration_ui_and_api_keep_optional_balances_explicit() -> 
 
     assert "PatientRegistrationForm" in page
     assert 'pattern="01[0125][0-9]{8}"' in form
-    assert "initial_package_offer_id" in form
-    assert "initial_package_sessions_remaining" in form
+    assert "initial_packages_json" in form
+    assert "initial_packages: initialPackages" in actions
     assert "initial_pulse_device_key" in form
     assert "initial_pulses_remaining" in form
     assert '"/crm/patients/register"' in actions
@@ -208,10 +208,12 @@ def test_registration_rolls_back_patient_and_package_if_pulse_balance_fails(monk
             first_name="Ada",
             phone="01012345678",
             customer_id="000012",
-            initial_package_offer_id=offer.id,
-            initial_package_sessions_remaining=2,
-            initial_package_amount_paid_minor=120_000,
-            initial_package_payment_method="cash",
+            initial_packages=[{
+                "offer_id": offer.id,
+                "sessions_remaining": 2,
+                "amount_paid_minor": 120_000,
+                "payment_method": "cash",
+            }],
             initial_pulse_balances=[
                 {"device_key": "candela", "pulses_remaining": 500},
                 {"device_key": "invalid", "pulses_remaining": 250},
@@ -329,10 +331,12 @@ def test_registration_records_partial_package_payment_and_multiple_independent_p
             first_name="Ada",
             phone="01012345678",
             customer_id="000012",
-            initial_package_offer_id=offer.id,
-            initial_package_sessions_remaining=4,
-            initial_package_amount_paid_minor=400_000,
-            initial_package_payment_method="visa",
+            initial_packages=[{
+                "offer_id": offer.id,
+                "sessions_remaining": 4,
+                "amount_paid_minor": 400_000,
+                "payment_method": "visa",
+            }],
             initial_pulse_balances=[
                 {"device_key": "candela", "pulses_remaining": 500},
                 {"device_key": "alma", "pulses_remaining": 750},
@@ -404,9 +408,12 @@ def test_zero_package_payment_keeps_offer_price_and_creates_no_payment(monkeypat
             PatientRegistrationCreate(
                 first_name="Ada",
                 phone="01112345678",
-                initial_package_offer_id=offer.id,
-                initial_package_sessions_remaining=3,
-                initial_package_amount_paid_minor=0,
+                initial_packages=[{
+                    "offer_id": offer.id,
+                    "sessions_remaining": 3,
+                    "amount_paid_minor": 0,
+                    "payment_method": "cash",
+                }],
             ),
             access,
             db,
@@ -464,9 +471,12 @@ def test_invalid_opening_package_balance_rolls_back_patient_creation(monkeypatch
                 PatientRegistrationCreate(
                     first_name="Ada",
                     phone="01212345678",
-                    initial_package_offer_id=offer.id,
-                    initial_package_sessions_remaining=7,
-                    initial_package_amount_paid_minor=120_000,
+                    initial_packages=[{
+                        "offer_id": offer.id,
+                        "sessions_remaining": 7,
+                        "amount_paid_minor": 120_000,
+                        "payment_method": "cash",
+                    }],
                 ),
                 access,
                 db,

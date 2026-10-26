@@ -494,3 +494,58 @@ def test_booking_schema_preserves_selected_package_id() -> None:
         start_at=datetime.now(UTC) + timedelta(days=1),
     )
     assert payload.patient_package_id == package_id
+
+def test_multiple_active_packages_never_cross_service_or_duplicate_usage(monkeypatch) -> None:
+    monkeypatch.setattr(package_service, "record_activity_event", lambda *args, **kwargs: None)
+    engine = _package_engine()
+    workspace_id, patient_id = uuid4(), uuid4()
+    service_a, service_b = uuid4(), uuid4()
+    with Session(engine) as db:
+        package_a = _package(workspace_id=workspace_id, patient_id=patient_id, service_id=service_a)
+        package_a.external_id = "PKG-A"
+        package_b = _package(workspace_id=workspace_id, patient_id=patient_id, service_id=service_b)
+        package_b.external_id = "PKG-B"
+        db.add_all([package_a, package_b])
+        db.flush()
+        future = datetime.now(UTC) + timedelta(days=2)
+
+        with pytest.raises(PackageOperationError, match="different service"):
+            package_service.validate_package_for_booking(
+                db,
+                workspace_id=workspace_id,
+                package_id=package_b.id,
+                patient_id=patient_id,
+                service_id=service_a,
+                appointment_start_at=future,
+            )
+        selected_a = package_service.validate_package_for_booking(
+            db,
+            workspace_id=workspace_id,
+            package_id=package_a.id,
+            patient_id=patient_id,
+            service_id=service_a,
+            appointment_start_at=future,
+        )
+        appointment_a = _appointment(
+            workspace_id=workspace_id,
+            patient_id=patient_id,
+            service_id=service_a,
+        )
+        package_service.reserve_package_usage(db, appointment=appointment_a, package=selected_a)
+        package_service.reserve_package_usage(db, appointment=appointment_a, package=selected_a)
+
+        assert db.scalar(select(func.count()).select_from(PackageUsage)) == 1
+        usage = db.scalar(select(PackageUsage))
+        assert usage.patient_package_id == package_a.id
+        assert appointment_a.patient_package_id == package_a.id
+        assert package_service.package_read(db, package_b).sessions_reserved == 0
+
+        with pytest.raises(PackageOperationError, match="different service"):
+            package_service.validate_package_for_booking(
+                db,
+                workspace_id=workspace_id,
+                package_id=package_a.id,
+                patient_id=patient_id,
+                service_id=service_b,
+                appointment_start_at=future,
+            )

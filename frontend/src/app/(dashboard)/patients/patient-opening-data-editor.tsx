@@ -14,18 +14,18 @@ const CURRENT_PACKAGE = "__current_opening_package__";
 type OpeningData = {
   patient_id: string;
   customer_id: string | null;
-  package: {
+  packages: Array<{
     package_id: string;
     offer_id: string | null;
     service_id: string;
     name: string;
     sessions_total: number;
-    sessions_remaining: number;
+    opening_sessions_remaining: number;
     current_remaining: number;
     sessions_reserved: number;
     sessions_consumed: number;
     replaceable_identity: boolean;
-  } | null;
+  }>;
   pulse_balances: Array<{
     opening_pack_id: string;
     device_key: string;
@@ -37,6 +37,18 @@ type OpeningData = {
   }>;
 };
 
+type PackageRow = {
+  id: number;
+  packageId: string | null;
+  serviceId: string;
+  selectedOfferId: string;
+  name: string;
+  sessionsTotal: number | null;
+  sessionsRemaining: string;
+  currentRemaining: number | null;
+  replaceableIdentity: boolean;
+};
+
 type PulseRow = {
   id: number;
   deviceKey: string;
@@ -45,6 +57,20 @@ type PulseRow = {
   currentRemaining: number | null;
   replaceableIdentity: boolean;
 };
+
+function emptyPackageRow(id: number): PackageRow {
+  return {
+    id,
+    packageId: null,
+    serviceId: "",
+    selectedOfferId: "",
+    name: "",
+    sessionsTotal: null,
+    sessionsRemaining: "",
+    currentRemaining: null,
+    replaceableIdentity: true,
+  };
+}
 
 export function PatientOpeningDataEditor({
   patientId,
@@ -57,7 +83,8 @@ export function PatientOpeningDataEditor({
   devices: ClinicLaserDevice[];
   services: Service[];
 }) {
-  const nextRowId = useRef(1);
+  const nextPackageRowId = useRef(1);
+  const nextPulseRowId = useRef(1);
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -65,27 +92,32 @@ export function PatientOpeningDataEditor({
   const [success, setSuccess] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<OpeningData | null>(null);
   const [customerId, setCustomerId] = useState("");
-  const [selectedServiceId, setSelectedServiceId] = useState("");
-  const [selectedOfferId, setSelectedOfferId] = useState("");
-  const [sessionsRemaining, setSessionsRemaining] = useState("");
+  const [packageRows, setPackageRows] = useState<PackageRow[]>([]);
   const [pulseRows, setPulseRows] = useState<PulseRow[]>([]);
 
   function applyData(data: OpeningData) {
     setLoaded(data);
     setCustomerId(data.customer_id || "");
-    if (data.package) {
-      setSelectedServiceId(data.package.service_id);
-      const activeCurrent = data.package.offer_id
-        ? offers.some((offer) => offer.id === data.package?.offer_id && offer.is_active)
-        : false;
-      setSelectedOfferId(activeCurrent ? data.package.offer_id || "" : CURRENT_PACKAGE);
-      setSessionsRemaining(String(data.package.sessions_remaining));
-    } else {
-      setSelectedServiceId("");
-      setSelectedOfferId("");
-      setSessionsRemaining("");
-    }
-    nextRowId.current = data.pulse_balances.length + 1;
+    nextPackageRowId.current = data.packages.length + 1;
+    setPackageRows(
+      data.packages.map((pkg, index) => {
+        const activeCurrent = pkg.offer_id
+          ? offers.some((offer) => offer.id === pkg.offer_id && offer.is_active)
+          : false;
+        return {
+          id: index + 1,
+          packageId: pkg.package_id,
+          serviceId: pkg.service_id,
+          selectedOfferId: activeCurrent ? pkg.offer_id || "" : CURRENT_PACKAGE,
+          name: pkg.name,
+          sessionsTotal: pkg.sessions_total,
+          sessionsRemaining: String(pkg.opening_sessions_remaining),
+          currentRemaining: pkg.current_remaining,
+          replaceableIdentity: pkg.replaceable_identity,
+        };
+      }),
+    );
+    nextPulseRowId.current = data.pulse_balances.length + 1;
     setPulseRows(
       data.pulse_balances.map((balance, index) => ({
         id: index + 1,
@@ -113,14 +145,10 @@ export function PatientOpeningDataEditor({
     applyData(result.data as OpeningData);
   }
 
-  const currentPackage = loaded?.package || null;
-  const packageIdentityLocked = Boolean(currentPackage && !currentPackage.replaceable_identity);
-  const serviceOffers = getActiveOffersForService(offers, selectedServiceId);
-  const selectedOffer = serviceOffers.find((offer) => offer.id === selectedOfferId);
-  const maxSessions =
-    selectedOffer?.sessions_count ||
-    (currentPackage && selectedOfferId === CURRENT_PACKAGE ? currentPackage.sessions_total : null);
   const activeServices = services.filter((service) => service.is_active);
+  const selectedOfferIds = packageRows
+    .map((row) => row.selectedOfferId)
+    .filter((offerId) => offerId && offerId !== CURRENT_PACKAGE);
   const selectedDeviceKeys = pulseRows.map((row) => row.deviceKey).filter(Boolean);
 
   async function save() {
@@ -128,29 +156,42 @@ export function PatientOpeningDataEditor({
     setError(null);
     setSuccess(null);
 
-    let packagePayload: { offer_id: string | null; sessions_remaining: number } | null = null;
-    const hasPackage = Boolean(currentPackage || selectedOfferId);
-    if (hasPackage) {
-      const remaining = Number(sessionsRemaining);
-      if (!Number.isInteger(remaining) || remaining <= 0) {
-        setError("أدخل عدد الجلسات المتبقية بشكل صحيح.");
+    const packagePayload: Array<{
+      package_id: string | null;
+      offer_id: string | null;
+      sessions_remaining: number;
+    }> = [];
+    const seenOffers = new Set<string>();
+    for (const row of packageRows) {
+      const completelyBlank = !row.packageId && !row.serviceId && !row.selectedOfferId && !row.sessionsRemaining;
+      if (completelyBlank) continue;
+      const serviceOffers = getActiveOffersForService(offers, row.serviceId);
+      const selectedOffer = serviceOffers.find((offer) => offer.id === row.selectedOfferId);
+      const maxSessions = selectedOffer?.sessions_count || (row.selectedOfferId === CURRENT_PACKAGE ? row.sessionsTotal : null);
+      const remaining = Number(row.sessionsRemaining);
+      if (!row.serviceId || !row.selectedOfferId) {
+        setError("اختر الخدمة والباكيدج لكل رصيد افتتاحي.");
         return;
       }
-      if (!maxSessions || remaining > maxSessions) {
-        setError("عدد الجلسات المتبقية لا يمكن أن يتجاوز إجمالي جلسات الباكدج.");
+      if (!Number.isInteger(remaining) || remaining <= 0 || !maxSessions || remaining > maxSessions) {
+        setError("راجع عدد الجلسات المتبقية لكل باكيدج.");
         return;
       }
-      if (!selectedOfferId) {
-        setError("اختر عرض الباكدج قبل الحفظ.");
-        return;
+      if (row.selectedOfferId !== CURRENT_PACKAGE) {
+        if (seenOffers.has(row.selectedOfferId)) {
+          setError("لا يمكن تكرار نفس الباكيدج في الأرصدة الافتتاحية.");
+          return;
+        }
+        seenOffers.add(row.selectedOfferId);
       }
-      packagePayload = {
-        offer_id: selectedOfferId === CURRENT_PACKAGE ? null : selectedOfferId,
+      packagePayload.push({
+        package_id: row.packageId,
+        offer_id: row.selectedOfferId === CURRENT_PACKAGE ? null : row.selectedOfferId,
         sessions_remaining: remaining,
-      };
+      });
     }
 
-    const seen = new Set<string>();
+    const seenDevices = new Set<string>();
     const pulsePayload: Array<{ device_key: string; pulses_remaining: number }> = [];
     for (const row of pulseRows) {
       const pulses = Number(row.pulsesRemaining);
@@ -159,18 +200,18 @@ export function PatientOpeningDataEditor({
         return;
       }
       const key = row.deviceKey.toLocaleLowerCase();
-      if (seen.has(key)) {
+      if (seenDevices.has(key)) {
         setError("لا يمكن تكرار نفس الجهاز في أرصدة Pulse.");
         return;
       }
-      seen.add(key);
+      seenDevices.add(key);
       pulsePayload.push({ device_key: row.deviceKey, pulses_remaining: pulses });
     }
 
     setSaving(true);
     const result = await savePatientOpeningDataAction(patientId, {
       customer_id: customerId.trim() || null,
-      package: packagePayload,
+      packages: packagePayload,
       pulse_balances: pulsePayload,
     });
     setSaving(false);
@@ -196,76 +237,113 @@ export function PatientOpeningDataEditor({
           {loaded && (
             <>
               <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                Customer ID
+                ID
                 <Input value={customerId} onChange={(event) => setCustomerId(event.target.value)} dir="ltr" />
               </label>
 
-              <details open={Boolean(currentPackage)} className="rounded-xl border border-[var(--border)] p-3">
-                <summary className="cursor-pointer text-sm font-bold text-[var(--interactive)]">الرصيد الافتتاحي للباكدج</summary>
+              <details open={packageRows.length > 0} className="rounded-xl border border-[var(--border)] p-3">
+                <summary className="cursor-pointer text-sm font-bold text-[var(--interactive)]">أرصدة الباكيدجات الافتتاحية</summary>
                 <div className="mt-3 space-y-3">
-                  <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                    الخدمة
-                    <select
-                      value={selectedServiceId}
-                      disabled={packageIdentityLocked}
-                      onChange={(event) => {
-                        setSelectedServiceId(event.target.value);
-                        setSelectedOfferId("");
-                        setSessionsRemaining("");
-                      }}
-                      className="form-control h-10 min-h-10"
-                    >
-                      <option value="">اختر الخدمة</option>
-                      {currentPackage && !activeServices.some((service) => service.id === currentPackage.service_id) && (
-                        <option value={currentPackage.service_id}>{currentPackage.name} (الحالية)</option>
-                      )}
-                      {activeServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                    الباكدج
-                    <select
-                      value={selectedOfferId}
-                      disabled={packageIdentityLocked || !selectedServiceId}
-                      onChange={(event) => {
-                        setSelectedOfferId(event.target.value);
-                        setSessionsRemaining("");
-                      }}
-                      className="form-control h-10 min-h-10"
-                    >
-                      {!currentPackage && <option value="">بدون رصيد باكدج</option>}
-                      {currentPackage && selectedServiceId === currentPackage.service_id &&
-                        (selectedOfferId === CURRENT_PACKAGE || !currentPackage.offer_id) && (
-                          <option value={CURRENT_PACKAGE}>{currentPackage.name} · {currentPackage.sessions_total} جلسة (الحالية)</option>
+                  {packageRows.map((row, index) => {
+                    const identityLocked = Boolean(row.packageId && !row.replaceableIdentity);
+                    const serviceOffers = getActiveOffersForService(offers, row.serviceId);
+                    const availableOffers = serviceOffers.filter(
+                      (offer) => offer.id === row.selectedOfferId || !selectedOfferIds.includes(offer.id),
+                    );
+                    const selectedOffer = serviceOffers.find((offer) => offer.id === row.selectedOfferId);
+                    const maxSessions = selectedOffer?.sessions_count || (row.selectedOfferId === CURRENT_PACKAGE ? row.sessionsTotal : null);
+                    return (
+                      <div key={row.id} className="space-y-3 rounded-lg bg-[var(--surface-2)] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-black">باكيدج {index + 1}</div>
+                          {row.replaceableIdentity && (
+                            <button
+                              type="button"
+                              aria-label={`حذف الباكيدج ${index + 1}`}
+                              onClick={() => setPackageRows((current) => current.filter((item) => item.id !== row.id))}
+                              className="rounded-lg p-2 text-slate-500 hover:bg-white hover:text-red-700"
+                            >
+                              <Trash2 size={17} />
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            الخدمة
+                            <select
+                              value={row.serviceId}
+                              disabled={identityLocked}
+                              onChange={(event) => setPackageRows((current) => current.map((item) =>
+                                item.id === row.id
+                                  ? { ...item, serviceId: event.target.value, selectedOfferId: "", sessionsRemaining: "" }
+                                  : item,
+                              ))}
+                              className="form-control h-10 min-h-10"
+                            >
+                              <option value="">اختر الخدمة</option>
+                              {row.packageId && !activeServices.some((service) => service.id === row.serviceId) && (
+                                <option value={row.serviceId}>{row.name} (الحالية)</option>
+                              )}
+                              {activeServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+                            </select>
+                          </label>
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            الباكيدج
+                            <select
+                              value={row.selectedOfferId}
+                              disabled={identityLocked || !row.serviceId}
+                              onChange={(event) => setPackageRows((current) => current.map((item) =>
+                                item.id === row.id ? { ...item, selectedOfferId: event.target.value, sessionsRemaining: "" } : item,
+                              ))}
+                              className="form-control h-10 min-h-10"
+                            >
+                              <option value="">اختر الباكيدج</option>
+                              {row.packageId && row.selectedOfferId === CURRENT_PACKAGE && (
+                                <option value={CURRENT_PACKAGE}>{row.name} · {row.sessionsTotal} جلسة (الحالية)</option>
+                              )}
+                              {availableOffers.map((offer) => (
+                                <option key={offer.id} value={offer.id}>
+                                  {offer.device_name ? `${offer.device_name} · ` : ""}{offer.sessions_count} جلسة
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                          الجلسات المتبقية الافتتاحية
+                          <Input
+                            type="number"
+                            min={1}
+                            max={maxSessions || undefined}
+                            step={1}
+                            value={row.sessionsRemaining}
+                            disabled={!row.selectedOfferId}
+                            onChange={(event) => setPackageRows((current) => current.map((item) =>
+                              item.id === row.id ? { ...item, sessionsRemaining: event.target.value } : item,
+                            ))}
+                          />
+                          {row.currentRemaining !== null && (
+                            <span className="text-xs font-normal text-[var(--muted)]">المتاح حاليًا بعد الاستخدام: {row.currentRemaining}</span>
+                          )}
+                        </label>
+                        {identityLocked && (
+                          <p className="text-xs text-[var(--muted)]">يمكن تعديل الرصيد الافتتاحي، لكن لا يمكن تغيير أو حذف هذه الباكيدج لوجود تاريخ مسجل عليها.</p>
                         )}
-                      {serviceOffers.map((offer) => (
-                        <option key={offer.id} value={offer.id}>
-                          {offer.device_name ? `${offer.device_name} · ` : ""}{offer.sessions_count} جلسة
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {(currentPackage || selectedOfferId) && (
-                    <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                      الجلسات المتبقية الافتتاحية
-                      <Input
-                        type="number"
-                        min={1}
-                        max={maxSessions || undefined}
-                        step={1}
-                        value={sessionsRemaining}
-                        onChange={(event) => setSessionsRemaining(event.target.value)}
-                      />
-                      {currentPackage && (
-                        <span className="text-xs font-normal text-[var(--muted)]">
-                          المتاح حاليًا بعد الاستخدام: {currentPackage.current_remaining}
-                        </span>
-                      )}
-                    </label>
-                  )}
-                  {packageIdentityLocked && (
-                    <p className="text-xs text-[var(--muted)]">يمكن تعديل الرصيد الافتتاحي، لكن لا يمكن تغيير هوية الباكدج لوجود تاريخ مسجل عليها.</p>
-                  )}
+                      </div>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={packageRows.length >= 20}
+                    onClick={() => {
+                      const id = nextPackageRowId.current++;
+                      setPackageRows((current) => [...current, emptyPackageRow(id)]);
+                    }}
+                  >
+                    <Plus size={16} />
+                    إضافة باكيدج أخرى
+                  </Button>
                 </div>
               </details>
 
@@ -324,11 +402,12 @@ export function PatientOpeningDataEditor({
                   })}
                   <Button
                     type="button"
+                    variant="outline"
                     disabled={pulseRows.length >= devices.length}
                     onClick={() => {
                       const device = devices.find((item) => !selectedDeviceKeys.includes(item.device_key));
                       if (!device) return;
-                      const id = nextRowId.current++;
+                      const id = nextPulseRowId.current++;
                       setPulseRows((current) => [...current, {
                         id,
                         deviceKey: device.device_key,

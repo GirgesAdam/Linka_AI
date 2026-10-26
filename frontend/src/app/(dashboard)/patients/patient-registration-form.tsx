@@ -21,42 +21,54 @@ type RegistrationState = {
   duplicatePhone?: string | null;
   duplicateAttempt?: string | null;
 };
+type PackageRow = {
+  id: number;
+  serviceId: string;
+  offerId: string;
+  sessionsRemaining: string;
+  amountPaidEgp: string;
+  paymentMethod: "cash" | "visa" | "instapay";
+};
 type PulseRow = { id: number; deviceKey: string; pulsesRemaining: string };
 
 const copy = {
-  title: "\u062a\u0633\u062c\u064a\u0644 \u0639\u0645\u064a\u0644 \u062c\u062f\u064a\u062f",
-  description: "\u0623\u062f\u062e\u0644 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u0639\u0645\u064a\u0644\u060c \u0648\u0623\u0636\u0641 \u0623\u0631\u0635\u062f\u0629 \u0627\u0641\u062a\u062a\u0627\u062d\u064a\u0629 \u0625\u0630\u0627 \u0644\u0632\u0645.",
-  open: "\u062a\u0633\u062c\u064a\u0644 \u0639\u0645\u064a\u0644 \u062c\u062f\u064a\u062f",
-  close: "\u0625\u063a\u0644\u0627\u0642",
-  firstName: "\u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u0623\u0648\u0644 *",
-  lastName: "\u0627\u0633\u0645 \u0627\u0644\u0639\u0627\u0626\u0644\u0629",
-  phone: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 *",
-  phoneHint: "\u0623\u062f\u062e\u0644 11 \u0631\u0642\u0645\u064b\u0627 \u064a\u0628\u062f\u0623 \u0628\u0640 010 \u0623\u0648 011 \u0623\u0648 012 \u0623\u0648 015",
-  customerId: "Customer ID (\u0627\u062e\u062a\u064a\u0627\u0631\u064a)",
-  packageSection: "\u0631\u0635\u064a\u062f \u0627\u0644\u0628\u0627\u0643\u062f\u062c (\u0627\u062e\u062a\u064a\u0627\u0631\u064a)",
-  packageHelp: "\u0627\u062e\u062a\u0631 \u0627\u0644\u062e\u062f\u0645\u0629 \u0623\u0648\u0644\u064b\u0627\u060c \u062b\u0645 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0627\u0644\u0645\u0641\u0639\u0651\u0644. \u0625\u062c\u0645\u0627\u0644\u064a \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0648\u0633\u0639\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0645\u0623\u062e\u0648\u0630\u0627\u0646 \u0645\u0646 \u0627\u0644\u0639\u0631\u0636 \u0627\u0644\u0645\u062e\u062a\u0627\u0631.",
-  service: "\u0627\u0644\u062e\u062f\u0645\u0629",
-  chooseService: "\u0627\u062e\u062a\u0631 \u0627\u0644\u062e\u062f\u0645\u0629 \u0623\u0648\u0644\u064b\u0627",
-  packageOffer: "\u0639\u0631\u0636 \u0627\u0644\u0628\u0627\u0643\u062f\u062c",
-  noPackage: "\u0628\u062f\u0648\u0646 \u0631\u0635\u064a\u062f \u0628\u0627\u0643\u062f\u062c",
-  noOffers: "\u0644\u0627 \u062a\u0648\u062c\u062f \u0639\u0631\u0648\u0636 \u0628\u0627\u0643\u062f\u062c \u0645\u0641\u0639\u0651\u0644\u0629 \u0644\u0647\u0630\u0647 \u0627\u0644\u062e\u062f\u0645\u0629.",
-  sessionsRemaining: "\u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629",
-  amountPaid: "\u0627\u0644\u0645\u0628\u0644\u063a \u0627\u0644\u0645\u062f\u0641\u0648\u0639 (\u062c\u0646\u064a\u0647)",
-  packagePrice: "\u0633\u0639\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c",
-  outstanding: "\u0627\u0644\u0645\u062a\u0628\u0642\u064a",
-  paymentMethod: "\u0637\u0631\u064a\u0642\u0629 \u0627\u0644\u062f\u0641\u0639",
-  pulseSection: "\u0631\u0635\u064a\u062f Pulse (\u0627\u062e\u062a\u064a\u0627\u0631\u064a)",
-  pulseHelp: "\u0623\u0636\u0641 \u0631\u0635\u064a\u062f \u0627\u0644\u0646\u0628\u0636\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629 \u0644\u0643\u0644 \u062c\u0647\u0627\u0632 \u0628\u0634\u0643\u0644 \u0645\u0633\u062a\u0642\u0644. \u0644\u0627 \u064a\u062a\u0645 \u062a\u0633\u062c\u064a\u0644 \u0623\u0633\u0639\u0627\u0631 \u0623\u0648 \u0645\u062f\u0641\u0648\u0639\u0627\u062a \u0623\u0648 \u0627\u0633\u062a\u062e\u062f\u0627\u0645\u0627\u062a \u062a\u0627\u0631\u064a\u062e\u064a\u0629.",
-  device: "\u062c\u0647\u0627\u0632 \u0627\u0644\u0644\u064a\u0632\u0631",
-  chooseDevice: "\u0627\u062e\u062a\u0631 \u0627\u0644\u062c\u0647\u0627\u0632",
-  noPulse: "\u0628\u062f\u0648\u0646 \u0631\u0635\u064a\u062f Pulse",
-  pulsesRemaining: "\u0627\u0644\u0646\u0628\u0636\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629",
-  addDevice: "\u0625\u0636\u0627\u0641\u0629 \u062c\u0647\u0627\u0632",
-  removeDevice: "\u062d\u0630\u0641 \u0627\u0644\u062c\u0647\u0627\u0632",
-  noDevices: "\u0644\u0627 \u062a\u0648\u062c\u062f \u0623\u062c\u0647\u0632\u0629 \u0644\u064a\u0632\u0631 \u0645\u0641\u0639\u0651\u0644\u0629.",
-  pending: "\u062c\u0627\u0631\u064d \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0639\u0645\u064a\u0644...",
-  submit: "\u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0639\u0645\u064a\u0644",
+  title: "تسجيل عميل",
+  description: "أدخل بيانات العميل، وأضف أرصدة افتتاحية إذا لزم.",
+  open: "تسجيل عميل",
+  close: "إغلاق",
+  name: "الاسم *",
+  phone: "رقم الموبايل *",
+  phoneHint: "أدخل 11 رقمًا يبدأ بـ 010 أو 011 أو 012 أو 015",
+  id: "ID (اختياري)",
+  packageSection: "أرصدة الباكيدجات (اختياري)",
+  packageHelp: "يمكن إضافة أكثر من باكيدج، ولكل باكيدج رصيد ومدفوعات مستقلة.",
+  service: "الخدمة",
+  chooseService: "اختر الخدمة",
+  packageOffer: "الباكيدج",
+  choosePackage: "اختر الباكيدج",
+  noOffers: "لا توجد عروض باكيدج مفعّلة لهذه الخدمة.",
+  sessionsRemaining: "الجلسات المتبقية",
+  amountPaid: "المبلغ المدفوع (جنيه)",
+  packagePrice: "سعر الباكيدج",
+  outstanding: "المتبقي",
+  paymentMethod: "طريقة الدفع",
+  addPackage: "إضافة باكيدج",
+  removePackage: "حذف الباكيدج",
+  pulseSection: "رصيد Pulse (اختياري)",
+  pulseHelp: "أضف رصيد النبضات المتبقية لكل جهاز بشكل مستقل. لا يتم تسجيل أسعار أو مدفوعات أو استخدامات تاريخية.",
+  device: "جهاز الليزر",
+  noPulse: "بدون رصيد Pulse",
+  pulsesRemaining: "النبضات المتبقية",
+  addDevice: "إضافة جهاز",
+  removeDevice: "حذف الجهاز",
+  noDevices: "لا توجد أجهزة ليزر مفعّلة.",
+  pending: "جارٍ تسجيل العميل...",
+  submit: "تسجيل العميل",
 };
+
+function emptyPackageRow(id: number): PackageRow {
+  return { id, serviceId: "", offerId: "", sessionsRemaining: "", amountPaidEgp: "", paymentMethod: "cash" };
+}
 
 export function PatientRegistrationForm({
   offers,
@@ -74,9 +86,8 @@ export function PatientRegistrationForm({
   const [isOpen, setIsOpen] = useState(false);
   const [phone, setPhone] = useState("");
   const [duplicateAttempt, setDuplicateAttempt] = useState(0);
-  const [selectedServiceId, setSelectedServiceId] = useState("");
-  const [selectedOfferId, setSelectedOfferId] = useState("");
-  const [amountPaidEgp, setAmountPaidEgp] = useState("");
+  const [packageRows, setPackageRows] = useState<PackageRow[]>([emptyPackageRow(0)]);
+  const [nextPackageRowId, setNextPackageRowId] = useState(1);
   const [pulseRows, setPulseRows] = useState<PulseRow[]>([
     { id: 0, deviceKey: "", pulsesRemaining: "" },
   ]);
@@ -98,18 +109,8 @@ export function PatientRegistrationForm({
   }, [isOpen, closeRegistrationModal]);
 
   const activeServices = services.filter((service) => service.is_active);
-  const serviceOffers = getActiveOffersForService(offers, selectedServiceId);
-  const selectedOffer = serviceOffers.find((offer) => offer.id === selectedOfferId);
+  const selectedOfferIds = packageRows.map((row) => row.offerId).filter(Boolean);
   const selectedDeviceKeys = pulseRows.map((row) => row.deviceKey).filter(Boolean);
-  let paidMinorPreview = 0;
-  try {
-    paidMinorPreview = parseEgpAmountToMinor(amountPaidEgp);
-  } catch {
-    paidMinorPreview = 0;
-  }
-  const outstandingPreview = selectedOffer
-    ? Math.max(0, selectedOffer.price_minor - paidMinorPreview)
-    : 0;
   const activeDuplicatePatient = state.existingPatient && isCurrentDuplicateRegistration(
     state.duplicatePhone,
     state.duplicateAttempt,
@@ -119,6 +120,12 @@ export function PatientRegistrationForm({
     ? state.existingPatient
     : null;
   const visibleError = state.existingPatient ? (activeDuplicatePatient ? state.error : null) : state.error;
+  const packagePayload = packageRows.map((row) => ({
+    offer_id: row.offerId,
+    sessions_remaining: row.sessionsRemaining,
+    amount_paid_egp: row.amountPaidEgp,
+    payment_method: row.paymentMethod,
+  }));
 
   return (
     <>
@@ -161,14 +168,11 @@ export function PatientRegistrationForm({
 
             <form action={formAction} className="space-y-4 p-5">
               <input type="hidden" name="duplicate_attempt" value={String(duplicateAttempt)} />
+              <input type="hidden" name="initial_packages_json" value={JSON.stringify(packagePayload)} />
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                  {copy.firstName}
-                  <Input name="first_name" autoComplete="given-name" maxLength={120} required />
-                </label>
-                <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                  {copy.lastName}
-                  <Input name="last_name" autoComplete="family-name" maxLength={120} />
+                  {copy.name}
+                  <Input name="name" autoComplete="name" maxLength={120} required />
                 </label>
                 <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
                   {copy.phone}
@@ -187,8 +191,8 @@ export function PatientRegistrationForm({
                     required
                   />
                 </label>
-                <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                  {copy.customerId}
+                <label className="grid gap-1.5 text-sm font-semibold text-slate-700 sm:col-span-2">
+                  {copy.id}
                   <Input name="customer_id" maxLength={200} dir="ltr" />
                 </label>
               </div>
@@ -199,98 +203,153 @@ export function PatientRegistrationForm({
                 </summary>
                 <div className="mt-3 space-y-3">
                   <p className="text-xs leading-5 text-[var(--muted)]">{copy.packageHelp}</p>
-                  <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                    {copy.service}
-                    <select
-                      value={selectedServiceId}
-                      onChange={(event) => {
-                        setSelectedServiceId(event.target.value);
-                        setSelectedOfferId("");
-                        setAmountPaidEgp("");
-                      }}
-                      className="form-control h-10 min-h-10"
-                    >
-                      <option value="">{copy.chooseService}</option>
-                      {activeServices.map((service) => (
-                        <option key={service.id} value={service.id}>{service.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                    {copy.packageOffer}
-                    <select
-                      name="initial_package_offer_id"
-                      value={selectedOfferId}
-                      disabled={!selectedServiceId}
-                      onChange={(event) => {
-                        const offerId = event.target.value;
-                        const offer = serviceOffers.find((item) => item.id === offerId);
-                        setSelectedOfferId(offerId);
-                        setAmountPaidEgp(offer ? (offer.price_minor / 100).toFixed(2) : "");
-                      }}
-                      className="form-control h-10 min-h-10"
-                    >
-                      <option value="">{copy.noPackage}</option>
-                      {serviceOffers.map((offer) => (
-                        <option key={offer.id} value={offer.id}>
-                          {offer.device_name ? offer.device_name + " - " : ""}
-                          {offer.sessions_count} {"\u062c\u0644\u0633\u0629"} - {(offer.price_minor / 100).toFixed(2)} EGP
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {selectedServiceId && serviceOffers.length === 0 && (
-                    <p className="rounded-lg bg-[var(--surface-2)] p-3 text-xs text-[var(--muted)]">{copy.noOffers}</p>
-                  )}
-                  {selectedOffer && (
-                    <>
-                      <div className="grid gap-2 rounded-lg bg-[var(--surface-2)] p-3 text-sm sm:grid-cols-2">
-                        <div>
-                          <div className="text-xs text-[var(--muted)]">{copy.packagePrice}</div>
-                          <div className="mt-1 font-bold">{(selectedOffer.price_minor / 100).toFixed(2)} EGP</div>
+                  {packageRows.map((row, index) => {
+                    const serviceOffers = getActiveOffersForService(offers, row.serviceId);
+                    const availableOffers = serviceOffers.filter(
+                      (offer) => offer.id === row.offerId || !selectedOfferIds.includes(offer.id),
+                    );
+                    const selectedOffer = serviceOffers.find((offer) => offer.id === row.offerId);
+                    let paidMinorPreview = 0;
+                    try {
+                      paidMinorPreview = parseEgpAmountToMinor(row.amountPaidEgp || "0");
+                    } catch {
+                      paidMinorPreview = 0;
+                    }
+                    const outstandingPreview = selectedOffer
+                      ? Math.max(0, selectedOffer.price_minor - paidMinorPreview)
+                      : 0;
+                    return (
+                      <div key={row.id} className="space-y-3 rounded-xl bg-[var(--surface-2)] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-black">باكيدج {index + 1}</div>
+                          {packageRows.length > 1 && (
+                            <button
+                              type="button"
+                              aria-label={`${copy.removePackage} ${index + 1}`}
+                              onClick={() => setPackageRows((current) => current.filter((item) => item.id !== row.id))}
+                              className="rounded-lg p-2 text-slate-500 hover:bg-white hover:text-red-700"
+                            >
+                              <Trash2 size={17} />
+                            </button>
+                          )}
                         </div>
-                        <div>
-                          <div className="text-xs text-[var(--muted)]">{copy.outstanding}</div>
-                          <div className="mt-1 font-bold">{(outstandingPreview / 100).toFixed(2)} EGP</div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            {copy.service}
+                            <select
+                              value={row.serviceId}
+                              onChange={(event) => setPackageRows((current) => current.map((item) =>
+                                item.id === row.id
+                                  ? { ...item, serviceId: event.target.value, offerId: "", sessionsRemaining: "", amountPaidEgp: "" }
+                                  : item,
+                              ))}
+                              className="form-control h-10 min-h-10"
+                            >
+                              <option value="">{copy.chooseService}</option>
+                              {activeServices.map((service) => <option key={service.id} value={service.id}>{service.name}</option>)}
+                            </select>
+                          </label>
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            {copy.packageOffer}
+                            <select
+                              value={row.offerId}
+                              disabled={!row.serviceId}
+                              onChange={(event) => {
+                                const offerId = event.target.value;
+                                const offer = serviceOffers.find((item) => item.id === offerId);
+                                setPackageRows((current) => current.map((item) =>
+                                  item.id === row.id
+                                    ? {
+                                        ...item,
+                                        offerId,
+                                        sessionsRemaining: "",
+                                        amountPaidEgp: offer ? (offer.price_minor / 100).toFixed(2) : "",
+                                      }
+                                    : item,
+                                ));
+                              }}
+                              className="form-control h-10 min-h-10"
+                            >
+                              <option value="">{copy.choosePackage}</option>
+                              {availableOffers.map((offer) => (
+                                <option key={offer.id} value={offer.id}>
+                                  {offer.device_name ? `${offer.device_name} - ` : ""}{offer.sessions_count} جلسة - {(offer.price_minor / 100).toFixed(2)} EGP
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                         </div>
+                        {row.serviceId && serviceOffers.length === 0 && (
+                          <p className="rounded-lg bg-white p-3 text-xs text-[var(--muted)]">{copy.noOffers}</p>
+                        )}
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            {copy.sessionsRemaining}
+                            <Input
+                              type="number"
+                              min={1}
+                              max={selectedOffer?.sessions_count}
+                              step={1}
+                              value={row.sessionsRemaining}
+                              disabled={!selectedOffer}
+                              onChange={(event) => setPackageRows((current) => current.map((item) =>
+                                item.id === row.id ? { ...item, sessionsRemaining: event.target.value } : item,
+                              ))}
+                            />
+                          </label>
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            {copy.amountPaid}
+                            <Input
+                              type="number"
+                              min={0}
+                              max={selectedOffer ? (selectedOffer.price_minor / 100).toFixed(2) : undefined}
+                              step="0.01"
+                              value={row.amountPaidEgp}
+                              disabled={!selectedOffer}
+                              onChange={(event) => setPackageRows((current) => current.map((item) =>
+                                item.id === row.id ? { ...item, amountPaidEgp: event.target.value } : item,
+                              ))}
+                            />
+                          </label>
+                          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                            {copy.paymentMethod}
+                            <select
+                              value={row.paymentMethod}
+                              disabled={!selectedOffer}
+                              onChange={(event) => setPackageRows((current) => current.map((item) =>
+                                item.id === row.id
+                                  ? { ...item, paymentMethod: event.target.value as PackageRow["paymentMethod"] }
+                                  : item,
+                              ))}
+                              className="form-control h-10 min-h-10"
+                            >
+                              <option value="cash">Cash</option>
+                              <option value="visa">Visa</option>
+                              <option value="instapay">InstaPay</option>
+                            </select>
+                          </label>
+                        </div>
+                        {selectedOffer && (
+                          <div className="grid gap-2 rounded-lg bg-white p-3 text-sm sm:grid-cols-2">
+                            <div><div className="text-xs text-[var(--muted)]">{copy.packagePrice}</div><div className="mt-1 font-bold">{(selectedOffer.price_minor / 100).toFixed(2)} EGP</div></div>
+                            <div><div className="text-xs text-[var(--muted)]">{copy.outstanding}</div><div className="mt-1 font-bold">{(outstandingPreview / 100).toFixed(2)} EGP</div></div>
+                          </div>
+                        )}
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                          {copy.sessionsRemaining}
-                          <Input
-                            name="initial_package_sessions_remaining"
-                            type="number"
-                            min={1}
-                            max={selectedOffer.sessions_count}
-                            step={1}
-                            required
-                            placeholder={"1 - " + selectedOffer.sessions_count}
-                          />
-                        </label>
-                        <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                          {copy.amountPaid}
-                          <Input
-                            name="initial_package_amount_paid_egp"
-                            type="number"
-                            min={0}
-                            max={(selectedOffer.price_minor / 100).toFixed(2)}
-                            step="0.01"
-                            value={amountPaidEgp}
-                            onChange={(event) => setAmountPaidEgp(event.target.value)}
-                            required
-                          />
-                        </label>
-                      </div>
-                      <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                        {copy.paymentMethod}
-                        <select name="initial_package_payment_method" defaultValue="cash" className="form-control h-10 min-h-10">
-                          <option value="cash">Cash</option>
-                          <option value="visa">Visa</option>
-                          <option value="instapay">InstaPay</option>
-                        </select>
-                      </label>
-                    </>
-                  )}
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={packageRows.length >= 20}
+                    onClick={() => {
+                      setPackageRows((current) => [...current, emptyPackageRow(nextPackageRowId)]);
+                      setNextPackageRowId((current) => current + 1);
+                    }}
+                  >
+                    <Plus size={16} />
+                    {copy.addPackage}
+                  </Button>
                 </div>
               </details>
 
@@ -316,16 +375,12 @@ export function PatientRegistrationForm({
                                 name="initial_pulse_device_key"
                                 value={row.deviceKey}
                                 onChange={(event) => setPulseRows((current) => current.map((item) =>
-                                  item.id === row.id
-                                    ? { ...item, deviceKey: event.target.value, pulsesRemaining: "" }
-                                    : item,
+                                  item.id === row.id ? { ...item, deviceKey: event.target.value, pulsesRemaining: "" } : item,
                                 ))}
                                 className="form-control h-10 min-h-10"
                               >
                                 <option value="">{copy.noPulse}</option>
-                                {availableDevices.map((device) => (
-                                  <option key={device.id} value={device.device_key}>{device.name}</option>
-                                ))}
+                                {availableDevices.map((device) => <option key={device.id} value={device.device_key}>{device.name}</option>)}
                               </select>
                             </label>
                             <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
@@ -346,7 +401,7 @@ export function PatientRegistrationForm({
                             {pulseRows.length > 1 && (
                               <button
                                 type="button"
-                                aria-label={copy.removeDevice + " " + (index + 1)}
+                                aria-label={`${copy.removeDevice} ${index + 1}`}
                                 onClick={() => setPulseRows((current) => current.filter((item) => item.id !== row.id))}
                                 className="self-end rounded-lg p-2 text-slate-500 hover:bg-white hover:text-red-700"
                               >
@@ -358,6 +413,7 @@ export function PatientRegistrationForm({
                       })}
                       <Button
                         type="button"
+                        variant="outline"
                         disabled={pulseRows.length >= devices.length}
                         onClick={() => {
                           setPulseRows((current) => [...current, { id: nextPulseRowId, deviceKey: "", pulsesRemaining: "" }]);
@@ -398,9 +454,7 @@ export function PatientRegistrationForm({
 
               <div className="flex justify-end gap-2">
                 <Button type="button" onClick={closeRegistrationModal}>{copy.close}</Button>
-                <Button type="submit" disabled={pending}>
-                  {pending ? copy.pending : copy.submit}
-                </Button>
+                <Button type="submit" disabled={pending}>{pending ? copy.pending : copy.submit}</Button>
               </div>
             </form>
           </section>

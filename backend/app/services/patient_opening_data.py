@@ -18,6 +18,7 @@ from app.schemas.patient_opening_data import (
     PatientOpeningDataRead,
     PatientOpeningDataUpdate,
     PatientOpeningPackageRead,
+    PatientOpeningPackageUpdate,
     PatientOpeningPulseRead,
 )
 from app.services.activity import record_activity_event
@@ -71,12 +72,7 @@ def _opening_packages(
     )
     if for_update:
         stmt = stmt.with_for_update()
-    packages = list(db.scalars(stmt.order_by(PatientPackage.created_at, PatientPackage.id)).all())
-    if len(packages) > 1:
-        raise PatientOpeningDataConflict(
-            "This patient has multiple active opening packages, so the opening package cannot be corrected automatically."
-        )
-    return packages
+    return list(db.scalars(stmt.order_by(PatientPackage.created_at, PatientPackage.id)).all())
 
 
 def _opening_pulse_packs(
@@ -261,7 +257,7 @@ def _package_read(
         service_id=package.service_id,
         name=package.name,
         sessions_total=int(package.sessions_purchased),
-        sessions_remaining=int(package.opening_sessions_remaining or 0),
+        opening_sessions_remaining=int(package.opening_sessions_remaining or 0),
         current_remaining=int(read.sessions_remaining),
         sessions_reserved=int(read.sessions_reserved),
         sessions_consumed=int(read.sessions_consumed),
@@ -316,11 +312,10 @@ def get_patient_opening_data(
     return PatientOpeningDataRead(
         patient_id=patient.id,
         customer_id=patient.customer_id,
-        package=(
-            _package_read(db, workspace_id=workspace_id, package=packages[0])
-            if packages
-            else None
-        ),
+        packages=[
+            _package_read(db, workspace_id=workspace_id, package=package)
+            for package in packages
+        ],
         pulse_balances=[
             _pulse_read(db, workspace_id=workspace_id, pack=pack) for pack in pulse_packs
         ],
@@ -343,70 +338,113 @@ def update_patient_opening_data(
     if patient is None:
         raise PatientOpeningDataNotFound("Patient not found.")
 
-    require_tia_patient_fields_writable(
-        db,
-        workspace_id=workspace_id,
-        patient_id=patient.id,
-        fields={"customer_id"},
-    )
+    customer_id_changed = payload.customer_id != patient.customer_id
+    if customer_id_changed:
+        require_tia_patient_fields_writable(
+            db,
+            workspace_id=workspace_id,
+            patient_id=patient.id,
+            fields={"customer_id"},
+        )
 
-    packages = _opening_packages(
+    current_packages = _opening_packages(
         db, workspace_id=workspace_id, patient_id=patient_id, for_update=True
     )
-    current_package = packages[0] if packages else None
-    package_usages: list[PackageUsage] = []
-    reserved = consumed = 0
-    if current_package is not None:
-        package_usages = _package_usage_rows(
-            db, workspace_id=workspace_id, package_id=current_package.id, for_update=True
-        )
-        reserved = sum(int(row.sessions_used) for row in package_usages if row.status == "reserved")
-        consumed = sum(int(row.sessions_used) for row in package_usages if row.status == "consumed")
+    current_by_id = {package.id: package for package in current_packages}
+    requested_existing_ids = {
+        item.package_id for item in payload.packages if item.package_id is not None
+    }
+    unknown_ids = requested_existing_ids - set(current_by_id)
+    if unknown_ids:
+        raise PatientOpeningDataNotFound("Opening package not found for this patient.")
 
-    desired_offer: ServicePackageOffer | None = None
-    replacing_package = False
-    if payload.package is not None:
-        if current_package is not None and (
-            payload.package.offer_id is None
-            or payload.package.offer_id == current_package.package_offer_id
+    usage_by_package_id: dict[UUID, list[PackageUsage]] = {}
+    totals_by_package_id: dict[UUID, tuple[int, int]] = {}
+    for package in current_packages:
+        usages = _package_usage_rows(
+            db, workspace_id=workspace_id, package_id=package.id, for_update=True
+        )
+        usage_by_package_id[package.id] = usages
+        reserved = sum(int(row.sessions_used) for row in usages if row.status == "reserved")
+        consumed = sum(int(row.sessions_used) for row in usages if row.status == "consumed")
+        totals_by_package_id[package.id] = (reserved, consumed)
+
+    package_plans: list[
+        tuple[PatientOpeningPackageUpdate, PatientPackage | None, ServicePackageOffer | None, bool]
+    ] = []
+    effective_offer_ids: set[UUID] = set()
+    for item in payload.packages:
+        current = current_by_id.get(item.package_id) if item.package_id is not None else None
+        desired_offer: ServicePackageOffer | None = None
+        replacing = False
+        if current is not None and (
+            item.offer_id is None or item.offer_id == current.package_offer_id
         ):
-            if payload.package.sessions_remaining > int(current_package.sessions_purchased):
+            reserved, consumed = totals_by_package_id[current.id]
+            if item.sessions_remaining > int(current.sessions_purchased):
                 raise PatientOpeningDataConflict(
                     "Opening package balance cannot exceed the package total session count."
                 )
-            if payload.package.sessions_remaining < reserved + consumed:
+            if item.sessions_remaining < reserved + consumed:
                 raise PatientOpeningDataConflict(
                     "Opening package balance cannot be lower than the sessions already reserved or consumed."
                 )
+            effective_offer_id = current.package_offer_id
         else:
-            if payload.package.offer_id is None:
-                raise PatientOpeningDataConflict("Choose a package offer before adding an opening package.")
+            if item.offer_id is None:
+                raise PatientOpeningDataConflict(
+                    "Choose a package offer before adding or replacing an opening package."
+                )
             desired_offer = db.scalar(
                 select(ServicePackageOffer)
                 .where(
                     ServicePackageOffer.workspace_id == workspace_id,
-                    ServicePackageOffer.id == payload.package.offer_id,
+                    ServicePackageOffer.id == item.offer_id,
                     ServicePackageOffer.is_active.is_(True),
                 )
                 .with_for_update()
             )
             if desired_offer is None:
                 raise PatientOpeningDataNotFound("Active package offer not found.")
-            if payload.package.sessions_remaining > int(desired_offer.sessions_count):
+            if item.sessions_remaining > int(desired_offer.sessions_count):
                 raise PatientOpeningDataConflict(
                     "Opening package balance cannot exceed the selected package total session count."
                 )
-            replacing_package = current_package is not None
-            if current_package is not None and not _package_identity_replaceable(
+            replacing = current is not None
+            if current is not None and not _package_identity_replaceable(
                 db,
                 workspace_id=workspace_id,
-                package=current_package,
-                usage_rows=package_usages,
+                package=current,
+                usage_rows=usage_by_package_id[current.id],
                 for_update=True,
             ):
                 raise PatientOpeningDataConflict(
                     "لا يمكن استبدال هذه الباكدج لأن عليها استخدام أو تاريخ مالي مسجل بالفعل. يمكن تعديل الرصيد الافتتاحي فقط بما يتوافق مع الاستخدام الحالي."
                 )
+            effective_offer_id = desired_offer.id
+
+        if effective_offer_id is not None:
+            if effective_offer_id in effective_offer_ids:
+                raise PatientOpeningDataConflict(
+                    "لا يمكن تكرار نفس عرض الباكدج ضمن الأرصدة الافتتاحية."
+                )
+            effective_offer_ids.add(effective_offer_id)
+        package_plans.append((item, current, desired_offer, replacing))
+
+    removed_packages = [
+        package for package in current_packages if package.id not in requested_existing_ids
+    ]
+    for package in removed_packages:
+        if not _package_identity_replaceable(
+            db,
+            workspace_id=workspace_id,
+            package=package,
+            usage_rows=usage_by_package_id[package.id],
+            for_update=True,
+        ):
+            raise PatientOpeningDataConflict(
+                "لا يمكن حذف هذه الباكدج لأن عليها استخدام أو تاريخ مالي مسجل بالفعل."
+            )
 
     current_pulse_packs = _opening_pulse_packs(
         db, workspace_id=workspace_id, patient_id=patient_id, for_update=True
@@ -473,11 +511,37 @@ def update_patient_opening_data(
             metadata={"customer_id_changed": True},
         )
 
-    if payload.package is not None:
-        if current_package is not None and not replacing_package:
-            old_remaining = int(current_package.opening_sessions_remaining or 0)
-            current_package.opening_sessions_remaining = payload.package.sessions_remaining
-            if old_remaining != payload.package.sessions_remaining:
+    replacing_ids = {
+        current.id
+        for _item, current, _offer, replacing in package_plans
+        if replacing and current is not None
+    }
+    for package in removed_packages:
+        record_activity_event(
+            db,
+            workspace_id=workspace_id,
+            actor_type="staff",
+            actor_user_id=actor_user_id,
+            action="package.opening_balance_corrected",
+            entity_type="patient_package",
+            entity_id=package.id,
+            summary="Opening package removed",
+            metadata={
+                "old_offer_id": str(package.package_offer_id) if package.package_offer_id else None,
+                "old_remaining": int(package.opening_sessions_remaining or 0),
+            },
+        )
+        db.delete(package)
+    for package_id in replacing_ids:
+        db.delete(current_by_id[package_id])
+    if removed_packages or replacing_ids:
+        db.flush()
+
+    for item, current, desired_offer, replacing in package_plans:
+        if current is not None and not replacing:
+            old_remaining = int(current.opening_sessions_remaining or 0)
+            current.opening_sessions_remaining = item.sessions_remaining
+            if old_remaining != item.sessions_remaining:
                 record_activity_event(
                     db,
                     workspace_id=workspace_id,
@@ -485,48 +549,46 @@ def update_patient_opening_data(
                     actor_user_id=actor_user_id,
                     action="package.opening_balance_corrected",
                     entity_type="patient_package",
-                    entity_id=current_package.id,
+                    entity_id=current.id,
                     summary="Opening package balance corrected",
                     metadata={
                         "old_remaining": old_remaining,
-                        "new_remaining": payload.package.sessions_remaining,
-                        "offer_id": str(current_package.package_offer_id) if current_package.package_offer_id else None,
+                        "new_remaining": item.sessions_remaining,
+                        "offer_id": str(current.package_offer_id) if current.package_offer_id else None,
                     },
                 )
-        else:
-            old_offer_id = current_package.package_offer_id if current_package is not None else None
-            if current_package is not None:
-                db.delete(current_package)
-                db.flush()
-            try:
-                new_package = create_patient_package_opening_balance(
-                    db,
-                    workspace_id=workspace_id,
-                    patient_id=patient.id,
-                    offer_id=payload.package.offer_id,
-                    sessions_remaining=payload.package.sessions_remaining,
-                    amount_paid_minor=0,
-                    payment_method="unknown",
-                    created_by_user_id=actor_user_id,
-                )
-            except (PackageOfferError, PackageOfferNotFound) as exc:
-                raise PatientOpeningDataConflict(str(exc)) from exc
-            if replacing_package:
-                record_activity_event(
-                    db,
-                    workspace_id=workspace_id,
-                    actor_type="staff",
-                    actor_user_id=actor_user_id,
-                    action="package.opening_balance_corrected",
-                    entity_type="patient_package",
-                    entity_id=new_package.id,
-                    summary="Opening package identity corrected",
-                    metadata={
-                        "old_offer_id": str(old_offer_id) if old_offer_id else None,
-                        "new_offer_id": str(new_package.package_offer_id) if new_package.package_offer_id else None,
-                        "new_remaining": payload.package.sessions_remaining,
-                    },
-                )
+            continue
+
+        assert desired_offer is not None
+        old_offer_id = current.package_offer_id if current is not None else None
+        try:
+            new_package = create_patient_package_opening_balance(
+                db,
+                workspace_id=workspace_id,
+                patient_id=patient.id,
+                offer_id=desired_offer.id,
+                sessions_remaining=item.sessions_remaining,
+                amount_paid_minor=0,
+                payment_method="unknown",
+                created_by_user_id=actor_user_id,
+            )
+        except (PackageOfferError, PackageOfferNotFound) as exc:
+            raise PatientOpeningDataConflict(str(exc)) from exc
+        record_activity_event(
+            db,
+            workspace_id=workspace_id,
+            actor_type="staff",
+            actor_user_id=actor_user_id,
+            action="package.opening_balance_corrected",
+            entity_type="patient_package",
+            entity_id=new_package.id,
+            summary=("Opening package identity corrected" if replacing else "Opening package added"),
+            metadata={
+                "old_offer_id": str(old_offer_id) if old_offer_id else None,
+                "new_offer_id": str(new_package.package_offer_id) if new_package.package_offer_id else None,
+                "new_remaining": item.sessions_remaining,
+            },
+        )
 
     for key, pack in current_by_key.items():
         requested = requested_by_key.get(key)

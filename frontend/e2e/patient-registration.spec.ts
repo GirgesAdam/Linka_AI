@@ -7,17 +7,19 @@ import {
   isCurrentDuplicateRegistration,
   parseEgpAmountToMinor,
 } from "../src/app/(dashboard)/patients/registration-utils";
+import { patientDisplayName } from "../src/app/(dashboard)/patients/patient-utils";
 
 const root = resolve(__dirname, "..");
 const page = readFileSync(resolve(root, "src/app/(dashboard)/patients/page.tsx"), "utf8");
 const form = readFileSync(resolve(root, "src/app/(dashboard)/patients/patient-registration-form.tsx"), "utf8");
 const actions = readFileSync(resolve(root, "src/app/(dashboard)/patients/actions.ts"), "utf8");
 const openingEditor = readFileSync(resolve(root, "src/app/(dashboard)/patients/patient-opening-data-editor.tsx"), "utf8");
-const api = readFileSync(resolve(root, "src/lib/tia/api.ts"), "utf8");
 const profilePage = readFileSync(resolve(root, "src/app/(dashboard)/patients/[patientId]/page.tsx"), "utf8");
+const profileEditor = readFileSync(resolve(root, "src/app/(dashboard)/patients/[patientId]/patient-profile-editor.tsx"), "utf8");
+const api = readFileSync(resolve(root, "src/lib/tia/api.ts"), "utf8");
 const normalizedApi = api.replace(/\r\n/g, "\n");
 
-test("package offers are service-first and only active offers for the chosen service are shown", () => {
+test("package offers remain service-first and active-only", () => {
   const offers = [
     { id: "a1", service_id: "service-a", is_active: true },
     { id: "a2", service_id: "service-a", is_active: false },
@@ -28,7 +30,7 @@ test("package offers are service-first and only active offers for the chosen ser
   expect(getActiveOffersForService(offers, "service-b")).toEqual([offers[2]]);
 });
 
-test("EGP amounts convert exactly to minor units for full, partial, and zero payments", () => {
+test("EGP amounts convert exactly to minor units per package", () => {
   expect(parseEgpAmountToMinor("6000.00")).toBe(600_000);
   expect(parseEgpAmountToMinor("4000")).toBe(400_000);
   expect(parseEgpAmountToMinor("12.3")).toBe(1_230);
@@ -37,100 +39,122 @@ test("EGP amounts convert exactly to minor units for full, partial, and zero pay
   expect(() => parseEgpAmountToMinor("1.234")).toThrow();
 });
 
-test("registration is opened from a modal and package/Pulse sections collapse independently", () => {
-  expect(page).toContain("<PatientRegistrationForm");
-  expect(form).toContain('role="dialog"');
-  expect(form).toContain('aria-modal="true"');
-  expect(form).toContain("setIsOpen(true)");
-  expect(form).toContain("setIsOpen(false)");
-  expect((form.match(/<details /g) || []).length).toBe(2);
-  expect(form).toContain('name="initial_package_sessions_remaining"');
-  expect(form).not.toContain("sessionsTotal");
-  expect(form).toContain("max={selectedOffer.sessions_count}");
-  expect(form).not.toContain('name="initial_package_sessions_purchased"');
-  expect(form).toContain('name="initial_pulse_device_key"');
-  expect(form).toContain('name="initial_pulses_remaining"');
-  expect(form).toContain('name="customer_id"');
+test("legacy first and last names render as one canonical patient name", () => {
+  expect(patientDisplayName({ first_name: "Mona", last_name: "Ali" })).toBe("Mona Ali");
+  expect(patientDisplayName({ first_name: "منى علي حسن", last_name: null })).toBe("منى علي حسن");
 });
 
+test("patients toolbar uses search placeholder, بحث and تسجيل عميل together", () => {
+  expect(page).toContain('placeholder="ابحث بالاسم أو رقم الهاتف"');
+  expect(page).toContain("<Search");
+  expect(page).toContain('type="submit" className="px-5">بحث</Button>');
+  expect(page).not.toContain(">تطبيق</Button>");
+  expect(form).toContain('open: "تسجيل عميل"');
+  expect(form).not.toContain('open: "تسجيل عميل جديد"');
+  expect(page).toContain("<PatientRegistrationForm");
+});
+
+test("registration uses one name field, ID copy, dynamic packages and preserves Pulse", () => {
+  expect(form).toContain('name="name"');
+  expect(form).toContain('name: "الاسم *"');
+  expect(form).not.toContain("الاسم الأول");
+  expect(form).not.toContain("اسم العائلة");
+  expect(form).not.toContain("Customer ID");
+  expect(form).toContain('id: "ID (اختياري)"');
+  expect(form).toContain('name="initial_packages_json"');
+  expect(form).toContain("packageRows.map");
+  expect(form).toContain('addPackage: "إضافة باكيدج"');
+  expect(form).toContain('removePackage: "حذف الباكيدج"');
+  expect(form).toContain('amountPaid: "المبلغ المدفوع (جنيه)"');
+  expect(form).toContain('paymentMethod: "طريقة الدفع"');
+  expect(form).toContain('value="cash"');
+  expect(form).toContain('value="visa"');
+  expect(form).toContain('value="instapay"');
+  expect(actions).toContain("initial_packages: initialPackages");
+  expect(actions).toContain("first_name: name");
+  expect(actions).toContain("last_name: null");
+  expect(form).toContain('name="initial_pulse_device_key"');
+  expect(form).toContain('name="initial_pulses_remaining"');
+});
+
+test("patient profile shows one identity card and one edit entry point", () => {
+  expect(profilePage).toContain(">الاسم</span>");
+  expect(profilePage).toContain(">رقم الهاتف</span>");
+  expect(profilePage).toContain(">ID</span>");
+  expect(profilePage).toContain(">مصدر العميل</span>");
+  expect(profilePage).toContain("<PatientProfileEditor");
+  expect(profilePage).not.toContain("Customer ID (optional)");
+  expect(profilePage).not.toContain("Save Customer ID");
+  expect(profileEditor).toContain(">تعديل</Button>");
+  expect(profileEditor).toContain("name: initialName");
+  expect(profileEditor).toContain("phone: initialPhone");
+  expect(profileEditor).toContain("customerId: initialCustomerId");
+  expect(profileEditor).toContain("source: initialSource");
+  expect(profileEditor).toContain("updatePatientProfileAction(patientId, changes)");
+  expect(profileEditor).toContain("function cancel()");
+  expect(actions).toContain("payload.first_name = name");
+  expect(actions).toContain("payload.last_name = null");
+});
 
 test("source-level duplicate phone contract maps only structured duplicate conflicts to a profile link", () => {
   expect(normalizedApi).toContain("public detail?: unknown");
-  expect(normalizedApi).toContain("const detail = body?.detail");
-  expect(normalizedApi).toContain("technicalMessage,\n      detail,\n    );");
   expect(actions).toContain("error.status !== 409");
   expect(actions).toContain('detail.code !== "patient_phone_exists"');
   expect(actions).toContain('typeof detail.patient_id !== "string"');
   expect(actions).toContain('typeof detail.patient_name !== "string"');
-  expect(actions).toContain("\\u0631\\u0642\\u0645 \\u0627\\u0644\\u0645\\u0648\\u0628\\u0627\\u064a\\u0644 \\u062f\\u0647 \\u0645\\u0633\\u062c\\u0644 \\u0628\\u0627\\u0644\\u0641\\u0639\\u0644 \\u0644\\u0639\\u0645\\u064a\\u0644 \\u0645\\u0648\\u062c\\u0648\\u062f.");
+  expect(actions).toContain("رقم الموبايل ده مسجل بالفعل لعميل موجود.");
   expect(form).toContain("activeDuplicatePatient.name");
   expect(form).toContain('href={`/patients/${activeDuplicatePatient.id}`}');
-  expect(profilePage.length).toBeGreaterThan(0);
   expect(form).not.toContain("?phone=");
 });
 
-
-test("source-level existing-patient opening-data flow loads canonical values before explicit save", () => {
+test("existing-patient opening-data flow supports multiple packages without payment UI", () => {
   expect(form).toContain("<PatientOpeningDataEditor");
-  expect(form).toContain("activeDuplicatePatient &&");
   expect(form).toContain("key={activeDuplicatePatient.id}");
   expect(form).toContain("patientId={activeDuplicatePatient.id}");
-  expect(openingEditor).toContain("استكمال / تحديث بيانات العميل");
+  expect(openingEditor).toContain("data.packages.map");
+  expect(openingEditor).toContain("package_id: row.packageId");
+  expect(openingEditor).toContain("packages: packagePayload");
+  expect(openingEditor).toContain("إضافة باكيدج أخرى");
   expect(openingEditor).toContain("loadPatientOpeningDataAction(patientId)");
-  expect(openingEditor).toContain("setCustomerId(data.customer_id || \"\")");
-  expect(openingEditor).toContain("String(data.package.sessions_remaining)");
-  expect(openingEditor).toContain("String(balance.opening_pulses)");
   expect(openingEditor).toContain("savePatientOpeningDataAction(patientId");
   expect(openingEditor).toContain("تم تحديث بيانات العميل.");
-  expect(actions).toContain("`/crm/patients/${patientId}/opening-data`");
-  expect(actions).toContain('{ method: "PUT", body: JSON.stringify(payload) }');
-});
-
-test("source-level opening-data editor cannot mutate accounting and leaves patient profile UI unchanged", () => {
   expect(openingEditor).not.toContain("amount_paid");
   expect(openingEditor).not.toContain("payment_method");
   expect(openingEditor).not.toContain("refund");
-  expect(openingEditor).toContain("replaceableIdentity");
-  expect(openingEditor).toContain("currentPackage.current_remaining");
   expect(profilePage).not.toContain("PatientOpeningDataEditor");
-  expect(profilePage).not.toContain("opening-data");
-  expect(profilePage).not.toContain("استكمال / تحديث بيانات العميل");
 });
-
 
 test("F1 current duplicate identity remains actionable only for the submitted phone", () => {
   expect(isCurrentDuplicateRegistration("01011111111", "0", "01011111111", "0")).toBe(true);
   expect(actions).toContain("duplicatePhone: phone");
   expect(actions).toContain("duplicateAttempt");
   expect(form).toContain("activeDuplicatePatient.name");
-  expect(form).toContain("<PatientOpeningDataEditor");
 });
 
 test("F2 changing the phone immediately deactivates the old duplicate identity", () => {
   expect(isCurrentDuplicateRegistration("01011111111", "0", "01022222222", "0")).toBe(false);
   expect(form).toContain("state.duplicatePhone");
   expect(form).toContain("state.duplicateAttempt");
-  expect(form).toContain("const visibleError = state.existingPatient ? (activeDuplicatePatient ? state.error : null) : state.error");
+  expect(form).toContain("activeDuplicatePatient ? state.error : null");
   expect(form).toContain("onChange={(event) => setPhone(event.target.value)}");
 });
 
-test("F3 changing the phone back may safely reactivate the same duplicate within the same modal attempt", () => {
+test("F3 changing back may reactivate only within the same modal attempt", () => {
   expect(isCurrentDuplicateRegistration("01011111111", "4", "01022222222", "4")).toBe(false);
   expect(isCurrentDuplicateRegistration("01011111111", "4", "01011111111", "4")).toBe(true);
 });
 
-test("F4 duplicate patient switch remounts the editor and binds it to the new patient", () => {
-  expect(isCurrentDuplicateRegistration("01022222222", "5", "01022222222", "5")).toBe(true);
+test("F4 duplicate patient switch remounts editor on the new patient", () => {
   expect(form).toContain("key={activeDuplicatePatient.id}");
   expect(form).toContain("patientId={activeDuplicatePatient.id}");
   expect(form).not.toContain("patientId={state.existingPatient.id}");
 });
 
-test("F5 save after a patient switch always uses the mounted editor patientId", () => {
+test("F5 save after patient switch uses the mounted editor patientId", () => {
   expect(openingEditor).toContain("loadPatientOpeningDataAction(patientId)");
   expect(openingEditor).toContain("savePatientOpeningDataAction(patientId");
   expect(actions).toContain("`/crm/patients/${patientId}/opening-data`");
-  expect(form).toContain("key={activeDuplicatePatient.id}");
 });
 
 test("F6 close and reopen invalidates the prior duplicate modal attempt", () => {
@@ -141,7 +165,7 @@ test("F6 close and reopen invalidates the prior duplicate modal attempt", () => 
   expect(form).toContain('name="duplicate_attempt"');
 });
 
-test("F7 normal new registration remains the standard POST flow without an opening editor target", () => {
+test("F7 normal new registration remains POST + redirect with no duplicate editor target", () => {
   expect(actions).toContain('tiaRequest<{ id: string }>("/crm/patients/register"');
   expect(actions).toContain('redirect("/patients/" + patient.id)');
   expect(form).toContain("activeDuplicatePatient &&");

@@ -12,6 +12,7 @@ import { labelForSource, labelForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type { ClinicLaserDevice, Patient, Service, ServicePackageOffer } from "@/lib/types";
 import { PatientRegistrationForm } from "./patient-registration-form";
+import { patientDisplayName } from "./patient-utils";
 
 function statusDescription(patient: Patient) {
   if (patient.status === "active") return "نشط";
@@ -36,19 +37,20 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
     <>
       <PageHeader title="العملاء" description="ابحث عن أي عميل وافتح ملفه لمراجعة بيانات التواصل والمواعيد والمتابعات." />
 
-      <PatientRegistrationForm
-        offers={packageOffers.filter((offer) => offer.is_active)}
-        devices={laserDevices.filter((device) => device.is_active)}
-        services={services.filter((service) => service.is_active)}
-      />
-
-      <form className="mb-4 flex max-w-2xl gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute right-3 top-3.5 text-slate-400" size={16} />
-          <Input name="q" defaultValue={q} placeholder="ابحث بالاسم أو رقم الهاتف" className="pr-9" />
-        </div>
-        <Button type="submit" className="px-5">تطبيق</Button>
-      </form>
+      <div className="mb-4 flex max-w-3xl flex-wrap items-center gap-2">
+        <form className="flex min-w-[260px] flex-1 gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute right-3 top-3.5 text-slate-400" size={16} />
+            <Input name="q" defaultValue={q} placeholder="ابحث بالاسم أو رقم الهاتف" className="pr-9" />
+          </div>
+          <Button type="submit" className="px-5">بحث</Button>
+        </form>
+        <PatientRegistrationForm
+          offers={packageOffers.filter((offer) => offer.is_active)}
+          devices={laserDevices.filter((device) => device.is_active)}
+          services={services.filter((service) => service.is_active)}
+        />
+      </div>
 
       <Card>
         <CardContent className="p-0 sm:p-0">
@@ -59,7 +61,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
                   <Link key={patient.id} href={`/patients/${patient.id}`} className="interactive-row block p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--accent)]">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-black text-slate-950">{patient.first_name} {patient.last_name || ""}</div>
+                        <div className="truncate text-sm font-black text-slate-950">{patientDisplayName(patient)}</div>
                         <div className="mt-1 inline-flex items-center gap-1.5 text-xs text-[var(--muted)]">
                           <Phone size={13} />
                           <span dir="ltr">{patient.phone || "بدون رقم هاتف"}</span>
@@ -93,7 +95,7 @@ export default async function PatientsPage({ searchParams }: { searchParams: Pro
                     {patients.map((patient) => (
                       <tr key={patient.id}>
                         <td className="font-bold">
-                          <Link href={`/patients/${patient.id}`} className="interactive-link font-semibold text-[var(--interactive-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]">{patient.first_name} {patient.last_name || ""}</Link>
+                          <Link href={`/patients/${patient.id}`} className="interactive-link font-semibold text-[var(--interactive-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]">{patientDisplayName(patient)}</Link>
                         </td>
                         <td dir="ltr" className="text-right">{patient.phone || "—"}</td>
                         <td>{labelForSource(patient.source)}</td>
