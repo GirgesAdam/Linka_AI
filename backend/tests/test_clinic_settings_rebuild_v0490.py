@@ -430,6 +430,7 @@ def test_official_template_preserves_active_packages_contract_with_pulses() -> N
             for cell in next(wb["active_packages"].iter_rows(min_row=1, max_row=1))
         ]
         assert headers == [
+            "ID",
             "اسم العميل",
             "رقم الموبايل",
             "اسم الخدمة",
