@@ -258,6 +258,8 @@ type RegistrationExistingPatient = { id: string; name: string };
 type RegistrationActionState = {
   error: string | null;
   existingPatient?: RegistrationExistingPatient | null;
+  duplicatePhone?: string | null;
+  duplicateAttempt?: string | null;
 };
 
 function existingPatientFromRegistrationError(error: unknown): RegistrationExistingPatient | null {
@@ -276,6 +278,7 @@ export async function registerPatientAction(
   const firstName = String(formData.get("first_name") || "").trim();
   const lastName = String(formData.get("last_name") || "").trim();
   const phone = String(formData.get("phone") || "").trim();
+  const duplicateAttempt = String(formData.get("duplicate_attempt") || "");
   const customerId = String(formData.get("customer_id") || "").trim();
   const offerId = String(formData.get("initial_package_offer_id") || "").trim();
   const sessionsRaw = String(formData.get("initial_package_sessions_remaining") || "").trim();
@@ -359,6 +362,8 @@ export async function registerPatientAction(
       return {
         error: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f.",
         existingPatient,
+        duplicatePhone: phone,
+        duplicateAttempt,
       };
     }
     return {

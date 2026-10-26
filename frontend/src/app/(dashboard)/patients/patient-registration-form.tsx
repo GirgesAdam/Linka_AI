@@ -1,19 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useCallback, useEffect, useState } from "react";
 import { Plus, Trash2, UserRoundPlus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ClinicLaserDevice, Service, ServicePackageOffer } from "@/lib/types";
-import { getActiveOffersForService, parseEgpAmountToMinor } from "./registration-utils";
+import {
+  getActiveOffersForService,
+  isCurrentDuplicateRegistration,
+  parseEgpAmountToMinor,
+} from "./registration-utils";
 import { registerPatientAction } from "./actions";
 import { PatientOpeningDataEditor } from "./patient-opening-data-editor";
 
 type RegistrationState = {
   error: string | null;
   existingPatient?: { id: string; name: string } | null;
+  duplicatePhone?: string | null;
+  duplicateAttempt?: string | null;
 };
 type PulseRow = { id: number; deviceKey: string; pulsesRemaining: string };
 
@@ -66,6 +72,8 @@ export function PatientRegistrationForm({
     { error: null, existingPatient: null },
   );
   const [isOpen, setIsOpen] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [duplicateAttempt, setDuplicateAttempt] = useState(0);
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedOfferId, setSelectedOfferId] = useState("");
   const [amountPaidEgp, setAmountPaidEgp] = useState("");
@@ -74,14 +82,20 @@ export function PatientRegistrationForm({
   ]);
   const [nextPulseRowId, setNextPulseRowId] = useState(1);
 
+  const closeRegistrationModal = useCallback(() => {
+    setIsOpen(false);
+    setPhone("");
+    setDuplicateAttempt((current) => current + 1);
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false);
+      if (event.key === "Escape") closeRegistrationModal();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen]);
+  }, [isOpen, closeRegistrationModal]);
 
   const activeServices = services.filter((service) => service.is_active);
   const serviceOffers = getActiveOffersForService(offers, selectedServiceId);
@@ -96,6 +110,15 @@ export function PatientRegistrationForm({
   const outstandingPreview = selectedOffer
     ? Math.max(0, selectedOffer.price_minor - paidMinorPreview)
     : 0;
+  const activeDuplicatePatient = state.existingPatient && isCurrentDuplicateRegistration(
+    state.duplicatePhone,
+    state.duplicateAttempt,
+    phone,
+    String(duplicateAttempt),
+  )
+    ? state.existingPatient
+    : null;
+  const visibleError = state.existingPatient ? (activeDuplicatePatient ? state.error : null) : state.error;
 
   return (
     <>
@@ -110,7 +133,7 @@ export function PatientRegistrationForm({
             type="button"
             aria-label={copy.close}
             className="absolute inset-0 bg-slate-950/35 backdrop-blur-[1px]"
-            onClick={() => setIsOpen(false)}
+            onClick={closeRegistrationModal}
           />
           <section
             role="dialog"
@@ -129,7 +152,7 @@ export function PatientRegistrationForm({
               <button
                 type="button"
                 aria-label={copy.close}
-                onClick={() => setIsOpen(false)}
+                onClick={closeRegistrationModal}
                 className="grid size-9 shrink-0 place-items-center rounded-lg border border-[var(--border)] text-slate-600 hover:bg-slate-50"
               >
                 <X size={17} />
@@ -137,6 +160,7 @@ export function PatientRegistrationForm({
             </header>
 
             <form action={formAction} className="space-y-4 p-5">
+              <input type="hidden" name="duplicate_attempt" value={String(duplicateAttempt)} />
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
                   {copy.firstName}
@@ -154,6 +178,8 @@ export function PatientRegistrationForm({
                     inputMode="numeric"
                     autoComplete="tel-national"
                     dir="ltr"
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value)}
                     placeholder="01012345678"
                     pattern="01[0125][0-9]{8}"
                     title={copy.phoneHint}
@@ -346,23 +372,24 @@ export function PatientRegistrationForm({
                 </div>
               </details>
 
-              {state.error && (
+              {visibleError && (
                 <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
-                  <p>{state.error}</p>
-                  {state.existingPatient && (
+                  <p>{visibleError}</p>
+                  {activeDuplicatePatient && (
                     <Link
-                      href={`/patients/${state.existingPatient.id}`}
+                      href={`/patients/${activeDuplicatePatient.id}`}
                       className="mt-2 inline-block font-bold text-[var(--interactive)] underline underline-offset-2"
                     >
-                      {state.existingPatient.name}
+                      {activeDuplicatePatient.name}
                     </Link>
                   )}
                 </div>
               )}
 
-              {state.existingPatient && (
+              {activeDuplicatePatient && (
                 <PatientOpeningDataEditor
-                  patientId={state.existingPatient.id}
+                  key={activeDuplicatePatient.id}
+                  patientId={activeDuplicatePatient.id}
                   offers={offers}
                   devices={devices}
                   services={services}
@@ -370,7 +397,7 @@ export function PatientRegistrationForm({
               )}
 
               <div className="flex justify-end gap-2">
-                <Button type="button" onClick={() => setIsOpen(false)}>{copy.close}</Button>
+                <Button type="button" onClick={closeRegistrationModal}>{copy.close}</Button>
                 <Button type="submit" disabled={pending}>
                   {pending ? copy.pending : copy.submit}
                 </Button>

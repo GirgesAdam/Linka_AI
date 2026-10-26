@@ -8,6 +8,19 @@ export function getActiveOffersForService<T extends Pick<ServicePackageOffer, "s
   return offers.filter((offer) => offer.is_active && offer.service_id === serviceId);
 }
 
+export function isCurrentDuplicateRegistration(
+  duplicatePhone: string | null | undefined,
+  duplicateAttempt: string | null | undefined,
+  currentPhone: string,
+  currentAttempt: string,
+): boolean {
+  return Boolean(
+    duplicatePhone &&
+    duplicatePhone === currentPhone &&
+    duplicateAttempt === currentAttempt,
+  );
+}
+
 export function parseEgpAmountToMinor(value: string): number {
   const normalized = value.trim().replace(",", ".");
   if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) {
