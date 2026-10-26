@@ -2276,3 +2276,313 @@ def test_historical_import_customer_id_headers_parse_as_text_without_database(he
     assert sheet == "active_packages"
     assert row_number == 2
     assert row["customer_id"] == value
+
+
+
+def _add_package_offer(
+    db: Session,
+    *,
+    workspace: Workspace,
+    service: Service,
+    sessions: int,
+    price_minor: int,
+    device_key: str | None = None,
+    active: bool = True,
+) -> ServicePackageOffer:
+    return package_offer_service.upsert_package_offer(
+        db,
+        workspace_id=workspace.id,
+        service_id=service.id,
+        device_key=device_key,
+        sessions_count=sessions,
+        price_minor=price_minor,
+        currency="EGP",
+        is_active=active,
+    )
+
+
+def test_historical_package_fallback_f1_missing_financials_uses_exact_offer_and_full_payment() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        offer = _add_package_offer(
+            db,
+            workspace=workspace,
+            service=services["Hydrafacial"],
+            sessions=6,
+            price_minor=300_000,
+        )
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row(None, "Ahmed", "01011111111", service="Hydrafacial", sessions_total=6, sessions_remaining=2)
+            ]),
+        )
+        assert preview.ready_counts == {"holding": 1}
+        package = db.scalar(select(PatientPackage).where(PatientPackage.workspace_id == workspace.id))
+        assert package is not None
+        assert package.sessions_purchased == 6
+        assert package.opening_sessions_remaining == 2
+        assert package.sale_price_minor == 300_000
+        payment = db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_package_id == package.id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        )
+        assert payment is not None
+        assert payment.amount_minor == 300_000
+        assert package.purchase_transaction_id == payment.id
+        assert db.scalar(
+            select(func.count()).select_from(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace.id,
+                PaymentTransaction.patient_package_id == package.id,
+                PaymentTransaction.transaction_type == "payment",
+            )
+        ) == 1
+        assert offer.price_minor == 300_000
+
+
+@pytest.mark.parametrize(
+    ("case", "package_price", "amount_paid", "expected_price", "expected_paid"),
+    [
+        ("F2", 2500, None, 250_000, 250_000),
+        ("F3", None, 2500, 250_000, 250_000),
+        ("F4", 3000, 2500, 300_000, 250_000),
+        ("F5", 2500, None, 250_000, 250_000),
+    ],
+)
+def test_historical_package_fallback_f2_to_f5_explicit_financial_precedence(
+    case: str,
+    package_price: object,
+    amount_paid: object,
+    expected_price: int,
+    expected_paid: int,
+) -> None:
+    workspace_id = uuid4()
+    service = Service(
+        workspace_id=workspace_id,
+        name="Hydrafacial",
+        slug=f"hydra-{uuid4().hex[:8]}",
+        category="Skin",
+        operational_category="dermatology",
+        description=None,
+        duration_minutes=60,
+        buffer_before_minutes=0,
+        buffer_after_minutes=0,
+        price_minor=180_000,
+        currency="EGP",
+        requires_medical_review=False,
+        requires_laser_device=False,
+        is_active=True,
+    )
+    service.id = uuid4()
+    offer = ServicePackageOffer(
+        workspace_id=workspace_id,
+        service_id=service.id,
+        device_key=None,
+        device_name=None,
+        sessions_count=6,
+        price_minor=300_000,
+        currency="EGP",
+        is_active=True,
+    )
+    offer.id = uuid4()
+    payload, code, message = history._normalize_active_holding(
+        {
+            "full_name": case,
+            "phone": "01011111111",
+            "service_name": "Hydrafacial",
+            "sessions_total": 6,
+            "sessions_remaining": 2,
+            "package_price": package_price,
+            "amount_paid": amount_paid,
+            "purchased_at": "2026-10-01",
+        },
+        services_by_id={service.id: service},
+        device_prices_by_service_id={},
+        devices_by_name={},
+        package_offers_by_identity={(service.id, None, 6): offer},
+    )
+    assert code is None, message
+    assert payload is not None
+    assert payload["price_minor"] == expected_price
+    assert payload["historical_payment_amount_minor"] == expected_paid
+    assert payload["financial_fallback_offer_id"] is None
+    assert payload["financial_fallback_offer_price_minor"] is None
+
+
+def test_historical_package_fallback_f6_no_exact_active_offer_blocks_preview_and_writes() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row(None, "No Offer", "01022222222", service="Hydrafacial", sessions_total=6, sessions_remaining=2)
+            ])],
+            mode="append",
+        )
+        assert preview.ready_counts == {}
+        assert preview.rejected_counts == {"holding": 1}
+        assert {issue.code for issue in preview.issue_groups} == {"active_holding_package_offer_missing"}
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 0
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction).where(PaymentTransaction.workspace_id == workspace.id)) == 0
+
+
+def test_historical_package_fallback_f7_wrong_session_count_does_not_nearest_match() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        _add_package_offer(db, workspace=workspace, service=services["Hydrafacial"], sessions=6, price_minor=300_000)
+        _add_package_offer(db, workspace=workspace, service=services["Hydrafacial"], sessions=10, price_minor=450_000)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row(None, "Eight", "01033333333", service="Hydrafacial", sessions_total=8, sessions_remaining=2)
+            ])],
+            mode="append",
+        )
+        assert preview.ready_counts == {}
+        assert {issue.code for issue in preview.issue_groups} == {"active_holding_package_offer_missing"}
+
+
+def test_historical_package_fallback_f8_laser_requires_exact_device_offer() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db, services=("Full Body",))
+        service = services["Full Body"]
+        _configure_laser_service(db, workspace=workspace, service=service)
+        _add_package_offer(db, workspace=workspace, service=service, sessions=8, price_minor=480_000, device_key="prime_lase")
+        _add_package_offer(db, workspace=workspace, service=service, sessions=8, price_minor=520_000, device_key="candela_gentle")
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row(None, "Laser", "01044444444", service="Full Body", device="Candela Gentle", sessions_total=8, sessions_remaining=3)
+            ]),
+        )
+        assert preview.ready_counts == {"holding": 1}
+        package = db.scalar(select(PatientPackage).where(PatientPackage.workspace_id == workspace.id))
+        assert package is not None
+        assert package.laser_device_key == "candela_gentle"
+        assert package.sale_price_minor == 520_000
+
+
+def test_historical_package_fallback_f9_inactive_exact_offer_is_not_eligible() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        _add_package_offer(db, workspace=workspace, service=services["Hydrafacial"], sessions=6, price_minor=300_000, active=False)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row(None, "Inactive", "01055555555", service="Hydrafacial", sessions_total=6, sessions_remaining=2)
+            ])],
+            mode="append",
+        )
+        assert preview.ready_counts == {}
+        assert {issue.code for issue in preview.issue_groups} == {"active_holding_package_offer_missing"}
+
+
+@pytest.mark.parametrize("value", [None, "not-a-date"])
+def test_historical_package_fallback_f10_f11_purchase_date_remains_optional(value) -> None:
+    reference = datetime(2026, 10, 26).date()
+    assert history._parse_active_package_purchase_date(value, reference_date=reference) == reference
+
+
+def test_historical_package_fallback_f12_offer_resolution_is_workspace_scoped() -> None:
+    with _db_session() as db:
+        workspace_a, user_a, _branch_a, _services_a, _doctor_a = _seed_workspace(db)
+        workspace_b, _user_b, _branch_b, services_b, _doctor_b = _seed_workspace(db)
+        _add_package_offer(db, workspace=workspace_b, service=services_b["Hydrafacial"], sessions=6, price_minor=300_000)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace_a,
+            user_id=user_a.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row(None, "Scoped", "01066666666", service="Hydrafacial", sessions_total=6, sessions_remaining=2)
+            ])],
+            mode="append",
+        )
+        assert preview.ready_counts == {}
+        assert {issue.code for issue in preview.issue_groups} == {"active_holding_package_offer_missing"}
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace_a.id)) == 0
+
+
+def test_historical_package_fallback_f13_apply_rechecks_offer_price_before_any_write() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        offer = _add_package_offer(db, workspace=workspace, service=services["Hydrafacial"], sessions=6, price_minor=300_000)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row(None, "Race", "01077777777", service="Hydrafacial", sessions_total=6, sessions_remaining=2)
+            ])],
+            mode="append",
+        )
+        batch = history.get_historical_import_batch(db, workspace_id=workspace.id, batch_id=preview.batch.batch_id)
+        assert batch is not None
+        offer.price_minor = 350_000
+        db.flush()
+        with pytest.raises(history.HistoricalImportConflictError, match="changed after preview"):
+            history.apply_historical_import(db, workspace=workspace, batch=batch)
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 0
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction).where(PaymentTransaction.workspace_id == workspace.id)) == 0
+
+
+def test_historical_package_fallback_f14_rerun_does_not_duplicate_package_or_payment() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        _add_package_offer(db, workspace=workspace, service=services["Hydrafacial"], sessions=6, price_minor=300_000)
+        document = _arabic_active_package_document_with_id([
+            _id_active_row(None, "Repeat", "01088888888", service="Hydrafacial", sessions_total=6, sessions_remaining=2, purchased_at="2026-10-01")
+        ])
+        _preview_and_apply(db, workspace=workspace, user=user, document=document)
+        _preview_and_apply(db, workspace=workspace, user=user, document=document)
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 1
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction).where(
+            PaymentTransaction.workspace_id == workspace.id,
+            PaymentTransaction.transaction_type == "payment",
+        )) == 1
+
+
+def test_historical_package_fallback_zero_price_offer_creates_no_fake_payment() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db)
+        _add_package_offer(db, workspace=workspace, service=services["Hydrafacial"], sessions=6, price_minor=0)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row(None, "Free", "01099999999", service="Hydrafacial", sessions_total=6, sessions_remaining=2)
+            ]),
+        )
+        assert preview.ready_counts == {"holding": 1}
+        package = db.scalar(select(PatientPackage).where(PatientPackage.workspace_id == workspace.id))
+        assert package is not None and package.sale_price_minor == 0
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction).where(PaymentTransaction.workspace_id == workspace.id)) == 0
+
+
+def test_historical_package_fallback_template_explains_optional_financials_and_date() -> None:
+    workbook = load_workbook(io.BytesIO(history.build_historical_import_template(service_names=["Hydrafacial"], device_names=[])))
+    try:
+        readme_text = "\n".join(
+            str(cell.value)
+            for row in workbook["README"].iter_rows()
+            for cell in row
+            if cell.value is not None
+        )
+        assert "سعر الباقة والمبلغ المدفوع وتاريخ الشراء حقول اختيارية" in readme_text
+        assert "إذا تُرك السعر والمبلغ المدفوع فارغين معًا" in readme_text
+        assert "المطابقة تمامًا للخدمة والجهاز وعدد الجلسات" in readme_text
+    finally:
+        workbook.close()

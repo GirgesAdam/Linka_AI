@@ -40,6 +40,7 @@ from app.models.patient_package import PackageUsage, PatientPackage
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.pulse_billing import PatientPulsePack, PulseUsage
 from app.models.service import Service
+from app.models.service_package_offer import ServicePackageOffer
 from app.models.staff import Staff
 from app.models.workspace import Workspace
 from app.schemas.crm import normalize_patient_identity_phone
@@ -486,6 +487,24 @@ def _active_device_price_catalog(
             current_device_name,
         )
     return result
+
+
+def _active_package_offer_catalog(
+    db: Session,
+    workspace_id: UUID,
+) -> dict[tuple[UUID, str | None, int], ServicePackageOffer]:
+    rows = list(
+        db.scalars(
+            select(ServicePackageOffer).where(
+                ServicePackageOffer.workspace_id == workspace_id,
+                ServicePackageOffer.is_active.is_(True),
+            )
+        ).all()
+    )
+    return {
+        (row.service_id, row.device_key, int(row.sessions_count)): row
+        for row in rows
+    }
 
 
 def _active_device_catalog(
@@ -1016,12 +1035,14 @@ def _normalize_active_holding(
     services_by_id: dict[UUID, Service],
     device_prices_by_service_id: dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]],
     devices_by_name: dict[str, list[ClinicLaserDevice]],
+    package_offers_by_identity: dict[tuple[UUID, str | None, int], ServicePackageOffer] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Normalize the clinic-facing active_packages sheet with optional holdings.
 
     Name + Egyptian mobile are the only unconditional required fields. Package and
     pulse fields become conditionally required only when that holding is supplied.
     """
+    package_offers_by_identity = package_offers_by_identity or {}
     full_name = _clean(row.get("full_name"))
     if not full_name:
         return None, "active_package_name_missing", "اسم العميل مطلوب."
@@ -1122,32 +1143,45 @@ def _normalize_active_holding(
 
         amount_raw = _clean(row.get("amount_paid"))
         price_raw = _clean(row.get("package_price"))
+        financial_fallback_offer_id: str | None = None
+        financial_fallback_offer_price_minor: int | None = None
+
         if amount_raw is None and price_raw is None:
-            return (
-                None,
-                "active_holding_financials_missing",
-                "للباقة يجب إدخال المبلغ المدفوع أو سعر الباقة على الأقل. إذا تركت المبلغ المدفوع فارغًا سيعتبر النظام الباقة مدفوعة بالكامل بسعر الباقة.",
+            offer = package_offers_by_identity.get(
+                (service.id, package_device_key, sessions_total)
             )
-
-        if price_raw is None:
-            package_price_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
+            if offer is None:
+                return (
+                    None,
+                    "active_holding_package_offer_missing",
+                    "لا توجد باقة حالية مطابقة للخدمة والجهاز وعدد الجلسات. "
+                    "أضف الباقة المطابقة في إعدادات Linka أو أدخل سعر الباقة في ملف الاستيراد.",
+                )
+            package_price_minor = int(offer.price_minor)
+            amount_paid_minor = int(offer.price_minor)
+            financial_fallback_offer_id = str(offer.id)
+            financial_fallback_offer_price_minor = int(offer.price_minor)
         else:
-            package_price_minor = _money_minor(row.get("package_price"), allow_negative=False)
-        if package_price_minor is None or package_price_minor < 0:
-            return None, "active_package_price_invalid", "سعر الباقة يجب أن يكون مبلغًا صحيحًا غير سالب."
+            if price_raw is None:
+                package_price_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
+            else:
+                package_price_minor = _money_minor(row.get("package_price"), allow_negative=False)
+            if package_price_minor is None or package_price_minor < 0:
+                return None, "active_package_price_invalid", "سعر الباقة يجب أن يكون مبلغًا صحيحًا غير سالب."
 
-        if amount_raw is None:
-            amount_paid_minor = package_price_minor
-        else:
-            amount_paid_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
-        if amount_paid_minor is None or amount_paid_minor <= 0:
-            return None, "active_package_amount_paid_invalid", "المبلغ المدفوع يجب أن يكون أكبر من صفر، أو اتركه فارغًا مع إدخال سعر الباقة ليعتبرها النظام مدفوعة بالكامل."
+            if amount_raw is None:
+                amount_paid_minor = package_price_minor
+            else:
+                amount_paid_minor = _money_minor(row.get("amount_paid"), allow_negative=False)
+                if amount_paid_minor is None or amount_paid_minor <= 0:
+                    return None, "active_package_amount_paid_invalid", "المبلغ المدفوع يجب أن يكون أكبر من صفر، أو اتركه فارغًا ليعتبر النظام الباقة مدفوعة بالكامل."
+
+        if amount_paid_minor is None or amount_paid_minor < 0:
+            return None, "active_package_amount_paid_invalid", "المبلغ المدفوع غير صالح."
         if amount_paid_minor > package_price_minor:
             return None, "active_package_price_below_paid", "سعر الباقة لا يمكن أن يكون أقل من المبلغ المدفوع."
 
-        purchased_date = _parse_active_package_purchase_date(row.get("purchased_at"))
-        if purchased_date is None:
-            return None, "active_package_purchase_date_invalid", "عند إدخال باقة يجب إدخال تاريخ شراء صحيح بصيغة DD/MM/YYYY أو YYYY-MM-DD."
+        purchased_date = _parse_active_package_purchase_date(row.get("purchased_at")) or datetime.now(EGYPT_TZ).date()
         purchased_at = datetime.combine(purchased_date, time.min, tzinfo=EGYPT_TZ).astimezone(UTC)
 
     pulse_device_key: str | None = None
@@ -1219,6 +1253,8 @@ def _normalize_active_holding(
         "standalone_session_price_minor": standalone_session_price_minor,
         "price_minor": package_price_minor,
         "historical_payment_amount_minor": amount_paid_minor,
+        "financial_fallback_offer_id": financial_fallback_offer_id if service is not None else None,
+        "financial_fallback_offer_price_minor": financial_fallback_offer_price_minor if service is not None else None,
         "purchased_at": purchased_at.isoformat() if purchased_at is not None else None,
         "package_source_record_id": package_source_record_id,
         "pulses_remaining": pulses_remaining,
@@ -1492,6 +1528,7 @@ def _normalize_row(
     services_by_name: dict[str, Service],
     device_prices_by_service_id: dict[UUID, dict[str, tuple[ServiceDevicePrice, str]]],
     devices_by_name: dict[str, list[ClinicLaserDevice]],
+    package_offers_by_identity: dict[tuple[UUID, str | None, int], ServicePackageOffer],
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     if entity_type == "patient":
         payload, code, message = _normalize_patient(row)
@@ -1520,6 +1557,7 @@ def _normalize_row(
                 services_by_id=services_by_id,
                 device_prices_by_service_id=device_prices_by_service_id,
                 devices_by_name=devices_by_name,
+                package_offers_by_identity=package_offers_by_identity,
             )
         return _normalize_unified_holding(
             row,
@@ -1664,6 +1702,7 @@ def preview_historical_import(
     services_by_id, services_by_name = _service_catalog(db, workspace.id)
     device_prices_by_service_id = _active_device_price_catalog(db, workspace.id)
     devices_by_name = _active_device_catalog(db, workspace.id)
+    package_offers_by_identity = _active_package_offer_catalog(db, workspace.id)
 
     _validate_documents(documents)
     fingerprint = _source_fingerprint(documents)
@@ -1703,6 +1742,7 @@ def preview_historical_import(
             services_by_name=services_by_name,
             device_prices_by_service_id=device_prices_by_service_id,
             devices_by_name=devices_by_name,
+            package_offers_by_identity=package_offers_by_identity,
         )
         if payload is None:
             source_record_id = f"{entity_type}:rejected:{_digest(f'{source_file}|{sheet}|{row_number}')[:32]}"
@@ -2493,6 +2533,56 @@ def _safe_remove_previous_imports(
     return {entity: len(ids) for entity, ids in ids_by_type.items()}
 
 
+def _recheck_active_holding_financial_fallback(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    payload: dict[str, Any],
+) -> None:
+    offer_id = _parse_uuid(payload.get("financial_fallback_offer_id"))
+    if offer_id is None:
+        return
+    service_id = _parse_uuid(payload.get("service_id"))
+    sessions_total = _int_value(payload.get("sessions_total"))
+    expected_price = payload.get("financial_fallback_offer_price_minor")
+    if service_id is None or sessions_total is None or expected_price is None:
+        raise HistoricalImportConflictError(
+            "Package offer fallback metadata is incomplete. Preview the file again before applying."
+        )
+    device_key = _clean(payload.get("package_device_key"))
+    device_predicate = (
+        ServicePackageOffer.device_key == device_key
+        if device_key is not None
+        else ServicePackageOffer.device_key.is_(None)
+    )
+    offer = db.scalar(
+        select(ServicePackageOffer)
+        .where(
+            ServicePackageOffer.workspace_id == workspace_id,
+            ServicePackageOffer.id == offer_id,
+            ServicePackageOffer.service_id == service_id,
+            device_predicate,
+            ServicePackageOffer.sessions_count == sessions_total,
+            ServicePackageOffer.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    expected_price_int = int(expected_price)
+    if offer is None or int(offer.price_minor) != expected_price_int:
+        raise HistoricalImportConflictError(
+            "The active package offer used for missing financials changed after preview. "
+            "Preview the file again before applying."
+        )
+    if (
+        int(payload.get("price_minor") or 0) != expected_price_int
+        or int(payload.get("historical_payment_amount_minor") or 0) != expected_price_int
+    ):
+        raise HistoricalImportConflictError(
+            "Package financial fallback no longer matches the previewed offer. "
+            "Preview the file again before applying."
+        )
+
+
 def apply_historical_import(
     db: Session,
     *,
@@ -2516,6 +2606,14 @@ def apply_historical_import(
     )
     if not rows:
         raise HistoricalImportError("Historical import contains no ready rows.")
+
+    for row in rows:
+        if row.entity_type == "holding":
+            _recheck_active_holding_financial_fallback(
+                db,
+                workspace_id=workspace.id,
+                payload=row.normalized_json,
+            )
 
     existing_links = _existing_link_map(db, workspace.id)
     incoming_hashes = {
@@ -3237,8 +3335,10 @@ def build_historical_import_template(
         "الحقول الإلزامية لكل صف هي اسم العميل ورقم الموبايل فقط. ID اختياري، وإذا كان موجودًا سيتم حفظه كـID الخاص بالعميل. "
         "إذا تكرر نفس رقم الموبايل بأكثر من ID مختلف، سيوقف النظام الصفوف المتعارضة للمراجعة قبل الاستيراد. "
         "يمكن تكرار نفس العميل في أكثر من صف إذا كان لديه أكثر من باقة مختلفة. "
-        "يمكن ترك باقي الأعمدة فارغة لإضافة العميل فقط. إذا كانت هناك باقة وترك المبلغ المدفوع فارغًا، "
-        "سيعتبر النظام الباقة مدفوعة بالكامل ويستخدم سعر الباقة كمبلغ مدفوع."
+        "يمكن ترك باقي الأعمدة فارغة لإضافة العميل فقط. سعر الباقة والمبلغ المدفوع وتاريخ الشراء حقول اختيارية. "
+        "إذا أُدخل سعر الباقة وترك المبلغ المدفوع فارغًا، سيعتبر النظام الباقة مدفوعة بالكامل بهذا السعر. "
+        "إذا تُرك السعر والمبلغ المدفوع فارغين معًا، يستخدم Linka سعر الباقة الحالية المطابقة تمامًا للخدمة والجهاز وعدد الجلسات "
+        "ويعتبرها مدفوعة بالكامل. إذا لم توجد باقة حالية مطابقة، يجب إضافة الباقة في الإعدادات أو إدخال سعرها في الملف."
     )
     instructions["A3"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
     instructions.row_dimensions[3].height = 72
