@@ -69,6 +69,8 @@ ACTIVE_HOLDING_CONTRACT = "active_packages_holdings_v3"
 UNIFIED_HOLDING_CONTRACT = "unified_patient_holdings_v1"
 HOLDING_CONTRACTS = {ACTIVE_HOLDING_CONTRACT, UNIFIED_HOLDING_CONTRACT}
 ACTIVE_PACKAGE_HEADER_ALIASES = {
+    "id": "customer_id",
+    "customer_id": "customer_id",
     "full_name": "full_name",
     "phone": "phone",
     "service_name": "service_name",
@@ -1033,6 +1035,7 @@ def _normalize_active_holding(
             "رقم الموبايل يجب أن يكون رقم موبايل مصري صحيح (010/011/012/015). لو Excel حذف الصفر الأول، Linka يصلحه تلقائيًا.",
         )
     identity = f"phone:{_digest(phone_normalized)[:24]}"
+    customer_id = _clean(row.get("customer_id"))
 
     service_name = _clean(row.get("service_name"))
     device_name = _clean(row.get("laser_device_name") or row.get("device_name"))
@@ -1203,6 +1206,7 @@ def _normalize_active_holding(
         "patient_id": None,
         "patient_phone": phone_display,
         "patient_phone_normalized": phone_normalized,
+        "customer_id": customer_id,
         "full_name": full_name,
         "patient_name": full_name,
         "holding_kind": kind,
@@ -1538,6 +1542,115 @@ def _batch_read(batch: ClinicHistoricalImportBatch) -> HistoricalImportBatchRead
     )
 
 
+def _reject_ready_preview_rows(
+    rows: list[ClinicHistoricalImportRow],
+    *,
+    issue_code: str,
+    issue_message: str,
+    ready_counts: Counter[str],
+    rejected_counts: Counter[str],
+    issue_counts: dict[tuple[str, str, str], dict[str, Any]],
+) -> None:
+    for staged in rows:
+        if staged.row_status != "ready":
+            continue
+        staged.row_status = "rejected"
+        staged.issue_code = issue_code
+        staged.issue_message = issue_message
+        ready_counts[staged.entity_type] -= 1
+        rejected_counts[staged.entity_type] += 1
+    issue_key = ("holding", issue_code, issue_message)
+    group = issue_counts.setdefault(issue_key, {"count": 0, "rows": []})
+    group["count"] += len(rows)
+    for staged in rows:
+        if len(group["rows"]) >= 5:
+            break
+        if staged.row_number not in group["rows"]:
+            group["rows"].append(staged.row_number)
+
+
+def _validate_active_holding_customer_ids(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    rows: list[ClinicHistoricalImportRow],
+    ready_counts: Counter[str],
+    rejected_counts: Counter[str],
+    issue_counts: dict[tuple[str, str, str], dict[str, Any]],
+) -> None:
+    by_phone: dict[str, list[ClinicHistoricalImportRow]] = defaultdict(list)
+    for staged in rows:
+        payload = staged.normalized_json
+        if (
+            staged.entity_type == "holding"
+            and payload.get("import_contract") == ACTIVE_HOLDING_CONTRACT
+            and payload.get("patient_phone_normalized")
+        ):
+            by_phone[str(payload["patient_phone_normalized"])].append(staged)
+
+    for phone_normalized, phone_rows in by_phone.items():
+        customer_ids = sorted(
+            {
+                customer_id
+                for staged in phone_rows
+                if (customer_id := _clean(staged.normalized_json.get("customer_id")))
+            }
+        )
+        phone_display = next(
+            (
+                str(staged.normalized_json.get("patient_phone"))
+                for staged in phone_rows
+                if staged.normalized_json.get("patient_phone")
+            ),
+            phone_normalized,
+        )
+        if len(customer_ids) > 1:
+            ids_text = "، ".join(customer_ids)
+            _reject_ready_preview_rows(
+                phone_rows,
+                issue_code="customer_id_conflict_in_file",
+                issue_message=(
+                    f"رقم الموبايل {phone_display} مكرر بأكثر من ID في ملف الاستيراد. "
+                    f"راجع الصفوف قبل المتابعة. IDs: {ids_text}"
+                ),
+                ready_counts=ready_counts,
+                rejected_counts=rejected_counts,
+                issue_counts=issue_counts,
+            )
+            continue
+
+        imported_customer_id = customer_ids[0] if customer_ids else None
+        if imported_customer_id is not None:
+            for staged in phone_rows:
+                if staged.row_status == "ready":
+                    staged.normalized_json["customer_id"] = imported_customer_id
+                    staged.payload_hash = _payload_hash(staged.normalized_json)
+
+        existing_patient = db.scalar(
+            select(Patient).where(
+                Patient.workspace_id == workspace_id,
+                Patient.phone_normalized == phone_normalized,
+            )
+        )
+        existing_customer_id = _clean(existing_patient.customer_id) if existing_patient is not None else None
+        if (
+            imported_customer_id is not None
+            and existing_customer_id is not None
+            and imported_customer_id != existing_customer_id
+        ):
+            _reject_ready_preview_rows(
+                phone_rows,
+                issue_code="customer_id_conflict_existing_patient",
+                issue_message=(
+                    "العميل الموجود بنفس رقم الموبايل لديه ID مختلف عن الموجود في ملف الاستيراد. "
+                    f"Current ID: {existing_customer_id}. Imported ID: {imported_customer_id}."
+                ),
+                ready_counts=ready_counts,
+                rejected_counts=rejected_counts,
+                issue_counts=issue_counts,
+            )
+
+
 def preview_historical_import(
     db: Session,
     *,
@@ -1650,6 +1763,15 @@ def preview_historical_import(
                 issue_message=issue_message,
             )
         )
+
+    _validate_active_holding_customer_ids(
+        db,
+        workspace_id=workspace.id,
+        rows=rows_to_add,
+        ready_counts=ready_counts,
+        rejected_counts=rejected_counts,
+        issue_counts=issue_counts,
+    )
 
     # Allocation references must point to explicit transaction/appointment IDs in the same
     # upload or to a previously imported source record. The contract does not guess joins.
@@ -2098,6 +2220,20 @@ def _fill_missing_patient_facts(
         patient.source = source
 
 
+def _apply_historical_customer_id(patient: Patient, payload: dict[str, Any]) -> None:
+    imported_customer_id = _clean(payload.get("customer_id"))
+    if imported_customer_id is None:
+        return
+    existing_customer_id = _clean(patient.customer_id)
+    if existing_customer_id is None:
+        patient.customer_id = imported_customer_id
+        return
+    if existing_customer_id != imported_customer_id:
+        raise HistoricalImportConflictError(
+            "Existing patient customer ID changed after preview. Review the import before retrying."
+        )
+
+
 def _doctor_catalog(db: Session, workspace_id: UUID) -> tuple[dict[UUID, Doctor], dict[str, Doctor]]:
     rows = list(
         db.execute(
@@ -2502,6 +2638,8 @@ def apply_historical_import(
             patient = _patient_for_identity(db, workspace=workspace, identity=identity, payload=payload, cache=patient_cache)
         else:
             patient_cache[identity] = patient
+
+        _apply_historical_customer_id(patient, payload)
 
         if row.entity_type == "patient" and batch.mode == "append":
             _fill_missing_patient_facts(
@@ -3088,21 +3226,25 @@ def build_historical_import_template(
     thin_side = Side(style="thin")
     table_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
-    instructions.merge_cells("A1:J1")
+    instructions.merge_cells("A1:K1")
     instructions["A1"] = "دليل استيراد الباقات النشطة"
     instructions["A1"].font = title_font
     instructions["A1"].alignment = Alignment(horizontal="center", vertical="center")
     instructions.row_dimensions[1].height = 26
 
-    instructions.merge_cells("A3:J3")
+    instructions.merge_cells("A3:K3")
     instructions["A3"] = (
-        "الحقول الإلزامية لكل صف هي اسم العميل ورقم الموبايل فقط. يمكن ترك باقي الأعمدة فارغة لإضافة العميل فقط. "
-        "إذا كانت هناك باقة وترك المبلغ المدفوع فارغًا، سيعتبر النظام الباقة مدفوعة بالكامل ويستخدم سعر الباقة كمبلغ مدفوع."
+        "الحقول الإلزامية لكل صف هي اسم العميل ورقم الموبايل فقط. ID اختياري، وإذا كان موجودًا سيتم حفظه كـID الخاص بالعميل. "
+        "إذا تكرر نفس رقم الموبايل بأكثر من ID مختلف، سيوقف النظام الصفوف المتعارضة للمراجعة قبل الاستيراد. "
+        "يمكن تكرار نفس العميل في أكثر من صف إذا كان لديه أكثر من باقة مختلفة. "
+        "يمكن ترك باقي الأعمدة فارغة لإضافة العميل فقط. إذا كانت هناك باقة وترك المبلغ المدفوع فارغًا، "
+        "سيعتبر النظام الباقة مدفوعة بالكامل ويستخدم سعر الباقة كمبلغ مدفوع."
     )
     instructions["A3"].alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
-    instructions.row_dimensions[3].height = 42
+    instructions.row_dimensions[3].height = 72
 
     arabic_headers = [
+        "ID",
         "اسم العميل",
         "رقم الموبايل",
         "اسم الخدمة",
@@ -3115,12 +3257,13 @@ def build_historical_import_template(
         "النبضات المتبقية",
     ]
 
-    instructions.merge_cells("A5:J5")
+    instructions.merge_cells("A5:K5")
     instructions["A5"] = "مثال صحيح"
     instructions["A5"].font = section_font
     instructions["A5"].alignment = Alignment(horizontal="right")
 
     example_values = [
+        "000123",
         "سارة أحمد",
         "01012345678",
         example_service,
@@ -3140,8 +3283,9 @@ def build_historical_import_template(
         value_cell = instructions.cell(row=7, column=column, value=example_values[column - 1])
         value_cell.border = table_border
         value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    instructions["B7"].number_format = "@"
-    instructions["H7"].number_format = "dd/mm/yyyy"
+    instructions["A7"].number_format = "@"
+    instructions["C7"].number_format = "@"
+    instructions["I7"].number_format = "dd/mm/yyyy"
 
     instructions["A10"] = "الخدمات"
     instructions["A10"].font = section_font
@@ -3185,8 +3329,8 @@ def build_historical_import_template(
     instructions.add_table(devices_table)
 
     readme_widths = {
-        "A": 34, "B": 18, "C": 34, "D": 20, "E": 20,
-        "F": 22, "G": 18, "H": 18, "I": 18, "J": 20,
+        "A": 18, "B": 34, "C": 18, "D": 34, "E": 20, "F": 20,
+        "G": 22, "H": 18, "I": 18, "J": 18, "K": 20,
     }
     for column_letter, width in readme_widths.items():
         instructions.column_dimensions[column_letter].width = width
@@ -3197,7 +3341,7 @@ def build_historical_import_template(
     sheet.append(arabic_headers)
     sheet.append([None] * len(arabic_headers))
 
-    widths = [34, 18, 34, 20, 20, 22, 18, 18, 18, 20]
+    widths = [18, 34, 18, 34, 20, 20, 22, 18, 18, 18, 20]
     for index, width in enumerate(widths, start=1):
         header_cell = sheet.cell(row=1, column=index)
         header_cell.font = header_font
@@ -3205,7 +3349,7 @@ def build_historical_import_template(
         header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         sheet.column_dimensions[header_cell.column_letter].width = width
     sheet.row_dimensions[1].height = 24
-    active_packages_table = Table(displayName="ActivePackagesTable", ref="A1:J2")
+    active_packages_table = Table(displayName="ActivePackagesTable", ref="A1:K2")
     active_packages_table.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
         showRowStripes=True, showColumnStripes=False,
@@ -3213,9 +3357,10 @@ def build_historical_import_template(
     sheet.add_table(active_packages_table)
 
     for row_number in range(2, 5001):
-        sheet.cell(row=row_number, column=2).number_format = "@"
-        sheet.cell(row=row_number, column=8).number_format = "dd/mm/yyyy"
-        sheet.cell(row=row_number, column=10).number_format = "0"
+        sheet.cell(row=row_number, column=1).number_format = "@"
+        sheet.cell(row=row_number, column=3).number_format = "@"
+        sheet.cell(row=row_number, column=9).number_format = "dd/mm/yyyy"
+        sheet.cell(row=row_number, column=11).number_format = "0"
 
     if service_start_row is not None and service_end_row is not None:
         validation = DataValidation(
@@ -3228,7 +3373,7 @@ def build_historical_import_template(
         validation.prompt = "اختر خدمة من القائمة عند إدخال باقة."
         validation.promptTitle = "اسم الخدمة"
         sheet.add_data_validation(validation)
-        validation.add("C2:C5000")
+        validation.add("D2:D5000")
 
     if device_start_row is not None and device_end_row is not None:
         device_validation = DataValidation(
@@ -3241,7 +3386,7 @@ def build_historical_import_template(
         device_validation.prompt = "الجهاز مطلوب للباقة الليزر أو عند إدخال نبضات متبقية."
         device_validation.promptTitle = "اسم الجهاز"
         sheet.add_data_validation(device_validation)
-        device_validation.add("D2:D5000")
+        device_validation.add("E2:E5000")
 
     stream = io.BytesIO()
     workbook.save(stream)
