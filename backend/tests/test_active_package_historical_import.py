@@ -267,6 +267,72 @@ def _arabic_active_package_document(
     )
 
 
+def _arabic_active_package_document_with_id(
+    rows: list[list[object]],
+    *,
+    id_header: str = "ID",
+) -> HistoricalImportDocument:
+    wb = Workbook()
+    readme = wb.active
+    readme.title = "README"
+    readme.append(["اختبار"])
+    sheet = wb.create_sheet("active_packages")
+    sheet.append(
+        [
+            id_header,
+            "اسم العميل",
+            "رقم الموبايل",
+            "اسم الخدمة",
+            "اسم الجهاز",
+            "عدد الجلسات الكلي",
+            "عدد الجلسات المتبقي",
+            "المبلغ المدفوع",
+            "تاريخ الشراء",
+            "سعر الباقة",
+            "النبضات المتبقية",
+        ]
+    )
+    for row in rows:
+        sheet.append(row)
+    stream = io.BytesIO()
+    wb.save(stream)
+    wb.close()
+    return HistoricalImportDocument(
+        name="active_packages_id.xlsx",
+        format="xlsx",
+        content_base64=base64.b64encode(stream.getvalue()).decode("ascii"),
+    )
+
+
+def _id_active_row(
+    customer_id: object,
+    name: str,
+    phone: object,
+    *,
+    service: object = None,
+    device: object = None,
+    sessions_total: object = None,
+    sessions_remaining: object = None,
+    amount_paid: object = None,
+    purchased_at: object = None,
+    package_price: object = None,
+    pulses_remaining: object = None,
+) -> list[object]:
+    return [
+        customer_id,
+        name,
+        phone,
+        service,
+        device,
+        sessions_total,
+        sessions_remaining,
+        amount_paid,
+        purchased_at,
+        package_price,
+        pulses_remaining,
+    ]
+
+
 def _unified_document(rows: list[list[object]]) -> HistoricalImportDocument:
     wb = Workbook()
     readme = wb.active
@@ -366,7 +432,7 @@ def _preview_and_apply(
         ("00201012345678", "01012345678", "+201012345678"),
     ],
 )
-def test_active_package_egypt_phone_normalization_repairs_excel_leading_zero(
+def test_historical_import_t18_active_package_egypt_phone_normalization_repairs_excel_leading_zero(
     value,
     expected_display: str,
     expected_normalized: str,
@@ -452,7 +518,7 @@ def test_active_package_purchase_date_accepts_blank_day_month_and_month_only(
     assert parsed.isoformat() == expected
 
 
-def test_active_packages_template_preserves_old_shape_and_adds_pulses() -> None:
+def test_historical_import_t1_template_adds_optional_customer_id_first() -> None:
     laser_service = "ليزر إزالة الشعر - جسم كامل سيدات"
     payload = history.build_historical_import_template(
         service_names=["Hydrafacial", laser_service],
@@ -464,6 +530,7 @@ def test_active_packages_template_preserves_old_shape_and_adds_pulses() -> None:
         readme = workbook["README"]
         sheet = workbook["active_packages"]
         expected_headers = [
+            "ID",
             "اسم العميل",
             "رقم الموبايل",
             "اسم الخدمة",
@@ -484,23 +551,29 @@ def test_active_packages_template_preserves_old_shape_and_adds_pulses() -> None:
             if cell.value is not None
         )
         assert "اسم العميل ورقم الموبايل فقط" in readme_text
+        assert "ID اختياري" in readme_text
+        assert "أكثر من ID مختلف" in readme_text
+        assert "أكثر من باقة مختلفة" in readme_text
         assert "ترك المبلغ المدفوع فارغًا" in readme_text
         assert "سعر الباقة كمبلغ مدفوع" in readme_text
-        assert [readme.cell(6, column).value for column in range(1, 11)] == expected_headers
-        assert [sheet.cell(1, column).value for column in range(1, 11)] == expected_headers
-        assert [sheet.cell(2, column).value for column in range(1, 11)] == [None] * 10
+        assert [readme.cell(6, column).value for column in range(1, 12)] == expected_headers
+        assert [sheet.cell(1, column).value for column in range(1, 12)] == expected_headers
+        assert [sheet.cell(2, column).value for column in range(1, 12)] == [None] * 11
         assert "ActivePackagesTable" in sheet.tables
-        assert sheet.tables["ActivePackagesTable"].ref == "A1:J2"
-        assert sheet["B2"].number_format == "@"
+        assert sheet.tables["ActivePackagesTable"].ref == "A1:K2"
+        assert sheet["A2"].number_format == "@"
+        assert sheet["C2"].number_format == "@"
+        assert sheet["I2"].number_format == "dd/mm/yyyy"
+        assert sheet["K2"].number_format == "0"
         validations = {
             str(validation.sqref): validation
             for validation in sheet.data_validations.dataValidation
         }
-        assert set(validations) == {"C2:C5000", "D2:D5000"}
-        assert "ServicesTable" in validations["C2:C5000"].formula1
-        assert "DevicesTable" in validations["D2:D5000"].formula1
-        assert validations["C2:C5000"].allow_blank is True
+        assert set(validations) == {"D2:D5000", "E2:E5000"}
+        assert "ServicesTable" in validations["D2:D5000"].formula1
+        assert "DevicesTable" in validations["E2:E5000"].formula1
         assert validations["D2:D5000"].allow_blank is True
+        assert validations["E2:E5000"].allow_blank is True
     finally:
         workbook.close()
 
@@ -522,9 +595,9 @@ def test_active_packages_template_keeps_empty_lookup_tables_without_helper_text(
             str(validation.sqref): validation
             for validation in sheet.data_validations.dataValidation
         }
-        assert set(validations) == {"C2:C5000", "D2:D5000"}
-        assert "ServicesTable" in validations["C2:C5000"].formula1
-        assert "DevicesTable" in validations["D2:D5000"].formula1
+        assert set(validations) == {"D2:D5000", "E2:E5000"}
+        assert "ServicesTable" in validations["D2:D5000"].formula1
+        assert "DevicesTable" in validations["E2:E5000"].formula1
     finally:
         workbook.close()
 
@@ -1818,3 +1891,388 @@ def test_history_route_structures_file_validation_without_exposing_internals() -
         "error_count": 2,
         "errors": exc.errors,
     }
+
+
+def test_historical_import_t2_customer_only_with_id() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id(
+                [_id_active_row("100", "سارة أحمد", "01012345678")]
+            ),
+        )
+        assert preview.ready_counts == {"holding": 1}
+        patient = db.scalar(select(Patient).where(Patient.workspace_id == workspace.id))
+        assert patient is not None
+        assert patient.customer_id == "100"
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 0
+        assert db.scalar(select(func.count()).select_from(PatientPulsePack).where(PatientPulsePack.workspace_id == workspace.id)) == 0
+
+
+def test_historical_import_t3_customer_only_without_id() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document(
+                [["سارة أحمد", "01012345678", None, None, None, None, None, None, None, None]]
+            ),
+        )
+        assert preview.ready_counts == {"holding": 1}
+        patient = db.scalar(select(Patient).where(Patient.workspace_id == workspace.id))
+        assert patient is not None
+        assert patient.customer_id is None
+
+
+def test_historical_import_t4_t5_customer_id_text_and_aliases() -> None:
+    cases = [
+        ("ID", "000123", "01011111111"),
+        ("id", "CL-0012", "01011111112"),
+        ("customer_id", "A-123", "01011111113"),
+        ("Customer ID", "CUST/123", "01011111114"),
+    ]
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        for header, customer_id, phone in cases:
+            _preview, _summary = _preview_and_apply(
+                db,
+                workspace=workspace,
+                user=user,
+                document=_arabic_active_package_document_with_id(
+                    [_id_active_row(customer_id, f"Patient {customer_id}", phone)],
+                    id_header=header,
+                ),
+            )
+        patients = {
+            row.phone: row.customer_id
+            for row in db.scalars(select(Patient).where(Patient.workspace_id == workspace.id)).all()
+        }
+        assert patients["01011111111"] == "000123"
+        assert patients["01011111112"] == "CL-0012"
+        assert patients["01011111113"] == "A-123"
+        assert patients["01011111114"] == "CUST/123"
+
+
+def test_historical_import_t6_same_phone_same_id_one_patient() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        row = _id_active_row("100", "سارة أحمد", "01012345678")
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([row, list(row)]),
+        )
+        assert preview.ready_counts["holding"] == 1
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+        patient = db.scalar(select(Patient).where(Patient.workspace_id == workspace.id))
+        assert patient is not None and patient.customer_id == "100"
+
+
+@pytest.mark.parametrize("rows", [
+    [
+        _id_active_row(None, "سارة أحمد", "01012345678"),
+        _id_active_row("100", "سارة أحمد", "01012345678"),
+    ],
+    [
+        _id_active_row("100", "سارة أحمد", "01012345678"),
+        _id_active_row(None, "سارة أحمد", "01012345678"),
+    ],
+])
+def test_historical_import_t7_blank_and_supplied_id_resolve_to_supplied(rows) -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id(rows),
+        )
+        assert preview.ready_counts["holding"] == 1
+        patient = db.scalar(select(Patient).where(Patient.workspace_id == workspace.id))
+        assert patient is not None
+        assert patient.customer_id == "100"
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+
+
+def test_historical_import_t8_same_phone_different_ids_preview_conflict() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row("100", "سارة أحمد", "01012345678"),
+                _id_active_row("200", "سارة أحمد", "01012345678"),
+            ])],
+            mode="append",
+        )
+        assert preview.can_import is False
+        assert preview.ready_counts.get("holding", 0) == 0
+        conflict = next(group for group in preview.issue_groups if group.code == "customer_id_conflict_in_file")
+        assert conflict.example_rows == [2, 3]
+        assert "100" in conflict.message and "200" in conflict.message
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 0
+        batch = history.get_historical_import_batch(db, workspace_id=workspace.id, batch_id=preview.batch.batch_id)
+        assert batch is not None
+        with pytest.raises(history.HistoricalImportError, match="no ready rows"):
+            history.apply_historical_import(db, workspace=workspace, batch=batch)
+
+
+def _existing_patient(db: Session, workspace: Workspace, *, phone: str, customer_id: str | None) -> Patient:
+    display, normalized = normalize_patient_identity_phone(phone)
+    patient = Patient(
+        workspace_id=workspace.id,
+        first_name="Existing",
+        last_name="Patient",
+        phone=display,
+        phone_normalized=normalized,
+        customer_id=customer_id,
+        gender="female",
+        preferred_language="ar",
+        preferred_branch_id=workspace.primary_branch_id,
+        source="other",
+        status="active",
+        marketing_consent=False,
+    )
+    db.add(patient)
+    db.flush()
+    return patient
+
+
+def test_historical_import_t9_existing_patient_missing_id_is_filled() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        existing = _existing_patient(db, workspace, phone="01012345678", customer_id=None)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row("100", "Different Import Name", "01012345678")
+            ]),
+        )
+        assert preview.projected_counts["existing_patients_reused"] == 1
+        db.refresh(existing)
+        assert existing.customer_id == "100"
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+
+
+def test_historical_import_t10_existing_patient_same_id_is_safe_noop() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        existing = _existing_patient(db, workspace, phone="01012345678", customer_id="100")
+        _preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row("100", "Different Import Name", "01012345678")
+            ]),
+        )
+        db.refresh(existing)
+        assert existing.customer_id == "100"
+        assert existing.first_name == "Existing"
+        assert existing.last_name == "Patient"
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+
+
+def test_historical_import_t11_existing_patient_conflicting_id_is_preview_conflict() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        existing = _existing_patient(db, workspace, phone="01012345678", customer_id="100")
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row("200", "Existing Patient", "01012345678")
+            ])],
+            mode="append",
+        )
+        assert preview.can_import is False
+        conflict = next(group for group in preview.issue_groups if group.code == "customer_id_conflict_existing_patient")
+        assert "Current ID: 100" in conflict.message
+        assert "Imported ID: 200" in conflict.message
+        db.refresh(existing)
+        assert existing.customer_id == "100"
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+
+
+def test_historical_import_t12_existing_patient_blank_import_id_preserves_existing() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        existing = _existing_patient(db, workspace, phone="01012345678", customer_id="100")
+        _preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row(None, "Existing Patient", "01012345678")
+            ]),
+        )
+        db.refresh(existing)
+        assert existing.customer_id == "100"
+
+
+def test_historical_import_t13_one_phone_two_different_packages() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db, services=("Hydrafacial", "Peel"))
+        rows = [
+            _id_active_row("100", "سارة أحمد", "01012345678", service="Hydrafacial", sessions_total=6, sessions_remaining=3, amount_paid=3000, purchased_at="15/02/2026", package_price=3000),
+            _id_active_row("100", "سارة أحمد", "01012345678", service="Peel", sessions_total=8, sessions_remaining=5, amount_paid=4000, purchased_at="16/02/2026", package_price=4000),
+        ]
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id(rows),
+        )
+        assert preview.ready_counts["holding"] == 2
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+        packages = list(db.scalars(select(PatientPackage).where(PatientPackage.workspace_id == workspace.id)).all())
+        assert len(packages) == 2
+        assert {row.service_id for row in packages} == {services["Hydrafacial"].id, services["Peel"].id}
+
+
+def test_historical_import_t14_exact_duplicate_package_writes_once() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        row = _id_active_row("100", "سارة أحمد", "01012345678", service="Hydrafacial", sessions_total=6, sessions_remaining=3, amount_paid=3000, purchased_at="15/02/2026", package_price=3000)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([row, list(row)]),
+        )
+        assert any(group.code == "duplicate_historical_package_row" for group in preview.issue_groups)
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 1
+        assert db.scalar(select(func.count()).select_from(PaymentTransaction).where(PaymentTransaction.workspace_id == workspace.id)) == 1
+
+
+def test_historical_import_t15_duplicate_pulse_component_writes_once() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db, services=("Hydrafacial", "Peel"))
+        db.add(ClinicLaserDevice(workspace_id=workspace.id, device_key="candela_gentle", name="Candela Gentle", is_active=True))
+        db.flush()
+        rows = [
+            _id_active_row("100", "سارة أحمد", "01012345678", service="Hydrafacial", device="Candela Gentle", sessions_total=6, sessions_remaining=3, amount_paid=3000, purchased_at="15/02/2026", package_price=3000, pulses_remaining=1000),
+            _id_active_row("100", "سارة أحمد", "01012345678", service="Peel", device="Candela Gentle", sessions_total=8, sessions_remaining=5, amount_paid=4000, purchased_at="16/02/2026", package_price=4000, pulses_remaining=1000),
+        ]
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id(rows),
+        )
+        assert any(group.code == "duplicate_pulse_pack_holding" for group in preview.issue_groups)
+        assert db.scalar(select(func.count()).select_from(PatientPulsePack).where(PatientPulsePack.workspace_id == workspace.id)) == 1
+
+
+def test_historical_import_t16_same_phone_is_workspace_scoped() -> None:
+    with _db_session() as db:
+        workspace_a, _user_a, _branch_a, _services_a, _doctor_a = _seed_workspace(db)
+        workspace_b, user_b, _branch_b, _services_b, _doctor_b = _seed_workspace(db)
+        patient_a = _existing_patient(db, workspace_a, phone="01012345678", customer_id="100")
+        _preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace_b,
+            user=user_b,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row("200", "Workspace B", "01012345678")
+            ]),
+        )
+        display, normalized = normalize_patient_identity_phone("01012345678")
+        del display
+        patient_b = db.scalar(select(Patient).where(Patient.workspace_id == workspace_b.id, Patient.phone_normalized == normalized))
+        assert patient_b is not None and patient_b.customer_id == "200"
+        db.refresh(patient_a)
+        assert patient_a.customer_id == "100"
+        assert patient_a.id != patient_b.id
+
+
+def test_historical_import_t17_old_ten_column_template_is_still_accepted() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document([
+                ["Legacy Ten Columns", "01012345678", None, None, None, None, None, None, None, None]
+            ]),
+        )
+        assert preview.ready_counts == {"holding": 1}
+        patient = db.scalar(select(Patient).where(Patient.workspace_id == workspace.id))
+        assert patient is not None and patient.customer_id is None
+
+
+def test_historical_import_conflicting_names_do_not_duplicate_patient() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, services, _doctor = _seed_workspace(db, services=("Hydrafacial", "Peel"))
+        preview, _summary = _preview_and_apply(
+            db,
+            workspace=workspace,
+            user=user,
+            document=_arabic_active_package_document_with_id([
+                _id_active_row("100", "سارة أحمد", "01012345678", service="Hydrafacial", sessions_total=6, sessions_remaining=3, amount_paid=3000, purchased_at="15/02/2026", package_price=3000),
+                _id_active_row("100", "سارة محمد", "01012345678", service="Peel", sessions_total=8, sessions_remaining=4, amount_paid=4000, purchased_at="16/02/2026", package_price=4000),
+            ]),
+        )
+        assert preview.ready_counts["holding"] == 2
+        assert db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)) == 1
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 2
+        patient = db.scalar(select(Patient).where(Patient.workspace_id == workspace.id))
+        assert patient is not None
+        assert f"{patient.first_name} {patient.last_name or ''}".strip() == "سارة أحمد"
+        assert {row.service_id for row in db.scalars(select(PatientPackage).where(PatientPackage.workspace_id == workspace.id)).all()} == {services["Hydrafacial"].id, services["Peel"].id}
+
+
+def test_historical_import_apply_rechecks_customer_id_after_preview() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        existing = _existing_patient(db, workspace, phone="01012345678", customer_id=None)
+        preview = history.preview_historical_import(
+            db,
+            workspace=workspace,
+            user_id=user.id,
+            documents=[_arabic_active_package_document_with_id([
+                _id_active_row("100", "Existing Patient", "01012345678", service="Hydrafacial", sessions_total=6, sessions_remaining=3, amount_paid=3000, purchased_at="15/02/2026", package_price=3000)
+            ])],
+            mode="append",
+        )
+        existing.customer_id = "999"
+        db.commit()
+        batch = history.get_historical_import_batch(db, workspace_id=workspace.id, batch_id=preview.batch.batch_id)
+        assert batch is not None
+        with pytest.raises(history.HistoricalImportConflictError, match="customer ID changed after preview"):
+            history.apply_historical_import(db, workspace=workspace, batch=batch)
+        db.rollback()
+        assert db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)) == 0
+        db.refresh(existing)
+        assert existing.customer_id == "999"
+
+
+@pytest.mark.parametrize("header,value", [
+    ("ID", "000123"),
+    ("id", "CL-0012"),
+    ("customer_id", "A-123"),
+    ("Customer ID", "CUST/123"),
+])
+def test_historical_import_customer_id_headers_parse_as_text_without_database(header: str, value: str) -> None:
+    document = _arabic_active_package_document_with_id(
+        [_id_active_row(value, "Header Test", "01012345678")],
+        id_header=header,
+    )
+    rows = list(history._iter_rows([document]))
+    assert len(rows) == 1
+    _source_file, sheet, row_number, row = rows[0]
+    assert sheet == "active_packages"
+    assert row_number == 2
+    assert row["customer_id"] == value
