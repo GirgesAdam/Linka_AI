@@ -6,7 +6,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -340,10 +340,7 @@ def register_patient(
         "phone",
         "marketing_consent",
         "whatsapp_opt_in",
-        "initial_package_offer_id",
-        "initial_package_sessions_remaining",
-        "initial_package_amount_paid_minor",
-        "initial_package_payment_method",
+        "initial_packages",
         "initial_pulse_balances",
     }
     data = payload.model_dump(exclude=registration_only_fields)
@@ -363,15 +360,15 @@ def register_patient(
     try:
         db.add(patient)
         db.flush()
-        if payload.initial_package_offer_id is not None:
+        for initial_package in payload.initial_packages:
             create_patient_package_opening_balance(
                 db,
                 workspace_id=access.workspace.id,
                 patient_id=patient.id,
-                offer_id=payload.initial_package_offer_id,
-                sessions_remaining=int(payload.initial_package_sessions_remaining),
-                amount_paid_minor=payload.initial_package_amount_paid_minor,
-                payment_method=payload.initial_package_payment_method,
+                offer_id=initial_package.offer_id,
+                sessions_remaining=initial_package.sessions_remaining,
+                amount_paid_minor=initial_package.amount_paid_minor,
+                payment_method=initial_package.payment_method,
                 created_by_user_id=access.user.id,
             )
         for pulse_balance in payload.initial_pulse_balances:
@@ -441,6 +438,7 @@ def list_patients(
             or_(
                 Patient.first_name.ilike(term),
                 Patient.last_name.ilike(term),
+                (Patient.first_name + " " + func.coalesce(Patient.last_name, "")).ilike(term),
                 Patient.phone.ilike(term),
             )
         )
@@ -531,7 +529,7 @@ def put_patient_opening_data(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="لا يمكن تعديل Customer ID لأن نظام العيادة الخارجي هو صاحب صلاحية هذا الحقل.",
+            detail="لا يمكن تعديل ID لأن نظام العيادة الخارجي هو صاحب صلاحية هذا الحقل.",
         ) from exc
     except PatientOpeningDataConflict as exc:
         db.rollback()
@@ -590,7 +588,7 @@ def update_patient(
     for key, value in updates.items():
         setattr(patient, key, value)
 
-    commit_or_conflict(db, "A patient with this phone already exists in this workspace.")
+    commit_or_conflict(db, DUPLICATE_PATIENT_MESSAGE)
     db.refresh(patient)
     return patient
 

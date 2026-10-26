@@ -42,16 +42,38 @@ export async function addPatientNote(formData: FormData) {
   revalidatePatient(patientId);
 }
 
-export async function updatePatientCustomerId(formData: FormData) {
-  const patientId = String(formData.get("patient_id") || "").trim();
-  const customerId = String(formData.get("customer_id") || "");
-  if (!patientId) return;
+export async function updatePatientProfileAction(
+  patientId: string,
+  changes: {
+    name?: string;
+    phone?: string | null;
+    customer_id?: string | null;
+    source?: string;
+  },
+) {
+  if (!patientId) return { ok: false, error: "تعذر تحديث بيانات العميل." };
+  const payload: Record<string, string | null> = {};
+  if (Object.hasOwn(changes, "name")) {
+    const name = String(changes.name || "").trim();
+    if (!name) return { ok: false, error: "أدخل اسم العميل." };
+    payload.first_name = name;
+    payload.last_name = null;
+  }
+  if (Object.hasOwn(changes, "phone")) payload.phone = changes.phone?.trim() || null;
+  if (Object.hasOwn(changes, "customer_id")) payload.customer_id = changes.customer_id?.trim() || null;
+  if (Object.hasOwn(changes, "source")) payload.source = changes.source || "other";
+  if (Object.keys(payload).length === 0) return { ok: true, error: null };
 
-  await tiaRequest(`/crm/patients/${patientId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ customer_id: customerId.trim() ? customerId : null }),
-  });
-  revalidatePatient(patientId);
+  try {
+    await tiaRequest(`/crm/patients/${patientId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    revalidatePatient(patientId);
+    return { ok: true, error: null };
+  } catch (error) {
+    return { ok: false, error: safeTiaActionError(error, "تعذر تحديث بيانات العميل.") };
+  }
 }
 
 export async function setPatientWhatsappOptIn(formData: FormData) {
@@ -203,18 +225,18 @@ export async function loadPatientOpeningDataAction(patientId: string) {
     const data = await tiaRequest<{
       patient_id: string;
       customer_id: string | null;
-      package: {
+      packages: Array<{
         package_id: string;
         offer_id: string | null;
         service_id: string;
         name: string;
         sessions_total: number;
-        sessions_remaining: number;
+        opening_sessions_remaining: number;
         current_remaining: number;
         sessions_reserved: number;
         sessions_consumed: number;
         replaceable_identity: boolean;
-      } | null;
+      }>;
       pulse_balances: Array<{
         opening_pack_id: string;
         device_key: string;
@@ -235,7 +257,7 @@ export async function savePatientOpeningDataAction(
   patientId: string,
   payload: {
     customer_id: string | null;
-    package: { offer_id: string | null; sessions_remaining: number } | null;
+    packages: Array<{ package_id: string | null; offer_id: string | null; sessions_remaining: number }>;
     pulse_balances: Array<{ device_key: string; pulses_remaining: number }>;
   },
 ) {
@@ -275,49 +297,75 @@ export async function registerPatientAction(
   _previousState: RegistrationActionState,
   formData: FormData,
 ): Promise<RegistrationActionState> {
-  const firstName = String(formData.get("first_name") || "").trim();
-  const lastName = String(formData.get("last_name") || "").trim();
+  const name = String(formData.get("name") || "").trim();
   const phone = String(formData.get("phone") || "").trim();
   const duplicateAttempt = String(formData.get("duplicate_attempt") || "");
   const customerId = String(formData.get("customer_id") || "").trim();
-  const offerId = String(formData.get("initial_package_offer_id") || "").trim();
-  const sessionsRaw = String(formData.get("initial_package_sessions_remaining") || "").trim();
-  const amountPaidRaw = String(formData.get("initial_package_amount_paid_egp") || "").trim();
-  const paymentMethod = String(formData.get("initial_package_payment_method") || "cash");
+  const packagesJson = String(formData.get("initial_packages_json") || "[]");
   const deviceKeys = formData.getAll("initial_pulse_device_key").map((value) => String(value || "").trim());
   const pulseCounts = formData.getAll("initial_pulses_remaining").map((value) => String(value || "").trim());
 
-  if (!firstName) return { error: "\u0623\u062f\u062e\u0644 \u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u0623\u0648\u0644." };
+  if (!name) return { error: "أدخل الاسم." };
   if (!/^01[0125][0-9]{8}$/.test(phone)) {
-    return { error: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 11 \u0631\u0642\u0645\u064b\u0627 \u0648\u064a\u0628\u062f\u0623 \u0628\u0640 010 \u0623\u0648 011 \u0623\u0648 012 \u0623\u0648 015." };
-  }
-  if (Boolean(offerId) !== Boolean(sessionsRaw)) {
-    return { error: "\u0627\u062e\u062a\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0648\u0623\u062f\u062e\u0644 \u0639\u062f\u062f \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629 \u0645\u0639\u064b\u0627." };
-  }
-  if (sessionsRaw && (!/^[0-9]+$/.test(sessionsRaw) || Number(sessionsRaw) <= 0)) {
-    return { error: "\u0639\u062f\u062f \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0627\u0644\u0645\u062a\u0628\u0642\u064a\u0629 \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0639\u062f\u062f\u064b\u0627 \u0635\u062d\u064a\u062d\u064b\u0627 \u0623\u0643\u0628\u0631 \u0645\u0646 \u0635\u0641\u0631." };
-  }
-  if (offerId && !amountPaidRaw) {
-    return { error: "\u0623\u062f\u062e\u0644 \u0627\u0644\u0645\u0628\u0644\u063a \u0627\u0644\u0645\u062f\u0641\u0648\u0639\u060c \u0648\u064a\u0645\u0643\u0646 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0635\u0641\u0631\u064b\u0627." };
-  }
-  if (!offerId && (sessionsRaw || amountPaidRaw)) {
-    return { error: "\u0627\u062e\u062a\u0631 \u0627\u0644\u0628\u0627\u0643\u062f\u062c \u0642\u0628\u0644 \u0625\u062f\u062e\u0627\u0644 \u0627\u0644\u062c\u0644\u0633\u0627\u062a \u0623\u0648 \u0627\u0644\u0645\u062f\u0641\u0648\u0639\u0627\u062a." };
+    return { error: "رقم الموبايل يجب أن يكون 11 رقمًا ويبدأ بـ 010 أو 011 أو 012 أو 015." };
   }
 
-  let amountPaidMinor: number | null = null;
-  if (offerId) {
+  let rawPackages: unknown;
+  try {
+    rawPackages = JSON.parse(packagesJson);
+  } catch {
+    return { error: "أعد مراجعة بيانات الباكيدجات." };
+  }
+  if (!Array.isArray(rawPackages) || rawPackages.length > 20) {
+    return { error: "أعد مراجعة بيانات الباكيدجات." };
+  }
+
+  const initialPackages: Array<{
+    offer_id: string;
+    sessions_remaining: number;
+    amount_paid_minor: number;
+    payment_method: string;
+  }> = [];
+  const seenOffers = new Set<string>();
+  for (const raw of rawPackages) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return { error: "أعد مراجعة بيانات الباكيدجات." };
+    }
+    const row = raw as Record<string, unknown>;
+    const offerId = String(row.offer_id || "").trim();
+    const sessionsRaw = String(row.sessions_remaining || "").trim();
+    const amountPaidRaw = String(row.amount_paid_egp ?? "").trim();
+    const paymentMethod = String(row.payment_method || "cash").trim();
+    if (!offerId && !sessionsRaw && !amountPaidRaw) continue;
+    if (!offerId || !sessionsRaw || !amountPaidRaw) {
+      return { error: "اختر الباكيدج وأدخل الجلسات المتبقية والمبلغ المدفوع لكل باكيدج." };
+    }
+    if (!/^[0-9]+$/.test(sessionsRaw) || Number(sessionsRaw) <= 0 || Number(sessionsRaw) > 10_000) {
+      return { error: "عدد الجلسات المتبقية يجب أن يكون عددًا صحيحًا أكبر من صفر." };
+    }
+    if (seenOffers.has(offerId)) {
+      return { error: "لا يمكن إضافة نفس الباكيدج مرتين." };
+    }
+    seenOffers.add(offerId);
+    let amountPaidMinor: number;
     try {
       amountPaidMinor = parseEgpAmountToMinor(amountPaidRaw);
     } catch {
-      return { error: "\u0623\u062f\u062e\u0644 \u0645\u0628\u0644\u063a\u064b\u0627 \u0635\u062d\u064a\u062d\u064b\u0627 \u0628\u0627\u0644\u062c\u0646\u064a\u0647 \u0648\u0628\u062d\u062f \u0623\u0642\u0635\u0649 \u0645\u0646 \u062e\u0627\u0646\u062a\u064a\u0646 \u0639\u0634\u0631\u064a\u062a\u064a\u0646." };
+      return { error: "أدخل مبلغًا صحيحًا بالجنيه وبحد أقصى من خانتين عشريتين لكل باكيدج." };
     }
     if (!["cash", "visa", "instapay"].includes(paymentMethod)) {
-      return { error: "\u0627\u062e\u062a\u0631 \u0637\u0631\u064a\u0642\u0629 \u062f\u0641\u0639 \u0635\u062d\u064a\u062d\u0629." };
+      return { error: "اختر طريقة دفع صحيحة لكل باكيدج." };
     }
+    initialPackages.push({
+      offer_id: offerId,
+      sessions_remaining: Number(sessionsRaw),
+      amount_paid_minor: amountPaidMinor,
+      payment_method: paymentMethod,
+    });
   }
 
   if (deviceKeys.length !== pulseCounts.length) {
-    return { error: "\u0623\u0639\u062f \u0645\u0631\u0627\u062c\u0639\u0629 \u0623\u0631\u0635\u062f\u0629 Pulse." };
+    return { error: "أعد مراجعة أرصدة Pulse." };
   }
   const pulseBalances: Array<{ device_key: string; pulses_remaining: number }> = [];
   const seenDevices = new Set<string>();
@@ -326,14 +374,14 @@ export async function registerPatientAction(
     const pulsesRaw = pulseCounts[index];
     if (!deviceKey && !pulsesRaw) continue;
     if (!deviceKey || !pulsesRaw) {
-      return { error: "\u0627\u062e\u062a\u0631 \u062c\u0647\u0627\u0632 \u0627\u0644\u0644\u064a\u0632\u0631 \u0648\u0623\u062f\u062e\u0644 \u0631\u0635\u064a\u062f\u0647 \u0645\u0639\u064b\u0627." };
+      return { error: "اختر جهاز الليزر وأدخل رصيده معًا." };
     }
     if (!/^[0-9]+$/.test(pulsesRaw) || Number(pulsesRaw) <= 0 || Number(pulsesRaw) > 1_000_000_000) {
-      return { error: "\u0639\u062f\u062f \u0627\u0644\u0646\u0628\u0636\u0627\u062a \u064a\u062c\u0628 \u0623\u0646 \u064a\u0643\u0648\u0646 \u0639\u062f\u062f\u064b\u0627 \u0635\u062d\u064a\u062d\u064b\u0627 \u0623\u0643\u0628\u0631 \u0645\u0646 \u0635\u0641\u0631." };
+      return { error: "عدد النبضات يجب أن يكون عددًا صحيحًا أكبر من صفر." };
     }
     const normalizedDeviceKey = deviceKey.toLocaleLowerCase();
     if (seenDevices.has(normalizedDeviceKey)) {
-      return { error: "\u0644\u0627 \u062a\u0643\u0631\u0631 \u0646\u0641\u0633 \u0627\u0644\u062c\u0647\u0627\u0632 \u0641\u064a \u0623\u0631\u0635\u062f\u0629 Pulse." };
+      return { error: "لا تكرر نفس الجهاز في أرصدة Pulse." };
     }
     seenDevices.add(normalizedDeviceKey);
     pulseBalances.push({ device_key: deviceKey, pulses_remaining: Number(pulsesRaw) });
@@ -344,15 +392,12 @@ export async function registerPatientAction(
     patient = await tiaRequest<{ id: string }>("/crm/patients/register", {
       method: "POST",
       body: JSON.stringify({
-        first_name: firstName,
-        last_name: lastName || null,
+        first_name: name,
+        last_name: null,
         phone,
         customer_id: customerId || null,
         source: "walk_in",
-        initial_package_offer_id: offerId || null,
-        initial_package_sessions_remaining: sessionsRaw ? Number(sessionsRaw) : null,
-        initial_package_amount_paid_minor: amountPaidMinor,
-        initial_package_payment_method: paymentMethod,
+        initial_packages: initialPackages,
         initial_pulse_balances: pulseBalances,
       }),
     });
@@ -360,14 +405,14 @@ export async function registerPatientAction(
     const existingPatient = existingPatientFromRegistrationError(error);
     if (existingPatient) {
       return {
-        error: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f.",
+        error: "رقم الموبايل ده مسجل بالفعل لعميل موجود.",
         existingPatient,
         duplicatePhone: phone,
         duplicateAttempt,
       };
     }
     return {
-      error: error instanceof Error ? error.message : "\u062a\u0639\u0630\u0631 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0639\u0645\u064a\u0644. \u062d\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.",
+      error: error instanceof Error ? error.message : "تعذر تسجيل العميل. حاول مرة أخرى.",
       existingPatient: null,
     };
   }

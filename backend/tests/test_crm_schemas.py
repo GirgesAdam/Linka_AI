@@ -65,12 +65,22 @@ def test_reception_registration_rejects_unsupported_or_invalid_mobile_numbers(ph
         PatientRegistrationCreate(first_name="Ada", phone=phone)
 
 
-def test_reception_registration_requires_package_offer_and_remaining_sessions_together() -> None:
+def test_reception_registration_validates_package_rows_and_rejects_duplicate_offer() -> None:
+    offer_id = "00000000-0000-0000-0000-000000000001"
     with pytest.raises(ValidationError):
         PatientRegistrationCreate(
             first_name="Ada",
             phone="01012345678",
-            initial_package_offer_id="00000000-0000-0000-0000-000000000001",
+            initial_packages=[{"offer_id": offer_id}],
+        )
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(
+            first_name="Ada",
+            phone="01012345678",
+            initial_packages=[
+                {"offer_id": offer_id, "sessions_remaining": 2},
+                {"offer_id": offer_id, "sessions_remaining": 1},
+            ],
         )
 
 
@@ -110,13 +120,28 @@ def test_reception_registration_rejects_duplicate_pulse_device_balances() -> Non
         )
 
 
-def test_reception_registration_rejects_payment_without_package_offer() -> None:
-    with pytest.raises(ValidationError):
-        PatientRegistrationCreate(
-            first_name="Ada",
-            phone="01012345678",
-            initial_package_amount_paid_minor=100,
-        )
+def test_reception_registration_accepts_multiple_package_financial_rows() -> None:
+    patient = PatientRegistrationCreate(
+        first_name="Ada",
+        phone="01012345678",
+        initial_packages=[
+            {
+                "offer_id": "00000000-0000-0000-0000-000000000001",
+                "sessions_remaining": 2,
+                "amount_paid_minor": 100_000,
+                "payment_method": "cash",
+            },
+            {
+                "offer_id": "00000000-0000-0000-0000-000000000002",
+                "sessions_remaining": 3,
+                "amount_paid_minor": 250_000,
+                "payment_method": "visa",
+            },
+        ],
+    )
+    assert len(patient.initial_packages) == 2
+    assert patient.initial_packages[0].amount_paid_minor == 100_000
+    assert patient.initial_packages[1].payment_method == "visa"
 
 
 def test_reception_registration_preserves_optional_customer_id() -> None:
@@ -127,3 +152,12 @@ def test_reception_registration_preserves_optional_customer_id() -> None:
     )
     assert patient.customer_id == "000012"
     assert patient.initial_pulse_balances == []
+
+def test_reception_registration_rejects_removed_singular_package_fields() -> None:
+    with pytest.raises(ValidationError):
+        PatientRegistrationCreate(
+            first_name="Ada",
+            phone="01012345678",
+            initial_package_offer_id="00000000-0000-0000-0000-000000000001",
+            initial_package_sessions_remaining=2,
+        )

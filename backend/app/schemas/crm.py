@@ -142,14 +142,20 @@ class InitialPulseBalanceCreate(BaseModel):
         return value
 
 
+class InitialPackageCreate(BaseModel):
+    offer_id: UUID
+    sessions_remaining: int = Field(gt=0, le=10_000)
+    amount_paid_minor: int | None = Field(default=None, ge=0)
+    payment_method: PaymentMethod = "cash"
+
+
 class PatientRegistrationCreate(PatientCreate):
     """Reception registration contract with optional opening entitlements and payment."""
 
+    model_config = ConfigDict(extra="forbid")
+
     phone: str = Field(min_length=1, max_length=40)
-    initial_package_offer_id: UUID | None = None
-    initial_package_sessions_remaining: int | None = Field(default=None, gt=0, le=10000)
-    initial_package_amount_paid_minor: int | None = Field(default=None, ge=0)
-    initial_package_payment_method: PaymentMethod = "cash"
+    initial_packages: list[InitialPackageCreate] = Field(default_factory=list, max_length=20)
     initial_pulse_balances: list[InitialPulseBalanceCreate] = Field(
         default_factory=list,
         max_length=20,
@@ -162,14 +168,11 @@ class PatientRegistrationCreate(PatientCreate):
             raise ValueError(
                 "Phone must be an 11-digit Egyptian mobile starting with 010, 011, 012, or 015."
             )
-        if (self.initial_package_offer_id is None) != (
-            self.initial_package_sessions_remaining is None
-        ):
-            raise ValueError(
-                "Choose a package offer and enter its remaining sessions together."
-            )
-        if self.initial_package_offer_id is None and self.initial_package_amount_paid_minor is not None:
-            raise ValueError("A package payment requires a selected package offer.")
+        seen_offer_ids: set[UUID] = set()
+        for package in self.initial_packages:
+            if package.offer_id in seen_offer_ids:
+                raise ValueError("Each package offer may only be added once during registration.")
+            seen_offer_ids.add(package.offer_id)
         seen_device_keys: set[str] = set()
         for balance in self.initial_pulse_balances:
             key = balance.device_key.casefold()
