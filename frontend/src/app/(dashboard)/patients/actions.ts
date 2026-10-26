@@ -191,11 +191,75 @@ export async function recordPatientPulsePackPayment(formData: FormData) {
 }
 
 
+function safeTiaActionError(error: unknown, fallback: string) {
+  if (error instanceof TiaApiError && typeof error.detail === "string") return error.detail;
+  return error instanceof Error ? error.message : fallback;
+}
+
+
+export async function loadPatientOpeningDataAction(patientId: string) {
+  if (!patientId) return { data: null, error: "تعذر تحميل بيانات العميل." };
+  try {
+    const data = await tiaRequest<{
+      patient_id: string;
+      customer_id: string | null;
+      package: {
+        package_id: string;
+        offer_id: string | null;
+        service_id: string;
+        name: string;
+        sessions_total: number;
+        sessions_remaining: number;
+        current_remaining: number;
+        sessions_reserved: number;
+        sessions_consumed: number;
+        replaceable_identity: boolean;
+      } | null;
+      pulse_balances: Array<{
+        opening_pack_id: string;
+        device_key: string;
+        device_name: string;
+        opening_pulses: number;
+        current_remaining: number;
+        pulses_consumed: number;
+        replaceable_identity: boolean;
+      }>;
+    }>(`/crm/patients/${patientId}/opening-data`);
+    return { data, error: null };
+  } catch (error) {
+    return { data: null, error: safeTiaActionError(error, "تعذر تحميل بيانات العميل.") };
+  }
+}
+
+export async function savePatientOpeningDataAction(
+  patientId: string,
+  payload: {
+    customer_id: string | null;
+    package: { offer_id: string | null; sessions_remaining: number } | null;
+    pulse_balances: Array<{ device_key: string; pulses_remaining: number }>;
+  },
+) {
+  if (!patientId) return { data: null, error: "تعذر تحديث بيانات العميل." };
+  try {
+    const data = await tiaRequest<Awaited<ReturnType<typeof loadPatientOpeningDataAction>>["data"]>(
+      `/crm/patients/${patientId}/opening-data`,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+    revalidatePatient(patientId);
+    return { data, error: null };
+  } catch (error) {
+    return { data: null, error: safeTiaActionError(error, "تعذر تحديث بيانات العميل.") };
+  }
+}
+
+
 type RegistrationExistingPatient = { id: string; name: string };
 
 type RegistrationActionState = {
   error: string | null;
   existingPatient?: RegistrationExistingPatient | null;
+  duplicatePhone?: string | null;
+  duplicateAttempt?: string | null;
 };
 
 function existingPatientFromRegistrationError(error: unknown): RegistrationExistingPatient | null {
@@ -214,6 +278,7 @@ export async function registerPatientAction(
   const firstName = String(formData.get("first_name") || "").trim();
   const lastName = String(formData.get("last_name") || "").trim();
   const phone = String(formData.get("phone") || "").trim();
+  const duplicateAttempt = String(formData.get("duplicate_attempt") || "");
   const customerId = String(formData.get("customer_id") || "").trim();
   const offerId = String(formData.get("initial_package_offer_id") || "").trim();
   const sessionsRaw = String(formData.get("initial_package_sessions_remaining") || "").trim();
@@ -297,6 +362,8 @@ export async function registerPatientAction(
       return {
         error: "\u0631\u0642\u0645 \u0627\u0644\u0645\u0648\u0628\u0627\u064a\u0644 \u062f\u0647 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0639\u0645\u064a\u0644 \u0645\u0648\u062c\u0648\u062f.",
         existingPatient,
+        duplicatePhone: phone,
+        duplicateAttempt,
       };
     }
     return {

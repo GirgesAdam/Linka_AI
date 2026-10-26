@@ -76,6 +76,7 @@ from app.schemas.crm_cohort import (
     CRMCohortRead,
 )
 from app.schemas.patient_history import PatientHistoryContextRead
+from app.schemas.patient_opening_data import PatientOpeningDataRead, PatientOpeningDataUpdate
 from app.services.conversation_ownership import (
     record_customer_inbound,
     return_to_ai,
@@ -114,6 +115,12 @@ from app.services.package_offers import (
     create_patient_package_opening_balance,
 )
 from app.services.patient_history import build_patient_history_context
+from app.services.patient_opening_data import (
+    PatientOpeningDataConflict,
+    PatientOpeningDataNotFound,
+    get_patient_opening_data,
+    update_patient_opening_data,
+)
 from app.services.patient_packages import PackageOperationError
 from app.services.patient_timeline import build_patient_profile
 from app.services.pulse_billing import (
@@ -480,6 +487,58 @@ def get_patient_history_context(
         patient=patient,
         recent_limit=recent_limit,
     )
+
+
+@router.get("/patients/{patient_id}/opening-data", response_model=PatientOpeningDataRead)
+def get_patient_opening_data_route(
+    patient_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PatientOpeningDataRead:
+    try:
+        return get_patient_opening_data(
+            db,
+            workspace_id=access.workspace.id,
+            patient_id=patient_id,
+        )
+    except PatientOpeningDataNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patient not found.") from exc
+    except PatientOpeningDataConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.put("/patients/{patient_id}/opening-data", response_model=PatientOpeningDataRead)
+def put_patient_opening_data(
+    patient_id: UUID,
+    payload: PatientOpeningDataUpdate,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PatientOpeningDataRead:
+    try:
+        result = update_patient_opening_data(
+            db,
+            workspace_id=access.workspace.id,
+            patient_id=patient_id,
+            payload=payload,
+            actor_user_id=access.user.id,
+        )
+        db.commit()
+        return result
+    except PatientOpeningDataNotFound as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ClinicIntegrationAuthorityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="لا يمكن تعديل Customer ID لأن نظام العيادة الخارجي هو صاحب صلاحية هذا الحقل.",
+        ) from exc
+    except PatientOpeningDataConflict as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.patch("/patients/{patient_id}", response_model=PatientRead)
