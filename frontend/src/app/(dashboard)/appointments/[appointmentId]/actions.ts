@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
@@ -391,7 +390,7 @@ export async function rescheduleAppointment(formData: FormData) {
   if (!appointmentId || !startAt) return;
   const replacement = await tiaRequest<Appointment>(`/booking/appointments/${appointmentId}/reschedule`, {
     method: "POST",
-    headers: { "Idempotency-Key": `dashboard:${randomUUID()}` },
+    headers: { "Idempotency-Key": `dashboard-reschedule:${appointmentId}:${new Date(startAt).toISOString()}` },
     body: JSON.stringify({
       start_at: startAt,
       reason: "appointment_rescheduled_from_operations",

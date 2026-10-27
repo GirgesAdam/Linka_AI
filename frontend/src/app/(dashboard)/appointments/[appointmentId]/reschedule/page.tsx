@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowRight, CalendarClock } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { tiaRequest } from "@/lib/tia/api";
@@ -318,10 +319,10 @@ export default async function RescheduleAppointmentPage({
                                           <form key={slot.start_at} action={rescheduleAppointment}>
                                             <input type="hidden" name="appointment_id" value={appointmentId} />
                                             <input type="hidden" name="start_at" value={slot.start_at} />
-                                            <Button type="submit" size="sm" variant="outline" className="w-full justify-between bg-white">
+                                            <PendingSubmitButton type="submit" size="sm" variant="outline" className="w-full justify-between bg-white" pendingLabel="جارٍ نقل الموعد...">
                                               <span>{timeLabel(slot.start_at, availability.timezone)} – {timeLabel(slot.end_at, availability.timezone)}</span>
                                               <CalendarClock size={14} />
-                                            </Button>
+                                            </PendingSubmitButton>
                                           </form>
                                         ))}
                                       </div>

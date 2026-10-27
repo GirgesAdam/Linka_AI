@@ -1,8 +1,8 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
+import { operationIdempotencyKey } from "@/lib/tia/operation-idempotency";
 import type { Appointment, Patient } from "@/lib/types";
 
 export type ManualAppointmentState = { ok: boolean; message: string };
@@ -283,7 +283,7 @@ export async function createManualAppointment(previous: ManualAppointmentState, 
     const endpoint = bookingMode === "quick" ? "/booking/appointments/quick" : "/booking/appointments";
     const appointment = await tiaRequest<Appointment>(endpoint, {
       method: "POST",
-      headers: { "Idempotency-Key": `dashboard-${bookingMode}-appointment:${randomUUID()}` },
+      headers: { "Idempotency-Key": operationIdempotencyKey(formData, `dashboard-${bookingMode}-appointment`) },
       body: JSON.stringify({
         patient_id: patientId,
         branch_id: branchId,

@@ -52,6 +52,10 @@ from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from app.models.workspace import Workspace
 from app.services.activity import record_activity_event
 from app.services.appointment_confirmation import initial_confirmation_decision
+from app.services.appointment_creation import (
+    APPOINTMENT_IDEMPOTENCY_CONFLICT,
+    appointment_matches_create_intent,
+)
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
@@ -432,6 +436,37 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
         assert service_id is not None
         assert doctor_id is not None
         requested_start = self._require_aware_start(request.start_at)
+        idempotency_key = (
+            "agent:"
+            f"{request.operation_id}:book:{patient_id}:{doctor_id}:"
+            f"{requested_start.astimezone(UTC).isoformat()}"
+        )[:128]
+        existing = self.db.scalar(
+            select(Appointment).where(
+                Appointment.workspace_id == self.workspace.id,
+                Appointment.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if not appointment_matches_create_intent(
+                existing,
+                patient_id=patient_id,
+                branch_id=branch_id,
+                doctor_id=doctor_id,
+                service_id=service_id,
+                requested_start_at=requested_start,
+                patient_package_id=patient_package_id,
+                use_pulse_balance=False,
+                visit_group_id=None,
+                lead_id=existing.lead_id,
+                source="ai",
+                laser_device_key=request.laser_device_key,
+                is_quick_booking=False,
+            ):
+                raise BookingRuleError(APPOINTMENT_IDEMPOTENCY_CONFLICT)
+            return AppointmentMutationResult(
+                appointment=self._appointment_record(appointment_id=existing.id)
+            )
 
         slot = find_exact_slot(
             db=self.db,
@@ -500,11 +535,7 @@ class TiaDatabaseClinicAdapter(ClinicAdapter):
             laser_device_key=slot.laser_device_key,
             laser_device_name=slot.laser_device_name,
             customer_note=request.customer_note.strip() or None,
-            idempotency_key=(
-                "agent:"
-                f"{request.operation_id}:book:{patient_id}:{doctor_id}:"
-                f"{slot.start_at.isoformat()}"
-            )[:128],
+            idempotency_key=idempotency_key,
             confirmed_at=confirmation.confirmed_at,
         )
         self.db.add(appointment)

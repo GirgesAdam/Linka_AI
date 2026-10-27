@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { isOperationToken } from "@/lib/tia/operation-idempotency";
 import type { Doctor, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
+import { createClientRequestId } from "@/lib/utils";
 import {
   createManualAppointment,
   getManualAppointmentAvailability,
@@ -106,6 +108,8 @@ export function ManualAppointmentForm({
 }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createManualAppointment, initialState);
+  const operationStorageKey = `linka:operation:appointment-create:${schedulingMode}:${branchId}:${patientId || phone}`;
+  const handledSuccessRef = useRef<ManualAppointmentState | null>(null);
   const [serviceId, setServiceId] = useState("");
   const [laserDeviceKey, setLaserDeviceKey] = useState(fixedLaserDeviceKey || "");
   const [packageId, setPackageId] = useState("");
@@ -123,11 +127,21 @@ export function ManualAppointmentForm({
   );
   const availabilityRequestRef = useRef(0);
 
+  function submitWithStableOperationToken(formData: FormData) {
+    const existing = window.sessionStorage.getItem(operationStorageKey);
+    const token = existing && isOperationToken(existing) ? existing : createClientRequestId();
+    window.sessionStorage.setItem(operationStorageKey, token);
+    formData.set("operation_token", token);
+    formAction(formData);
+  }
+
   useEffect(() => {
-    if (!state.ok || !successHref) return;
-    router.replace(successHref);
+    if (!state.ok || handledSuccessRef.current === state) return;
+    handledSuccessRef.current = state;
+    window.sessionStorage.setItem(operationStorageKey, createClientRequestId());
+    if (successHref) router.replace(successHref);
     router.refresh();
-  }, [router, state.ok, successHref]);
+  }, [operationStorageKey, router, state, successHref]);
 
   const staffMap = useMemo(
     () => new Map(staff.map((item) => [item.id, `${item.first_name} ${item.last_name}`.trim()])),
@@ -253,7 +267,7 @@ export function ManualAppointmentForm({
   }
 
   return (
-    <form action={formAction} className="space-y-4">
+    <form action={submitWithStableOperationToken} className="space-y-4">
       <input type="hidden" name="customer_mode" value={mode} />
       <input type="hidden" name="booking_mode" value={schedulingMode} />
       <input type="hidden" name="clinic_timezone" value={timezone} />

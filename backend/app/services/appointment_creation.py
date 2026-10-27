@@ -22,6 +22,53 @@ from app.services.patient_packages import (
 )
 from app.services.pulse_billing import PulseBillingError, validate_pulse_booking
 
+APPOINTMENT_IDEMPOTENCY_CONFLICT = (
+    "Idempotency key was already used for a different appointment operation."
+)
+
+
+def _same_appointment_instant(left: datetime, right: datetime) -> bool:
+    def canonical(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    return canonical(left) == canonical(right)
+
+
+def appointment_matches_create_intent(
+    appointment: Appointment,
+    *,
+    patient_id: UUID,
+    branch_id: UUID,
+    doctor_id: UUID,
+    service_id: UUID,
+    requested_start_at: datetime,
+    patient_package_id: UUID | None,
+    use_pulse_balance: bool,
+    visit_group_id: UUID | None,
+    lead_id: UUID | None,
+    source: str,
+    laser_device_key: str | None,
+    is_quick_booking: bool,
+) -> bool:
+    """Compare one create request with the immutable intent persisted on an appointment."""
+    expected_billing_context = "pulse_prepaid" if use_pulse_balance else "standard"
+    return bool(
+        appointment.patient_id == patient_id
+        and appointment.branch_id == branch_id
+        and appointment.doctor_id == doctor_id
+        and appointment.service_id == service_id
+        and _same_appointment_instant(appointment.start_at, requested_start_at)
+        and appointment.laser_device_key == laser_device_key
+        and appointment.patient_package_id == patient_package_id
+        and appointment.billing_context == expected_billing_context
+        and appointment.visit_group_id == visit_group_id
+        and appointment.lead_id == lead_id
+        and appointment.source == source
+        and bool(appointment.is_quick_booking) is is_quick_booking
+    )
+
 
 def create_appointment_operation(
     db: Session,
@@ -53,6 +100,22 @@ def create_appointment_operation(
             )
         )
         if existing is not None:
+            if not appointment_matches_create_intent(
+                existing,
+                patient_id=patient_id,
+                branch_id=branch_id,
+                doctor_id=doctor_id,
+                service_id=service_id,
+                requested_start_at=requested_start_at,
+                patient_package_id=patient_package_id,
+                use_pulse_balance=use_pulse_balance,
+                visit_group_id=visit_group_id,
+                lead_id=lead.id if lead is not None else None,
+                source=source,
+                laser_device_key=laser_device_key,
+                is_quick_booking=False,
+            ):
+                raise AppointmentOperationError(APPOINTMENT_IDEMPOTENCY_CONFLICT)
             return existing
 
     try:
