@@ -548,11 +548,12 @@ def test_frontend_no_longer_uses_mapping_wizard_contract() -> None:
 
 def test_history_import_is_bounded_and_setup_mutations_are_audited() -> None:
     history = (BACKEND / "app/services/historical_import.py").read_text(encoding="utf-8")
+    history_limits = (BACKEND / "app/core/historical_import_limits.py").read_text(encoding="utf-8")
     route = (BACKEND / "app/api/routes/clinic_setup_v2.py").read_text(encoding="utf-8")
     frontend_actions = (FRONTEND / "src/app/(dashboard)/setup/integration/actions.ts").read_text(encoding="utf-8")
-    assert "MAX_DOCUMENT_BYTES = 25 * 1024 * 1024" in history
-    assert "MAX_UPLOAD_BYTES = 60 * 1024 * 1024" in history
-    assert "MAX_IMPORT_ROWS = 250_000" in history
+    assert "MAX_DOCUMENT_BYTES = 25 * MIB" in history_limits
+    assert "MAX_UPLOAD_BYTES = 60 * MIB" in history_limits
+    assert "MAX_IMPORT_ROWS = 250_000" in history_limits
     assert "processed_rows > MAX_IMPORT_ROWS" in history
     assert "files.length > 10" in frontend_actions
     for action in (

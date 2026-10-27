@@ -8,8 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.historical_import_limits import MAX_HISTORICAL_IMPORT_REQUEST_BYTES
 from app.core.logging import configure_logging
 from app.database.session import engine
+from app.middleware.historical_import_request_size import (
+    HistoricalImportRequestSizeLimitMiddleware,
+)
 from app.runtime.automation_scheduler import run_forever as run_automation_scheduler
 
 configure_logging()
@@ -58,6 +62,13 @@ if settings.cors_origins:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+historical_import_preview_path = f"{settings.api_v1_prefix.rstrip('/')}/clinic/history/preview"
+app.add_middleware(
+    HistoricalImportRequestSizeLimitMiddleware,
+    path=historical_import_preview_path,
+    max_body_bytes=MAX_HISTORICAL_IMPORT_REQUEST_BYTES,
+)
 
 
 @app.middleware("http")
