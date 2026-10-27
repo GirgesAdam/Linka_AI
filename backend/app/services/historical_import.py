@@ -22,6 +22,13 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from app.core.historical_import_limits import (
+    MAX_DOCUMENT_BASE64_CHARS,
+    MAX_DOCUMENT_BYTES,
+    MAX_IMPORT_ROWS,
+    MAX_UPLOAD_BASE64_CHARS,
+    MAX_UPLOAD_BYTES,
+)
 from app.models.agent_action import AgentAction
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
@@ -53,9 +60,6 @@ from app.schemas.historical_import import (
 from app.services.activity import record_activity_event
 
 SCHEMA_VERSION = "tia_history_v1"
-MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
-MAX_UPLOAD_BYTES = 60 * 1024 * 1024
-MAX_IMPORT_ROWS = 250_000
 RECOGNIZED_SHEETS = {
     "patients": "patient",
     "appointments": "appointment",
@@ -217,15 +221,27 @@ def _payload_hash(payload: dict[str, Any]) -> str:
 
 
 def _decode(document: HistoricalImportDocument) -> bytes:
+    if len(document.content_base64) > MAX_DOCUMENT_BASE64_CHARS:
+        raise HistoricalImportError(f"{document.name}: file is too large for historical import.")
     try:
         return base64.b64decode(document.content_base64, validate=True)
     except Exception as exc:  # pragma: no cover - defensive boundary
         raise HistoricalImportError(f"{document.name}: invalid file encoding.") from exc
 
 
+def _validate_encoded_lengths(documents: list[HistoricalImportDocument]) -> None:
+    total_encoded = 0
+    for document in documents:
+        if len(document.content_base64) > MAX_DOCUMENT_BASE64_CHARS:
+            raise HistoricalImportError(f"{document.name}: file is too large for historical import.")
+        total_encoded += len(document.content_base64)
+    if total_encoded > MAX_UPLOAD_BASE64_CHARS:
+        raise HistoricalImportError("Historical import files are too large in total.")
 
 
 def _validate_documents(documents: list[HistoricalImportDocument]) -> None:
+    _validate_encoded_lengths(documents)
+
     seen_names: set[str] = set()
     total = 0
     for document in documents:

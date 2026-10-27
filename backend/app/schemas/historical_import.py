@@ -5,14 +5,20 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.historical_import_limits import (
+    MAX_DOCUMENT_BASE64_CHARS,
+    MAX_DOCUMENT_NAME_CHARS,
+    MAX_DOCUMENTS,
+)
+
 HistoricalImportMode = Literal["append", "replace_previous_imports"]
 HistoricalEntityType = Literal["patient", "appointment", "payment", "payment_allocation", "package", "holding"]
 
 
 class HistoricalImportDocument(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=MAX_DOCUMENT_NAME_CHARS)
     format: Literal["csv", "xlsx"]
-    content_base64: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1, max_length=MAX_DOCUMENT_BASE64_CHARS)
 
     @field_validator("name")
     @classmethod
@@ -21,7 +27,7 @@ class HistoricalImportDocument(BaseModel):
 
 
 class HistoricalImportPreviewRequest(BaseModel):
-    documents: list[HistoricalImportDocument] = Field(min_length=1, max_length=10)
+    documents: list[HistoricalImportDocument] = Field(min_length=1, max_length=MAX_DOCUMENTS)
     mode: HistoricalImportMode = "append"
 
 
