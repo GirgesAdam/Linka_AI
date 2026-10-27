@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Annotated
 from uuid import UUID
 
@@ -34,8 +35,10 @@ from app.schemas.inbox import (
     InboxAssigneeRead,
     InboxConversationListItem,
     InboxConversationRead,
+    InboxLiveRevisionRead,
     InboxMessageRead,
     InboxPatientRead,
+    InboxSummaryRead,
     ResolveHandoffRequest,
     StaffReplyRequest,
     StaffReplyResponse,
@@ -70,6 +73,11 @@ def _conflict(exc: HandoffStateError) -> HTTPException:
         status_code=status.HTTP_409_CONFLICT,
         detail=str(exc),
     )
+
+
+def _live_revision(*parts: object) -> str:
+    payload = "\x1f".join("" if part is None else str(part) for part in parts)
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _get_handoff(
@@ -177,6 +185,21 @@ def _queue_item(
         assigned_user_name=assigned_user.full_name if assigned_user else None,
         assigned_user_email=assigned_user.email if assigned_user else None,
     )
+
+
+@router.get("/summary", response_model=InboxSummaryRead)
+def get_inbox_summary(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InboxSummaryRead:
+    unread_conversations = db.scalar(
+        select(func.count(Conversation.id)).where(
+            Conversation.workspace_id == access.workspace.id,
+            Conversation.status == "open",
+            Conversation.unread_count > 0,
+        )
+    )
+    return InboxSummaryRead(unread_conversations=int(unread_conversations or 0))
 
 
 @router.get("/conversations", response_model=list[InboxConversationListItem])
@@ -319,6 +342,34 @@ def list_inbox_conversations(
     return items
 
 
+@router.get("/conversations/live-revision", response_model=InboxLiveRevisionRead)
+def get_inbox_conversations_live_revision(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+    owner_type: ConversationOwnerType | None = None,
+    conversation_status: Annotated[ConversationStatus | None, Query(alias="status")] = None,
+    assigned_to_me: bool = False,
+    unread_only: bool = False,
+    q: Annotated[str | None, Query(max_length=120)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> InboxLiveRevisionRead:
+    items = list_inbox_conversations(
+        access=access,
+        db=db,
+        owner_type=owner_type,
+        conversation_status=conversation_status,
+        assigned_to_me=assigned_to_me,
+        unread_only=unread_only,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return InboxLiveRevisionRead(
+        revision=_live_revision(*(item.model_dump_json() for item in items))
+    )
+
+
 @router.get("/handoffs", response_model=list[HandoffQueueItem])
 def list_handoffs(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
@@ -350,6 +401,70 @@ def list_handoffs(
 
     stmt = stmt.order_by(priority_order, HandoffRequest.created_at).limit(limit).offset(offset)
     return [_queue_item(db, item) for item in db.scalars(stmt)]
+
+
+@router.get(
+    "/conversations/{conversation_id}/live-revision",
+    response_model=InboxLiveRevisionRead,
+)
+def get_inbox_conversation_live_revision(
+    conversation_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    db: Annotated[Session, Depends(get_db)],
+) -> InboxLiveRevisionRead:
+    conversation = _get_conversation(
+        db,
+        workspace_id=access.workspace.id,
+        conversation_id=conversation_id,
+    )
+    patient_updated_at = db.scalar(
+        select(Patient.updated_at).where(
+            Patient.workspace_id == access.workspace.id,
+            Patient.id == conversation.patient_id,
+        )
+    )
+    if patient_updated_at is None:
+        raise _not_found("Patient")
+
+    assigned_user_updated_at = None
+    if conversation.assigned_user_id:
+        assigned_user_updated_at = db.scalar(
+            select(User.updated_at).where(User.id == conversation.assigned_user_id)
+        )
+
+    active_handoff = get_active_handoff(
+        db,
+        workspace_id=access.workspace.id,
+        conversation_id=conversation.id,
+    )
+    message_count, latest_message_update = db.execute(
+        select(func.count(Message.id), func.max(Message.updated_at)).where(
+            Message.workspace_id == access.workspace.id,
+            Message.conversation_id == conversation.id,
+        )
+    ).one()
+
+    revision = _live_revision(
+        conversation.id,
+        conversation.updated_at,
+        conversation.status,
+        conversation.owner_type,
+        conversation.unread_count,
+        conversation.assigned_user_id,
+        conversation.last_message_at,
+        conversation.closed_at,
+        conversation.ownership_changed_at,
+        patient_updated_at,
+        assigned_user_updated_at,
+        message_count,
+        latest_message_update,
+        active_handoff.id if active_handoff else None,
+        active_handoff.updated_at if active_handoff else None,
+        active_handoff.status if active_handoff else None,
+        active_handoff.priority if active_handoff else None,
+        active_handoff.assigned_user_id if active_handoff else None,
+    )
+    return InboxLiveRevisionRead(revision=revision)
 
 
 @router.get(
