@@ -11,6 +11,7 @@ from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
     require_tia_workspace_domain_write,
 )
+from app.models.activity_event import ActivityEvent
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.clinic_inventory import AppointmentProductLine
@@ -623,6 +624,104 @@ def _payment_part_key(base_key: str | None, index: int) -> str | None:
     return f"{base_key[: 128 - len(suffix)]}{suffix}"
 
 
+def _payment_recorded_metadata(
+    db: Session, *, workspace_id: UUID, transaction_id: UUID
+) -> dict:
+    event = db.scalar(
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.action == "payment.recorded",
+            ActivityEvent.entity_type == "payment_transaction",
+            ActivityEvent.entity_id == transaction_id,
+        )
+        .order_by(ActivityEvent.created_at.desc(), ActivityEvent.id.desc())
+        .limit(1)
+    )
+    return dict(event.metadata_json or {}) if event is not None else {}
+
+
+def _assert_same_payment_replay(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    existing: PaymentTransaction,
+    amount_minor: int,
+    payment_method: str,
+    discount_minor: int | None,
+    external_reference: str | None,
+    source: str,
+) -> None:
+    metadata = _payment_recorded_metadata(
+        db, workspace_id=workspace_id, transaction_id=existing.id
+    )
+    recorded_amount = int(metadata.get("amount_minor", existing.amount_minor))
+    mismatch = (
+        existing.transaction_type != "payment"
+        or not _transaction_has_allocation(
+            db,
+            workspace_id=workspace_id,
+            transaction_id=existing.id,
+            appointment_id=appointment_id,
+        )
+        or recorded_amount != amount_minor
+        or existing.payment_method != payment_method
+        or existing.source != source
+        or existing.external_reference != external_reference
+    )
+    if not mismatch:
+        recorded_discount_mode = metadata.get("discount_mode")
+        if recorded_discount_mode is not None:
+            requested_mode = "unchanged" if discount_minor is None else "set"
+            mismatch = recorded_discount_mode != requested_mode
+            if not mismatch and discount_minor is not None:
+                mismatch = int(metadata.get("discount_minor", -1)) != int(discount_minor)
+        elif discount_minor is not None:
+            appointment = db.scalar(
+                select(Appointment).where(
+                    Appointment.workspace_id == workspace_id,
+                    Appointment.id == appointment_id,
+                )
+            )
+            mismatch = (
+                appointment is None
+                or int(getattr(appointment, "discount_minor", 0) or 0)
+                != int(discount_minor)
+            )
+    if mismatch:
+        raise PaymentOperationError(
+            "Idempotency key was already used for a different payment operation."
+        )
+
+
+def _assert_same_refund_replay(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    appointment_id: UUID,
+    existing: PaymentTransaction,
+    payment_transaction_id: UUID,
+    amount_minor: int,
+    reason: str,
+) -> None:
+    if (
+        existing.transaction_type != "refund"
+        or not _transaction_has_allocation(
+            db,
+            workspace_id=workspace_id,
+            transaction_id=existing.id,
+            appointment_id=appointment_id,
+        )
+        or existing.reference_transaction_id != payment_transaction_id
+        or int(existing.amount_minor) != amount_minor
+        or (existing.reason or "") != reason[:500]
+    ):
+        raise PaymentOperationError(
+            "Idempotency key was already used for a different refund operation."
+        )
+
+
 def _set_discount_locked(
     db: Session,
     *,
@@ -758,18 +857,17 @@ def record_payment(
             )
         )
         if existing is not None:
-            if (
-                existing.transaction_type != "payment"
-                or not _transaction_has_allocation(
-                    db,
-                    workspace_id=workspace_id,
-                    transaction_id=existing.id,
-                    appointment_id=appointment_id,
-                )
-            ):
-                raise PaymentOperationError(
-                    "Idempotency key is already used by another payment operation."
-                )
+            _assert_same_payment_replay(
+                db,
+                workspace_id=workspace_id,
+                appointment_id=appointment_id,
+                existing=existing,
+                amount_minor=amount_minor,
+                payment_method=payment_method,
+                discount_minor=discount_minor,
+                external_reference=external_reference,
+                source=source,
+            )
             return existing
 
     appointment = _locked_appointment(
@@ -991,6 +1089,8 @@ def record_payment(
             "currency": appointment.currency,
             "payment_method": payment_method,
             "source": source,
+            "discount_mode": "unchanged" if discount_minor is None else "set",
+            "discount_minor": discount_minor,
             "transaction_ids": [str(row.id) for row in created_transactions],
         },
     )
@@ -1029,18 +1129,15 @@ def record_refund(
             )
         )
         if existing is not None:
-            if (
-                existing.transaction_type != "refund"
-                or not _transaction_has_allocation(
-                    db,
-                    workspace_id=workspace_id,
-                    transaction_id=existing.id,
-                    appointment_id=appointment_id,
-                )
-            ):
-                raise PaymentOperationError(
-                    "Idempotency key is already used by another payment operation."
-                )
+            _assert_same_refund_replay(
+                db,
+                workspace_id=workspace_id,
+                appointment_id=appointment_id,
+                existing=existing,
+                payment_transaction_id=payment_transaction_id,
+                amount_minor=amount_minor,
+                reason=reason,
+            )
             return existing
 
     appointment = _locked_appointment(

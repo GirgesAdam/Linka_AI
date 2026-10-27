@@ -99,6 +99,9 @@ def _appointment(*, workspace_id, patient_id, service_id):
 def _allow_package_writes(monkeypatch):
     monkeypatch.setattr(package_service, "record_activity_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
+        package_service, "_package_cancellation_event_by_key", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
         package_service, "require_tia_workspace_domain_write", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(

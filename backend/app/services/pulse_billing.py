@@ -41,6 +41,89 @@ class PulseBillingNotFound(PulseBillingError):
     pass
 
 
+def _pulse_purchase_transaction(
+    db: Session, *, workspace_id: UUID, pack: PatientPulsePack
+) -> PaymentTransaction | None:
+    if pack.purchase_transaction_id is None:
+        return None
+    transaction = db.scalar(
+        select(PaymentTransaction).where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.id == pack.purchase_transaction_id,
+        )
+    )
+    if (
+        transaction is None
+        or transaction.transaction_type != "payment"
+        or transaction.patient_pulse_pack_id != pack.id
+        or transaction.reason != "Prepaid pulse pack purchase"
+    ):
+        return None
+    return transaction
+
+
+def _assert_same_pulse_sale_replay(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    existing: PatientPulsePack,
+    patient_id: UUID,
+    offer_id: UUID,
+    amount_paid_minor: int,
+    payment_method: str,
+    external_reference: str | None,
+    actor_type: ActivityActorType,
+    origin_appointment_id: UUID | None,
+    expires_at: date | None,
+) -> None:
+    mismatch = (
+        existing.patient_id != patient_id
+        or existing.pulse_pack_offer_id != offer_id
+        or existing.origin_appointment_id != origin_appointment_id
+        or existing.expires_at != expires_at
+    )
+    purchase_transaction = _pulse_purchase_transaction(
+        db, workspace_id=workspace_id, pack=existing
+    )
+    recorded_initial_payment = (
+        int(purchase_transaction.amount_minor) if purchase_transaction is not None else 0
+    )
+    if recorded_initial_payment != amount_paid_minor:
+        mismatch = True
+    if not mismatch and amount_paid_minor > 0:
+        expected_source = "staff" if actor_type == "staff" else "system"
+        mismatch = (
+            purchase_transaction is None
+            or purchase_transaction.payment_method != payment_method
+            or purchase_transaction.external_reference != external_reference
+            or purchase_transaction.source != expected_source
+        )
+    if mismatch:
+        raise PulseBillingError(
+            "Idempotency key was already used for a different pulse pack sale."
+        )
+
+
+def _assert_same_pulse_payment_replay(
+    *,
+    existing: PaymentTransaction,
+    pack_id: UUID,
+    amount_minor: int,
+    payment_method: str,
+    external_reference: str | None,
+) -> None:
+    if (
+        existing.patient_pulse_pack_id != pack_id
+        or int(existing.amount_minor) != amount_minor
+        or existing.transaction_type != "payment"
+        or existing.payment_method != payment_method
+        or existing.external_reference != external_reference
+    ):
+        raise PulseBillingError(
+            "Idempotency key was already used for a different pulse pack payment."
+        )
+
+
 def _known_clinic_laser_device(
     db: Session,
     *,
@@ -477,6 +560,29 @@ def purchase_pulse_pack_offer(
     origin_appointment_id: UUID | None = None,
     expires_at: date | None = None,
 ) -> PatientPulsePack:
+    if idempotency_key:
+        existing = db.scalar(
+            select(PatientPulsePack).where(
+                PatientPulsePack.workspace_id == workspace_id,
+                PatientPulsePack.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            _assert_same_pulse_sale_replay(
+                db,
+                workspace_id=workspace_id,
+                existing=existing,
+                patient_id=patient_id,
+                offer_id=offer_id,
+                amount_paid_minor=amount_paid_minor,
+                payment_method=payment_method,
+                external_reference=external_reference,
+                actor_type=actor_type,
+                origin_appointment_id=origin_appointment_id,
+                expires_at=expires_at,
+            )
+            return existing
+
     offer = _get_active_offer(
         db,
         workspace_id=workspace_id,
@@ -489,19 +595,6 @@ def purchase_pulse_pack_offer(
         payment_method not in PAYMENT_METHODS or payment_method == "unknown"
     ):
         raise PulseBillingError("A paid pulse pack requires a supported payment method.")
-    if idempotency_key:
-        existing = db.scalar(
-            select(PatientPulsePack).where(
-                PatientPulsePack.workspace_id == workspace_id,
-                PatientPulsePack.idempotency_key == idempotency_key,
-            )
-        )
-        if existing is not None:
-            if existing.patient_id != patient_id or existing.pulse_pack_offer_id != offer_id:
-                raise PulseBillingError(
-                    "Idempotency key was already used for another pulse pack sale."
-                )
-            return existing
 
     patient = db.scalar(
         select(Patient)
@@ -635,14 +728,13 @@ def record_pulse_pack_payment(
             )
         )
         if existing is not None:
-            if (
-                existing.patient_pulse_pack_id != pack_id
-                or existing.amount_minor != amount_minor
-                or existing.transaction_type != "payment"
-            ):
-                raise PulseBillingError(
-                    "Idempotency key was already used for another pulse pack payment."
-                )
+            _assert_same_pulse_payment_replay(
+                existing=existing,
+                pack_id=pack_id,
+                amount_minor=amount_minor,
+                payment_method=payment_method,
+                external_reference=external_reference,
+            )
             return existing
     pack = db.scalar(
         select(PatientPulsePack)

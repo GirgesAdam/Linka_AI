@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, update
@@ -10,6 +11,7 @@ from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
     require_tia_workspace_domain_write,
 )
+from app.models.activity_event import ActivityEvent
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.clinic_inventory import ServiceDevicePrice
@@ -28,6 +30,210 @@ class PackageOperationError(ValueError):
 
 class PackageNotFound(PackageOperationError):
     pass
+
+
+def _package_purchase_transaction(
+    db: Session, *, workspace_id: UUID, package: PatientPackage
+) -> PaymentTransaction | None:
+    if package.purchase_transaction_id is None:
+        return None
+    transaction = db.scalar(
+        select(PaymentTransaction).where(
+            PaymentTransaction.workspace_id == workspace_id,
+            PaymentTransaction.id == package.purchase_transaction_id,
+        )
+    )
+    if (
+        transaction is None
+        or transaction.transaction_type != "payment"
+        or transaction.patient_package_id != package.id
+        or transaction.reason != "Prepaid package purchase"
+    ):
+        return None
+    return transaction
+
+
+def _assert_same_package_sale_replay(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    existing: PatientPackage,
+    patient_id: UUID,
+    service_id: UUID,
+    name: str,
+    sessions_purchased: int,
+    sale_price_minor: int,
+    effective_initial_payment: int,
+    payment_method: str,
+    purchased_at: datetime | None,
+    expires_at: date | None,
+    external_reference: str | None,
+    external_id: str | None,
+    package_offer_id: UUID | None,
+    origin_appointment_id: UUID | None,
+    laser_device_key: str | None,
+    laser_device_name: str | None,
+    opening_sessions_remaining: int | None,
+    sessions_total_known: bool,
+    standalone_session_price_minor_at_purchase: int | None,
+) -> None:
+    mismatch = (
+        existing.patient_id != patient_id
+        or existing.service_id != service_id
+        or existing.name != name.strip()
+        or int(existing.sessions_purchased) != sessions_purchased
+        or int(existing.sale_price_minor) != sale_price_minor
+        or existing.expires_at != expires_at
+        or existing.external_id != external_id
+        or existing.package_offer_id != package_offer_id
+        or existing.origin_appointment_id != origin_appointment_id
+        or existing.laser_device_key != laser_device_key
+        or existing.laser_device_name != laser_device_name
+        or existing.opening_sessions_remaining != opening_sessions_remaining
+        or bool(existing.sessions_total_known) != bool(sessions_total_known)
+    )
+    if not mismatch and purchased_at is not None:
+        normalized_purchase_time = purchased_at.astimezone(UTC)
+        mismatch = existing.purchased_at != normalized_purchase_time
+    if not mismatch and standalone_session_price_minor_at_purchase is not None:
+        mismatch = (
+            existing.standalone_session_price_minor_at_purchase
+            != standalone_session_price_minor_at_purchase
+        )
+
+    purchase_transaction = _package_purchase_transaction(
+        db, workspace_id=workspace_id, package=existing
+    )
+    recorded_initial_payment = (
+        int(purchase_transaction.amount_minor) if purchase_transaction is not None else 0
+    )
+    if recorded_initial_payment != effective_initial_payment:
+        mismatch = True
+    if not mismatch and effective_initial_payment > 0:
+        mismatch = (
+            purchase_transaction is None
+            or purchase_transaction.payment_method != payment_method
+            or purchase_transaction.external_reference != external_reference
+        )
+    if mismatch:
+        raise PackageOperationError(
+            "Idempotency key was already used for a different package sale."
+        )
+
+
+def _assert_same_package_payment_replay(
+    *,
+    existing: PaymentTransaction,
+    package_id: UUID,
+    amount_minor: int,
+    payment_method: str,
+    external_reference: str | None,
+) -> None:
+    if (
+        existing.transaction_type != "payment"
+        or existing.patient_package_id != package_id
+        or int(existing.amount_minor) != amount_minor
+        or existing.payment_method != payment_method
+        or existing.external_reference != external_reference
+    ):
+        raise PackageOperationError(
+            "Idempotency key was already used for a different package payment."
+        )
+
+
+def _package_cancellation_event_by_key(
+    db: Session, *, workspace_id: UUID, idempotency_key: str
+) -> ActivityEvent | None:
+    return db.scalar(
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.workspace_id == workspace_id,
+            ActivityEvent.action == "package.cancelled_refund",
+            ActivityEvent.entity_type == "patient_package",
+            ActivityEvent.metadata_json["idempotency_key"].astext == idempotency_key,
+        )
+        .order_by(ActivityEvent.created_at.desc(), ActivityEvent.id.desc())
+        .limit(1)
+    )
+
+
+def _package_cancellation_reason_digest(reason: str) -> str:
+    return sha256(reason.encode("utf-8")).hexdigest()
+
+
+def _replay_package_cancellation(
+    db: Session,
+    *,
+    event: ActivityEvent,
+    package: PatientPackage,
+    package_id: UUID,
+    reason: str,
+    settlement_target_minor: int | None,
+    payment_method: str,
+    standalone_session_price_minor_at_purchase: int | None,
+    require_reversible_unpaid: bool,
+    expected_patient_id: UUID | None,
+) -> tuple[PatientPackage, int, int, int, int, int, int, list[PaymentTransaction]]:
+    metadata = dict(event.metadata_json or {})
+    expected_settlement_mode = "default" if settlement_target_minor is None else "explicit"
+    expected_standalone_mode = (
+        "unchanged" if standalone_session_price_minor_at_purchase is None else "explicit"
+    )
+    mismatch = (
+        event.entity_id != package_id
+        or metadata.get("reason_sha256") != _package_cancellation_reason_digest(reason)
+        or metadata.get("settlement_target_mode") != expected_settlement_mode
+        or metadata.get("standalone_price_mode") != expected_standalone_mode
+        or bool(metadata.get("require_reversible_unpaid", False))
+        != bool(require_reversible_unpaid)
+        or metadata.get("expected_patient_id")
+        != (str(expected_patient_id) if expected_patient_id is not None else None)
+    )
+    if not mismatch and settlement_target_minor is not None:
+        mismatch = int(metadata.get("requested_settlement_target_minor", -1)) != int(
+            settlement_target_minor
+        )
+    if not mismatch and standalone_session_price_minor_at_purchase is not None:
+        mismatch = int(metadata.get("requested_standalone_price_minor", -1)) != int(
+            standalone_session_price_minor_at_purchase
+        )
+    if not mismatch and int(metadata.get("collected_now_minor", 0)) > 0:
+        mismatch = metadata.get("payment_method") != payment_method
+    if mismatch:
+        raise PackageOperationError(
+            "Idempotency key was already used for a different package cancellation."
+        )
+
+    refund_ids = [UUID(str(value)) for value in metadata.get("refund_transaction_ids", [])]
+    refunds: list[PaymentTransaction] = []
+    if refund_ids:
+        rows = list(
+            db.scalars(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.workspace_id == package.workspace_id,
+                    PaymentTransaction.patient_package_id == package.id,
+                    PaymentTransaction.transaction_type == "refund",
+                    PaymentTransaction.id.in_(refund_ids),
+                )
+            ).all()
+        )
+        by_id = {row.id: row for row in rows}
+        if any(refund_id not in by_id for refund_id in refund_ids):
+            raise PackageOperationError(
+                "Stored package cancellation replay data is incomplete."
+            )
+        refunds = [by_id[refund_id] for refund_id in refund_ids]
+
+    return (
+        package,
+        int(metadata.get("collected_minor", 0)),
+        int(metadata.get("consumed_value_minor", 0)),
+        int(metadata.get("settlement_target_minor", 0)),
+        int(metadata.get("previously_refunded_minor", 0)),
+        int(metadata.get("collected_now_minor", 0)),
+        int(metadata.get("refunded_now_minor", 0)),
+        refunds,
+    )
 
 
 def _effective_status(package: PatientPackage, *, on_date: date | None = None) -> str:
@@ -272,6 +478,7 @@ def create_patient_package(
         payment_method not in PAYMENT_METHODS or payment_method == "unknown"
     ):
         raise PackageOperationError("A paid package requires a supported payment method.")
+    requested_purchased_at = purchased_at
     purchased_at = purchased_at or datetime.now(UTC)
     if purchased_at.tzinfo is None or purchased_at.utcoffset() is None:
         raise PackageOperationError("Package purchase time must include a timezone offset.")
@@ -287,13 +494,31 @@ def create_patient_package(
             )
         )
         if existing is not None:
-            if (
-                existing.patient_id != patient_id
-                or existing.service_id != service_id
-                or existing.sessions_purchased != sessions_purchased
-                or existing.sale_price_minor != sale_price_minor
-            ):
-                raise PackageOperationError("Idempotency key was already used for another package sale.")
+            _assert_same_package_sale_replay(
+                db,
+                workspace_id=workspace_id,
+                existing=existing,
+                patient_id=patient_id,
+                service_id=service_id,
+                name=name,
+                sessions_purchased=sessions_purchased,
+                sale_price_minor=sale_price_minor,
+                effective_initial_payment=effective_initial_payment,
+                payment_method=payment_method,
+                purchased_at=requested_purchased_at,
+                expires_at=expires_at,
+                external_reference=external_reference,
+                external_id=external_id,
+                package_offer_id=package_offer_id,
+                origin_appointment_id=origin_appointment_id,
+                laser_device_key=laser_device_key,
+                laser_device_name=laser_device_name,
+                opening_sessions_remaining=opening_sessions_remaining,
+                sessions_total_known=sessions_total_known,
+                standalone_session_price_minor_at_purchase=(
+                    standalone_session_price_minor_at_purchase
+                ),
+            )
             return existing
 
     patient = db.scalar(
@@ -474,12 +699,13 @@ def record_package_payment(
             )
         )
         if existing is not None:
-            if (
-                existing.transaction_type != "payment"
-                or existing.patient_package_id != package_id
-                or existing.amount_minor != amount_minor
-            ):
-                raise PackageOperationError("Idempotency key was already used for another package payment.")
+            _assert_same_package_payment_replay(
+                existing=existing,
+                package_id=package_id,
+                amount_minor=amount_minor,
+                payment_method=payment_method,
+                external_reference=external_reference,
+            )
             return existing
 
     package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
@@ -573,6 +799,25 @@ def cancel_patient_package_with_refund(
     if not reason:
         raise PackageOperationError("Refund reason cannot be empty.")
     package = _locked_package(db, workspace_id=workspace_id, package_id=package_id)
+    if idempotency_key:
+        prior_event = _package_cancellation_event_by_key(
+            db, workspace_id=workspace_id, idempotency_key=idempotency_key
+        )
+        if prior_event is not None:
+            return _replay_package_cancellation(
+                db,
+                event=prior_event,
+                package=package,
+                package_id=package_id,
+                reason=reason,
+                settlement_target_minor=settlement_target_minor,
+                payment_method=payment_method,
+                standalone_session_price_minor_at_purchase=(
+                    standalone_session_price_minor_at_purchase
+                ),
+                require_reversible_unpaid=require_reversible_unpaid,
+                expected_patient_id=expected_patient_id,
+            )
     reserved, consumed = _usage_totals(db, workspace_id=workspace_id, package_id=package.id)
     if require_reversible_unpaid:
         payments, refunds = _package_financial_rows(
@@ -690,6 +935,10 @@ def cancel_patient_package_with_refund(
             if settlement_payment is not None and (
                 settlement_payment.transaction_type != "payment"
                 or settlement_payment.patient_package_id != package.id
+                or int(settlement_payment.amount_minor) != collected_now_minor
+                or settlement_payment.payment_method != payment_method
+                or settlement_payment.reason
+                != f"Package cancellation settlement: {reason}"[:500]
             ):
                 raise PackageOperationError(
                     "Idempotency key was already used for another package settlement."
@@ -769,6 +1018,8 @@ def cancel_patient_package_with_refund(
                     existing.transaction_type != "refund"
                     or existing.patient_package_id != package.id
                     or existing.reference_transaction_id != payment.id
+                    or int(existing.amount_minor) != amount
+                    or (existing.reason or "") != reason[:500]
                 ):
                     raise PackageOperationError(
                         "Idempotency key was already used for another package refund."
@@ -884,6 +1135,24 @@ def cancel_patient_package_with_refund(
             else "Package cancelled and unused value refunded"
         ),
         metadata={
+            "idempotency_key": idempotency_key,
+            "reason_sha256": _package_cancellation_reason_digest(reason),
+            "settlement_target_mode": (
+                "default" if settlement_target_minor is None else "explicit"
+            ),
+            "requested_settlement_target_minor": settlement_target_minor,
+            "standalone_price_mode": (
+                "unchanged"
+                if standalone_session_price_minor_at_purchase is None
+                else "explicit"
+            ),
+            "requested_standalone_price_minor": (
+                standalone_session_price_minor_at_purchase
+            ),
+            "payment_method": payment_method,
+            "require_reversible_unpaid": require_reversible_unpaid,
+            "expected_patient_id": expected_patient_id,
+            "collected_minor": collected_minor,
             "consumed_sessions": consumed,
             "released_reservations": reserved,
             "consumed_value_minor": consumed_value_minor,
@@ -891,6 +1160,7 @@ def cancel_patient_package_with_refund(
             "collected_now_minor": collected_now_minor,
             "refunded_now_minor": refundable_minor,
             "previously_refunded_minor": previously_refunded_minor,
+            "refund_transaction_ids": [row.id for row in created_refunds],
         },
     )
     return (

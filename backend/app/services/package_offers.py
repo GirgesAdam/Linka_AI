@@ -6,11 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.patient_package import PatientPackage
+from app.models.payment_transaction import PaymentTransaction
 from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.schemas.package_offers import ServicePackageOfferRead
 from app.services.inventory import InventoryOperationError, configured_device_price
-from app.services.patient_packages import create_patient_package, record_package_payment
+from app.services.patient_packages import (
+    PackageOperationError,
+    create_patient_package,
+    record_package_payment,
+)
 
 
 class PackageOfferError(ValueError):
@@ -19,6 +24,67 @@ class PackageOfferError(ValueError):
 
 class PackageOfferNotFound(PackageOfferError):
     pass
+
+
+def _existing_package_offer_purchase(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    patient_id: UUID,
+    offer_id: UUID,
+    amount_paid_minor: int,
+    payment_method: str,
+    external_reference: str | None,
+    idempotency_key: str | None,
+    origin_appointment_id: UUID | None,
+) -> PatientPackage | None:
+    if not idempotency_key:
+        return None
+    package = db.scalar(
+        select(PatientPackage).where(
+            PatientPackage.workspace_id == workspace_id,
+            PatientPackage.idempotency_key == idempotency_key,
+        )
+    )
+    if package is None:
+        return None
+
+    purchase_transaction = None
+    if package.purchase_transaction_id is not None:
+        candidate = db.scalar(
+            select(PaymentTransaction).where(
+                PaymentTransaction.workspace_id == workspace_id,
+                PaymentTransaction.id == package.purchase_transaction_id,
+            )
+        )
+        if (
+            candidate is not None
+            and candidate.transaction_type == "payment"
+            and candidate.patient_package_id == package.id
+            and candidate.reason == "Prepaid package purchase"
+        ):
+            purchase_transaction = candidate
+
+    recorded_initial_payment = (
+        int(purchase_transaction.amount_minor) if purchase_transaction is not None else 0
+    )
+    mismatch = (
+        package.patient_id != patient_id
+        or package.package_offer_id != offer_id
+        or package.origin_appointment_id != origin_appointment_id
+        or recorded_initial_payment != amount_paid_minor
+    )
+    if not mismatch and amount_paid_minor > 0:
+        mismatch = (
+            purchase_transaction is None
+            or purchase_transaction.payment_method != payment_method
+            or purchase_transaction.external_reference != external_reference
+        )
+    if mismatch:
+        raise PackageOperationError(
+            "Idempotency key was already used for a different package offer purchase."
+        )
+    return package
 
 
 def _read_offer(
@@ -212,6 +278,20 @@ def purchase_package_offer(
     Payment amount is recorded but never controls whether package sessions can be
     reserved or consumed. The clinic keeps that operational decision outside Linka.
     """
+    existing = _existing_package_offer_purchase(
+        db,
+        workspace_id=workspace_id,
+        patient_id=patient_id,
+        offer_id=offer_id,
+        amount_paid_minor=amount_paid_minor,
+        payment_method=payment_method,
+        external_reference=external_reference,
+        idempotency_key=idempotency_key,
+        origin_appointment_id=origin_appointment_id,
+    )
+    if existing is not None:
+        return existing
+
     offer = get_active_package_offer(
         db,
         workspace_id=workspace_id,
