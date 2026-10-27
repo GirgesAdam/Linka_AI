@@ -1,10 +1,13 @@
+import base64
+import json
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
 import httpx
-from supabase_auth import SyncGoTrueAdminAPI
+from supabase_auth import SyncGoTrueAdminAPI, SyncGoTrueClient
+from supabase_auth.errors import AuthError
 
 from app.core.config import settings
 
@@ -24,6 +27,22 @@ class VerifiedAuthIdentity:
 class InvitedAuthUser:
     auth_user_id: UUID
     email: str
+
+
+@lru_cache
+def get_access_token_verifier() -> SyncGoTrueClient:
+    """Return the process-level Supabase JWT verifier.
+
+    ``get_claims`` verifies asymmetric JWT signatures against Supabase JWKS and
+    keeps its public-key cache on this client instance. Authorization decisions
+    remain in the database-backed FastAPI dependencies and are never cached here.
+    """
+    return SyncGoTrueClient(
+        url=f"{settings.supabase_url.rstrip('/')}/auth/v1",
+        headers={"apiKey": settings.supabase_publishable_key},
+        auto_refresh_token=False,
+        persist_session=False,
+    )
 
 
 @lru_cache
@@ -61,6 +80,19 @@ def _to_mapping(value: Any) -> dict[str, Any]:
     raise SupabaseAuthError("Supabase returned an unsupported auth payload.")
 
 
+def _parse_unverified_header(token: str) -> dict[str, Any]:
+    """Parse JWT header only to choose the verification path; never authenticate from it."""
+    try:
+        raw_header = token.split(".", 1)[0]
+        padded = raw_header + ("=" * (-len(raw_header) % 4))
+        decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise SupabaseAuthError("Access token is malformed.") from exc
+    if not isinstance(decoded, dict):
+        raise SupabaseAuthError("Access token header is invalid.")
+    return decoded
+
+
 def _parse_uuid(value: Any, *, field_name: str) -> UUID:
     if isinstance(value, UUID):
         return value
@@ -79,50 +111,46 @@ def verify_access_token(token: str) -> VerifiedAuthIdentity:
         raise SupabaseAuthError("Access token is missing.")
 
     access_token = token.strip()
+    header = _parse_unverified_header(access_token)
+    if header.get("alg") not in {"ES256", "RS256"} or not isinstance(header.get("kid"), str):
+        raise SupabaseAuthError("Access token does not use a supported asymmetric signing key.")
 
     try:
-        response = httpx.get(
-            f"{settings.supabase_url}/auth/v1/user",
-            headers={
-                "apikey": settings.supabase_publishable_key,
-                "Authorization": f"Bearer {access_token}",
-            },
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        raise SupabaseAuthError("Could not reach Supabase Auth server.") from exc
+        response = get_access_token_verifier().get_claims(access_token)
+    except (AuthError, httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise SupabaseAuthError("Supabase rejected the access token.") from exc
 
-    if response.status_code != 200:
-        try:
-            error_payload = response.json()
-        except ValueError:
-            error_payload = response.text
+    if not response:
+        raise SupabaseAuthError("Supabase did not return verified JWT claims.")
 
-        raise SupabaseAuthError(
-            f"Supabase rejected the access token "
-            f"(status={response.status_code}, response={error_payload})."
-        )
+    claims = response.get("claims")
+    if not isinstance(claims, dict):
+        raise SupabaseAuthError("Supabase returned invalid verified JWT claims.")
 
-    try:
-        user_data = response.json()
-    except ValueError as exc:
-        raise SupabaseAuthError("Supabase returned a non-JSON user response.") from exc
+    if claims.get("iss") != settings.supabase_auth_issuer:
+        raise SupabaseAuthError("Access token issuer is invalid.")
 
-    if not isinstance(user_data, dict):
-        raise SupabaseAuthError("Supabase returned an invalid user response.")
+    audience = claims.get("aud")
+    if isinstance(audience, str):
+        audience_ok = audience == "authenticated"
+    elif isinstance(audience, list):
+        audience_ok = "authenticated" in audience
+    else:
+        audience_ok = False
+    if not audience_ok or claims.get("role") != "authenticated":
+        raise SupabaseAuthError("Access token is not an authenticated user token.")
 
     auth_user_id = _parse_uuid(
-        user_data.get("id"),
+        claims.get("sub"),
         field_name="authenticated user id",
     )
 
-    raw_email = user_data.get("email")
+    raw_email = claims.get("email")
     if not isinstance(raw_email, str) or not raw_email.strip():
         raise SupabaseAuthError("Authenticated clinic users must have an email identity.")
 
-    user_metadata = user_data.get("user_metadata")
+    user_metadata = claims.get("user_metadata")
     full_name: str | None = None
-
     if isinstance(user_metadata, dict):
         candidate = user_metadata.get("full_name") or user_metadata.get("name")
         if isinstance(candidate, str) and candidate.strip():
