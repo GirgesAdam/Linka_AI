@@ -75,7 +75,7 @@ def test_payment_writes_lock_appointment_bound_amounts_and_audit() -> None:
     assert 'action="payment.recorded"' in source
     assert 'action="payment.refunded"' in source
     assert "sync_appointment_payment_snapshot" in source
-    assert "Idempotency key is already used" in source
+    assert "Idempotency key was already used" in source
     assert "generative" not in source.lower()
     assert "llm" not in source.lower()
     assert "re.compile" not in source
