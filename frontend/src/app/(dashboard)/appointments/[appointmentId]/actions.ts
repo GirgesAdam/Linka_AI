@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import type { Appointment } from "@/lib/types";
+import { operationIdempotencyKey } from "@/lib/tia/operation-idempotency";
 
 function refreshAppointmentViews(appointmentId: string, patientId?: string) {
   revalidatePath("/appointments");
@@ -214,7 +215,7 @@ export async function recordAppointmentPayment(formData: FormData) {
   try {
     await tiaRequest(`/payments/appointments/${appointmentId}/checkout`, {
       method: "POST",
-      headers: { "Idempotency-Key": `dashboard-checkout:${randomUUID()}` },
+      headers: { "Idempotency-Key": operationIdempotencyKey(formData, "dashboard-checkout") },
       body: JSON.stringify({
         amount_minor: moneyToMinor(amount),
         discount_minor: moneyToMinor(discount),
@@ -232,7 +233,6 @@ export async function recordAppointmentPayment(formData: FormData) {
     redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(message)}`);
   }
   refreshAppointmentViews(appointmentId, patientId || undefined);
-  redirect(`/appointments/${appointmentId}?visit_saved=payment`);
 }
 
 export async function addAppointmentProduct(formData: FormData) {
@@ -292,7 +292,7 @@ export async function addAppointmentAdditionalService(formData: FormData) {
   try {
     await tiaRequest(`/booking/appointments/${appointmentId}/additional-services`, {
       method: "POST",
-      headers: { "Idempotency-Key": `appointment-extra-service:${randomUUID()}` },
+      headers: { "Idempotency-Key": operationIdempotencyKey(formData, "appointment-extra-service") },
       body: JSON.stringify({
         service_id: serviceId,
         laser_device_key: laserDeviceKey || null,
@@ -306,7 +306,6 @@ export async function addAppointmentAdditionalService(formData: FormData) {
   }
   if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
   refreshAppointmentViews(appointmentId, patientId || undefined);
-  redirect(`/appointments/${appointmentId}?visit_saved=service`);
 }
 
 export async function removeAppointmentAdditionalService(formData: FormData) {
@@ -334,7 +333,7 @@ export async function purchasePackageFromAppointment(formData: FormData) {
   try {
     await tiaRequest(`/booking/appointments/${appointmentId}/package-offer`, {
       method: "POST",
-      headers: { "Idempotency-Key": `appointment-package:${randomUUID()}` },
+      headers: { "Idempotency-Key": operationIdempotencyKey(formData, "appointment-package") },
       body: JSON.stringify({ offer_id: offerId }),
     });
   } catch (error) {
@@ -342,7 +341,6 @@ export async function purchasePackageFromAppointment(formData: FormData) {
   }
   if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
   refreshAppointmentViews(appointmentId, patientId || undefined);
-  redirect(`/appointments/${appointmentId}?visit_saved=package`);
 }
 
 export async function purchasePackageForAdditionalService(formData: FormData) {
@@ -357,7 +355,7 @@ export async function purchasePackageForAdditionalService(formData: FormData) {
       `/booking/appointments/${appointmentId}/additional-services/${lineId}/package-offer`,
       {
         method: "POST",
-        headers: { "Idempotency-Key": `appointment-extra-package:${lineId}:${randomUUID()}` },
+        headers: { "Idempotency-Key": operationIdempotencyKey(formData, `appointment-extra-package:${lineId}`) },
         body: JSON.stringify({ offer_id: offerId }),
       },
     );
@@ -366,7 +364,6 @@ export async function purchasePackageForAdditionalService(formData: FormData) {
   }
   if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
   refreshAppointmentViews(appointmentId, patientId || undefined);
-  redirect(`/appointments/${appointmentId}?visit_saved=extra_package`);
 }
 
 export async function refundAppointmentPayment(formData: FormData) {
@@ -378,7 +375,7 @@ export async function refundAppointmentPayment(formData: FormData) {
   if (!appointmentId || !paymentTransactionId || !amount || !reason) return;
   await tiaRequest(`/payments/appointments/${appointmentId}/refunds`, {
     method: "POST",
-    headers: { "Idempotency-Key": `dashboard-refund:${randomUUID()}` },
+    headers: { "Idempotency-Key": operationIdempotencyKey(formData, "dashboard-refund") },
     body: JSON.stringify({
       payment_transaction_id: paymentTransactionId,
       amount_minor: moneyToMinor(amount),

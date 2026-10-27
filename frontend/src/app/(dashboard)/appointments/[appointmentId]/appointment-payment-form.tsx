@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { CircleDollarSign, Zap } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { IdempotentMutationForm, PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { formatMoney } from "@/lib/format";
 import type { PulsePackOffer } from "@/lib/types";
 
@@ -121,7 +121,12 @@ export function AppointmentPaymentForm({
     : 0;
 
   return (
-    <form action={recordAppointmentPayment} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
+    <IdempotentMutationForm
+      action={recordAppointmentPayment}
+      storageKey={`linka:operation:appointment-payment:${appointmentId}`}
+      successHref={`/appointments/${appointmentId}?visit_saved=payment`}
+      className="space-y-4 rounded-xl border border-[var(--border)] p-4"
+    >
       <input type="hidden" name="appointment_id" value={appointmentId} />
       <input type="hidden" name="patient_id" value={patientId} />
       <input type="hidden" name="pulse_mode" value={pulseMode} />
@@ -290,10 +295,10 @@ export function AppointmentPaymentForm({
         </label>
       </div>
 
-      <Button disabled={pulseSelectionRequired || packSelectionRequired}>
+      <PendingSubmitButton pendingLabel="???? ?????..." disabled={pulseSelectionRequired || packSelectionRequired}>
         <CircleDollarSign size={15} />
         {parseMinor(amount) > 0 ? "تسجيل الحساب والدفعة" : "تأكيد الحساب"}
-      </Button>
-    </form>
+      </PendingSubmitButton>
+    </IdempotentMutationForm>
   );
 }

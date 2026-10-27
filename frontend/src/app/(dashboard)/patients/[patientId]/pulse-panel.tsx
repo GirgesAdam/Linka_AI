@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { IdempotentMutationForm, PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
@@ -71,7 +71,7 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
                     : `${formatMoney(pack.amount_paid_minor, pack.currency)} مدفوع من ${formatMoney(pack.sale_price_minor, pack.currency)}`}
                 </div>
                 {pack.effective_status === "active" && pack.balance_due_minor > 0 && (
-                  <form action={recordPatientPulsePackPayment} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                  <IdempotentMutationForm action={recordPatientPulsePackPayment} storageKey={`linka:operation:pulse-payment:${pack.id}`} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                     <input type="hidden" name="patient_id" value={patientId} />
                     <input type="hidden" name="pack_id" value={pack.id} />
                     <Input name="amount" type="number" min="0.01" step="0.01" required
@@ -81,8 +81,8 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
                       <option value="visa">Visa</option>
                       <option value="instapay">InstaPay</option>
                     </select>
-                    <Button type="submit" variant="outline">تسجيل دفعة</Button>
-                  </form>
+                    <PendingSubmitButton pendingLabel="???? ?????..." type="submit" variant="outline">تسجيل دفعة</PendingSubmitButton>
+                  </IdempotentMutationForm>
                 )}
               </div>
             ))}
@@ -92,7 +92,7 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
         {offers.length > 0 && (
           <details className="rounded-xl border border-[var(--border)] p-3">
             <summary className="flex min-h-10 cursor-pointer items-center text-sm font-black text-[var(--interactive)]">بيع باقة Pulses جديدة</summary>
-            <form action={purchasePatientPulsePack} className="mt-3 grid gap-3 md:grid-cols-2">
+            <IdempotentMutationForm action={purchasePatientPulsePack} storageKey={`linka:operation:pulse-purchase:${patientId}`} className="mt-3 grid gap-3 md:grid-cols-2">
               <input type="hidden" name="patient_id" value={patientId} />
               <label className="grid gap-1.5 text-xs font-bold text-slate-700 md:col-span-2">
                 الباقة
@@ -117,9 +117,9 @@ export async function PatientPulsePanel({ patientId }: { patientId: string }) {
                 </select>
               </label>
               <div className="md:col-span-2">
-                <Button type="submit">إضافة الباقة للعميل</Button>
+                <PendingSubmitButton pendingLabel="???? ???????..." type="submit">إضافة الباقة للعميل</PendingSubmitButton>
               </div>
-            </form>
+            </IdempotentMutationForm>
           </details>
         )}
       </CardContent>
