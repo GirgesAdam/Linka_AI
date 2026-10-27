@@ -33,7 +33,7 @@ from app.models.patient import Patient
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.workspace import Workspace
-from app.services import automations, channels
+from app.services import appointment_confirmation, automations, channels
 from app.services import meta_whatsapp_transport as transport
 
 
@@ -1018,17 +1018,43 @@ def test_scheduler_preflight_skips_confirmed_confirmation_candidate(case):
 
 
 def test_scheduler_preflight_uses_clamped_confirmation_schedule(case):
+    from zoneinfo import ZoneInfo
+
     case.rule.offset_minutes = -(48 * 60)
-    start = case.now + timedelta(days=3, hours=6)
+    case.now = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+    start = datetime(2026, 10, 30, 8, 0, tzinfo=UTC)  # 10:00 Cairo after DST ends.
+    raw_configured_time = start - timedelta(hours=48)
     case.appointment.start_at = start
     case.appointment.end_at = start + timedelta(minutes=30)
     case.appointment.busy_start_at = start
     case.appointment.busy_end_at = start + timedelta(minutes=30)
+    case.appointment.created_at = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
     case.db.commit()
+
+    branch = case.db.get(Branch, case.appointment.branch_id)
+    assert branch is not None
+    assert branch.timezone == "Africa/Cairo"
+    cairo = ZoneInfo(branch.timezone)
+    assert raw_configured_time.astimezone(cairo).utcoffset() == timedelta(hours=3)
+    assert start.astimezone(cairo).utcoffset() == timedelta(hours=2)
+
+    expected = appointment_confirmation.confirmation_ticket_delivery_time(
+        case.db,
+        workspace_id=case.workspace.id,
+        branch_id=case.appointment.branch_id,
+        start_at=start,
+        appointment_created_at=case.appointment.created_at,
+        scheduled_for=raw_configured_time,
+    )
+    # The appointment is on Oct 30 local time, so the confirmation window opens
+    # at Oct 29 00:00 Cairo. On this transition date that is Oct 28 21:00 UTC.
+    assert expected == datetime(2026, 10, 28, 21, 0, tzinfo=UTC)
+    assert raw_configured_time < expected
 
     job = plan(case)
     assert job is not None
-    assert job.scheduled_for > start - timedelta(hours=48)
+    assert job.scheduled_for == expected
+    assert job.scheduled_for > raw_configured_time
     assert automations.automation_planning_may_have_work(
         case.db,
         workspace_id=case.workspace.id,
