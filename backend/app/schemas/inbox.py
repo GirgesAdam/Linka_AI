@@ -191,6 +191,14 @@ class InboxConversationRead(BaseModel):
     handoff_events: list[HandoffEventRead]
 
 
+class InboxLiveRevisionRead(BaseModel):
+    revision: str
+
+
+class InboxSummaryRead(BaseModel):
+    unread_conversations: int = 0
+
+
 class ConversationReadReceipt(BaseModel):
     conversation_id: UUID
     unread_count: int = 0

@@ -9,20 +9,13 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
 import { formatDateTime } from "@/lib/format";
+import { inboxChannelHealthRevision } from "@/lib/inbox-live";
 import { labelForChannel } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
-import type { InboxConversationListItem } from "@/lib/types";
+import type { ChannelConnection, InboxConversationListItem } from "@/lib/types";
 
 type InboxSearchParams = { owner?: string; status?: string; mine?: string; unread?: string; q?: string; page?: string };
 type InboxFilters = Omit<InboxSearchParams, "page">;
-
-type InboxChannelConnection = {
-  channel: string;
-  provider: string;
-  status: string;
-  updated_at: string;
-  config_json?: Record<string, unknown>;
-};
 
 type DeliveryHealthNotice = {
   tone: "amber" | "red";
@@ -82,7 +75,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function deliveryHealthNotice(connections: InboxChannelConnection[]): DeliveryHealthNotice | null {
+function deliveryHealthNotice(connections: ChannelConnection[]): DeliveryHealthNotice | null {
   const connection = [...connections]
     .filter(
       (item) =>
@@ -154,17 +147,29 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   if (filters.unread) query.set("unread_only", "true");
   if (filters.q) query.set("q", filters.q);
 
-  const [conversationPage, channelConnections] = await Promise.all([
+  const [conversationPage, channelConnections, liveRevision] = await Promise.all([
     tiaRequest<InboxConversationListItem[]>(`/inbox/conversations?${query.toString()}`),
-    tiaRequest<InboxChannelConnection[]>("/channels/connections").catch(() => []),
+    tiaRequest<ChannelConnection[]>("/channels/connections").catch(() => []),
+    tiaRequest<{ revision: string }>(`/inbox/conversations/live-revision?${query.toString()}`),
   ]);
   const hasNextPage = conversationPage.length > PAGE_SIZE;
   const conversations = conversationPage.slice(0, PAGE_SIZE);
   const deliveryHealth = deliveryHealthNotice(channelConnections);
+  const conversationRevision = liveRevision.revision;
+  const channelRevision = inboxChannelHealthRevision(channelConnections);
 
   return (
     <>
-      <LiveRouteRefresh />
+      <LiveRouteRefresh
+        endpoint={`/api/inbox/live-list?${query.toString()}`}
+        initialRevision={conversationRevision}
+        intervalMs={10_000}
+      />
+      <LiveRouteRefresh
+        endpoint="/api/inbox/channel-health"
+        initialRevision={channelRevision}
+        intervalMs={60_000}
+      />
       <PageHeader
         title="الرسائل"
         description="كل محادثات العملاء في مكان واحد، مع توضيح المحادثات التي تديرها Linka والمحادثات التي تحتاج تدخل الفريق."
