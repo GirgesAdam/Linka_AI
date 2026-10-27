@@ -373,6 +373,60 @@ def cancel_appointment_operation(
     return appointment
 
 
+RESCHEDULE_IDEMPOTENCY_CONFLICT = (
+    "Idempotency key was already used for a different appointment reschedule operation."
+)
+
+
+def _same_reschedule_instant(left: datetime, right: datetime) -> bool:
+    def canonical(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    return canonical(left) == canonical(right)
+
+
+def _reschedule_replay_matches(
+    *,
+    replacement: Appointment,
+    previous: Appointment,
+    appointment_id: UUID,
+    requested_start_at: datetime,
+    branch_id: UUID | None,
+    doctor_id: UUID | None,
+    service_id: UUID | None,
+    laser_device_key: str | None,
+    patient_id: UUID | None,
+) -> bool:
+    effective_branch_id = branch_id or previous.branch_id
+    effective_doctor_id = doctor_id or previous.doctor_id
+    effective_service_id = service_id or previous.service_id
+
+    if laser_device_key is not None:
+        device_matches = replacement.laser_device_key == laser_device_key
+    elif effective_service_id == previous.service_id:
+        device_matches = replacement.laser_device_key == previous.laser_device_key
+    elif replacement.laser_device_key is None:
+        # A changed target service that persisted no device is the canonical
+        # result of omitting a device for a non-laser target.
+        device_matches = True
+    else:
+        # For a changed laser service, omission reuses the previous device only.
+        device_matches = replacement.laser_device_key == previous.laser_device_key
+
+    return bool(
+        replacement.rescheduled_from_appointment_id == appointment_id
+        and previous.id == appointment_id
+        and (patient_id is None or previous.patient_id == patient_id)
+        and replacement.branch_id == effective_branch_id
+        and replacement.doctor_id == effective_doctor_id
+        and replacement.service_id == effective_service_id
+        and _same_reschedule_instant(replacement.start_at, requested_start_at)
+        and device_matches
+    )
+
+
 def reschedule_appointment_operation(
     db: Session,
     *,
@@ -400,11 +454,28 @@ def reschedule_appointment_operation(
             )
         )
         if existing is not None:
-            previous = db.get(Appointment, existing.rescheduled_from_appointment_id)
+            previous = db.scalar(
+                select(Appointment).where(
+                    Appointment.workspace_id == workspace.id,
+                    Appointment.id == existing.rescheduled_from_appointment_id,
+                )
+            )
             if previous is None:
                 raise AppointmentOperationError(
                     "Idempotent reschedule replacement is missing its previous appointment."
                 )
+            if not _reschedule_replay_matches(
+                replacement=existing,
+                previous=previous,
+                appointment_id=appointment_id,
+                requested_start_at=requested_start_at,
+                branch_id=branch_id,
+                doctor_id=doctor_id,
+                service_id=service_id,
+                laser_device_key=laser_device_key,
+                patient_id=patient_id,
+            ):
+                raise AppointmentOperationError(RESCHEDULE_IDEMPOTENCY_CONFLICT)
             return existing, previous
 
     current = _locked_appointment(

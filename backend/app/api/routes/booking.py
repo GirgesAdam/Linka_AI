@@ -62,6 +62,10 @@ from app.schemas.patient_packages import (
 )
 from app.services.activity import record_activity_event
 from app.services.appointment_confirmation import initial_confirmation_decision
+from app.services.appointment_creation import (
+    APPOINTMENT_IDEMPOTENCY_CONFLICT,
+    appointment_matches_create_intent,
+)
 from app.services.appointment_operations import (
     AppointmentCancellationOverrideRequired,
     AppointmentOperationError,
@@ -655,6 +659,22 @@ def create_appointment(
             )
         )
         if existing is not None:
+            if not appointment_matches_create_intent(
+                existing,
+                patient_id=payload.patient_id,
+                branch_id=payload.branch_id,
+                doctor_id=payload.doctor_id,
+                service_id=payload.service_id,
+                requested_start_at=payload.start_at,
+                patient_package_id=payload.patient_package_id,
+                use_pulse_balance=payload.use_pulse_balance,
+                visit_group_id=None,
+                lead_id=payload.lead_id,
+                source=payload.source,
+                laser_device_key=payload.laser_device_key,
+                is_quick_booking=False,
+            ):
+                raise booking_conflict(APPOINTMENT_IDEMPOTENCY_CONFLICT)
             return existing
 
     get_patient_for_booking(db, access.workspace.id, payload.patient_id)
@@ -799,6 +819,22 @@ def create_quick_appointment(
             Appointment.idempotency_key == idempotency_key,
         ))
         if existing is not None:
+            if not appointment_matches_create_intent(
+                existing,
+                patient_id=payload.patient_id,
+                branch_id=payload.branch_id,
+                doctor_id=payload.doctor_id,
+                service_id=payload.service_id,
+                requested_start_at=payload.start_at,
+                patient_package_id=payload.patient_package_id,
+                use_pulse_balance=payload.use_pulse_balance,
+                visit_group_id=None,
+                lead_id=None,
+                source="staff",
+                laser_device_key=payload.laser_device_key,
+                is_quick_booking=True,
+            ):
+                raise booking_conflict(APPOINTMENT_IDEMPOTENCY_CONFLICT)
             return existing
     get_patient_for_booking(db, access.workspace.id, payload.patient_id)
     branch = db.scalar(select(Branch).where(
