@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { IdempotentMutationForm, PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -556,7 +557,7 @@ export default async function AppointmentOperationsPage({
                             {!line.patient_package_id && line.billing_context === "standard" && canEditVisitCharges && linePackageOffers.length > 0 && (
                               <details className="mt-3 rounded-lg border border-[var(--accent-border)] bg-white p-3">
                                 <summary className="cursor-pointer text-xs font-black text-[var(--accent-strong)]">تحويل الخدمة دي لباكيدج</summary>
-                                <form action={purchasePackageForAdditionalService} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                                <IdempotentMutationForm action={purchasePackageForAdditionalService} storageKey={`linka:operation:appointment-extra-package:${line.id}`} successHref={`/appointments/${appointment.id}?visit_saved=extra_package`}>
                                   <input type="hidden" name="appointment_id" value={appointment.id} />
                                   <input type="hidden" name="patient_id" value={appointment.patient_id} />
                                   <input type="hidden" name="line_id" value={line.id} />
@@ -571,8 +572,8 @@ export default async function AppointmentOperationsPage({
                                       ))}
                                     </select>
                                   </label>
-                                  <Button size="sm"><PackagePlus size={14} /> إضافة الباكيدج للحساب</Button>
-                                </form>
+                                  <PendingSubmitButton pendingLabel="???? ???????..." size="sm"><PackagePlus size={14} /> إضافة الباكيدج للحساب</PendingSubmitButton>
+                                </IdempotentMutationForm>
                               </details>
                             )}
                           </div>
@@ -600,7 +601,7 @@ export default async function AppointmentOperationsPage({
               {!prepaidBacked && compatiblePackageOffers.length > 0 && canEditVisitCharges && (
                 <details className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3">
                   <summary className="flex cursor-pointer items-center gap-2 text-sm font-black text-slate-900"><PackagePlus size={16} /> تحويل الجلسة الحالية إلى باكيدج</summary>
-                  <form action={purchasePackageFromAppointment} className="mt-4 grid gap-3">
+                  <IdempotentMutationForm action={purchasePackageFromAppointment} storageKey={`linka:operation:appointment-package:${appointment.id}`} successHref={`/appointments/${appointment.id}?visit_saved=package`}>
                     <input type="hidden" name="appointment_id" value={appointment.id} />
                     <input type="hidden" name="patient_id" value={appointment.patient_id} />
                     <label className="text-xs font-bold">
@@ -617,8 +618,8 @@ export default async function AppointmentOperationsPage({
                     <div className="rounded-xl border border-[var(--accent-border)] bg-white p-3 text-xs leading-5 text-slate-900">
                       عند التأكيد هيتضاف سعر الباكيدج إلى إجمالي الزيارة، والجلسة الحالية هتتحسب تلقائيًا كأول جلسة منها بدل سعر الجلسة الفردية. الدفع نفسه بيتسجل من قسم المدفوعات تحت.
                     </div>
-                    <div><Button><PackagePlus size={15} /> إضافة الباكيدج للحساب واحتساب الجلسة</Button></div>
-                  </form>
+                    <div><PendingSubmitButton pendingLabel="???? ???????..."><PackagePlus size={15} /> إضافة الباكيدج للحساب واحتساب الجلسة</PendingSubmitButton></div>
+                  </IdempotentMutationForm>
                 </details>
               )}
 
@@ -715,7 +716,7 @@ export default async function AppointmentOperationsPage({
                         <div className="mt-2 text-xs text-[var(--muted)]">{paymentMethodLabels[transaction.payment_method] || "غير محدد"}{transaction.external_reference ? ` · مرجع ${transaction.external_reference}` : ""}</div>
                         {transaction.reason && <div className="mt-2 text-sm">{transaction.reason}</div>}
                         {payments.can_refund && transaction.transaction_type === "payment" && transaction.refundable_minor > 0 && (
-                          <details className="mt-3 rounded-lg border border-red-100 bg-white p-3"><summary className="cursor-pointer text-xs font-bold text-red-700">استرداد من هذه الدفعة</summary><form action={refundAppointmentPayment} className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr_auto]"><input type="hidden" name="appointment_id" value={appointment.id} /><input type="hidden" name="patient_id" value={appointment.patient_id} /><input type="hidden" name="payment_transaction_id" value={transaction.id} /><input name="amount" inputMode="decimal" required defaultValue={minorInput(transaction.refundable_minor)} className="form-control h-9 min-h-9 px-2 text-sm" aria-label="قيمة الاسترداد" /><input name="reason" required maxLength={500} placeholder="سبب الاسترداد" className="form-control h-9 min-h-9 px-2 text-sm" /><Button variant="danger" size="sm">استرداد</Button></form></details>
+                          <details className="mt-3 rounded-lg border border-red-100 bg-white p-3"><summary className="cursor-pointer text-xs font-bold text-red-700">استرداد من هذه الدفعة</summary><IdempotentMutationForm action={refundAppointmentPayment} storageKey={`linka:operation:appointment-refund:${transaction.id}`} className="mt-3 grid gap-2 sm:grid-cols-[140px_1fr_auto]"><input type="hidden" name="appointment_id" value={appointment.id} /><input type="hidden" name="patient_id" value={appointment.patient_id} /><input type="hidden" name="payment_transaction_id" value={transaction.id} /><input name="amount" inputMode="decimal" required defaultValue={minorInput(transaction.refundable_minor)} className="form-control h-9 min-h-9 px-2 text-sm" aria-label="قيمة الاسترداد" /><input name="reason" required maxLength={500} placeholder="سبب الاسترداد" className="form-control h-9 min-h-9 px-2 text-sm" /><PendingSubmitButton variant="danger" size="sm" pendingLabel="???? ?????????...">استرداد</PendingSubmitButton></IdempotentMutationForm></details>
                         )}
                       </div>
                     ))}

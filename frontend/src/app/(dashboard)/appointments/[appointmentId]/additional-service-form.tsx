@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { Plus, Zap } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { IdempotentMutationForm, PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { formatMoney } from "@/lib/format";
 import type { PulseBalance, PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 
@@ -84,8 +84,10 @@ export function AdditionalServiceForm({
   const deviceReady = !service?.requires_laser_device || Boolean(selectedDevice);
 
   return (
-    <form
+    <IdempotentMutationForm
       action={addAppointmentAdditionalService}
+      storageKey={`linka:operation:appointment-extra-service:${appointmentId}`}
+      successHref={`/appointments/${appointmentId}?visit_saved=service`}
       className="space-y-3 rounded-xl border border-slate-200 bg-white p-3"
     >
       <input type="hidden" name="appointment_id" value={appointmentId} />
@@ -280,12 +282,12 @@ export function AdditionalServiceForm({
         </div>
       )}
 
-      <Button disabled={!serviceId || !deviceReady || !validPulse}>
+      <PendingSubmitButton disabled={!serviceId || !deviceReady || !validPulse} pendingLabel="???? ???????...">
         <Plus size={14} /> إضافة للخدمة والحساب
-      </Button>
+      </PendingSubmitButton>
       <div className="text-xs leading-5 text-[var(--muted)]">
         الخدمة الإضافية لا تغيّر وقت الموعد المحجوز. لو اخترت Pulses، سعر الخدمة نفسها لا يُحسب مرة ثانية.
       </div>
-    </form>
+    </IdempotentMutationForm>
   );
 }

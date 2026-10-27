@@ -1,10 +1,10 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import { parseEgpAmountToMinor } from "./registration-utils";
+import { operationIdempotencyKey } from "@/lib/tia/operation-idempotency";
 
 function revalidatePatient(patientId: string) {
   revalidatePath(`/patients/${patientId}`);
@@ -125,7 +125,7 @@ export async function purchasePatientPackage(formData: FormData) {
 
   await tiaRequest("/booking/package-offers/purchase", {
     method: "POST",
-    headers: { "Idempotency-Key": `dashboard-package-purchase:${randomUUID()}` },
+    headers: { "Idempotency-Key": operationIdempotencyKey(formData, "dashboard-package-purchase") },
     body: JSON.stringify({
       patient_id: patientId,
       offer_id: offerId,
@@ -145,7 +145,7 @@ export async function recordPatientPackagePayment(formData: FormData) {
 
   await tiaRequest(`/booking/patient-packages/${packageId}/payments`, {
     method: "POST",
-    headers: { "Idempotency-Key": `dashboard-package-payment:${randomUUID()}` },
+    headers: { "Idempotency-Key": operationIdempotencyKey(formData, "dashboard-package-payment") },
     body: JSON.stringify({
       amount_minor: moneyToMinor(amount),
       payment_method: paymentMethod,
@@ -166,7 +166,7 @@ export async function cancelPatientPackage(formData: FormData) {
 
   await tiaRequest(`/booking/patient-packages/${packageId}/cancel-refund`, {
     method: "POST",
-    headers: { "Idempotency-Key": `dashboard-package-cancel:${randomUUID()}` },
+    headers: { "Idempotency-Key": operationIdempotencyKey(formData, "dashboard-package-cancel") },
     body: JSON.stringify({
       reason,
       settlement_target_minor: moneyToMinor(settlementTarget),
@@ -185,7 +185,7 @@ export async function purchasePatientPulsePack(formData: FormData) {
 
   await tiaRequest("/booking/pulse-pack-offers/purchase", {
     method: "POST",
-    headers: { "Idempotency-Key": `patient-pulse-pack:${randomUUID()}` },
+    headers: { "Idempotency-Key": operationIdempotencyKey(formData, "patient-pulse-pack") },
     body: JSON.stringify({
       patient_id: patientId,
       offer_id: offerId,
@@ -206,7 +206,7 @@ export async function recordPatientPulsePackPayment(formData: FormData) {
 
   await tiaRequest(`/booking/patient-pulse-packs/${packId}/payments`, {
     method: "POST",
-    headers: { "Idempotency-Key": `patient-pulse-payment:${randomUUID()}` },
+    headers: { "Idempotency-Key": operationIdempotencyKey(formData, "patient-pulse-payment") },
     body: JSON.stringify({ amount_minor: amountMinor, payment_method: paymentMethod }),
   });
   revalidatePackageViews(patientId);

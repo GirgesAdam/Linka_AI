@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { IdempotentMutationForm, PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
 
@@ -44,7 +44,7 @@ export function PackageCancellationForm({
   return (
     <details className="mt-3 rounded-lg border border-red-200 bg-red-50/40 p-3">
       <summary className="flex min-h-10 cursor-pointer items-center text-xs font-black text-red-800">إلغاء الباكيدج وتسوية الحساب</summary>
-      <form action={cancelPatientPackage} className="mt-3 space-y-3">
+      <IdempotentMutationForm action={cancelPatientPackage} storageKey={`linka:operation:package-cancel:${packageId}`} className="mt-3 space-y-3">
         <input type="hidden" name="patient_id" value={patientId} />
         <input type="hidden" name="package_id" value={packageId} />
 
@@ -92,8 +92,8 @@ export function PackageCancellationForm({
         )}
         {difference <= 0 && <input type="hidden" name="payment_method" value="cash" />}
 
-        <Button type="submit" variant="danger">تأكيد إلغاء الباكيدج</Button>
-      </form>
+        <PendingSubmitButton type="submit" variant="danger" pendingLabel="???? ???????...">تأكيد إلغاء الباكيدج</PendingSubmitButton>
+      </IdempotentMutationForm>
     </details>
   );
 }
