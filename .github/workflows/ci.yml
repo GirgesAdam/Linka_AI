@@ -78,6 +78,19 @@ jobs:
         run: python -m alembic upgrade head
       - name: Run backend tests
         run: python -m pytest -q
+  python-vulnerability-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python vulnerability scanner
+        run: python -m pip install pip-audit==2.10.1
+      - name: Audit Python dependencies
+        # Temporary exact exception: pytest 8.4.2 / PYSEC-2026-1845; fix requires 9.0.3 but the project pins pytest<9.
+        # Remove when pytest is non-vulnerable or no longer in audited requirements; pytest is test tooling, not app runtime.
+        run: pip-audit -r backend/requirements.txt --ignore-vuln PYSEC-2026-1845
   frontend:
     runs-on: ubuntu-latest
     defaults:
