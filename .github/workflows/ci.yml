@@ -97,6 +97,8 @@ jobs:
       - run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+      - name: Verify financial UI idempotency contract
+        run: npx playwright test e2e/idempotent-financial-submit.spec.ts
       - run: npm run lint
       - run: npx next typegen
       - run: npm run typecheck
