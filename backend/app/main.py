@@ -1,15 +1,17 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager, suppress
-from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import PlainTextResponse
 
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.historical_import_limits import MAX_HISTORICAL_IMPORT_REQUEST_BYTES
 from app.core.logging import configure_logging
+from app.core.request_context import reset_request_id, resolve_request_id, set_request_id
 from app.database.session import engine
 from app.middleware.historical_import_request_size import (
     HistoricalImportRequestSizeLimitMiddleware,
@@ -17,6 +19,7 @@ from app.middleware.historical_import_request_size import (
 from app.runtime.automation_scheduler import run_forever as run_automation_scheduler
 
 configure_logging()
+logger = logging.getLogger("tia.http")
 
 
 def _env_flag(name: str) -> bool:
@@ -73,10 +76,30 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
-    request_id = request.headers.get("x-request-id") or str(uuid4())
-    response = await call_next(request)
-    response.headers["x-request-id"] = request_id
-    return response
+    request_id = resolve_request_id(request.headers.get("x-request-id"))
+    request.state.request_id = request_id
+    token = set_request_id(request_id)
+    try:
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception(
+                "http_request method=%s path=%s status=500",
+                request.method,
+                request.url.path,
+            )
+            response = PlainTextResponse("Internal Server Error", status_code=500)
+        else:
+            logger.info(
+                "http_request method=%s path=%s status=%s",
+                request.method,
+                request.url.path,
+                response.status_code,
+            )
+        response.headers["x-request-id"] = request_id
+        return response
+    finally:
+        reset_request_id(token)
 
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
