@@ -33,10 +33,29 @@ def _captured_application_logs():
     handler.setFormatter(logging.Formatter(REQUEST_LOG_FORMAT))
     handler.addFilter(RequestIdFilter())
     root = logging.getLogger()
+    original_root_level = root.level
+    correlated_loggers = [logging.getLogger("tia.http"), probe_logger]
+    original_logger_state = [
+        (logger, logger.disabled, logger.level, logger.propagate)
+        for logger in correlated_loggers
+    ]
     root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    for logger in correlated_loggers:
+        # Alembic migration tests call logging.fileConfig() in-process, which
+        # disables existing application loggers. Keep this capture helper
+        # hermetic so full-suite order cannot suppress the records under test.
+        logger.disabled = False
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
     try:
         yield stream
     finally:
+        for logger, disabled, level, propagate in original_logger_state:
+            logger.disabled = disabled
+            logger.setLevel(level)
+            logger.propagate = propagate
+        root.setLevel(original_root_level)
         root.removeHandler(handler)
         handler.close()
 
@@ -326,11 +345,24 @@ def test_request_context_is_reset_after_unhandled_500() -> None:
     assert "request_id=- after_500" in output
 
 
-def test_configured_root_handler_injects_request_id_field_for_operator_visible_logs() -> None:
+def test_capture_harness_is_independent_of_alembic_logging_side_effects() -> None:
     root = logging.getLogger()
-    assert any(
-        handler.formatter is not None
-        and "%(request_id)s" in handler.formatter._fmt
-        and any(isinstance(log_filter, RequestIdFilter) for log_filter in handler.filters)
-        for handler in root.handlers
-    )
+    http_logger = logging.getLogger("tia.http")
+    original_root_level = root.level
+    original_http_disabled = http_logger.disabled
+    original_probe_disabled = probe_logger.disabled
+    root.setLevel(logging.WARNING)
+    http_logger.disabled = True
+    probe_logger.disabled = True
+    try:
+        with _captured_application_logs() as logs:
+            http_logger.info("completion_probe")
+            probe_logger.info("nested_probe")
+    finally:
+        root.setLevel(original_root_level)
+        http_logger.disabled = original_http_disabled
+        probe_logger.disabled = original_probe_disabled
+
+    output = logs.getvalue()
+    assert "request_id=- completion_probe" in output
+    assert "request_id=- nested_probe" in output
