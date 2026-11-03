@@ -5,12 +5,13 @@ import base64
 import io
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import Session
 
 from app.agents.v2.semantic_context import build_semantic_context
@@ -22,8 +23,8 @@ from app.models.clinic_inventory import ClinicLaserDevice, ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
-from app.models.payment_transaction import PaymentTransaction
-from app.models.pulse_billing import PatientPulsePack, PulsePackOffer
+from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
+from app.models.pulse_billing import PatientPulsePack, PulsePackOffer, PulseUsage
 from app.models.service import Service
 from app.models.service_package_offer import ServicePackageOffer
 from app.models.staff import Staff
@@ -1893,6 +1894,89 @@ def test_history_route_structures_file_validation_without_exposing_internals() -
         "error_count": 2,
         "errors": exc.errors,
     }
+
+
+
+def test_historical_import_preview_1545_synthetic_holdings_does_not_apply_business_records_and_uses_batched_patient_reads() -> None:
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        rows = [
+            _id_active_row(
+                f"CUST-{index:05d}",
+                f"Synthetic Patient {index}",
+                f"010{index:08d}",
+                service="Hydrafacial",
+                sessions_total=6,
+                sessions_remaining=3,
+                purchased_at="2026-01-01",
+                package_price=3000,
+            )
+            for index in range(1545)
+        ]
+        document = _arabic_active_package_document_with_id(rows)
+        file_size_bytes = len(base64.b64decode(document.content_base64))
+        assert file_size_bytes <= 25 * 1024 * 1024
+
+        business_counts_before = {
+            "patients": db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)),
+            "appointments": db.scalar(select(func.count()).select_from(Appointment).where(Appointment.workspace_id == workspace.id)),
+            "payments": db.scalar(select(func.count()).select_from(PaymentTransaction).where(PaymentTransaction.workspace_id == workspace.id)),
+            "payment_allocations": db.scalar(select(func.count()).select_from(PaymentAllocation).where(PaymentAllocation.workspace_id == workspace.id)),
+            "packages": db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)),
+            "package_usage": db.scalar(select(func.count()).select_from(PackageUsage).where(PackageUsage.workspace_id == workspace.id)),
+            "pulse_packs": db.scalar(select(func.count()).select_from(PatientPulsePack).where(PatientPulsePack.workspace_id == workspace.id)),
+            "pulse_usage": db.scalar(select(func.count()).select_from(PulseUsage).where(PulseUsage.workspace_id == workspace.id)),
+        }
+        patient_select_queries = 0
+        connection = db.connection()
+
+        def count_patient_selects(_conn, _cursor, statement, _parameters, _context, _executemany):
+            nonlocal patient_select_queries
+            if statement.lstrip().upper().startswith("SELECT") and "from patients" in statement.lower():
+                patient_select_queries += 1
+
+        event.listen(connection, "before_cursor_execute", count_patient_selects)
+        started_at = perf_counter()
+        try:
+            preview = history.preview_historical_import(
+                db,
+                workspace=workspace,
+                user_id=user.id,
+                documents=[document],
+                mode="append",
+            )
+        finally:
+            preview_duration_seconds = perf_counter() - started_at
+            event.remove(connection, "before_cursor_execute", count_patient_selects)
+
+        business_counts_after = {
+            "patients": db.scalar(select(func.count()).select_from(Patient).where(Patient.workspace_id == workspace.id)),
+            "appointments": db.scalar(select(func.count()).select_from(Appointment).where(Appointment.workspace_id == workspace.id)),
+            "payments": db.scalar(select(func.count()).select_from(PaymentTransaction).where(PaymentTransaction.workspace_id == workspace.id)),
+            "payment_allocations": db.scalar(select(func.count()).select_from(PaymentAllocation).where(PaymentAllocation.workspace_id == workspace.id)),
+            "packages": db.scalar(select(func.count()).select_from(PatientPackage).where(PatientPackage.workspace_id == workspace.id)),
+            "package_usage": db.scalar(select(func.count()).select_from(PackageUsage).where(PackageUsage.workspace_id == workspace.id)),
+            "pulse_packs": db.scalar(select(func.count()).select_from(PatientPulsePack).where(PatientPulsePack.workspace_id == workspace.id)),
+            "pulse_usage": db.scalar(select(func.count()).select_from(PulseUsage).where(PulseUsage.workspace_id == workspace.id)),
+        }
+
+        assert preview.ready_counts == {"holding": 1545}
+        assert preview.rejected_counts == {}
+        assert preview.can_import is True
+        assert patient_select_queries == 3  # two 900-row lookup chunks plus one projected-count query
+        assert preview_duration_seconds < 270
+        assert business_counts_after == business_counts_before
+        assert business_counts_after == {
+            "patients": 0,
+            "appointments": 0,
+            "payments": 0,
+            "payment_allocations": 0,
+            "packages": 0,
+            "package_usage": 0,
+            "pulse_packs": 0,
+            "pulse_usage": 0,
+        }
+
 
 
 def test_historical_import_t2_customer_only_with_id() -> None:

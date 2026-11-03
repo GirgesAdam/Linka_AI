@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { MeResponse } from "@/lib/types";
+import { createRequestSignal } from "./request-signal";
 
 const RAW_API_URL = process.env.TIA_API_URL || "http://127.0.0.1:8000";
 const API_URL = (RAW_API_URL.startsWith("//") ? `https:${RAW_API_URL}` : RAW_API_URL).replace(/\/$/, "");
@@ -81,7 +82,10 @@ function userFacingApiError(status: number) {
   return "تعذر إكمال العملية. حاول مرة أخرى.";
 }
 
-export async function tiaRawRequest(path: string, init: RequestInit = {}, options?: { workspace?: boolean }) {
+type TiaRequestOptions = { workspace?: boolean; timeoutMs?: number };
+
+export async function tiaRawRequest(path: string, init: RequestInit = {}, options?: TiaRequestOptions) {
+  const timeoutMs = options?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const token = await accessToken();
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${token}`);
@@ -99,10 +103,12 @@ export async function tiaRawRequest(path: string, init: RequestInit = {}, option
       ...init,
       headers,
       cache: "no-store",
-      signal: init.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: createRequestSignal(init.signal, timeoutMs),
     });
   } catch (error) {
-    const technicalMessage = error instanceof Error ? error.message : String(error);
+    const isTimeout = error instanceof Error && error.name === "TimeoutError";
+    let technicalMessage = error instanceof Error ? error.message : String(error);
+    if (isTimeout) technicalMessage = `Request timed out after ${timeoutMs}ms`;
     console.error("[Linka API] network request failed", {
       path,
       method: init.method || "GET",
@@ -147,7 +153,7 @@ async function accessToken() {
   return token;
 }
 
-export async function tiaRequest<T>(path: string, init: RequestInit = {}, options?: { workspace?: boolean }) {
+export async function tiaRequest<T>(path: string, init: RequestInit = {}, options?: TiaRequestOptions) {
   const response = await tiaRawRequest(path, init, options);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;

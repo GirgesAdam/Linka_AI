@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   getImportValidationErrorDetail,
+  TiaApiError,
   tiaRequest,
   type ImportValidationErrorDetail,
 } from "@/lib/tia/api";
@@ -13,6 +14,7 @@ export type HistoricalImportActionState = {
   error: string | null;
 };
 
+const HISTORICAL_PREVIEW_TIMEOUT_MS = 270_000;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 60 * 1024 * 1024;
 const MAX_VISIBLE_VALIDATION_ERRORS = 4;
@@ -65,10 +67,16 @@ export async function previewHistoricalImportAction(
     const preview = await tiaRequest<HistoricalPreview>("/clinic/history/preview", {
       method: "POST",
       body: JSON.stringify({ documents, mode }),
-    });
+    }, { timeoutMs: HISTORICAL_PREVIEW_TIMEOUT_MS });
     revalidatePath("/setup/integration");
     return { preview, error: null };
   } catch (error) {
+    if (error instanceof TiaApiError && error.technicalMessage?.startsWith("Request timed out after ")) {
+      return {
+        preview: null,
+        error: "\u0627\u0646\u062a\u0647\u062a \u0645\u0647\u0644\u0629 \u0627\u0646\u062a\u0638\u0627\u0631 \u0645\u0639\u0627\u064a\u0646\u0629 \u0627\u0644\u0645\u0644\u0641. \u0642\u062f \u064a\u0643\u0648\u0646 \u0627\u0644\u062e\u0627\u062f\u0645 \u0645\u0627 \u0632\u0627\u0644 \u064a\u0639\u0627\u0644\u062c \u0627\u0644\u0645\u0639\u0627\u064a\u0646\u0629\u061b \u062d\u062f\u0651\u062b \u0635\u0641\u062d\u0629 \u0627\u0644\u0627\u0633\u062a\u064a\u0631\u0627\u062f \u0648\u062a\u062d\u0642\u0642 \u0645\u0646 \u062d\u0627\u0644\u0629 \u0622\u062e\u0631 \u0639\u0645\u0644\u064a\u0629 \u0642\u0628\u0644 \u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629 \u0644\u062a\u062c\u0646\u0628 \u0625\u0646\u0634\u0627\u0621 \u0645\u0639\u0627\u064a\u0646\u0629 \u0645\u0643\u0631\u0631\u0629.",
+      };
+    }
     const validation = getImportValidationErrorDetail(error);
     if (validation) return { preview: null, error: formatImportValidationError(validation) };
     return {
