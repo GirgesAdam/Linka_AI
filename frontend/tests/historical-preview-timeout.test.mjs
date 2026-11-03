@@ -11,7 +11,17 @@ const setupPage = read("../src/app/(dashboard)/setup/page.tsx");
 
 function waitForAbort(signal) {
   if (signal.aborted) return Promise.resolve(signal.reason);
-  return new Promise((resolve) => signal.addEventListener("abort", () => resolve(signal.reason), { once: true }));
+  return new Promise((resolve) => {
+    // AbortSignal.timeout uses an unref'ed timer in Node 22. Keep the test
+    // event loop alive until the abort event is observed.
+    const keepAlive = setTimeout(() => {}, 1_000);
+    const onAbort = () => {
+      clearTimeout(keepAlive);
+      resolve(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
 }
 
 test("global API timeout remains 15 seconds and both request APIs accept timeoutMs", () => {
