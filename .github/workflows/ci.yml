@@ -54,6 +54,9 @@ jobs:
           ruff check tools/agent_eval
           python -m compileall -q tools/agent_eval
           pytest -q tools/agent_eval/tests
+      - name: Validate trusted QA dispatch guard
+        working-directory: .
+        run: ruff check .github/qa_dispatch && python .github/qa_dispatch/test_guard.py
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
       - name: Verify single Alembic head
