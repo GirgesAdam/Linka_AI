@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, type ComponentProps, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { CheckCircle2 } from "lucide-react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 
@@ -24,14 +25,18 @@ export function IdempotentMutationForm({
   className,
   successHref,
   children,
+  successMessage = "تم تنفيذ العملية بنجاح.",
 }: {
   action: MutationAction;
   storageKey: string;
   className?: string;
   successHref?: string;
+  successMessage?: string;
   children: ReactNode;
 }) {
   const router = useRouter();
+  const [notice, setNotice] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   useEffect(() => {
     storedToken(storageKey);
   }, [storageKey]);
@@ -45,7 +50,15 @@ export function IdempotentMutationForm({
       // Rotate only after a confirmed successful server action. If the request
       // result is unknown (network error/redirected failure), the persisted token
       // survives so a retry represents the same logical operation.
-      await action(formData);
+      setErrorMessage(null);
+      try {
+        await action(formData);
+      } catch (error) {
+        setNotice(null);
+        setErrorMessage(error instanceof Error ? error.message : "تعذر تنفيذ العملية. حاول مرة أخرى.");
+        return;
+      }
+      setNotice(successMessage);
 
       const nextToken = createClientRequestId();
       window.sessionStorage.setItem(storageKey, nextToken);
@@ -55,13 +68,16 @@ export function IdempotentMutationForm({
         router.refresh();
       }
     },
-    [action, router, storageKey, successHref],
+    [action, router, storageKey, successHref, successMessage],
   );
 
   return (
-    <form action={submit} className={className}>
-      {children}
-    </form>
+    <div className="space-y-2">
+      <form action={submit} className={className}>
+        {children}
+      </form>
+      {errorMessage ? <div role="alert" aria-live="polite" className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{errorMessage}</div> : notice ? <div role="status" aria-live="polite" className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800"><CheckCircle2 size={14} />{notice}</div> : null}
+    </div>
   );
 }
 

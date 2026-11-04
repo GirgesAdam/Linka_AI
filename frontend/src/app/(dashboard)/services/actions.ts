@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 
 import { tiaRequest } from "@/lib/tia/api";
+import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
 
 function moneyMinor(value: FormDataEntryValue | null) {
   const amount = Number(String(value || "0"));
@@ -177,65 +178,89 @@ export async function updateLaserDevicePrice(formData: FormData) {
   revalidatePath("/appointments");
 }
 
-export async function updatePackageOffer(formData: FormData) {
-  const serviceId = String(formData.get("service_id") || "");
-  const deviceKey = String(formData.get("device_key") || "").trim() || null;
-  const sessionsCount = Number(String(formData.get("sessions_count") || "0"));
-  if (!serviceId) return;
-  if (!Number.isInteger(sessionsCount) || sessionsCount <= 0) {
-    throw new Error("اكتب عدد جلسات صحيح أكبر من صفر.");
-  }
+export async function updatePackageOffer(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const serviceId = String(formData.get("service_id") || "");
+    const deviceKey = String(formData.get("device_key") || "").trim() || null;
+    const sessionsCount = Number(String(formData.get("sessions_count") || "0"));
+    if (!serviceId) throw new Error("تعذر تحديد الخدمة.");
+    if (!Number.isInteger(sessionsCount) || sessionsCount <= 0) {
+      throw new Error("اكتب عدد جلسات صحيح أكبر من صفر.");
+    }
 
-  await tiaRequest("/booking/package-offers", {
-    method: "PUT",
-    body: JSON.stringify({
-      service_id: serviceId,
-      device_key: deviceKey,
-      sessions_count: sessionsCount,
-      price_minor: moneyMinor(formData.get("price")),
-      currency: "EGP",
-      is_active: formData.get("is_active") === "1",
-    }),
-  });
-  revalidatePath("/services");
+    await tiaRequest("/booking/package-offers", {
+      method: "PUT",
+      body: JSON.stringify({
+        service_id: serviceId,
+        device_key: deviceKey,
+        sessions_count: sessionsCount,
+        price_minor: moneyMinor(formData.get("price")),
+        currency: "EGP",
+        is_active: formData.get("is_active") === "1",
+      }),
+    });
+    revalidatePath("/services");
+    return { notice: "تم حفظ بيانات الباقة بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر حفظ بيانات الباقة. حاول مرة أخرى.");
+  }
 }
 
-export async function savePulsePriceFormAction(formData: FormData) {
-  const deviceKey = String(formData.get("device_key") || "").trim();
-  if (!deviceKey) throw new Error("اختار جهاز ليزر.");
+export async function savePulsePriceFormAction(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const deviceKey = String(formData.get("device_key") || "").trim();
+    if (!deviceKey) throw new Error("اختار جهاز ليزر.");
 
-  await tiaRequest("/booking/pulse-device-prices", {
-    method: "PUT",
-    body: JSON.stringify({
-      device_key: deviceKey,
-      overage_price_minor: pulseMoneyMinor(formData.get("overage_price")),
-      currency: "EGP",
-    }),
-  });
-  revalidatePath("/services");
-  revalidatePath("/appointments");
-  revalidatePath("/finance");
+    await tiaRequest("/booking/pulse-device-prices", {
+      method: "PUT",
+      body: JSON.stringify({
+        device_key: deviceKey,
+        overage_price_minor: pulseMoneyMinor(formData.get("overage_price")),
+        currency: "EGP",
+      }),
+    });
+    revalidatePath("/services");
+    revalidatePath("/appointments");
+    revalidatePath("/finance");
+    return { notice: "تم حفظ سعر الـPulse بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر حفظ سعر الـPulse. حاول مرة أخرى.");
+  }
 }
 
-export async function savePulsePackOfferFormAction(formData: FormData) {
-  const deviceKey = String(formData.get("device_key") || "").trim();
-  const pulsesCount = Number(String(formData.get("pulses_count") || "0"));
-  if (!deviceKey) throw new Error("اختار جهاز ليزر.");
-  if (!Number.isInteger(pulsesCount) || pulsesCount <= 0) {
-    throw new Error("عدد الـPulses لازم يكون رقم صحيح أكبر من صفر.");
-  }
+export async function savePulsePackOfferFormAction(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const deviceKey = String(formData.get("device_key") || "").trim();
+    const pulsesCount = Number(String(formData.get("pulses_count") || "0"));
+    if (!deviceKey) throw new Error("اختار جهاز ليزر.");
+    if (!Number.isInteger(pulsesCount) || pulsesCount <= 0) {
+      throw new Error("عدد الـPulses لازم يكون رقم صحيح أكبر من صفر.");
+    }
 
-  await tiaRequest("/booking/pulse-pack-offers", {
-    method: "PUT",
-    body: JSON.stringify({
-      device_key: deviceKey,
-      pulses_count: pulsesCount,
-      price_minor: pulseMoneyMinor(formData.get("price")),
-      currency: "EGP",
-      is_active: formData.get("is_active") === "on",
-    }),
-  });
-  revalidatePath("/services");
-  revalidatePath("/patients");
-  revalidatePath("/appointments");
+    await tiaRequest("/booking/pulse-pack-offers", {
+      method: "PUT",
+      body: JSON.stringify({
+        device_key: deviceKey,
+        pulses_count: pulsesCount,
+        price_minor: pulseMoneyMinor(formData.get("price")),
+        currency: "EGP",
+        is_active: formData.get("is_active") === "on",
+      }),
+    });
+    revalidatePath("/services");
+    revalidatePath("/patients");
+    revalidatePath("/appointments");
+    return { notice: "تم حفظ باقة الـPulses بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر حفظ باقة الـPulses. حاول مرة أخرى.");
+  }
 }

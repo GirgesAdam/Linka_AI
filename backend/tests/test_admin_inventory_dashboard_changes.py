@@ -1,17 +1,29 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
-from app.schemas.inventory import ClinicProductCreate, InventoryItemCreate, InventoryUsageCreate
+from app.schemas.inventory import (
+    ClinicProductCreate,
+    ClinicProductStockAdd,
+    InventoryItemCreate,
+    InventoryUsageCreate,
+)
 from app.services.finance_dashboard import _financial_period_buckets, financial_dashboard_trend
 from app.services.inventory import (
     InventoryOperationError,
     add_appointment_product,
+    add_product_stock,
     create_clinic_laser_device,
+    create_inventory_item,
+    create_product,
+    deactivate_inventory_item,
+    deactivate_product,
     delete_appointment_product,
     is_laser_service,
     list_clinic_laser_devices,
@@ -267,3 +279,167 @@ def test_dashboard_finance_uses_cairo_local_date_and_same_profit_formula() -> No
     assert result.points[3].expenses_minor == 3000
     assert sum(point.net_revenue_minor for point in result.points) == 8000
     assert sum(point.profit_minor for point in result.points) == 5000
+
+def test_product_stock_receipt_adds_to_existing_quantity_instead_of_replacing_it() -> None:
+    workspace_id = uuid4()
+    product = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        quantity_on_hand=7,
+        is_active=True,
+    )
+
+    class _Db:
+        def scalar(self, _stmt):
+            return product
+
+        def flush(self):
+            return None
+
+    updated = add_product_stock(
+        _Db(),
+        workspace_id=workspace_id,
+        product_id=product.id,
+        quantity_added=5,
+    )
+
+    assert updated.quantity_on_hand == 12
+    assert product.quantity_on_hand == 12
+
+
+def test_product_stock_receipt_rejects_zero_quantity() -> None:
+    with pytest.raises(ValueError, match="greater than zero"):
+        add_product_stock(
+            SimpleNamespace(),
+            workspace_id=uuid4(),
+            product_id=uuid4(),
+            quantity_added=0,
+        )
+    with pytest.raises(ValidationError):
+        ClinicProductStockAdd(quantity_added=0)
+
+
+def test_inventory_product_and_injectable_deletion_is_soft() -> None:
+    workspace_id = uuid4()
+    product = SimpleNamespace(id=uuid4(), workspace_id=workspace_id, is_active=True)
+    item = SimpleNamespace(id=uuid4(), workspace_id=workspace_id, is_active=True)
+
+    class _Db:
+        def __init__(self, row):
+            self.row = row
+
+        def scalar(self, _stmt):
+            return self.row
+
+        def flush(self):
+            return None
+
+    product_result = deactivate_product(
+        _Db(product),
+        workspace_id=workspace_id,
+        product_id=product.id,
+    )
+    item_result = deactivate_inventory_item(
+        _Db(item),
+        workspace_id=workspace_id,
+        item_id=item.id,
+    )
+
+    assert product_result.is_active is False
+    assert item_result.is_active is False
+def test_creating_an_existing_active_product_cannot_overwrite_its_stock() -> None:
+    workspace_id = uuid4()
+    product = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        name="Skin Protector",
+        description=None,
+        quantity_on_hand=9,
+        is_active=True,
+    )
+
+    class _Db:
+        def scalar(self, _stmt):
+            return product
+
+        def flush(self):
+            return None
+
+    with pytest.raises(InventoryOperationError, match="add-stock"):
+        create_product(
+            _Db(),
+            workspace_id=workspace_id,
+            name="Skin Protector",
+            description=None,
+            quantity_on_hand=2,
+        )
+    assert product.quantity_on_hand == 9
+
+
+def test_readding_a_soft_deleted_product_reactivates_it_without_losing_identity() -> None:
+    workspace_id = uuid4()
+    product = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        name="Skin Protector",
+        description="Old note",
+        quantity_on_hand=0,
+        is_active=False,
+    )
+
+    class _Db:
+        def scalar(self, _stmt):
+            return product
+
+        def flush(self):
+            return None
+
+    result = create_product(
+        _Db(),
+        workspace_id=workspace_id,
+        name="Skin Protector",
+        description="Updated note",
+        quantity_on_hand=4,
+    )
+    assert result.id == product.id
+    assert result.is_active is True
+    assert result.quantity_on_hand == 4
+    assert result.description == "Updated note"
+
+
+def test_readding_a_soft_deleted_injectable_reuses_its_historical_record() -> None:
+    workspace_id = uuid4()
+    created_at = datetime(2026, 10, 1, tzinfo=UTC)
+    item = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        name="Injectable A",
+        category="injectable",
+        quantity_ml=Decimal("0"),
+        low_stock_threshold_ml=None,
+        notes=None,
+        is_active=False,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+    class _Db:
+        def scalar(self, _stmt):
+            return item
+
+        def flush(self):
+            return None
+
+    result = create_inventory_item(
+        _Db(),
+        workspace_id=workspace_id,
+        name="  Injectable   A ",
+        quantity_ml=Decimal("12.5"),
+        low_stock_threshold_ml=Decimal("2"),
+        notes="New stock",
+    )
+    assert result.id == item.id
+    assert result.name == "Injectable A"
+    assert result.is_active is True
+    assert result.quantity_ml == Decimal("12.5")
+    assert result.notes == "New stock"

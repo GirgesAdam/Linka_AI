@@ -1,7 +1,8 @@
 import { ChevronDown, Cpu, Download, History } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
@@ -75,13 +76,12 @@ export function ClinicSettingsPanel({
           <CardDescription>البيانات الأساسية التي تظهر وتمثل العيادة داخل Linka.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form action={saveClinicProfileFormAction} className="grid gap-4 md:grid-cols-2">
+          <ActionFeedbackForm action={saveClinicProfileFormAction} className="grid gap-4 md:grid-cols-2" submitLabel="حفظ بيانات العيادة" pendingLabel="جاري الحفظ...">
             <Field label="اسم العيادة" name="name" defaultValue={setup.clinic.name} />
             <Field label="رقم الهاتف" name="phone" defaultValue={setup.clinic.phone} />
             <Field label="المدينة" name="city" defaultValue={setup.clinic.city} />
             <Field label="العنوان" name="address" defaultValue={setup.clinic.address} />
-            <div className="md:col-span-2"><Button type="submit">حفظ بيانات العيادة</Button></div>
-          </form>
+          </ActionFeedbackForm>
         </CardContent>
       </Card>
 
@@ -95,10 +95,14 @@ export function ClinicSettingsPanel({
         <CardContent className="space-y-4">
           <div className="space-y-2">
             {laserDevices.map((device) => (
-              <form
+              <ActionFeedbackForm
                 key={device.id}
                 action={updateLaserDeviceFormAction}
-                className="grid gap-3 rounded-xl border border-[var(--border)] p-3 sm:grid-cols-[minmax(180px,1fr)_auto_auto] sm:items-end"
+                className="grid gap-3 rounded-xl border border-[var(--border)] p-3 sm:grid-cols-[minmax(180px,1fr)_auto_auto]"
+                submitLabel="حفظ"
+                pendingLabel="جاري الحفظ..."
+                size="sm"
+                variant="outline"
               >
                 <input type="hidden" name="device_id" value={device.id} />
                 <Field label="اسم الجهاز" name="name" defaultValue={device.name} />
@@ -106,18 +110,18 @@ export function ClinicSettingsPanel({
                   <input type="checkbox" name="is_active" defaultChecked={device.is_active} />
                   مفعّل
                 </label>
-                <Button type="submit" size="sm" variant="outline">حفظ</Button>
-              </form>
+              </ActionFeedbackForm>
             ))}
           </div>
 
-          <form
+          <ActionFeedbackForm
             action={addLaserDeviceFormAction}
             className="grid gap-3 rounded-xl border border-dashed border-slate-300 p-3 sm:grid-cols-[minmax(180px,1fr)_auto] sm:items-end"
+            submitLabel="إضافة الجهاز"
+            pendingLabel="جاري الإضافة..."
           >
             <Field label="إضافة جهاز" name="name" />
-            <Button type="submit">إضافة الجهاز</Button>
-          </form>
+          </ActionFeedbackForm>
 
           <p className="text-xs leading-5 text-[var(--muted)]">
             تعطيل جهاز يمنعه من الاستخدام في إعدادات وحجوزات جديدة، لكنه لا يمس المواعيد أو الباقات أو السجلات التاريخية القديمة.
@@ -137,7 +141,7 @@ export function ClinicSettingsPanel({
             </CardHeader>
           </summary>
         <CardContent>
-          <form action={saveClinicHoursFormAction} className="space-y-3">
+          <ActionFeedbackForm action={saveClinicHoursFormAction} className="space-y-3" submitLabel="حفظ مواعيد العمل" pendingLabel="جاري حفظ المواعيد...">
             {DAYS.map(({ weekday, label }) => {
               const row = byDay.get(weekday);
               return (
@@ -151,8 +155,7 @@ export function ClinicSettingsPanel({
                 </div>
               );
             })}
-            <Button type="submit">حفظ مواعيد العمل</Button>
-          </form>
+          </ActionFeedbackForm>
         </CardContent>
         </details>
       </Card>
@@ -169,7 +172,7 @@ export function ClinicSettingsPanel({
             </CardHeader>
           </summary>
         <CardContent>
-          <form action={saveKnowledgeTextFormAction} className="space-y-4">
+          <ActionFeedbackForm action={saveKnowledgeTextFormAction} className="space-y-4" submitLabel="حفظ معلومات Linka" pendingLabel="جاري الحفظ...">
             <div className="rounded-xl border border-teal-200 bg-teal-50/70 p-4">
               <div className="mb-2 text-sm font-bold text-teal-950">مثال حقيقي لمعلومات Linka</div>
               <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{KNOWLEDGE_EXAMPLE}</div>
@@ -191,8 +194,7 @@ export function ClinicSettingsPanel({
               />
             </label>
             <p className="text-xs leading-5 text-[var(--muted)]">الأسعار والمدد والمواعيد والمدفوعات والباقات لا تُكتب هنا؛ تظل مأخوذة من بيانات Linka التشغيلية، والنص هنا هو مصدر الشرح الحر الوحيد للرد على استفسارات العملاء.</p>
-            <Button type="submit">حفظ معلومات Linka</Button>
-          </form>
+          </ActionFeedbackForm>
         </CardContent>
         </details>
       </Card>

@@ -93,7 +93,12 @@ export function ServicePricingForm({
       </div>
 
       {state.error && (
-        <div className="rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{state.error}</div>
+        <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700">{state.error}</div>
+      )}
+      {state.ok && (
+        <div role="status" aria-live="polite" className="rounded-lg bg-emerald-50 p-3 text-sm font-bold text-emerald-800">
+          تم حفظ بيانات الخدمة والأسعار بنجاح.
+        </div>
       )}
 
       {requiresLaserDevice ? (

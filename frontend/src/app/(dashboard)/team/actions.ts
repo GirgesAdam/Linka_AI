@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
+import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
 
 export type InviteMemberState = {
   notice: string | null;
@@ -52,12 +53,22 @@ export async function inviteMember(
   }
 }
 
-export async function changeRole(formData: FormData) {
-  const id = String(formData.get("membership_id"));
-  const role = String(formData.get("role"));
-  await tiaRequest(`/auth/workspace/members/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ role }),
-  });
-  revalidatePath("/team");
+export async function changeRole(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const id = String(formData.get("membership_id") || "").trim();
+    const role = String(formData.get("role") || "");
+    if (!id) throw new Error("تعذر تحديد العضو المطلوب تعديله.");
+    if (!["admin", "member"].includes(role)) throw new Error("اختار صلاحية صحيحة للعضو.");
+    await tiaRequest("/auth/workspace/members/" + id, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    });
+    revalidatePath("/team");
+    return { notice: "تم تحديث صلاحية العضو بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر تحديث صلاحية العضو. حاول مرة أخرى.");
+  }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -29,6 +30,7 @@ export function PatientProfileEditor({
   const [source, setSource] = useState(initialSource);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   function cancel() {
     setName(initialName);
@@ -36,6 +38,7 @@ export function PatientProfileEditor({
     setCustomerId(initialCustomerId || "");
     setSource(initialSource);
     setError(null);
+    setNotice(null);
     setEditing(false);
   }
 
@@ -58,18 +61,25 @@ export function PatientProfileEditor({
 
     setSaving(true);
     setError(null);
+    setNotice(null);
     const result = await updatePatientProfileAction(patientId, changes);
     setSaving(false);
     if (!result.ok) {
       setError(result.error || "تعذر تحديث بيانات العميل.");
       return;
     }
+    setNotice(result.notice || "تم حفظ بيانات العميل بنجاح.");
     setEditing(false);
     router.refresh();
   }
 
   if (!editing) {
-    return <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>تعديل</Button>;
+    return (
+      <div className="space-y-2">
+        <Button type="button" size="sm" variant="outline" onClick={() => { setNotice(null); setEditing(true); }}>تعديل</Button>
+        {notice ? <p role="status" aria-live="polite" className="flex items-center gap-1.5 text-xs font-bold text-emerald-700"><CheckCircle2 size={14} />{notice}</p> : null}
+      </div>
+    );
   }
 
   return (

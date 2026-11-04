@@ -1,5 +1,7 @@
 import { Banknote, CalendarRange, CreditCard, Pencil, Plus, Receipt, Trash2, TrendingDown, TrendingUp, WalletCards } from "lucide-react";
 
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
+import { ConfirmActionForm } from "@/components/confirm-action-form";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -63,7 +65,7 @@ type PaymentBreakdown = {
   }>;
 };
 
-type SearchParams = { start_date?: string; end_date?: string };
+type SearchParams = { start_date?: string; end_date?: string; notice?: string };
 
 const categoryLabels: Record<ExpenseCategory, string> = {
   rent: "إيجار",
@@ -172,6 +174,8 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const raw = await searchParams;
   const startDate = validDate(raw.start_date);
   const endDate = validDate(raw.end_date);
+  const noticeIsError = raw.notice === "delete_failed";
+  const notice = raw.notice === "expense_deleted" ? "تم حذف المصروف بنجاح، وتم تحديث حسابات الربحية." : noticeIsError ? "تعذر حذف المصروف. حدّث الصفحة وحاول مرة أخرى." : null;
   const { workspace } = await getAppContext();
   const isAdmin = workspace.role === "admin";
 
@@ -197,6 +201,8 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         title="المالية"
         description="تابع الدخل والمصروفات وصافي الربح ودخل طرق الدفع المستخدمة حاليًا."
       />
+
+      {notice ? <div role={noticeIsError ? "alert" : "status"} aria-live="polite" className={"mb-5 rounded-xl px-4 py-3 text-sm font-bold " + (noticeIsError ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{notice}</div> : null}
 
       <Card className="mb-5">
         <CardContent className="pt-5">
@@ -253,10 +259,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
             <span className="grid size-9 place-items-center rounded-xl bg-teal-50 text-teal-700"><Plus size={17} /></span>
           </CardHeader>
           <CardContent>
-            <form action={createExpense}>
+            <ActionFeedbackForm action={createExpense} className="space-y-4" submitLabel="إضافة المصروف" pendingLabel="جاري تسجيل المصروف...">
               <ExpenseFields defaultDate={profitability.end_date} />
-              <div className="mt-4 flex justify-end"><Button type="submit"><Plus size={16} />إضافة المصروف</Button></div>
-            </form>
+
+            </ActionFeedbackForm>
           </CardContent>
         </Card>
       )}
@@ -279,11 +285,11 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                     <div className="mt-3 border-t border-slate-100 pt-3">
                       <details>
                         <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-800"><Pencil size={14} /> تعديل المصروف</summary>
-                        <form action={updateExpense} className="mt-4 rounded-xl bg-slate-50 p-4"><input type="hidden" name="expense_id" value={expense.id} /><ExpenseFields expense={expense} defaultDate={profitability.end_date} /><div className="mt-4 flex flex-wrap justify-end gap-2"><Button type="submit" size="sm"><Pencil size={14} />حفظ التعديل</Button></div></form>
+                        <ActionFeedbackForm action={updateExpense} className="mt-4 space-y-4 rounded-xl bg-slate-50 p-4" submitLabel="حفظ التعديل" pendingLabel="جاري الحفظ..." size="sm"><input type="hidden" name="expense_id" value={expense.id} /><ExpenseFields expense={expense} defaultDate={profitability.end_date} /></ActionFeedbackForm>
                       </details>
                       <details className="mt-2">
                         <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-800"><Trash2 size={14} /> حذف المصروف</summary>
-                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 p-3"><span className="text-xs font-semibold text-rose-900">الحذف نهائي ولن يدخل هذا المصروف في حساب الربحية بعد ذلك.</span><form action={deleteExpense}><input type="hidden" name="expense_id" value={expense.id} /><Button type="submit" size="sm" variant="danger"><Trash2 size={14} />تأكيد الحذف</Button></form></div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 p-3"><span className="text-xs font-semibold text-rose-900">الحذف نهائي ولن يدخل هذا المصروف في حساب الربحية بعد ذلك.</span><ConfirmActionForm action={deleteExpense} ariaLabel="حذف المصروف" confirmMessage={"هل أنت متأكد من حذف المصروف " + expense.title + "؟ الحذف نهائي وسيتم تحديث حساب الربحية."}><input type="hidden" name="expense_id" value={expense.id} /><input type="hidden" name="return_start_date" value={profitability.start_date} /><input type="hidden" name="return_end_date" value={profitability.end_date} /></ConfirmActionForm></div>
                       </details>
                     </div>
                   )}

@@ -415,9 +415,13 @@ def create_product(
         select(ClinicProduct).where(
             ClinicProduct.workspace_id == workspace_id,
             ClinicProduct.name == name,
-        )
+        ).with_for_update()
     )
     if existing is not None:
+        if existing.is_active:
+            raise InventoryOperationError(
+                "Product already exists. Use the add-stock action to increase its quantity."
+            )
         existing.is_active = True
         existing.quantity_on_hand = quantity_on_hand
         if description is not None:
@@ -456,6 +460,48 @@ def set_product_quantity(
     db.flush()
     return row
 
+
+def add_product_stock(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+    quantity_added: int,
+) -> ClinicProduct:
+    if quantity_added <= 0:
+        raise InventoryOperationError("Added product quantity must be greater than zero.")
+    row = db.scalar(
+        select(ClinicProduct).where(
+            ClinicProduct.workspace_id == workspace_id,
+            ClinicProduct.id == product_id,
+            ClinicProduct.is_active.is_(True),
+        ).with_for_update()
+    )
+    if row is None:
+        raise InventoryNotFound("Product not found.")
+    row.quantity_on_hand = int(row.quantity_on_hand) + quantity_added
+    db.flush()
+    return row
+
+
+def deactivate_product(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    product_id: UUID,
+) -> ClinicProduct:
+    row = db.scalar(
+        select(ClinicProduct).where(
+            ClinicProduct.workspace_id == workspace_id,
+            ClinicProduct.id == product_id,
+            ClinicProduct.is_active.is_(True),
+        ).with_for_update()
+    )
+    if row is None:
+        raise InventoryNotFound("Product not found.")
+    row.is_active = False
+    db.flush()
+    return row
 
 def list_appointment_products(
     db: Session,
@@ -614,9 +660,28 @@ def create_inventory_item(
     low_stock_threshold_ml: Decimal | None,
     notes: str | None,
 ) -> InventoryItemRead:
+    normalized_name = " ".join(name.split())
+    existing = db.scalar(
+        select(InventoryItem).where(
+            InventoryItem.workspace_id == workspace_id,
+            InventoryItem.name == normalized_name,
+        ).with_for_update()
+    )
+    if existing is not None:
+        if existing.is_active:
+            raise InventoryOperationError(
+                "Inventory item already exists. Use the add-stock action to increase its quantity."
+            )
+        existing.is_active = True
+        existing.quantity_ml = quantity_ml
+        existing.low_stock_threshold_ml = low_stock_threshold_ml
+        existing.notes = notes
+        db.flush()
+        return _inventory_read(existing)
+
     row = InventoryItem(
         workspace_id=workspace_id,
-        name=" ".join(name.split()),
+        name=normalized_name,
         category="injectable",
         quantity_ml=quantity_ml,
         # Legacy storage keeps this non-null column; new inventory semantics are mL-only.
@@ -650,6 +715,25 @@ def add_inventory_stock(
     db.flush()
     return _inventory_read(row)
 
+
+def deactivate_inventory_item(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    item_id: UUID,
+) -> InventoryItem:
+    row = db.scalar(
+        select(InventoryItem).where(
+            InventoryItem.workspace_id == workspace_id,
+            InventoryItem.id == item_id,
+            InventoryItem.is_active.is_(True),
+        ).with_for_update()
+    )
+    if row is None:
+        raise InventoryNotFound("Inventory item not found.")
+    row.is_active = False
+    db.flush()
+    return row
 
 def record_inventory_usage(
     db: Session,

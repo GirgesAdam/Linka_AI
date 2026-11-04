@@ -1,7 +1,7 @@
-import { ChevronDown, Cpu, PackageCheck, PackagePlus, Save, Settings2 } from "lucide-react";
+import { ChevronDown, Cpu, PackageCheck, PackagePlus, Settings2 } from "lucide-react";
 
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
@@ -102,10 +102,7 @@ function PackageOffersEditor({
   return (
     <div className="space-y-3">
       {sortedOffers.map((offer) => (
-        <form
-          key={offer.id}
-          action={updatePackageOffer}
-          className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto]"
+        <ActionFeedbackForm key={offer.id} action={updatePackageOffer} className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto]" submitLabel="حفظ" pendingLabel="..." size="sm" variant="outline"
         >
           <input type="hidden" name="service_id" value={serviceId} />
           {deviceKey ? <input type="hidden" name="device_key" value={deviceKey} /> : null}
@@ -125,7 +122,7 @@ function PackageOffersEditor({
               defaultValue={major(offer.price_minor)}
             />
           </label>
-          <Button type="submit" size="sm" variant="outline"><Save size={13} /> حفظ</Button>
+
           {offer.is_active && (
             <div className="text-[11px] font-semibold text-slate-500 sm:col-span-3">
               {offer.savings_minor > 0
@@ -133,12 +130,10 @@ function PackageOffersEditor({
                 : "لا يوجد خصم مقارنة بسعر الجلسات المنفصلة."}
             </div>
           )}
-        </form>
+        </ActionFeedbackForm>
       ))}
 
-      <form
-        action={updatePackageOffer}
-        className="grid gap-2 rounded-xl border border-dashed border-slate-300 bg-white p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto_auto]"
+      <ActionFeedbackForm action={updatePackageOffer} className="grid gap-2 rounded-xl border border-dashed border-slate-300 bg-white p-3 sm:grid-cols-[110px_minmax(120px,1fr)_auto_auto]" submitLabel="إضافة" pendingLabel="جاري الإضافة..."
       >
         <input type="hidden" name="service_id" value={serviceId} />
         {deviceKey ? <input type="hidden" name="device_key" value={deviceKey} /> : null}
@@ -162,8 +157,8 @@ function PackageOffersEditor({
           <input type="checkbox" name="is_active" value="1" defaultChecked />
           مفعلة
         </label>
-        <Button type="submit" size="sm"><Save size={13} /> إضافة</Button>
-      </form>
+
+      </ActionFeedbackForm>
     </div>
   );
 }

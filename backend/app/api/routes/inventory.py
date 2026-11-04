@@ -19,6 +19,7 @@ from app.schemas.inventory import (
     ClinicProductCreate,
     ClinicProductQuantityUpdate,
     ClinicProductRead,
+    ClinicProductStockAdd,
     InventoryItemAdjust,
     InventoryItemCreate,
     InventoryItemRead,
@@ -32,10 +33,13 @@ from app.services.inventory import (
     InventoryOperationError,
     add_appointment_product,
     add_inventory_stock,
+    add_product_stock,
     create_clinic_laser_device,
     create_inventory_item,
     create_product,
+    deactivate_inventory_item,
     deactivate_laser_device_price,
+    deactivate_product,
     delete_appointment_product,
     list_appointment_products,
     list_clinic_laser_devices,
@@ -83,17 +87,57 @@ def add_product(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicProductRead:
-    row = create_product(
-        db,
-        workspace_id=access.workspace.id,
-        name=payload.name,
-        description=payload.description,
-        quantity_on_hand=payload.quantity_on_hand,
-    )
-    db.commit()
-    db.refresh(row)
-    return ClinicProductRead.model_validate(row)
+    try:
+        row = create_product(
+            db,
+            workspace_id=access.workspace.id,
+            name=payload.name,
+            description=payload.description,
+            quantity_on_hand=payload.quantity_on_hand,
+        )
+        db.commit()
+        db.refresh(row)
+        return ClinicProductRead.model_validate(row)
+    except InventoryOperationError as exc:
+        db.rollback()
+        _raise(exc)
 
+
+@router.post("/products/{product_id}/stock", response_model=ClinicProductRead)
+def increase_product_stock(
+    product_id: UUID,
+    payload: ClinicProductStockAdd,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClinicProductRead:
+    try:
+        row = add_product_stock(
+            db,
+            workspace_id=access.workspace.id,
+            product_id=product_id,
+            quantity_added=payload.quantity_added,
+        )
+        db.commit()
+        db.refresh(row)
+        return ClinicProductRead.model_validate(row)
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+
+
+@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_product_from_inventory(
+    product_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    try:
+        deactivate_product(db, workspace_id=access.workspace.id, product_id=product_id)
+        db.commit()
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.put("/products/{product_id}/quantity", response_model=ClinicProductRead)
 def update_product_quantity(
@@ -228,6 +272,20 @@ def add_inventory_item(
         db.rollback()
         _raise(exc)
 
+
+@router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_inventory_item(
+    item_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    try:
+        deactivate_inventory_item(db, workspace_id=access.workspace.id, item_id=item_id)
+        db.commit()
+    except (InventoryNotFound, InventoryOperationError) as exc:
+        db.rollback()
+        _raise(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.post("/items/{item_id}/stock", response_model=InventoryItemRead)
 def increase_inventory_stock(
