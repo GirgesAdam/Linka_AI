@@ -19,10 +19,11 @@ import { patientDisplayName } from "../patient-utils";
 import { PatientPackagePanel } from "./package-panel";
 import { PatientProfileEditor } from "./patient-profile-editor";
 import { PatientPulsePanel } from "./pulse-panel";
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -291,7 +292,7 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
             <CardContent className="space-y-3">
               <details className="rounded-xl border border-[var(--border)] p-3">
                 <summary className="flex min-h-10 cursor-pointer items-center text-sm font-bold text-slate-800">جدولة متابعة</summary>
-                <form action={createPatientTask} className="mt-4 space-y-3">
+                <ActionFeedbackForm action={createPatientTask} className="mt-4 space-y-3" submitLabel="حفظ المتابعة" pendingLabel="جاري الحفظ...">
                   <input type="hidden" name="patient_id" value={patient.id} />
                   <input type="hidden" name="conversation_id" value={profile.latest_conversation_id || ""} />
                   <label className="block text-xs font-bold text-slate-700">
@@ -303,17 +304,15 @@ export default async function PatientProfilePage({ params }: { params: Promise<{
                     <Input name="due_at" type="datetime-local" required className="mt-1" />
                   </label>
 
-                  <Button className="w-full"><ListTodo size={15} /> حفظ المتابعة</Button>
-                </form>
+                </ActionFeedbackForm>
               </details>
 
               <details className="rounded-xl border border-[var(--border)] p-3">
                 <summary className="flex min-h-10 cursor-pointer items-center text-sm font-bold text-slate-800">إضافة ملاحظة</summary>
-                <form action={addPatientNote} className="mt-4 space-y-3">
+                <ActionFeedbackForm action={addPatientNote} className="mt-4 space-y-3" submitLabel="حفظ الملاحظة" pendingLabel="جاري الحفظ..." variant="secondary">
                   <input type="hidden" name="patient_id" value={patient.id} />
                   <Textarea name="content" required placeholder="اكتب المعلومة المهمة للفريق..." />
-                  <Button variant="secondary" className="w-full"><StickyNote size={15} /> حفظ الملاحظة</Button>
-                </form>
+                </ActionFeedbackForm>
               </details>
             </CardContent>
           </Card>

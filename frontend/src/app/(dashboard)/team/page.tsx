@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
@@ -36,14 +36,20 @@ export default async function TeamPage() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={member.role === "admin" ? "purple" : "gray"}>{roleLabels[member.role]}</Badge>
-                  <form action={changeRole} className="flex gap-2">
+                  <ActionFeedbackForm
+                    action={changeRole}
+                    className="flex flex-wrap items-center gap-2"
+                    submitLabel="حفظ"
+                    pendingLabel="..."
+                    size="sm"
+                    variant="outline"
+                  >
                     <input type="hidden" name="membership_id" value={member.membership_id} />
                     <select name="role" defaultValue={member.role} className="rounded-lg border border-[var(--border)] bg-white px-2 py-1 text-xs">
                       <option value="member">عضو فريق</option>
                       <option value="admin">مدير</option>
                     </select>
-                    <Button size="sm" variant="outline">حفظ</Button>
-                  </form>
+                  </ActionFeedbackForm>
                 </div>
               </div>
             ))}

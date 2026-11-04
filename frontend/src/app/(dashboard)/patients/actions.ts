@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import { parseEgpAmountToMinor } from "./registration-utils";
 import { operationIdempotencyKey } from "@/lib/tia/operation-idempotency";
+import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
 
 function revalidatePatient(patientId: string) {
   revalidatePath(`/patients/${patientId}`);
@@ -27,19 +28,23 @@ function moneyToMinor(raw: string) {
   return Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
 }
 
-export async function addPatientNote(formData: FormData) {
-  const patientId = String(formData.get("patient_id") || "");
-  const content = String(formData.get("content") || "").trim();
-  if (!patientId || !content) return;
-
-  await tiaRequest(`/crm/patients/${patientId}/notes`, {
-    method: "POST",
-    body: JSON.stringify({
-      content,
-      is_pinned: true,
-    }),
-  });
-  revalidatePatient(patientId);
+export async function addPatientNote(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const patientId = String(formData.get("patient_id") || "");
+    const content = String(formData.get("content") || "").trim();
+    if (!patientId || !content) throw new Error("اكتب الملاحظة قبل الحفظ.");
+    await tiaRequest("/crm/patients/" + patientId + "/notes", {
+      method: "POST",
+      body: JSON.stringify({ content, is_pinned: true }),
+    });
+    revalidatePatient(patientId);
+    return { notice: "تم حفظ الملاحظة في ملف العميل.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر حفظ الملاحظة. حاول مرة أخرى.");
+  }
 }
 
 export async function updatePatientProfileAction(
@@ -51,18 +56,18 @@ export async function updatePatientProfileAction(
     source?: string;
   },
 ) {
-  if (!patientId) return { ok: false, error: "تعذر تحديث بيانات العميل." };
+  if (!patientId) return { ok: false, error: "تعذر تحديث بيانات العميل.", notice: null };
   const payload: Record<string, string | null> = {};
   if (Object.hasOwn(changes, "name")) {
     const name = String(changes.name || "").trim();
-    if (!name) return { ok: false, error: "أدخل اسم العميل." };
+    if (!name) return { ok: false, error: "أدخل اسم العميل.", notice: null };
     payload.first_name = name;
     payload.last_name = null;
   }
   if (Object.hasOwn(changes, "phone")) payload.phone = changes.phone?.trim() || null;
   if (Object.hasOwn(changes, "customer_id")) payload.customer_id = changes.customer_id?.trim() || null;
   if (Object.hasOwn(changes, "source")) payload.source = changes.source || "other";
-  if (Object.keys(payload).length === 0) return { ok: true, error: null };
+  if (Object.keys(payload).length === 0) return { ok: true, error: null, notice: "لا توجد تغييرات جديدة لحفظها." };
 
   try {
     await tiaRequest(`/crm/patients/${patientId}`, {
@@ -70,9 +75,9 @@ export async function updatePatientProfileAction(
       body: JSON.stringify(payload),
     });
     revalidatePatient(patientId);
-    return { ok: true, error: null };
+    return { ok: true, error: null, notice: "تم حفظ بيانات العميل بنجاح." };
   } catch (error) {
-    return { ok: false, error: safeTiaActionError(error, "تعذر تحديث بيانات العميل.") };
+    return { ok: false, error: safeTiaActionError(error, "تعذر تحديث بيانات العميل."), notice: null };
   }
 }
 
@@ -88,28 +93,36 @@ export async function setPatientWhatsappOptIn(formData: FormData) {
   revalidatePatient(patientId);
 }
 
-export async function createPatientTask(formData: FormData) {
-  const patientId = String(formData.get("patient_id") || "");
-  const title = String(formData.get("title") || "").trim();
-  const dueAt = String(formData.get("due_at") || "");
-  const conversationId = String(formData.get("conversation_id") || "");
-  if (!patientId || !title || !dueAt) return;
-
-  await tiaRequest("/crm/tasks", {
-    method: "POST",
-    body: JSON.stringify({
-      patient_id: patientId,
-      conversation_id: conversationId || null,
-      assigned_user_id: null,
-      task_type: "follow_up",
-      execution_mode: "human",
-      priority: "normal",
-      title,
-      due_at: dueAt,
-    }),
-  });
-  revalidatePatient(patientId);
-  revalidatePath("/tasks");
+export async function createPatientTask(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const patientId = String(formData.get("patient_id") || "");
+    const title = String(formData.get("title") || "").trim();
+    const dueAt = String(formData.get("due_at") || "");
+    const conversationId = String(formData.get("conversation_id") || "");
+    if (!patientId || !title || !dueAt) throw new Error("أكمل سبب المتابعة وموعدها.");
+    await tiaRequest("/crm/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        patient_id: patientId,
+        conversation_id: conversationId || null,
+        assigned_user_id: null,
+        task_type: "follow_up",
+        execution_mode: "human",
+        priority: "normal",
+        title,
+        due_at: dueAt,
+      }),
+    });
+    revalidatePatient(patientId);
+    revalidatePath("/tasks");
+    revalidatePath("/dashboard");
+    return { notice: "تمت جدولة المتابعة بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر جدولة المتابعة. راجع البيانات وحاول مرة أخرى.");
+  }
 }
 
 export async function purchasePatientPackage(formData: FormData) {

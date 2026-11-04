@@ -119,7 +119,7 @@ def test_team_messages_and_followups_keep_old_unresolved_work_visible() -> None:
 def test_dashboard_followup_can_be_completed_inline_and_revalidates_home() -> None:
     workspace = (_root() / "frontend/src/app/(dashboard)/dashboard/dashboard-workspace.tsx").read_text(encoding="utf-8")
     actions = (_root() / "frontend/src/app/(dashboard)/tasks/actions.ts").read_text(encoding="utf-8")
-    assert 'form action={setTaskStatus}' in workspace
+    assert 'ActionFeedbackForm action={setTaskStatus}' in workspace
     assert 'name="status" value="completed"' in workspace
     assert "تعليم المتابعة كمكتملة" in workspace
     assert 'revalidatePath("/dashboard")' in actions

@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type { PulseBillingSettings, PulsePackOffer } from "@/lib/types";
@@ -44,10 +44,13 @@ export function PulsePricingPanel({
       <CardContent className="space-y-5">
         <div className="grid gap-3 md:grid-cols-2">
           {settings.map((setting) => (
-            <form
+            <ActionFeedbackForm
               key={setting.device_key}
               action={savePulsePriceFormAction}
               className="grid items-end gap-3 rounded-xl border border-[var(--border)] p-4"
+              submitLabel={"حفظ سعر " + setting.device_name}
+              pendingLabel="جاري الحفظ..."
+              size="sm"
             >
               <input type="hidden" name="device_key" value={setting.device_key} />
               <div className="font-black text-slate-900">{setting.device_name}</div>
@@ -70,10 +73,7 @@ export function PulsePricingPanel({
                   بالجنيه المصري لكل Pulse غير مغطاة من رصيد {setting.device_name}.
                 </span>
               </label>
-              <div>
-                <Button type="submit" size="sm">حفظ سعر {setting.device_name}</Button>
-              </div>
-            </form>
+            </ActionFeedbackForm>
           ))}
         </div>
 
@@ -82,7 +82,15 @@ export function PulsePricingPanel({
           {offers.length ? (
             <div className="grid gap-2 md:grid-cols-2">
               {offers.map((offer) => (
-                <form key={offer.id} action={savePulsePackOfferFormAction} className="rounded-xl bg-[var(--surface-2)] p-3">
+                <ActionFeedbackForm
+                  key={offer.id}
+                  action={savePulsePackOfferFormAction}
+                  className="rounded-xl bg-[var(--surface-2)] p-3"
+                  submitLabel="حفظ"
+                  pendingLabel="جاري الحفظ..."
+                  size="sm"
+                  variant="outline"
+                >
                   <input type="hidden" name="device_key" value={offer.device_key} />
                   <input type="hidden" name="pulses_count" value={offer.pulses_count} />
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -109,10 +117,9 @@ export function PulsePricingPanel({
                         <input type="checkbox" name="is_active" defaultChecked={offer.is_active} />
                         متاحة للبيع
                       </label>
-                      <Button type="submit" size="sm" variant="outline">حفظ</Button>
                     </div>
                   </div>
-                </form>
+                </ActionFeedbackForm>
               ))}
             </div>
           ) : (
@@ -120,7 +127,12 @@ export function PulsePricingPanel({
           )}
         </div>
 
-        <form action={savePulsePackOfferFormAction} className="grid gap-3 rounded-xl border border-dashed border-slate-300 p-4 md:grid-cols-4 md:items-end">
+        <ActionFeedbackForm
+          action={savePulsePackOfferFormAction}
+          className="grid gap-3 rounded-xl border border-dashed border-slate-300 p-4 md:grid-cols-4 md:items-end"
+          submitLabel="حفظ الباقة"
+          pendingLabel="جاري الحفظ..."
+        >
           <label className="grid gap-1.5 text-sm font-medium">
             <span>الجهاز</span>
             <select
@@ -142,14 +154,11 @@ export function PulsePricingPanel({
             <span>سعر الباقة (EGP)</span>
             <Input name="price" type="number" min="0" step="0.01" required />
           </label>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-sm font-bold">
-              <input type="checkbox" name="is_active" defaultChecked />
-              متاحة للبيع
-            </label>
-            <Button type="submit">حفظ الباقة</Button>
-          </div>
-        </form>
+          <label className="flex h-10 items-center gap-2 text-sm font-bold">
+            <input type="checkbox" name="is_active" defaultChecked />
+            متاحة للبيع
+          </label>
+        </ActionFeedbackForm>
       </CardContent>
     </Card>
   );

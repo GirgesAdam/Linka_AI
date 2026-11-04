@@ -1,14 +1,13 @@
 import Link from "next/link";
 import {
   ArrowUpLeft,
-  CheckCircle2,
   CircleAlert,
   ListTodo,
   MessageSquareMore,
   WalletCards,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { formatMoney } from "@/lib/format";
@@ -144,20 +143,11 @@ function FollowUpRow({
             <MessageSquareMore size={14} /> المحادثة
           </Link>
         )}
-        <form action={setTaskStatus}>
+        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="تعليم المتابعة كمكتملة" pendingLabel="جاري التحديث..." size="sm" variant="outline" disabled={!canComplete} refreshAfterSuccess>
           <input type="hidden" name="task_id" value={task.id} />
           <input type="hidden" name="patient_id" value={task.patient_id} />
           <input type="hidden" name="status" value="completed" />
-          <Button
-            type="submit"
-            size="sm"
-            variant="outline"
-            disabled={!canComplete}
-            title={canComplete ? "تعليم المتابعة كمكتملة" : "المتابعة على Linka أو عضو آخر من الفريق"}
-          >
-            <CheckCircle2 size={14} /> تم
-          </Button>
-        </form>
+        </ActionFeedbackForm>
       </div>
     </div>
   );

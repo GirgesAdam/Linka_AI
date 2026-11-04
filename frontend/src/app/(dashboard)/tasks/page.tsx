@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { CheckCircle2, CircleAlert, Clock3, ListTodo, MessageSquareMore, UserRound } from "lucide-react";
 
+import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FilterChip } from "@/components/ui/filter-chip";
 import { formatDateTime } from "@/lib/format";
@@ -127,11 +127,11 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
 
                     <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
                       {canClaim && (
-                        <form action={claimTask}>
+                        <ActionFeedbackForm action={claimTask} className="flex flex-wrap items-center gap-2" submitLabel="استلام" pendingLabel="..." size="sm" variant="outline">
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
-                          <Button size="sm" variant="outline">استلام</Button>
-                        </form>
+
+                        </ActionFeedbackForm>
                       )}
 
                       {task.status === "completed" ? (
@@ -139,12 +139,12 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                           <CheckCircle2 size={14} /> تم
                         </span>
                       ) : active && canManage ? (
-                        <form action={setTaskStatus}>
+                        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="تم" pendingLabel="..." size="sm" variant="outline" refreshAfterSuccess>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
                           <input type="hidden" name="status" value="completed" />
-                          <Button size="sm" variant="outline"><CheckCircle2 size={14} /> تم</Button>
-                        </form>
+
+                        </ActionFeedbackForm>
                       ) : active ? (
                         <span className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-400">
                           <CheckCircle2 size={14} /> تم
@@ -152,12 +152,12 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                       ) : null}
 
                       {active && canManage && (
-                        <form action={setTaskStatus}>
+                        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="إلغاء" pendingLabel="..." size="sm" variant="ghost" refreshAfterSuccess>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
                           <input type="hidden" name="status" value="cancelled" />
-                          <Button size="sm" variant="ghost">إلغاء</Button>
-                        </form>
+
+                        </ActionFeedbackForm>
                       )}
 
                       {ctx.workspace.role === "admin" && active && (

@@ -1,7 +1,9 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
+import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
 import { tiaRequest } from "@/lib/tia/api";
 
 const expenseCategories = new Set([
@@ -40,7 +42,7 @@ function expensePayload(formData: FormData) {
     !amountMinor ||
     !/^\d{4}-\d{2}-\d{2}$/.test(incurredOn)
   ) {
-    return null;
+    throw new Error("راجع اسم المصروف والتصنيف والمبلغ والتاريخ قبل الحفظ.");
   }
 
   return {
@@ -54,33 +56,61 @@ function expensePayload(formData: FormData) {
   };
 }
 
-export async function createExpense(formData: FormData) {
-  const payload = expensePayload(formData);
-  if (!payload) return;
-
-  await tiaRequest("/finance/expenses", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  revalidatePath("/finance");
+export async function createExpense(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const payload = expensePayload(formData);
+    await tiaRequest("/finance/expenses", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    revalidatePath("/finance");
+    return { notice: "تم تسجيل المصروف بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذرت إضافة المصروف. حاول مرة أخرى.");
+  }
 }
 
-export async function updateExpense(formData: FormData) {
-  const expenseId = String(formData.get("expense_id") || "").trim();
-  const payload = expensePayload(formData);
-  if (!expenseId || !payload) return;
-
-  await tiaRequest(`/finance/expenses/${expenseId}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
-  revalidatePath("/finance");
+export async function updateExpense(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const expenseId = String(formData.get("expense_id") || "").trim();
+    if (!expenseId) throw new Error("تعذر تحديد المصروف المطلوب تعديله.");
+    const payload = expensePayload(formData);
+    await tiaRequest("/finance/expenses/" + expenseId, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    revalidatePath("/finance");
+    return { notice: "تم حفظ تعديل المصروف بنجاح.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر حفظ تعديل المصروف. حاول مرة أخرى.");
+  }
 }
 
-export async function deleteExpense(formData: FormData) {
+export async function deleteExpense(formData: FormData): Promise<void> {
   const expenseId = String(formData.get("expense_id") || "").trim();
-  if (!expenseId) return;
+  const startDate = String(formData.get("return_start_date") || "").trim();
+  const endDate = String(formData.get("return_end_date") || "").trim();
+  const query = new URLSearchParams();
+  if (startDate) query.set("start_date", startDate);
+  if (endDate) query.set("end_date", endDate);
 
-  await tiaRequest(`/finance/expenses/${expenseId}`, { method: "DELETE" });
+  if (!expenseId) {
+    query.set("notice", "delete_failed");
+    redirect("/finance?" + query.toString());
+  }
+  try {
+    await tiaRequest("/finance/expenses/" + expenseId, { method: "DELETE" });
+  } catch {
+    query.set("notice", "delete_failed");
+    redirect("/finance?" + query.toString());
+  }
   revalidatePath("/finance");
+  query.set("notice", "expense_deleted");
+  redirect("/finance?" + query.toString());
 }
