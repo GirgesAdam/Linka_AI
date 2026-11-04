@@ -2672,3 +2672,173 @@ def test_historical_package_fallback_template_explains_optional_financials_and_d
         assert "المطابقة تمامًا للخدمة والجهاز وعدد الجلسات" in readme_text
     finally:
         workbook.close()
+
+def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspace_and_admin() -> None:
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+
+    from app.api.dependencies.security import get_workspace_admin
+    from app.api.routes.clinic_setup_v2 import router
+    from app.database.session import get_db
+    from app.models.historical_import import ClinicHistoricalImportBatch, ClinicHistoricalImportRow
+
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        batch = ClinicHistoricalImportBatch(
+            workspace_id=workspace.id,
+            created_by_user_id=user.id,
+            mode="append",
+            status="preview_ready",
+            schema_version="tia_history_v1",
+            source_name="synthetic.xlsx",
+            source_fingerprint="a" * 64,
+            summary_json={"rejected_counts": {"holding": 283}},
+        )
+        db.add(batch)
+        db.flush()
+
+        dangerous = ["=1+1", "+SUM(1,2)", "-4+3", "@HYPERLINK(A1)", chr(0) + "=9"]
+        rejected = [
+            ClinicHistoricalImportRow(
+                workspace_id=workspace.id,
+                batch_id=batch.id,
+                entity_type="holding",
+                source_sheet="=Sheet" if index == 0 else "active_packages",
+                row_number=26 if index in (1, 2) else 100 + index,
+                source_record_id=f"rejected:{index}",
+                payload_hash="b" * 64,
+                row_status="rejected",
+                normalized_json={"private_phone": "01012345678"},
+                issue_code="=DANGEROUS" if index == 0 else "invalid_service",
+                issue_message=dangerous[index] if index < len(dangerous) else "الخدمة غير موجودة.",
+            )
+            for index in range(283)
+        ]
+        db.add_all([
+            *rejected,
+            ClinicHistoricalImportRow(
+                workspace_id=workspace.id,
+                batch_id=batch.id,
+                entity_type="holding",
+                source_sheet="active_packages",
+                row_number=9000,
+                source_record_id="ready",
+                payload_hash="c" * 64,
+                row_status="ready",
+                normalized_json={"private_phone": "01012345678"},
+            ),
+        ])
+        db.flush()
+
+        app = FastAPI()
+        app.include_router(router, prefix="/clinic")
+        app.dependency_overrides[get_db] = lambda: db
+        app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(workspace=workspace)
+        url = f"/clinic/history/batches/{batch.id}/rejected-report"
+        with TestClient(app) as client:
+            response = client.get(url)
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            assert "attachment" in response.headers["content-disposition"]
+            assert response.headers["cache-control"] == "no-store"
+
+            workbook = load_workbook(io.BytesIO(response.content), read_only=True, data_only=False)
+            try:
+                assert workbook.sheetnames == ["Rejected Rows"]
+                sheet = workbook["Rejected Rows"]
+                rows = list(sheet.iter_rows())
+                assert [cell.value for cell in rows[0]] == [
+                    "Sheet", "Row Number", "Entity Type", "Issue Code", "Reason"
+                ]
+                assert len(rows) == 284  # 1 header + all 283 rejected records
+                data = [tuple(cell.value for cell in row) for row in rows[1:]]
+                assert sum(row[1] == 26 for row in data) == 2
+                assert data[0][0] == "=Sheet"
+                assert data == sorted(data, key=lambda row: (row[0], row[1], row[2]))
+                assert set(row[4] for row in data) >= {
+                    "=1+1", "+SUM(1,2)", "-4+3", "@HYPERLINK(A1)", " =9"
+                }
+                assert all(
+                    row[column].data_type == "s"
+                    for row in rows[1:]
+                    for column in (0, 2, 3, 4)
+                )
+                assert not any("01012345678" in str(value) for row in data for value in row)
+            finally:
+                workbook.close()
+
+            repeated = client.get(url)
+            assert repeated.status_code == 200
+            again = load_workbook(io.BytesIO(repeated.content), read_only=True)
+            try:
+                assert [tuple(c.value for c in row) for row in again.active.iter_rows()][1:] == data
+            finally:
+                again.close()
+            assert db.scalar(
+                select(func.count())
+                .select_from(ClinicHistoricalImportRow)
+                .where(ClinicHistoricalImportRow.batch_id == batch.id)
+            ) == 284
+            assert batch.status == "preview_ready"
+            assert not db.dirty and not db.deleted
+
+            app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(
+                workspace=SimpleNamespace(id=uuid4())
+            )
+            assert client.get(url).status_code == 404
+            app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(workspace=workspace)
+            assert client.get(f"/clinic/history/batches/{uuid4()}/rejected-report").status_code == 404
+
+            def deny_member():
+                raise HTTPException(status_code=403, detail="Admin only")
+
+            app.dependency_overrides[get_workspace_admin] = deny_member
+            assert client.get(url).status_code == 403
+
+
+def test_historical_rejected_report_allows_empty_batch_without_mutation() -> None:
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.dependencies.security import get_workspace_admin
+    from app.api.routes.clinic_setup_v2 import router
+    from app.database.session import get_db
+    from app.models.historical_import import ClinicHistoricalImportBatch
+
+    with _db_session() as db:
+        workspace, user, _branch, _services, _doctor = _seed_workspace(db)
+        batch = ClinicHistoricalImportBatch(
+            workspace_id=workspace.id,
+            created_by_user_id=user.id,
+            mode="append",
+            status="preview_ready",
+            schema_version="tia_history_v1",
+            source_name="empty.xlsx",
+            source_fingerprint="b" * 64,
+            summary_json={},
+        )
+        db.add(batch)
+        db.flush()
+        app = FastAPI()
+        app.include_router(router, prefix="/clinic")
+        app.dependency_overrides[get_db] = lambda: db
+        app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(workspace=workspace)
+        with TestClient(app) as client:
+            response = client.get(f"/clinic/history/batches/{batch.id}/rejected-report")
+        assert response.status_code == 200
+        workbook = load_workbook(io.BytesIO(response.content), read_only=True)
+        try:
+            assert [tuple(c.value for c in row) for row in workbook.active.iter_rows()] == [
+                ("Sheet", "Row Number", "Entity Type", "Issue Code", "Reason")
+            ]
+        finally:
+            workbook.close()
+        assert batch.status == "preview_ready"
+        assert not db.dirty and not db.deleted
+

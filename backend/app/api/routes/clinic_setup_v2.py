@@ -58,6 +58,7 @@ from app.services.clinic_setup_v2 import (
     update_service_v2,
     upsert_clinic_profile,
 )
+from app.services.historical_import_error_report import build_historical_import_error_report
 from app.services.historical_import import (
     HistoricalImportConflictError,
     HistoricalImportError,
@@ -451,6 +452,29 @@ def read_history_batches(
 ) -> HistoricalImportListResponse:
     rows = list_historical_import_batches(db, workspace_id=access.workspace.id)
     return HistoricalImportListResponse(batches=[_batch_read(row) for row in rows])
+
+
+@router.get("/history/batches/{batch_id}/rejected-report")
+def download_historical_import_error_report(
+    batch_id: UUID,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    batch = get_historical_import_batch(db, workspace_id=access.workspace.id, batch_id=batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Historical import batch not found.")
+    content = build_historical_import_error_report(
+        db, workspace_id=access.workspace.id, batch_id=batch.id
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="Linka_Historical_Import_Errors.xlsx"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/history/batches/{batch_id}", response_model=HistoricalImportApplyResponse)

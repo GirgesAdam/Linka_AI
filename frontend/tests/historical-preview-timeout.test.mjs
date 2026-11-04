@@ -4,6 +4,7 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { createRequestSignal } from "../src/lib/tia/request-signal.ts";
 import { historicalPreviewFromBatch } from "../src/lib/historical-import-preview.ts";
+import { fetchHistoricalImportErrorReport } from "../src/lib/historical-import-error-download.ts";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const api = read("../src/lib/tia/api.ts");
@@ -254,4 +255,91 @@ test("historical upload confirms success without displaying uploaded-file histor
   assert.ok(!settings.includes("source_name"));
   assert.ok(page.includes('"/clinic/history/batches"'));
   assert.ok(page.includes("activeBatch"));
+});
+
+
+test("historical issue groups expand and the report belongs to the current preview", () => {
+  const uploader = read("../src/app/(dashboard)/setup/integration/history-uploader.tsx");
+  const download = read("../src/app/(dashboard)/setup/integration/historical-error-download.tsx");
+  const proxy = read("../src/app/api/clinic-history-errors/[batchId]/route.ts");
+
+  assert.match(uploader, /MAX_VISIBLE_ISSUE_GROUPS = 4/);
+  assert.match(uploader, /showAllIssues \? issueGroups : issueGroups\.slice\(0, MAX_VISIBLE_ISSUE_GROUPS\)/);
+  assert.match(uploader, /عرض جميع أنواع المشاكل/);
+  assert.match(uploader, /عرض مشاكل أقل/);
+  assert.match(uploader, /setShowAllIssues\(false\)/);
+  assert.match(uploader, /تم استبعاد \$\{rejectedTotal\} سجلًا/);
+  assert.match(uploader, /rejectedTotal > 0/);
+  assert.match(uploader, /validBatchId && !pendingPreview/);
+  assert.match(uploader, /أمثلة أرقام الصفوف/);
+  assert.doesNotMatch(uploader, /hiddenIssueRows/);
+  assert.doesNotMatch(uploader, /آخر عمليات الاستيراد/);
+
+  assert.match(download, /activeRequest\.current\?\.abort\(\)/);
+  assert.match(download, /if \(activeRequest\.current\) return/);
+  assert.match(download, /disabled=\{pending\}/);
+  assert.match(download, /role="alert"/);
+  assert.match(proxy, /tiaRawRequest/);
+  assert.match(proxy, /rejected-report/);
+  assert.doesNotMatch(proxy, /Bearer|SUPABASE_SECRET_KEY/);
+});
+
+test("historical error Excel download checks response content and aborts stale batches", async () => {
+  const id = "12345678-1234-1234-1234-123456789abc";
+  const controller = new AbortController();
+  const mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const makeXlsx = () => new Response(new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x01])]), {
+    status: 200,
+    headers: { "Content-Type": mime },
+  });
+  let requests = 0;
+
+  const file = await fetchHistoricalImportErrorReport(id, controller.signal, async (url, init) => {
+    requests += 1;
+    assert.equal(url, "/api/clinic-history-errors/" + id);
+    assert.equal(init.signal, controller.signal);
+    assert.equal(init.cache, "no-store");
+    return makeXlsx();
+  });
+  assert.equal(file.size, 5);
+  assert.equal(requests, 1);
+
+  await assert.rejects(
+    fetchHistoricalImportErrorReport(id, controller.signal, async () =>
+      new Response(JSON.stringify({ error: "ليس لديك صلاحية." }), {
+        status: 403, headers: { "Content-Type": "application/json" },
+      }),
+    ),
+    /ليس لديك صلاحية/,
+  );
+  await assert.rejects(
+    fetchHistoricalImportErrorReport(id, controller.signal, async () =>
+      new Response("<html>login</html>", { headers: { "Content-Type": "text/html" } }),
+    ),
+    /غير صالحة/,
+  );
+  await assert.rejects(
+    fetchHistoricalImportErrorReport(id, controller.signal, async () =>
+      new Response(new Blob(["not a workbook"]), { headers: { "Content-Type": mime } }),
+    ),
+    /غير صالح/,
+  );
+
+  const stale = new AbortController();
+  await assert.rejects(
+    fetchHistoricalImportErrorReport(id, stale.signal, async () => {
+      stale.abort();
+      return makeXlsx();
+    }),
+    { name: "AbortError" },
+  );
+  let called = false;
+  await assert.rejects(
+    fetchHistoricalImportErrorReport(id, stale.signal, async () => {
+      called = true;
+      return makeXlsx();
+    }),
+    { name: "AbortError" },
+  );
+  assert.equal(called, false);
 });
