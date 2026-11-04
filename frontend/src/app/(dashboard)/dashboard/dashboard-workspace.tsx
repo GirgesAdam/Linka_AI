@@ -143,7 +143,7 @@ function FollowUpRow({
             <MessageSquareMore size={14} /> المحادثة
           </Link>
         )}
-        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="تم" pendingLabel="..." size="sm" variant="outline" disabled={!canComplete} refreshAfterSuccess>
+        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="تعليم المتابعة كمكتملة" pendingLabel="جاري التحديث..." size="sm" variant="outline" disabled={!canComplete} refreshAfterSuccess>
           <input type="hidden" name="task_id" value={task.id} />
           <input type="hidden" name="patient_id" value={task.patient_id} />
           <input type="hidden" name="status" value="completed" />

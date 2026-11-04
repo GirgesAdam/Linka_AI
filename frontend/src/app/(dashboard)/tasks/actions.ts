@@ -19,7 +19,7 @@ export async function claimTask(
     const taskId = String(formData.get("task_id") || "");
     const patientId = String(formData.get("patient_id") || "");
     if (!taskId) throw new Error("تعذر تحديد المتابعة.");
-    await tiaRequest("/crm/tasks/" + taskId + "/claim", { method: "POST" });
+    await tiaRequest(`/crm/tasks/${taskId}/claim`, { method: "POST" });
     refreshTaskViews(patientId || undefined);
     return { notice: "تم استلام المتابعة بنجاح.", error: null };
   } catch (error) {
@@ -38,7 +38,7 @@ export async function setTaskStatus(
     if (!taskId || !["completed", "cancelled", "pending", "in_progress"].includes(status)) {
       throw new Error("بيانات تحديث المتابعة غير صحيحة.");
     }
-    await tiaRequest("/crm/tasks/" + taskId, {
+    await tiaRequest(`/crm/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify({ status }),
     });
@@ -71,7 +71,7 @@ export async function assignTask(
           : null;
     if (!body) throw new Error("اختار مسؤول متابعة صحيح.");
 
-    await tiaRequest("/crm/tasks/" + taskId + "/executor", {
+    await tiaRequest(`/crm/tasks/${taskId}/executor`, {
       method: "PATCH",
       body: JSON.stringify(body),
     });
