@@ -152,7 +152,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
                       ) : null}
 
                       {active && canManage && (
-                        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="تم" pendingLabel="..." size="sm" variant="outline" refreshAfterSuccess>
+                        <ActionFeedbackForm action={setTaskStatus} className="flex flex-wrap items-center gap-2" submitLabel="إلغاء" pendingLabel="..." size="sm" variant="ghost" refreshAfterSuccess>
                           <input type="hidden" name="task_id" value={task.id} />
                           <input type="hidden" name="patient_id" value={task.patient_id} />
                           <input type="hidden" name="status" value="cancelled" />
