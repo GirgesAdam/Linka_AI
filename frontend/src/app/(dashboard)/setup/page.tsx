@@ -17,7 +17,7 @@ import { ClinicSettingsPanel } from "./clinic-settings-panel";
 export const maxDuration = 300;
 
 export default async function SetupPage() {
-  const [setup, knowledge, history, laserDevices, ctx] = await Promise.all([
+  const [setup, knowledge, batchLookup, laserDevices, ctx] = await Promise.all([
     tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
     tiaRequest<ClinicKnowledgeText>("/clinic/knowledge-text"),
     tiaRequest<{ batches: HistoricalBatch[] }>("/clinic/history/batches"),
@@ -25,7 +25,7 @@ export default async function SetupPage() {
     getAppContext(),
   ]);
   const admin = ctx.workspace.role === "admin";
-  const activeBatch = history.batches.find((batch) => ["importing", "preview_ready", "failed"].includes(batch.status)) || null;
+  const activeBatch = batchLookup.batches.find((batch) => ["importing", "preview_ready", "failed"].includes(batch.status)) || null;
 
   return (
     <>
@@ -68,7 +68,6 @@ export default async function SetupPage() {
         <ClinicSettingsPanel
           setup={setup}
           knowledgeText={knowledge.content}
-          historicalBatches={history.batches}
           activeBatch={activeBatch}
           laserDevices={laserDevices}
         />
