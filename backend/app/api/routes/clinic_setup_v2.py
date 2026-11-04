@@ -58,7 +58,6 @@ from app.services.clinic_setup_v2 import (
     update_service_v2,
     upsert_clinic_profile,
 )
-from app.services.historical_import_error_report import build_historical_import_error_report
 from app.services.historical_import import (
     HistoricalImportConflictError,
     HistoricalImportError,
@@ -72,6 +71,7 @@ from app.services.historical_import import (
     preview_historical_import,
     start_historical_import,
 )
+from app.services.historical_import_error_report import build_historical_import_error_report
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
