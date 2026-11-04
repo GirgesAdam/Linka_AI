@@ -13,6 +13,7 @@ _BATCH_MODULES = {
     "batch_03": "tools.agent_eval.run_batch_03",
     "batch_04": "tools.agent_eval.run_batch_04",
     "batch_05": "tools.agent_eval.run_batch_05",
+    "batch_06": "tools.agent_eval.run_batch_06",
 }
 
 _BATCH1 = (
@@ -100,6 +101,25 @@ _BATCH5_NAMES = (
     "case_15_two_rapid_customer_turns",
 )
 
+_BATCH6_NAMES = (
+    "case_01_two_service_same_visit_success",
+    "case_02_second_component_unavailable",
+    "case_03_component_needs_device_clarification",
+    "case_04_shared_anchor_sequences_components",
+    "case_05_reschedule_entire_group",
+    "case_06_cancel_entire_standard_group",
+    "case_07_package_component_plus_standard_component",
+    "case_08_financial_handoff_blocks_grouped_write",
+    "case_09_buy_package_and_book_same_service",
+    "case_10_buy_package_a_book_a_and_b",
+    "case_11_replace_one_service_before_commit",
+    "case_12_change_device_for_one_component",
+    "case_13_side_price_query_preserves_compound",
+    "case_14_remove_one_component",
+    "case_15_sequence_crosses_resource_boundary",
+    "case_16_canonical_state_changes_before_compound_commit",
+)
+
 
 @dataclass(frozen=True)
 class Scenario:
@@ -146,8 +166,10 @@ def _rows_for(batch: BatchName) -> list[tuple[str, str]]:
         names, prefix = _BATCH3_NAMES, "b3"
     elif batch == "batch_04":
         names, prefix = _BATCH4_NAMES, "b4"
-    else:
+    elif batch == "batch_05":
         names, prefix = _BATCH5_NAMES, "b5"
+    else:
+        names, prefix = _BATCH6_NAMES, "b6"
     return [
         (name, f"{prefix}_{name.removeprefix('case_')}")
         for name in names
