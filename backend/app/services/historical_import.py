@@ -71,6 +71,7 @@ RECOGNIZED_SHEETS = {
 }
 ACTIVE_PACKAGE_CONTRACT = "active_packages_v2"
 ACTIVE_HOLDING_CONTRACT = "active_packages_holdings_v3"
+ACTIVE_HOLDING_CUSTOMER_LOOKUP_CHUNK_SIZE = 900
 UNIFIED_HOLDING_CONTRACT = "unified_patient_holdings_v1"
 HOLDING_CONTRACTS = {ACTIVE_HOLDING_CONTRACT, UNIFIED_HOLDING_CONTRACT}
 ACTIVE_PACKAGE_HEADER_ALIASES = {
@@ -1642,6 +1643,19 @@ def _validate_active_holding_customer_ids(
         ):
             by_phone[str(payload["patient_phone_normalized"])].append(staged)
 
+    phone_numbers = list(by_phone)
+    existing_customer_ids_by_phone: dict[str, str | None] = {}
+    for offset in range(0, len(phone_numbers), ACTIVE_HOLDING_CUSTOMER_LOOKUP_CHUNK_SIZE):
+        phone_chunk = phone_numbers[offset : offset + ACTIVE_HOLDING_CUSTOMER_LOOKUP_CHUNK_SIZE]
+        existing_patients = db.execute(
+            select(Patient.phone_normalized, Patient.customer_id).where(
+                Patient.workspace_id == workspace_id,
+                Patient.phone_normalized.in_(phone_chunk),
+            )
+        ).all()
+        for existing_phone, customer_id in existing_patients:
+            existing_customer_ids_by_phone[str(existing_phone)] = _clean(customer_id)
+
     for phone_normalized, phone_rows in by_phone.items():
         customer_ids = sorted(
             {
@@ -1680,13 +1694,7 @@ def _validate_active_holding_customer_ids(
                     staged.normalized_json["customer_id"] = imported_customer_id
                     staged.payload_hash = _payload_hash(staged.normalized_json)
 
-        existing_patient = db.scalar(
-            select(Patient).where(
-                Patient.workspace_id == workspace_id,
-                Patient.phone_normalized == phone_normalized,
-            )
-        )
-        existing_customer_id = _clean(existing_patient.customer_id) if existing_patient is not None else None
+        existing_customer_id = existing_customer_ids_by_phone.get(phone_normalized)
         if (
             imported_customer_id is not None
             and existing_customer_id is not None

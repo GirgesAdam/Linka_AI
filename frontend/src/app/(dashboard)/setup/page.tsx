@@ -14,6 +14,8 @@ import { getAppContext } from "@/lib/tia/workspace";
 
 import { ClinicSettingsPanel } from "./clinic-settings-panel";
 
+export const maxDuration = 300;
+
 export default async function SetupPage() {
   const [setup, knowledge, history, laserDevices, ctx] = await Promise.all([
     tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
