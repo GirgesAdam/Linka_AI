@@ -132,6 +132,14 @@ test("clinic settings and inventory mutations show success feedback", () => {
   assert.match(inventoryPage, /ConfirmActionForm/);
 });
 
+test("inventory delete failure is visibly an error rather than success", () => {
+  const inventoryPage = read("../src/app/(dashboard)/inventory/page.tsx");
+  assert.match(inventoryPage, /const noticeIsError = params\.notice === "delete_failed"/);
+  assert.match(inventoryPage, /role=\{noticeIsError \? "alert" : "status"\}/);
+  assert.match(inventoryPage, /noticeIsError \? "bg-red-50 text-red-700"/);
+  assert.match(inventoryPage, /noticeIsError \? <CircleAlert/);
+});
+
 test("inventory stock additions are incremental and deletion preserves history", () => {
   const inventoryRoute = read("../../backend/app/api/routes/inventory.py");
   const inventoryService = read("../../backend/app/services/inventory.py");

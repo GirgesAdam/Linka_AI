@@ -1,4 +1,4 @@
-import { CheckCircle2, PackagePlus, ShoppingBag, Syringe } from "lucide-react";
+import { CheckCircle2, CircleAlert, PackagePlus, ShoppingBag, Syringe } from "lucide-react";
 
 import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { ConfirmActionForm } from "@/components/confirm-action-form";
@@ -54,6 +54,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
   ]);
   const isAdmin = workspace.role === "admin";
   const notice = params.notice ? noticeMessages[params.notice] : null;
+  const noticeIsError = params.notice === "delete_failed";
 
   return (
     <>
@@ -63,8 +64,8 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
       />
 
       {notice ? (
-        <div role="status" aria-live="polite" className="mb-5 flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">
-          <CheckCircle2 size={17} />
+        <div role={noticeIsError ? "alert" : "status"} aria-live="polite" className={"mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-bold " + (noticeIsError ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>
+          {noticeIsError ? <CircleAlert size={17} /> : <CheckCircle2 size={17} />}
           {notice}
         </div>
       ) : null}
