@@ -97,7 +97,7 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
 
       {preview && (
         <div className="space-y-4 rounded-2xl border border-[var(--border)] bg-white p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3"><div><b className="text-lg">نتيجة الفحص</b><p className="mt-1 text-xs text-[var(--muted)]">Linka تستبعد الصفوف غير الصالحة بدل إسقاط الاستيراد كله.</p></div><div className="flex gap-2"><Badge tone="green">جاهز {readyTotal}</Badge>{rejectedTotal > 0 && <Badge tone="yellow">مستبعد {rejectedTotal}</Badge>}</div></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><div className="mb-2 flex items-center gap-2 text-sm font-bold text-emerald-700"><CheckCircle2 size={17} /> تم رفع الملف بنجاح.</div><b className="text-lg">نتيجة الفحص</b><p className="mt-1 text-xs text-[var(--muted)]">Linka تستبعد الصفوف غير الصالحة بدل إسقاط الاستيراد كله.</p></div><div className="flex gap-2"><Badge tone="green">جاهز {readyTotal}</Badge>{rejectedTotal > 0 && <Badge tone="yellow">مستبعد {rejectedTotal}</Badge>}</div></div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             {Object.entries(preview.ready_counts).map(([entity, count]) => <div key={entity} className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-[var(--muted)]">{entityLabels[entity] || entity}</div><b>{count}</b></div>)}
           </div>

@@ -170,3 +170,17 @@ test("uploader restores stored results and hides Apply when the summary is missi
   assert.ok(uploader.includes("تفاصيل نتيجة الفحص غير متاحة"));
   assert.ok(uploader.includes('preview.can_import && batch && (batch.status === "preview_ready" || batch.status === "failed")'));
 });
+
+test("historical upload confirms success without displaying uploaded-file history", () => {
+  const uploader = read("../src/app/(dashboard)/setup/integration/history-uploader.tsx");
+  const settings = read("../src/app/(dashboard)/setup/clinic-settings-panel.tsx");
+  const page = read("../src/app/(dashboard)/setup/page.tsx");
+
+  assert.ok(uploader.includes("تم رفع الملف بنجاح"));
+  assert.ok(settings.includes("<HistoricalImportUploader initialBatch={activeBatch} />"));
+  assert.ok(!settings.includes("آخر عمليات الاستيراد"));
+  assert.ok(!settings.includes("historicalBatches"));
+  assert.ok(!settings.includes("source_name"));
+  assert.ok(page.includes('"/clinic/history/batches"'));
+  assert.ok(page.includes("activeBatch"));
+});
