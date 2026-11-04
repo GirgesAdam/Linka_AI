@@ -22,6 +22,8 @@ from app.models.patient import Patient
 from app.models.service import Service
 from app.models.working_hours import DoctorAvailabilityWindow, DoctorWorkingHour
 from app.models.workspace import Workspace
+from app.services import booking as booking_module
+from app.services.agent_v2 import live_chat as live_chat_module
 from app.services.booking import get_effective_booking_settings
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -583,25 +585,48 @@ def case_07_same_day_current_time_boundary(db: Session, workspace: Workspace) ->
     branch_id = active_branch_id(catalog)
     adapter = get_clinic_adapter(db=db, workspace=workspace)
     timezone = ZoneInfo(workspace.timezone or "UTC")
-    local_now = datetime.now(UTC).astimezone(timezone)
+    wall_clock_now = datetime.now(UTC).astimezone(timezone)
     booking_settings = get_effective_booking_settings(db, workspace.id)
+    probe_now = wall_clock_now.replace(hour=0, minute=0, second=0, microsecond=0)
     available = adapter.get_availability(
         AvailabilityRequest(
             branch_id=branch_id,
             service_id=str(service.id),
-            booking_date=local_now.date(),
+            booking_date=wall_clock_now.date(),
+            now=probe_now.astimezone(UTC),
         )
     )
     if not available.slots:
         raise RuntimeError("EVAL_INFRA_ERROR: no same-day canonical slot for boundary scenario")
     slot = available.slots[0]
+    scenario_now_utc = slot.start_at - timedelta(
+        minutes=booking_settings.minimum_notice_minutes
+    )
+    local_now = scenario_now_utc.astimezone(timezone)
+    if local_now.date() != wall_clock_now.date():
+        raise RuntimeError("EVAL_INFRA_ERROR: same-day boundary clock escaped current local date")
     doctor = _doctor_row(catalog, slot.doctor_id)
     day, time_text = local_slot(available, slot)
     before = extended_state_snapshot(db, workspace, patient)
-    turns, _ = _run_messages(
-        db, workspace, patient, "b5_07_same_day_current_time_boundary",
-        [f"احجزيلي {service.name} النهارده {day} الساعة {time_text} مع {doctor_name(doctor)}"],
-    )
+    class _ScenarioDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return scenario_now_utc.replace(tzinfo=None)
+            return scenario_now_utc.astimezone(tz)
+
+    original_clock = live_chat_module._workspace_clock
+    original_booking_datetime = booking_module.datetime
+    live_chat_module._workspace_clock = lambda _workspace: (timezone.key, local_now)
+    booking_module.datetime = _ScenarioDateTime
+    try:
+        turns, _ = _run_messages(
+            db, workspace, patient, "b5_07_same_day_current_time_boundary",
+            [f"احجزيلي {service.name} النهارده {day} الساعة {time_text} مع {doctor_name(doctor)}"],
+        )
+    finally:
+        booking_module.datetime = original_booking_datetime
+        live_chat_module._workspace_clock = original_clock
     after = extended_state_snapshot(db, workspace, patient)
     created = created_appointments(before, after)
     exact = (
@@ -609,7 +634,7 @@ def case_07_same_day_current_time_boundary(db: Session, workspace: Workspace) ->
         and created[0]["start_at"] == slot.start_at.isoformat()
         and created[0]["doctor_id"] == str(slot.doctor_id)
     )
-    notice_minutes = int((slot.start_at - datetime.now(UTC)).total_seconds() // 60)
+    notice_minutes = int((slot.start_at - scenario_now_utc).total_seconds() // 60)
     wrong_write = bool(created) and not exact
     ok = exact
     return make_result(
