@@ -6,6 +6,7 @@ import { CheckCircle2, FileSpreadsheet, LoaderCircle, TriangleAlert } from "luci
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { HistoricalBatch } from "@/lib/clinic-setup-v2-types";
+import { historicalPreviewFromBatch } from "@/lib/historical-import-preview";
 import type { HistoricalImportActionState } from "./actions";
 import {
   previewHistoricalImportAction,
@@ -34,16 +35,18 @@ function BatchStatus({ batch }: { batch: HistoricalBatch }) {
 
 export function HistoricalImportUploader({ initialBatch = null }: { initialBatch?: HistoricalBatch | null }) {
   const [batch, setBatch] = useState<HistoricalBatch | null>(initialBatch);
+  const [applyError, setApplyError] = useState<string | null>(null);
   const [state, formAction, pendingPreview] = useActionState(
     async (previous: HistoricalImportActionState, formData: FormData) => {
+      setBatch(null);
+      setApplyError(null);
       const next = await previewHistoricalImportAction(previous, formData);
-      if (next.preview?.batch) setBatch(next.preview.batch);
+      setBatch(next.preview?.batch ?? null);
       return next;
     },
     initialHistoricalImportActionState,
   );
   const [pendingApply, startTransition] = useTransition();
-  const [applyError, setApplyError] = useState<string | null>(null);
   const batchId = batch?.batch_id ?? null;
   const batchStatus = batch?.status ?? null;
 
@@ -61,7 +64,7 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [batchId, batchStatus]);
 
-  const preview = state.preview;
+  const preview = pendingPreview ? null : state.preview ?? historicalPreviewFromBatch(batch);
   const readyTotal = preview ? Object.values(preview.ready_counts).reduce((sum, value) => sum + value, 0) : 0;
   const rejectedTotal = preview ? Object.values(preview.rejected_counts).reduce((sum, value) => sum + value, 0) : 0;
   const visibleIssues = preview?.issue_groups.slice(0, MAX_VISIBLE_ISSUE_GROUPS) ?? [];
@@ -85,13 +88,9 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
       {batch && !preview && (
         <div className="space-y-3 rounded-2xl border border-[var(--border)] bg-white p-5">
           <BatchStatus batch={batch} />
-          {(batch.status === "preview_ready" || batch.status === "failed") && (
-            <Button disabled={pendingApply} onClick={() => startTransition(async () => {
-              setApplyError(null);
-              try { setBatch(await startHistoricalImportAction(batch.batch_id)); }
-              catch (error) { setApplyError(error instanceof Error ? error.message : "تعذر بدء الاستيراد."); }
-            })}>{pendingApply ? <><LoaderCircle size={16} className="animate-spin" /> جاري البدء</> : batch.status === "failed" ? "إعادة محاولة الاستيراد" : "استيراد البيانات"}</Button>
-          )}
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            تفاصيل نتيجة الفحص غير متاحة لهذه العملية. ارفع الملف وأعد فحصه لعرض الأعداد والمشاكل قبل الاستيراد.
+          </div>
           {applyError && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{applyError}</div>}
         </div>
       )}
@@ -129,12 +128,12 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
           )}
           {batch && <BatchStatus batch={batch} />}
           {applyError && <div className="rounded-xl bg-red-50 p-3 text-sm font-bold text-red-700">{applyError}</div>}
-          {preview.can_import && batch?.status === "preview_ready" && (
+          {preview.can_import && batch && (batch.status === "preview_ready" || batch.status === "failed") && (
             <Button disabled={pendingApply} onClick={() => startTransition(async () => {
               setApplyError(null);
               try { setBatch(await startHistoricalImportAction(batch.batch_id)); }
               catch (error) { setApplyError(error instanceof Error ? error.message : "تعذر بدء الاستيراد."); }
-            })}>{pendingApply ? <><LoaderCircle size={16} className="animate-spin" /> جاري البدء</> : "استيراد البيانات"}</Button>
+            })}>{pendingApply ? <><LoaderCircle size={16} className="animate-spin" /> جاري البدء</> : batch.status === "failed" ? "إعادة محاولة الاستيراد" : "استيراد البيانات"}</Button>
           )}
         </div>
       )}
