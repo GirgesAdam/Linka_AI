@@ -1,6 +1,5 @@
-import { ChevronDown, Cpu, Download, History } from "lucide-react";
+import { ChevronDown, Cpu, Download } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -36,13 +35,6 @@ const KNOWLEDGE_EXAMPLE = `نحن عيادة متخصصة في الليزر وا
 
 لو العميل غير متأكد من الخدمة أو الجهاز الأنسب له، نرشح له حجز استشارة أو تقييم مع المختص قبل اختيار الجلسة.`;
 
-const statusLabel: Record<HistoricalBatch["status"], string> = {
-  preview_ready: "تم الفحص",
-  importing: "جاري الاستيراد",
-  imported: "مكتمل",
-  failed: "لم يكتمل",
-};
-
 function Field({ label, name, defaultValue, type = "text" }: { label: string; name: string; defaultValue?: string | number | null; type?: string }) {
   return (
     <label className="grid gap-1.5 text-sm font-medium">
@@ -55,13 +47,11 @@ function Field({ label, name, defaultValue, type = "text" }: { label: string; na
 export function ClinicSettingsPanel({
   setup,
   knowledgeText,
-  historicalBatches,
   activeBatch,
   laserDevices,
 }: {
   setup: ClinicSetupV2Snapshot;
   knowledgeText: string;
-  historicalBatches: HistoricalBatch[];
   activeBatch: HistoricalBatch | null;
   laserDevices: ClinicLaserDevice[];
 }) {
@@ -219,24 +209,6 @@ export function ClinicSettingsPanel({
 
           <HistoricalImportUploader initialBatch={activeBatch} />
 
-          <div className="rounded-xl border border-[var(--border)] p-4">
-            <div className="mb-3 flex items-center gap-2"><History size={17} /><b className="text-sm">آخر عمليات الاستيراد</b></div>
-            {historicalBatches.length ? (
-              <div className="space-y-2">
-                {historicalBatches.map((batch) => (
-                  <div key={batch.batch_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
-                    <div>
-                      <div className="text-sm font-bold">{batch.source_name}</div>
-                      <div className="mt-1 text-xs text-[var(--muted)]">{batch.mode === "append" ? "إضافة للبيانات الحالية" : "استبدال الاستيرادات السابقة"}</div>
-                    </div>
-                    <Badge tone={batch.status === "imported" ? "green" : batch.status === "failed" ? "red" : "yellow"}>{statusLabel[batch.status]}</Badge>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-[var(--muted)]">لا توجد عمليات استيراد سابقة.</p>
-            )}
-          </div>
         </CardContent>
         </details>
       </Card>
