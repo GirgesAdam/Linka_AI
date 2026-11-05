@@ -12,6 +12,19 @@ from sqlalchemy.orm import Session
 from app.models.historical_import import ClinicHistoricalImportRow
 
 
+# Preview messages for these codes contain the patient's phone or customer IDs.
+# Retain the original staged issue_message; sanitize only the exported report.
+_SAFE_IDENTITY_REASONS = {
+    "customer_id_conflict_in_file": (
+        "يوجد تعارض بين أرقام تعريف العميل في ملف الاستيراد. "
+        "راجع بيانات الصفوف المرتبطة بنفس العميل."
+    ),
+    "customer_id_conflict_existing_patient": (
+        "رقم تعريف العميل في الملف مختلف عن رقم التعريف المسجل للعميل الموجود في النظام."
+    ),
+}
+
+
 def _text_cell(sheet, value: str | None) -> WriteOnlyCell:
     """Keep untrusted spreadsheet text literal, including formula-like prefixes."""
     cell = WriteOnlyCell(sheet, value=ILLEGAL_CHARACTERS_RE.sub(" ", value or ""))
@@ -59,7 +72,7 @@ def build_historical_import_error_report(
                 row_number,
                 _text_cell(sheet, entity_type),
                 _text_cell(sheet, issue_code),
-                _text_cell(sheet, issue_message),
+                _text_cell(sheet, _SAFE_IDENTITY_REASONS.get(issue_code, issue_message)),
             ])
         workbook.save(output)
         return output.getvalue()

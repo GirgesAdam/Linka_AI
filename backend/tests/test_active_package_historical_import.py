@@ -2700,6 +2700,28 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
         db.flush()
 
         dangerous = ["=1+1", "+SUM(1,2)", "-4+3", "@HYPERLINK(A1)", chr(1) + "=9"]
+        issue_overrides = {
+            5: (
+                "customer_id_conflict_in_file",
+                "رقم الموبايل 01012345678 مكرر بأكثر من ID. IDs: PAT-001, PAT-002",
+            ),
+            6: (
+                "customer_id_conflict_existing_patient",
+                "Current ID: PAT-100. Imported ID: PAT-200.",
+            ),
+            7: (
+                "active_package_service_unknown",
+                'الخدمة "Laser Face" غير موجودة في النظام.',
+            ),
+            8: (
+                "active_package_laser_device_invalid",
+                "الجهاز Candela Gentle غير متاح لهذه الخدمة.",
+            ),
+            9: (
+                "duplicate_holding_record",
+                "Duplicate holding identity in the same import file.",
+            ),
+        }
         rejected = [
             ClinicHistoricalImportRow(
                 workspace_id=workspace.id,
@@ -2711,8 +2733,15 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
                 payload_hash="b" * 64,
                 row_status="rejected",
                 normalized_json={"private_phone": "01012345678"},
-                issue_code="=DANGEROUS" if index == 0 else "invalid_service",
-                issue_message=dangerous[index] if index < len(dangerous) else "الخدمة غير موجودة.",
+                issue_code=(
+                    issue_overrides[index][0] if index in issue_overrides
+                    else "=DANGEROUS" if index == 0 else "invalid_service"
+                ),
+                issue_message=(
+                    issue_overrides[index][1] if index in issue_overrides
+                    else dangerous[index] if index < len(dangerous)
+                    else "الخدمة غير موجودة."
+                ),
             )
             for index in range(283)
         ]
@@ -2768,7 +2797,24 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
                     for row in rows[1:]
                     for column in (0, 2, 3, 4)
                 )
-                assert not any("01012345678" in str(value) for row in data for value in row)
+                exported_text = " ".join(str(value) for row in data for value in row)
+                for sensitive in ("01012345678", "PAT-001", "PAT-002", "PAT-100", "PAT-200"):
+                    assert sensitive not in exported_text
+                by_row_number = {row[1]: row for row in data}
+                assert by_row_number[105][:4] == (
+                    "active_packages", 105, "holding", "customer_id_conflict_in_file"
+                )
+                assert "تعارض" in by_row_number[105][4]
+                assert by_row_number[106][:4] == (
+                    "active_packages", 106, "holding",
+                    "customer_id_conflict_existing_patient",
+                )
+                assert "مختلف" in by_row_number[106][4]
+                assert by_row_number[107][4] == issue_overrides[7][1]
+                assert "Laser Face" in by_row_number[107][4]
+                assert by_row_number[108][4] == issue_overrides[8][1]
+                assert "Candela Gentle" in by_row_number[108][4]
+                assert by_row_number[109][4] == issue_overrides[9][1]
             finally:
                 workbook.close()
 
@@ -2785,6 +2831,14 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
                 .where(ClinicHistoricalImportRow.batch_id == batch.id)
             ) == 284
             assert batch.status == "preview_ready"
+            assert db.scalar(
+                select(ClinicHistoricalImportRow.issue_message)
+                .where(ClinicHistoricalImportRow.source_record_id == "rejected:5")
+            ) == issue_overrides[5][1]
+            assert db.scalar(
+                select(ClinicHistoricalImportRow.issue_message)
+                .where(ClinicHistoricalImportRow.source_record_id == "rejected:6")
+            ) == issue_overrides[6][1]
             assert not db.dirty and not db.deleted
 
             app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(
