@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Final
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, String, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, JSON, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -44,6 +45,20 @@ class WorkspaceMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=True,
         server_default=text("true"),
+    )
+
+    # NULL preserves the pre-permission rollout's current workspace-role behavior.
+    # Use JSONB in PostgreSQL, while retaining compatibility with SQLite test metadata.
+    page_permissions: Mapped[dict[str, str] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+        default=None,
+    )
+    permissions_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
     )
 
     workspace = relationship("Workspace", back_populates="members")
