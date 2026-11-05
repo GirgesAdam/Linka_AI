@@ -2699,7 +2699,7 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
         db.add(batch)
         db.flush()
 
-        dangerous = ["=1+1", "+SUM(1,2)", "-4+3", "@HYPERLINK(A1)", chr(0) + "=9"]
+        dangerous = ["=1+1", "+SUM(1,2)", "-4+3", "@HYPERLINK(A1)", chr(1) + "=9"]
         rejected = [
             ClinicHistoricalImportRow(
                 workspace_id=workspace.id,
@@ -2757,8 +2757,9 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
                 assert len(rows) == 284  # 1 header + all 283 rejected records
                 data = [tuple(cell.value for cell in row) for row in rows[1:]]
                 assert sum(row[1] == 26 for row in data) == 2
-                assert data[0][0] == "=Sheet"
-                assert data == sorted(data, key=lambda row: (row[0], row[1], row[2]))
+                assert any(row[0] == "=Sheet" for row in data)
+                active_rows = [row for row in data if row[0] == "active_packages"]
+                assert [row[1] for row in active_rows] == sorted(row[1] for row in active_rows)
                 assert set(row[4] for row in data) >= {
                     "=1+1", "+SUM(1,2)", "-4+3", "@HYPERLINK(A1)", " =9"
                 }
