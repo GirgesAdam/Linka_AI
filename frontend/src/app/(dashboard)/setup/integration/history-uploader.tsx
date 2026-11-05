@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { HistoricalBatch } from "@/lib/clinic-setup-v2-types";
 import { historicalPreviewFromBatch } from "@/lib/historical-import-preview";
 import type { HistoricalImportActionState } from "./actions";
+import { HistoricalErrorDownload } from "./historical-error-download";
 import {
   previewHistoricalImportAction,
   readHistoricalImportBatchAction,
@@ -36,10 +37,12 @@ function BatchStatus({ batch }: { batch: HistoricalBatch }) {
 export function HistoricalImportUploader({ initialBatch = null }: { initialBatch?: HistoricalBatch | null }) {
   const [batch, setBatch] = useState<HistoricalBatch | null>(initialBatch);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [showAllIssues, setShowAllIssues] = useState(false);
   const [state, formAction, pendingPreview] = useActionState(
     async (previous: HistoricalImportActionState, formData: FormData) => {
       setBatch(null);
       setApplyError(null);
+      setShowAllIssues(false);
       const next = await previewHistoricalImportAction(previous, formData);
       setBatch(next.preview?.batch ?? null);
       return next;
@@ -67,10 +70,11 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
   const preview = pendingPreview ? null : state.preview ?? historicalPreviewFromBatch(batch);
   const readyTotal = preview ? Object.values(preview.ready_counts).reduce((sum, value) => sum + value, 0) : 0;
   const rejectedTotal = preview ? Object.values(preview.rejected_counts).reduce((sum, value) => sum + value, 0) : 0;
-  const visibleIssues = preview?.issue_groups.slice(0, MAX_VISIBLE_ISSUE_GROUPS) ?? [];
-  const hiddenIssueRows = preview
-    ? Math.max(rejectedTotal - visibleIssues.reduce((sum, issue) => sum + issue.occurrence_count, 0), 0)
-    : 0;
+  const issueGroups = preview?.issue_groups ?? [];
+  const visibleIssues = showAllIssues ? issueGroups : issueGroups.slice(0, MAX_VISIBLE_ISSUE_GROUPS);
+  const hiddenIssueGroups = Math.max(issueGroups.length - MAX_VISIBLE_ISSUE_GROUPS, 0);
+  const validBatchId = batch && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(batch.batch_id)
+    ? batch.batch_id : null;
 
   return (
     <div className="space-y-5">
@@ -115,15 +119,22 @@ export function HistoricalImportUploader({ initialBatch = null }: { initialBatch
           {rejectedTotal > 0 && (
             <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-sm">
               <div className="font-black">
-                {preview.can_import ? `تم العثور على ${rejectedTotal} مشاكل؛ سيتم استبعاد الصفوف غير الصالحة.` : `تعذر استيراد الملف بسبب ${rejectedTotal} مشاكل:`}
+                {preview.can_import ? `تم استبعاد ${rejectedTotal} سجلًا من الملف. بعض الصفوف غير صالحة للاستيراد.` : `تعذر استيراد الملف؛ تم رفض ${rejectedTotal} سجلًا غير صالح.`}
               </div>
-              {visibleIssues.map((issue) => (
-                <div key={`${issue.entity_type}-${issue.code}`}>
-                  <b>{issue.example_rows[0] ? `الصف ${issue.example_rows[0]}: ` : ""}{issue.message}</b>
-                  {issue.occurrence_count > 1 && <span className="mr-2 text-xs text-[var(--muted)]">({issue.occurrence_count} صفوف)</span>}
+              {visibleIssues.map((issue, index) => (
+                <div key={`${issue.entity_type}-${issue.code}-${index}`} className="space-y-1">
+                  <div className="font-bold">{issue.message} <span className="text-xs font-semibold text-[var(--muted)]">({issue.occurrence_count} سجل)</span></div>
+                  {issue.example_rows.length > 0 && (
+                    <div className="text-xs text-[var(--muted)]">أمثلة أرقام الصفوف: {issue.example_rows.join("، ")}</div>
+                  )}
                 </div>
               ))}
-              {hiddenIssueRows > 0 && <div className="font-semibold text-[var(--muted)]">وهناك {hiddenIssueRows} مشاكل إضافية.</div>}
+              {hiddenIssueGroups > 0 && (
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowAllIssues(!showAllIssues)}>
+                  {showAllIssues ? "عرض مشاكل أقل" : `عرض جميع أنواع المشاكل (${hiddenIssueGroups} مجموعات أخرى)`}
+                </Button>
+              )}
+              {validBatchId && !pendingPreview && <HistoricalErrorDownload key={validBatchId} batchId={validBatchId} />}
             </div>
           )}
           {batch && <BatchStatus batch={batch} />}

@@ -84,8 +84,11 @@ def test_history_import_ui_uses_structured_validation_errors_and_concise_summary
     assert "مشاكل إضافية" in actions
     assert "whitespace-pre-line" in uploader
     assert "MAX_VISIBLE_ISSUE_GROUPS = 4" in uploader
-    assert "issue_groups.slice" in uploader
-    assert "وهناك {hiddenIssueRows} مشاكل إضافية" in uploader
+    assert "showAllIssues ? issueGroups : issueGroups.slice(0, MAX_VISIBLE_ISSUE_GROUPS)" in uploader
+    assert "عرض جميع أنواع المشاكل" in uploader
+    assert "عرض مشاكل أقل" in uploader
+    assert "hiddenIssueGroups" in uploader
+    assert "hiddenIssueRows" not in uploader
 
 
 def test_laser_category_invariant_is_backfilled_and_database_enforced() -> None:
