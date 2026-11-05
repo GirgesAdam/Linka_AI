@@ -11,7 +11,7 @@ import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
@@ -27,8 +27,8 @@ from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.page_permissions import MemberPagePermissionsUpdate
 from app.services.page_permissions import (
-    PAGE_PERMISSION_KEYS,
     PAGE_PERMISSION_KEY_SET,
+    PAGE_PERMISSION_KEYS,
     build_page_permissions_compare_and_swap,
     page_permission_allows,
     require_successful_permission_update,
