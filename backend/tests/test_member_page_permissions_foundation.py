@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, inspect, text
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies.page_permissions import require_page_permission
 from app.api.dependencies.security import (
     WorkspaceAccess,
+    get_workspace_access,
     get_workspace_admin,
     get_workspace_reader,
 )
@@ -57,13 +59,20 @@ def _access(
     )
 
 
-def _allowed(access: WorkspaceAccess, key: str, action: str) -> bool:
+def _allowed(
+    access: WorkspaceAccess,
+    key: str,
+    action: str,
+    *,
+    legacy_access: str = "reader",
+) -> bool:
     return page_permission_allows(
         access.membership,
         workspace_id=access.workspace.id,
         user_id=access.user.id,
         page_key=key,
         action=action,
+        legacy_access=legacy_access,
     )
 
 
@@ -96,9 +105,12 @@ def test_member_null_uses_unchanged_legacy_role_policy() -> None:
     assert access.membership.page_permissions is None
     assert get_workspace_reader(access) is access
     for key in PAGE_PERMISSION_KEYS:
-        assert _allowed(access, key, "view")
-        assert _allowed(access, key, "manage") is (key != "team")
-    # The page gate is additive, not a replacement for existing admin-only checks.
+        assert _allowed(access, key, "view", legacy_access="reader")
+        assert _allowed(access, key, "manage", legacy_access="reader") is (key != "team")
+        assert not _allowed(access, key, "view", legacy_access="admin")
+        assert not _allowed(access, key, "manage", legacy_access="admin")
+    # Original RBAC is unchanged, but a future explicitly configured Member
+    # should not need a second get_workspace_admin dependency.
     with pytest.raises(HTTPException) as exc:
         get_workspace_admin(access)
     assert exc.value.status_code == 403
@@ -130,11 +142,22 @@ def test_other_page_permission_does_not_grant_access() -> None:
 
 def test_unknown_keys_and_actions_fail_during_dependency_configuration() -> None:
     with pytest.raises(ValueError, match="Unknown page"):
-        require_page_permission("patients.made_up", "view")
+        require_page_permission("patients.made_up", "view", legacy_access="reader")
     with pytest.raises(ValueError, match="Unknown page permission action"):
-        require_page_permission("patients.detail", "delete")
+        require_page_permission("patients.detail", "delete", legacy_access="reader")
+    with pytest.raises(ValueError, match="Unknown legacy access"):
+        require_page_permission("patients.detail", "view", legacy_access="superadmin")
+    with pytest.raises(ValueError, match="Unknown legacy access"):
+        _allowed(_access(), "patients.detail", "view", legacy_access="owner")
     with pytest.raises(ValueError):
         _allowed(_access(), "patients.made_up", "view")
+    with pytest.raises(TypeError):
+        require_page_permission("patients.detail", "view")
+    with pytest.raises(TypeError):
+        page_permission_allows(
+            _access().membership, workspace_id=uuid4(), user_id=uuid4(),
+            page_key="patients.detail", action="view",
+        )
 
 
 def test_matrix_validation_rejects_unknown_missing_and_invalid_values() -> None:
@@ -194,30 +217,154 @@ def test_inactive_membership_and_cross_workspace_access_denied() -> None:
     assert not _allowed(access, "patients.detail", "view")
 
 
+@pytest.mark.parametrize(
+    ("level", "legacy_access", "action", "expected"),
+    [
+        (None, "reader", "view", True),
+        (None, "reader", "manage", True),
+        (None, "admin", "view", False),
+        (None, "admin", "manage", False),
+        ("none", "reader", "view", False),
+        ("none", "admin", "manage", False),
+        ("view", "admin", "view", True),
+        ("view", "admin", "manage", False),
+        ("manage", "admin", "view", True),
+        ("manage", "admin", "manage", True),
+        ("manage", "reader", "manage", True),
+    ],
+)
+def test_legacy_and_explicit_contract(
+    level: str | None, legacy_access: str, action: str, expected: bool
+) -> None:
+    matrix = None if level is None else {"patients.detail": level}
+    assert _allowed(
+        _access(page_permissions=matrix),
+        "patients.detail",
+        action,
+        legacy_access=legacy_access,
+    ) is expected
+
+
+def test_explicit_member_manage_does_not_require_admin_role_guard() -> None:
+    access = _access(page_permissions={"patients.detail": "manage"})
+    with pytest.raises(HTTPException) as exc:
+        get_workspace_admin(access)
+    assert exc.value.status_code == 403
+    assert _allowed(access, "patients.detail", "manage", legacy_access="admin")
+
+
 def test_fastapi_dependency_blocks_direct_url_and_manage_bypass() -> None:
     app = FastAPI()
-    view_gate = require_page_permission("patients.detail", "view")
-    manage_gate = require_page_permission("patients.detail", "manage")
+    reader_view = require_page_permission(
+        "patients.detail", "view", legacy_access="reader"
+    )
+    reader_manage = require_page_permission(
+        "patients.detail", "manage", legacy_access="reader"
+    )
+    admin_view = require_page_permission(
+        "patients.detail", "view", legacy_access="admin"
+    )
+    admin_manage = require_page_permission(
+        "patients.detail", "manage", legacy_access="admin"
+    )
 
-    @app.get("/protected")
-    def read(_access: Annotated[WorkspaceAccess, Depends(view_gate)]) -> dict[str, bool]:
+    @app.get("/reader-view")
+    def reader_read(_access: Annotated[WorkspaceAccess, Depends(reader_view)]) -> dict[str, bool]:
         return {"allowed": True}
 
-    @app.post("/protected")
-    def write(_access: Annotated[WorkspaceAccess, Depends(manage_gate)]) -> dict[str, bool]:
+    @app.post("/reader-manage")
+    def reader_write(_access: Annotated[WorkspaceAccess, Depends(reader_manage)]) -> dict[str, bool]:
         return {"allowed": True}
 
-    access = _access(page_permissions={"patients.detail": "view"})
-    app.dependency_overrides[get_workspace_reader] = lambda: access
+    @app.get("/admin-view")
+    def admin_read(_access: Annotated[WorkspaceAccess, Depends(admin_view)]) -> dict[str, bool]:
+        return {"allowed": True}
+
+    @app.post("/admin-manage")
+    def admin_write(_access: Annotated[WorkspaceAccess, Depends(admin_manage)]) -> dict[str, bool]:
+        return {"allowed": True}
+
+    def unchanged_business_constraint() -> bool:
+        raise HTTPException(status_code=409, detail="Business constraints still apply.")
+
+    @app.post("/business-guarded")
+    def guarded_write(
+        _access: Annotated[WorkspaceAccess, Depends(admin_manage)],
+        _business: Annotated[bool, Depends(unchanged_business_constraint)],
+    ) -> dict[str, bool]:
+        return {"allowed": True}
+
+    # The new page guard must not contain an extra admin/reader role gate:
+    # a member with explicit manage must be able to reach the business guard.
+    def nested_dependencies(route: APIRoute) -> set[object]:
+        found: set[object] = set()
+
+        def visit(dep) -> None:
+            for child in dep.dependencies:
+                found.add(child.call)
+                visit(child)
+
+        visit(route.dependant)
+        return found
+
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            calls = nested_dependencies(route)
+            assert get_workspace_access in calls
+            assert get_workspace_admin not in calls
+            assert get_workspace_reader not in calls
+
+    access = _access()
+    app.dependency_overrides[get_workspace_access] = lambda: access
     with TestClient(app) as client:
-        assert client.get("/protected").status_code == 200
-        assert client.post("/protected").status_code == 403
+        # NULL Member: preserve the precise historical role requirement,
+        # regardless of HTTP method or whether page action is view/manage.
+        assert client.get("/reader-view").status_code == 200
+        assert client.post("/reader-manage").status_code == 200
+        assert client.get("/admin-view").status_code == 403
+        assert client.post("/admin-manage").status_code == 403
+
+        # Explicit matrix: replace only the role gate, not business constraints.
+        access.membership.page_permissions = {"patients.detail": "view"}
+        assert client.get("/admin-view").status_code == 200
+        assert client.post("/admin-manage").status_code == 403
+        assert client.post("/reader-manage").status_code == 403
+
         access.membership.page_permissions = {"patients.detail": "manage"}
-        assert client.post("/protected").status_code == 200
+        assert client.post("/admin-manage").status_code == 200
+        assert client.post("/business-guarded").status_code == 409
+        app.dependency_overrides[unchanged_business_constraint] = lambda: True
+        assert client.post("/business-guarded").status_code == 200
+
         access.membership.page_permissions = {"patients.detail": "none"}
-        assert client.get("/protected").status_code == 403
+        assert client.get("/reader-view").status_code == 403
+        assert client.get("/admin-view").status_code == 403
+        assert client.post("/admin-manage").status_code == 403
+
+        access.membership.role = "admin"
+        assert client.post("/admin-manage").status_code == 200
         access.membership.is_active = False
-        assert client.get("/protected").status_code == 403
+        assert client.get("/reader-view").status_code == 403
+
+
+def test_fastapi_team_manage_is_admin_only() -> None:
+    app = FastAPI()
+    team_manage = require_page_permission("team", "manage", legacy_access="admin")
+
+    @app.post("/team/permissions")
+    def change_permissions(
+        _access: Annotated[WorkspaceAccess, Depends(team_manage)],
+    ) -> dict[str, bool]:
+        return {"allowed": True}
+
+    access = _access(page_permissions={"team": "manage"})
+    app.dependency_overrides[get_workspace_access] = lambda: access
+    with TestClient(app) as client:
+        assert client.post("/team/permissions").status_code == 403
+        access.membership.page_permissions = None
+        assert client.post("/team/permissions").status_code == 403
+        access.membership.role = "admin"
+        assert client.post("/team/permissions").status_code == 200
 
 
 def test_atomic_cas_builder_scopes_workspace_actor_role_and_version() -> None:

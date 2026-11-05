@@ -1,7 +1,7 @@
 """Page-based permission catalog, validation and future atomic-update contract.
 
-This module does not change any API route's authorization. When NULL permissions
-are encountered, existing role checks MUST remain in place during migration.
+This module does not change any API route's authorization. A NULL matrix
+preserves each endpoint's explicitly declared legacy reader/admin policy.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.models.workspace_member import (
 
 PagePermissionLevel = Literal["none", "view", "manage"]
 PagePermissionAction = Literal["view", "manage"]
+LegacyPageAccess = Literal["reader", "admin"]
 
 PAGE_PERMISSION_KEYS: Final[tuple[str, ...]] = (
     "dashboard",
@@ -65,6 +66,11 @@ def validate_page_action(action: str) -> None:
         raise ValueError(f"Unknown page permission action: {action!r}")
 
 
+def validate_legacy_access(legacy_access: str) -> None:
+    if legacy_access not in {"reader", "admin"}:
+        raise ValueError(f"Unknown legacy access requirement: {legacy_access!r}")
+
+
 def validate_complete_page_permissions(matrix: Mapping[str, str]) -> dict[str, str]:
     """Validate a full explicit matrix for a future admin-only write endpoint.
 
@@ -94,10 +100,12 @@ def page_permission_allows(
     user_id: UUID,
     page_key: str,
     action: PagePermissionAction,
+    legacy_access: LegacyPageAccess,
 ) -> bool:
-    """Additional page gate; never replaces legacy role guards while NULL exists."""
+    """Honor original endpoint access for NULL; explicit maps replace role gates."""
     validate_page_key(page_key)
     validate_page_action(action)
+    validate_legacy_access(legacy_access)
     if (
         not membership.is_active
         or membership.workspace_id != workspace_id
@@ -114,9 +122,9 @@ def page_permission_allows(
 
     matrix = membership.page_permissions
     if matrix is None:
-        # No new restrictions for existing members. Legacy endpoints still
-        # enforce their original get_workspace_reader / get_workspace_admin.
-        return True
+        # Preserve the original endpoint's role requirement, including when
+        # a legacy admin-only operation is requested as a page 'view'.
+        return legacy_access == "reader"
     if not isinstance(matrix, dict):
         return False
     # Fail closed on corrupt/unknown stored data (but a missing key is 'none').
