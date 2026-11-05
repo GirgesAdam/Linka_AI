@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.models.historical_import import ClinicHistoricalImportRow
 
-
 _SAFE_IDENTITY_REASONS = {
     "customer_id_conflict_in_file": (
         "يوجد تعارض بين أرقام تعريف العميل في ملف الاستيراد. "
