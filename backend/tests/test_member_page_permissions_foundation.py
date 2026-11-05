@@ -1,7 +1,5 @@
 """Backend-only foundation checks: no business routes are bound in this PR."""
 
-from __future__ import annotations
-
 import os
 from types import SimpleNamespace
 from typing import Annotated
@@ -297,6 +295,8 @@ def test_migration_columns_and_legacy_defaults_on_isolated_postgresql() -> None:
             assert membership.permissions_version == 0
 
             admin_id = uuid4()
+            elevated_matrix = _full_matrix("manage")
+            elevated_matrix["team"] = "view"
             new = db.execute(
                 build_page_permissions_compare_and_swap(
                     workspace_id=workspace.id, membership_id=membership_id,
@@ -309,21 +309,21 @@ def test_migration_columns_and_legacy_defaults_on_isolated_postgresql() -> None:
                 build_page_permissions_compare_and_swap(
                     workspace_id=workspace.id, membership_id=membership_id,
                     actor_user_id=admin_id, expected_version=0,
-                    page_permissions=_full_matrix("manage"),
+                    page_permissions=elevated_matrix,
                 )
             ).scalar_one_or_none() is None
             assert db.execute(
                 build_page_permissions_compare_and_swap(
                     workspace_id=workspace.id, membership_id=membership_id,
                     actor_user_id=user.id, expected_version=1,
-                    page_permissions=_full_matrix("manage"),
+                    page_permissions=elevated_matrix,
                 )
             ).scalar_one_or_none() is None
             assert db.execute(
                 build_page_permissions_compare_and_swap(
                     workspace_id=uuid4(), membership_id=membership_id,
                     actor_user_id=admin_id, expected_version=1,
-                    page_permissions=_full_matrix("manage"),
+                    page_permissions=elevated_matrix,
                 )
             ).scalar_one_or_none() is None
             db.expire_all()
