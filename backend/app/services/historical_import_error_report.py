@@ -12,8 +12,6 @@ from sqlalchemy.orm import Session
 from app.models.historical_import import ClinicHistoricalImportRow
 
 
-# Preview messages for these codes contain the patient's phone or customer IDs.
-# Retain the original staged issue_message; sanitize only the exported report.
 _SAFE_IDENTITY_REASONS = {
     "customer_id_conflict_in_file": (
         "يوجد تعارض بين أرقام تعريف العميل في ملف الاستيراد. "
