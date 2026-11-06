@@ -60,7 +60,7 @@ jobs:
         run: |
           python -m compileall -q .github/scripts/production_db_readonly_attestation.py
           python -m compileall -q .github/scripts/tests/test_production_db_readonly_attestation.py
-          python -m unittest .github/scripts/tests/test_production_db_readonly_attestation.py -v
+          python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
 
       - name: Attest Production database without exposing credentials
         env:
