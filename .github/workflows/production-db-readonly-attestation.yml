@@ -57,6 +57,8 @@ jobs:
           python -m pip check
 
       - name: Compile and run focused safety tests
+        env:
+          PYTHONPATH: .github/scripts
         run: |
           python -m compileall -q .github/scripts/production_db_readonly_attestation.py
           python -m compileall -q .github/scripts/tests/test_production_db_readonly_attestation.py
