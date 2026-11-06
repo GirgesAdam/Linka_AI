@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import runpy
 import unittest
 from pathlib import Path
+from runpy import run_path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 
 module_path = Path(__file__).resolve().parents[1] / "production_db_readonly_attestation.py"
-probe = SimpleNamespace(**runpy.run_path(str(module_path)))
+probe = SimpleNamespace(**run_path(str(module_path)))
 
 
 RAW_URL = (
