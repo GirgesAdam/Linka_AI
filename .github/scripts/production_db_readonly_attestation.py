@@ -72,6 +72,7 @@ def connection_details(raw_url: str) -> tuple[str, str]:
     # Replace any weaker URL setting. Never fall back to require/prefer/disable.
     query["sslmode"] = "verify-full"
     query["sslrootcert"] = "system"
+    query["gssencmode"] = "disable"
     verified_url = parsed.set(drivername="postgresql", query=query)
     return verified_url.render_as_string(hide_password=False), mode
 
