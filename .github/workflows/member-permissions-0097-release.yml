@@ -1,0 +1,119 @@
+name: Member Permissions 0097 Controlled Release
+
+# No push, pull_request, schedule, workflow_run, or automatic deployment trigger.
+on:
+  workflow_dispatch:
+    inputs:
+      freeze_comment_id:
+        description: "GitHub PR #306 issue-comment ID containing owner-signed JSON freeze"
+        required: true
+        type: string
+      execute_ack:
+        description: "Explicit one-time execution acknowledgement"
+        required: true
+        type: choice
+        options:
+          - NOT_AUTHORIZED
+          - EXECUTE_APPROVED_0097_ONLY
+        default: NOT_AUTHORIZED
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+  deployments: read
+
+# Shares the legacy migration workflow's concurrency namespace. Railway
+# pre-deploy does NOT participate: the owner freeze is additionally mandatory.
+concurrency:
+  group: database-migration-production
+  cancel-in-progress: false
+
+jobs:
+  verify-controls:
+    name: Verify owner freeze, environment protection and one-time scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed release code from main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install only control-phase dependency
+        run: python -m pip install "SQLAlchemy==2.0.51"
+
+      - name: Fail-closed release controls (no production credentials)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXECUTION_ACK: ${{ inputs.execute_ack }}
+          FREEZE_COMMENT_ID: ${{ inputs.freeze_comment_id }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test "$EXECUTION_ACK" = "EXECUTE_APPROVED_0097_ONLY"
+          python release/.github/scripts/member_permissions_0097_release.py \
+            --phase controls \
+            --freeze-comment-id "$FREEZE_COMMENT_ID" \
+            --source approved
+
+  execute-0097:
+    name: One approved Alembic 0097 transaction only
+    needs: verify-controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment:
+      name: production
+    steps:
+      - name: Checkout reviewed release code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          persist-credentials: false
+
+      - name: Checkout exact approved permissions commit
+        uses: actions/checkout@v4
+        with:
+          ref: 594c920ca3655851e5c9c54f7d6fec3dc7e2d32a
+          path: approved
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: approved/backend/requirements.txt
+
+      - name: Install original approved migration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r approved/backend/requirements.txt
+
+      - name: Execute once with same-transaction DDL guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXECUTION_ACK: ${{ inputs.execute_ack }}
+          FREEZE_COMMENT_ID: ${{ inputs.freeze_comment_id }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          ENVIRONMENT: production
+          DEBUG: "false"
+          DOCS_ENABLED: "false"
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          python release/.github/scripts/member_permissions_0097_release.py \
+            --phase execute \
+            --freeze-comment-id "$FREEZE_COMMENT_ID" \
+            --source approved
