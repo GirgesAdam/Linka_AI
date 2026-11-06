@@ -56,6 +56,11 @@ jobs:
           pytest -q tools/agent_eval/tests
       - run: ruff check app tests alembic
       - run: python -m compileall -q app alembic tests
+      - name: Run production database read-only attestation tests
+        working-directory: .
+        run: |
+          ruff check .github/scripts/production_db_readonly_attestation.py .github/scripts/tests/test_production_db_readonly_attestation.py
+          python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
       - name: Verify single Alembic head
         run: test "$(python -m alembic heads)" = "0096_patient_customer_id (head)"
       - name: Bootstrap Supabase compatibility roles
