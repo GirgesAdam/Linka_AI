@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import production_db_readonly_attestation as probe
+
+module_path = Path(__file__).resolve().parents[1] / "production_db_readonly_attestation.py"
+module_spec = importlib.util.spec_from_file_location("production_db_readonly_attestation", module_path)
+if module_spec is None or module_spec.loader is None:
+    raise ImportError("Could not load the production attestation helper")
+probe = importlib.util.module_from_spec(module_spec)
+sys.modules[module_spec.name] = probe
+module_spec.loader.exec_module(probe)
 
 
 RAW_URL = (
