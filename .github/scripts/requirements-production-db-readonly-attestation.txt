@@ -1,0 +1,7 @@
+# Minimal runtime for the read-only production attestation probe.
+# Install with --no-deps and run pip check; no unpinned transitive dependencies.
+SQLAlchemy==2.0.51
+greenlet==3.2.4
+typing-extensions==4.15.0
+psycopg==3.3.4
+psycopg-binary==3.3.4
