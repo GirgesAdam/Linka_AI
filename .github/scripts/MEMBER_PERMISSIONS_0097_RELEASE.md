@@ -149,7 +149,7 @@ Do not change either hard block to True until Team Lead/Project Owner approves a
 - Release dependencies and their transitive runtime dependencies are listed at exact versions in .github/scripts/requirements-0097-release.txt and installed with --no-deps followed by pip check.
 - The PostgreSQL integration service uses the exact postgres:17.11-bookworm image tag.
 
-**Supply-chain limitation:** package versions are exact-pinned, but wheel SHA-256 hashes and the PostgreSQL image digest are not yet locked. Do not claim artifact-hash immutability from version pins alone. This remains a hardening item for Team Lead review.
+**Supply-chain limitation:** package versions are exact-pinned, but wheel SHA-256 hashes are not yet locked. The isolated CI PostgreSQL service is pinned to the linux/amd64 manifest digest `sha256:73bedc9eaa0121b92b9b26bb52e5141b3f6f37479c7ef913c0160455763ca80a` for `postgres:17.11-bookworm` (verified against docker-library/repo-info on 2026-11-06). The OCI multi-platform index digest is `sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994`. The image digest is fixed; dependency wheel hash locking remains open. Do not claim complete artifact integrity until wheel hashes are locked.
 
 ## 6. Independent PostgreSQL 17 Integration CI
 
