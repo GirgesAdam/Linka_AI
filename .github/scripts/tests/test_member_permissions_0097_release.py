@@ -460,7 +460,7 @@ class ControlIntegrationTests(unittest.TestCase):
              branch_policy=True, branch_policy_error=False):
         parent = self
 
-        class API:
+        class API(release.GitHubReader):
             def get(self, endpoint):
                 path = endpoint.split("?", 1)[0]
                 if path.endswith("/branches/main"):
