@@ -172,6 +172,10 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
             raise AttestationFailure("read_only_transaction_not_confirmed")
         if not backend_pid or not database_oid:
             raise AttestationFailure("database_fingerprint_incomplete")
+        if is_replica is True:
+            raise AttestationFailure("connected_to_read_replica")
+        if is_replica is not False:
+            raise AttestationFailure("replica_status_unavailable")
 
         system_row = conn.execute(
             "SELECT system_identifier::text FROM pg_control_system()"

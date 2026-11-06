@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from runpy import run_path
 from types import SimpleNamespace
@@ -33,11 +35,20 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, *, system_id=None, tls=True, fail_system_id=False, database_oid="5"):
+    def __init__(
+        self,
+        *,
+        system_id=None,
+        tls=True,
+        fail_system_id=False,
+        database_oid="5",
+        is_replica=False,
+    ):
         self.system_id = system_id or probe.REFERENCE["cluster_system_id"]
         self.tls = tls
         self.fail_system_id = fail_system_id
         self.database_oid = database_oid
+        self.is_replica = is_replica
         self.info = SimpleNamespace(backend_pid=4242)
         self.queries = []
         self.closed = False
@@ -59,13 +70,13 @@ class FakeConnection:
                     "17.6",
                     self.database_oid,
                     4242,
-                    False,
+                    self.is_replica,
                     "on",
                 )
             )
         if normalized.startswith("SELECT system_identifier::text"):
             if self.fail_system_id:
-                raise PermissionError("do-not-leak")
+                raise probe.psycopg.errors.InsufficientPrivilege("do-not-leak")
             return FakeCursor((self.system_id,))
         if normalized.startswith("SELECT version_num"):
             return FakeCursor(rows=[("0096_patient_customer_id",)])
@@ -130,6 +141,39 @@ class RuntimeAttestationTests(unittest.TestCase):
         result = probe.run_attestation(RAW_URL)
         return result, mocked
 
+    def _run_main_with_connection(self, connection):
+        output = StringIO()
+        with (
+            patch.object(probe.psycopg, "connect", return_value=connection),
+            patch.dict("os.environ", {"MIGRATION_DATABASE_URL": RAW_URL}),
+            redirect_stdout(output),
+        ):
+            exit_code = probe.main()
+        return exit_code, json.loads(output.getvalue())
+
+    def _assert_no_database_writes(self, connection):
+        write_prefixes = (
+            "INSERT ",
+            "UPDATE ",
+            "DELETE ",
+            "MERGE ",
+            "CREATE ",
+            "ALTER ",
+            "DROP ",
+            "TRUNCATE ",
+            "GRANT ",
+            "REVOKE ",
+            "CALL ",
+            "DO ",
+            "COPY ",
+        )
+        writes = [
+            query
+            for query in connection.queries
+            if query.lstrip().upper().startswith(write_prefixes)
+        ]
+        self.assertEqual(writes, [])
+
     def test_success_uses_one_connection_one_read_only_transaction_and_rollback(self):
         connection = FakeConnection()
         result, connect = self._run_with_connection(connection)
@@ -151,9 +195,71 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertEqual(connection.queries.count("ROLLBACK"), 1)
         self.assertFalse(any(query == "COMMIT" for query in connection.queries))
         self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
         serialized = json.dumps(result)
         self.assertNotIn("do-not-leak", serialized)
         self.assertNotIn("attestor", serialized)
+        self.assertNotIn("example-1-eu-west-3", serialized)
+
+    def test_primary_connection_returns_zero_exit_code(self):
+        connection = FakeConnection(is_replica=False)
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["status"], "VERIFIED")
+        self.assertEqual(result["verdict"], "SAME_DATABASE")
+        self.assertFalse(result["is_replica"])
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+
+    def test_read_replica_is_unverified_and_cannot_be_same_database(self):
+        connection = FakeConnection(is_replica=True)
+        result, connect = self._run_with_connection(connection)
+
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["failure_category"], "connected_to_read_replica")
+        self.assertNotIn("verdict", result)
+        self.assertNotIn("cluster_system_id", result)
+        connect.assert_called_once()
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertFalse(any("pg_control_system()" in query for query in connection.queries))
+        self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+        serialized = json.dumps(result)
+        self.assertNotIn("do-not-leak", serialized)
+        self.assertNotIn("attestor", serialized)
+        self.assertNotIn("example-1-eu-west-3", serialized)
+
+    def test_unknown_replica_state_is_unverified_and_rolls_back(self):
+        connection = FakeConnection(is_replica=None)
+        result, connect = self._run_with_connection(connection)
+
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["failure_category"], "replica_status_unavailable")
+        self.assertNotIn("verdict", result)
+        connect.assert_called_once()
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertFalse(any("pg_control_system()" in query for query in connection.queries))
+        self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+
+    def test_read_replica_main_returns_nonzero_and_rolls_back(self):
+        connection = FakeConnection(is_replica=True)
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertNotEqual(exit_code, 0)
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["failure_category"], "connected_to_read_replica")
+        self.assertNotIn("verdict", result)
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+        serialized = json.dumps(result)
+        self.assertNotIn("do-not-leak", serialized)
+        self.assertNotIn("attestor", serialized)
+        self.assertNotIn("example-1-eu-west-3", serialized)
 
     def test_tls_failure_is_unverified_and_transaction_is_rolled_back(self):
         connection = FakeConnection(tls=False)
@@ -164,17 +270,24 @@ class RuntimeAttestationTests(unittest.TestCase):
         connect.assert_called_once()
         self.assertEqual(connection.queries.count("ROLLBACK"), 1)
         self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
 
     def test_cluster_system_id_permission_failure_does_not_retry_or_escalate(self):
         connection = FakeConnection(fail_system_id=True)
         result, connect = self._run_with_connection(connection)
 
         self.assertEqual(result["status"], "UNVERIFIED")
-        self.assertEqual(result["failure_category"], "runtime_probe_failed")
-        self.assertEqual(result["error_type"], "PermissionError")
+        self.assertEqual(result["failure_category"], "database_permission_denied")
+        self.assertEqual(result["error_type"], "InsufficientPrivilege")
+        self.assertEqual(result["sqlstate"], "42501")
         connect.assert_called_once()
         self.assertEqual(connection.queries.count("ROLLBACK"), 1)
-        self.assertNotIn("do-not-leak", json.dumps(result))
+        self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+        serialized = json.dumps(result)
+        self.assertNotIn("do-not-leak", serialized)
+        self.assertNotIn("attestor", serialized)
+        self.assertNotIn("example-1-eu-west-3", serialized)
 
     def test_different_cluster_is_reported_as_different_database(self):
         connection = FakeConnection(system_id="1111111111111111111")
