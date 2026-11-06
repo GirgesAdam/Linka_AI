@@ -92,6 +92,7 @@ class ConnectionDetailsTests(unittest.TestCase):
         conninfo, mode = probe.connection_details(RAW_URL)
         self.assertIn("sslmode=verify-full", conninfo)
         self.assertIn("sslrootcert=system", conninfo)
+        self.assertIn("gssencmode=disable", conninfo)
         self.assertNotIn("sslmode=disable", conninfo)
         self.assertEqual(mode, "Supavisor session pooler")
 
