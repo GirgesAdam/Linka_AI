@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# isort: skip_file
+
 import json
 import unittest
 from pathlib import Path
