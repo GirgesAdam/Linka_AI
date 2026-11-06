@@ -225,7 +225,9 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         self.assertTrue(action_refs)
         for action_ref in action_refs:
-            self.assertRegex(action_ref, r"^[^@]+@[0-9a-f]{40}(?:\\s+#.*)?$")
+            revision = action_ref.split("@", maxsplit=1)[1].split(" ", maxsplit=1)[0]
+            self.assertEqual(len(revision), 40)
+            self.assertTrue(all(character in "0123456789abcdef" for character in revision))
 
 
 if __name__ == "__main__":
