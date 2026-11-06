@@ -132,8 +132,12 @@ def verify_freeze_history(note: dict, comments: list[dict], freeze_id: str) -> N
     copies = [item for item in comments if item.get("id") == note_id]
     ensure(len(copies) == 1, "FREEZE_COMMENT_HISTORY_MISMATCH")
     stored = copies[0]
-    for key in ("body", "created_at", "updated_at"):
+    for key in ("body", "created_at", "updated_at", "issue_url"):
         ensure(stored.get(key) == note.get(key), "FREEZE_COMMENT_HISTORY_MISMATCH")
+    ensure(
+        stored.get("user", {}).get("login") == note.get("user", {}).get("login"),
+        "FREEZE_COMMENT_HISTORY_MISMATCH",
+    )
     ensure(note.get("updated_at") == note.get("created_at"), "FREEZE_COMMENT_EDITED")
 
     references = [
@@ -667,7 +671,9 @@ def verify_release_controls(
     )
     dispatched = [run for run in release_runs if run.get("event") == "workflow_dispatch"]
     ensure(
-        len(dispatched) == 1 and dispatched[0].get("id") == run_id,
+        len(dispatched) == 1
+        and dispatched[0].get("id") == run_id
+        and dispatched[0].get("head_sha") == workflow_sha,
         "PRIOR_OR_UNREGISTERED_RELEASE_RUN",
     )
 

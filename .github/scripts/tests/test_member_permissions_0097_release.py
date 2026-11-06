@@ -246,6 +246,8 @@ class GuardTests(unittest.TestCase):
             "body": body,
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
+            "issue_url": "https://api.github.com/repos/GirgesAdam/Linka_AI/issues/306",
+            "user": {"login": release.OWNER},
         }
         release.verify_freeze_history(note, [note], freeze["freeze_id"])
         duplicate = dict(note, id=78, body=body + "\nFREEZE CLOSED")
@@ -500,9 +502,17 @@ class ControlIntegrationTests(unittest.TestCase):
                         else [{"type": "branch", "name": "*"}]
                     )}
                 if path.endswith(f"/actions/workflows/{release.WORKFLOW}/runs"):
-                    runs = [{"id": 123, "event": "workflow_dispatch"}]
+                    runs = [{
+                        "id": 123,
+                        "event": "workflow_dispatch",
+                        "head_sha": parent.sha,
+                    }]
                     if replay:
-                        runs.append({"id": 122, "event": "workflow_dispatch"})
+                        runs.append({
+                            "id": 122,
+                            "event": "workflow_dispatch",
+                            "head_sha": parent.sha,
+                        })
                     return {"total_count": len(runs), "workflow_runs": runs}
                 if path.endswith("/actions/workflows/apply-0068-production.yml/runs"):
                     status = "in_progress" if active_writer == "apply-0068-production.yml" else "completed"

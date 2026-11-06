@@ -142,8 +142,8 @@ Do not change either hard block to True until Team Lead/Project Owner approves a
 
 ## 5. Actions and dependency pins
 
-- actions/checkout is pinned to verified commit 11bd71901bbe5b1630ceea73d27597364c9af683 (v4.2.2).
-- actions/setup-python is pinned to verified commit a26af69be951a213d495a4c3e4e4022e16d87065 (v5.6.0).
+- actions/checkout is pinned to verified commit 1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 (v6.0.0, Node 24).
+- actions/setup-python is pinned to verified commit 83679a892e2d95755f2dac6acb0bfd1e9ac5d548 (v6.1.0, Node 24).
 - Python is pinned to 3.12.9 in both workflows.
 - pip is pinned to 25.3.
 - Release dependencies and their transitive runtime dependencies are listed at exact versions in .github/scripts/requirements-0097-release.txt and installed with --no-deps followed by pip check.
