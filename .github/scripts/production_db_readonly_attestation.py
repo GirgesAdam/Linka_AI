@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fail-closed, read-only fingerprint probe for Tia Production.
 
 The connection URL is parsed with SQLAlchemy and is never logged. PostgreSQL
@@ -17,6 +16,7 @@ from typing import Any
 
 import psycopg
 from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
 
 REFERENCE = {
     "cluster_system_id": "7666052913346410626",
@@ -59,7 +59,7 @@ def connection_details(raw_url: str) -> tuple[str, str]:
     """Parse SQLAlchemy URL and force full TLS certificate/hostname validation."""
     try:
         parsed = make_url(raw_url)
-    except Exception:
+    except (ArgumentError, TypeError, ValueError):
         raise AttestationFailure("connection_url_parse_failed") from None
 
     if parsed.drivername not in ALLOWED_DRIVERS:
@@ -112,7 +112,7 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
         conninfo, mode = connection_details(raw_url)
     except AttestationFailure as exc:
         return _failure(exc.category)
-    except Exception as exc:
+    except (ArgumentError, TypeError, ValueError) as exc:
         return _failure("connection_url_parse_failed", exc)
 
     conn = None
@@ -216,7 +216,7 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
         ):
             raise AttestationFailure("single_connection_transaction_not_confirmed")
 
-        info_pid = getattr(getattr(conn, "info", None), "backend_pid", backend_pid)
+        info_pid = conn.info.backend_pid
         if info_pid is not None and int(info_pid) != int(backend_pid):
             raise AttestationFailure("backend_pid_changed")
 
@@ -260,7 +260,7 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
         }
     except AttestationFailure as exc:
         failure = _failure(exc.category, mode=mode)
-    except Exception as exc:
+    except (psycopg.Error, OSError, TypeError, ValueError) as exc:
         category = "connection_failed" if phase == "connection" else "runtime_probe_failed"
         failure = _failure(category, exc, mode)
     finally:
@@ -268,12 +268,12 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
             try:
                 conn.execute("ROLLBACK")
                 transaction_started = False
-            except Exception as exc:
+            except (psycopg.Error, OSError, TypeError, ValueError) as exc:
                 failure = _failure("rollback_failed", exc, mode)
         if conn is not None:
             try:
                 conn.close()
-            except Exception as exc:
+            except (psycopg.Error, OSError, TypeError, ValueError) as exc:
                 if failure is None:
                     failure = _failure("connection_close_failed", exc, mode)
 
