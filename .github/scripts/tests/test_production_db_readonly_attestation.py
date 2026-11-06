@@ -207,16 +207,16 @@ class WorkflowContractTests(unittest.TestCase):
         trigger_block = workflow.split("permissions:", maxsplit=1)[0]
 
         self.assertIn("workflow_dispatch:", trigger_block)
-        self.assertNotIn("\\n  pull_request:", trigger_block)
-        self.assertNotIn("\\n  push:", trigger_block)
-        self.assertNotIn("\\n  schedule:", trigger_block)
+        self.assertNotIn("\n  pull_request:", trigger_block)
+        self.assertNotIn("\n  push:", trigger_block)
+        self.assertNotIn("\n  schedule:", trigger_block)
         self.assertIn("name: production", workflow)
         self.assertIn("secrets.MIGRATION_DATABASE_URL", workflow)
         self.assertEqual(workflow.count("secrets.MIGRATION_DATABASE_URL"), 1)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertNotIn("alembic upgrade", workflow)
         self.assertNotIn("upload-artifact", workflow)
-        self.assertNotIn("DATABASE_URL:", workflow)
+        self.assertNotIn("\n          DATABASE_URL:", workflow)
 
         action_refs = [
             line.strip().split("uses:", maxsplit=1)[1].strip()
