@@ -461,6 +461,9 @@ class ControlIntegrationTests(unittest.TestCase):
         parent = self
 
         class API(release.GitHubReader):
+            def __init__(self):
+                self.token = "test-token"
+
             def get(self, endpoint):
                 path = endpoint.split("?", 1)[0]
                 if path.endswith("/branches/main"):
