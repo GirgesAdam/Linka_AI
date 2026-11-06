@@ -466,8 +466,8 @@ class ControlIntegrationTests(unittest.TestCase):
                 if path.endswith("/branches/main"):
                     return {
                         "commit": {"sha": parent.sha},
-                        "protected": parent.main_protected,
-                        "protection": {"enabled": parent.main_protected},
+                        "protected": main_protected,
+                        "protection": {"enabled": main_protected},
                     }
                 if path.endswith("/pulls/306"):
                     return {
