@@ -230,7 +230,8 @@ class ControlIntegrationTests(unittest.TestCase):
                 if path.endswith("/issues/comments/77"):
                     return {"body": json.dumps(parent.body),
                             "user": {"login": release.OWNER},
-                            "created_at": parent.now.isoformat()}
+                            "created_at": parent.now.isoformat(),
+                            "issue_url": "https://api.github.com/repos/GirgesAdam/Linka_AI/issues/306"}
                 if path.endswith("/issues/306/comments?per_page=100"):
                     if revoked:
                         return [{

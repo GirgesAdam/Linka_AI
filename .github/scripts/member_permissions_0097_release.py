@@ -375,6 +375,8 @@ def verify_release_controls(gh, *, freeze_comment_id, workflow_sha,
             ensure(run.get("status") == "completed",
                    "OTHER_DATABASE_MIGRATION_ACTIVE")
     note = gh.get(f"repos/{REPOSITORY}/issues/comments/{freeze_comment_id}")
+    ensure(note.get("issue_url", "").endswith("/issues/306"),
+           "FREEZE_COMMENT_NOT_ON_PR306")
     frozen = freeze_contract(
         note.get("body", ""),
         note.get("user", {}).get("login"),
@@ -382,6 +384,8 @@ def verify_release_controls(gh, *, freeze_comment_id, workflow_sha,
         workflow_sha=workflow_sha, now=now,
     )
     comments = gh.get(f"repos/{REPOSITORY}/issues/306/comments?per_page=100")
+    ensure(isinstance(comments, list) and len(comments) < 100,
+           "FREEZE_REVOCATION_HISTORY_UNVERIFIED")
     for later in comments:
         if later.get("created_at", "") > note.get("created_at", ""):
             body = later.get("body") or ""
