@@ -58,6 +58,8 @@ jobs:
       - run: python -m compileall -q app alembic tests
       - name: Run production database read-only attestation tests
         working-directory: .
+        env:
+          PYTHONPATH: .github/scripts
         run: |
           ruff check .github/scripts/production_db_readonly_attestation.py .github/scripts/tests/test_production_db_readonly_attestation.py
           python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
