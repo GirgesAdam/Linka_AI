@@ -1,0 +1,71 @@
+name: Production Database Read-only Attestation
+
+# Manual-only fingerprint verification. This is not a migration lock and does
+# not coordinate with GitHub migration workflows or Railway Pre-deploy writers.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-db-readonly-attestation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Reject non-main dispatches and rerun attempts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require the default production branch and first attempt
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Production attestation may only run from main."
+            exit 1
+          fi
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "::error::Attestation reruns are not permitted; dispatch a new reviewed run."
+            exit 1
+          fi
+
+  attest:
+    name: Read-only Tia Production database fingerprint
+    needs: guard
+    if: needs.guard.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: production
+    steps:
+      - name: Checkout the exact main commit
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: "3.12.9"
+
+      - name: Install exact attestation dependencies
+        run: |
+          python -m pip install --only-binary=:all: --no-deps "pip==25.3"
+          python -m pip install --only-binary=:all: --no-deps -r .github/scripts/requirements-production-db-readonly-attestation.txt
+          python -m pip check
+
+      - name: Compile and run focused safety tests
+        run: |
+          python -m compileall -q .github/scripts/production_db_readonly_attestation.py
+          python -m compileall -q .github/scripts/tests/test_production_db_readonly_attestation.py
+          python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
+
+      - name: Attest Production database without exposing credentials
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        shell: bash
+        run: |
+          set +x
+          python .github/scripts/production_db_readonly_attestation.py
