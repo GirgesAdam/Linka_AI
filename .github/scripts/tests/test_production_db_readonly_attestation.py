@@ -3,6 +3,7 @@ from __future__ import annotations
 # isort: skip_file
 
 import json
+import os
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -74,7 +75,7 @@ class FakeConnection:
                     "on",
                 )
             )
-        if normalized.startswith("SELECT system_identifier::text"):
+        if normalized.startswith("SELECT attestation_private.cluster_system_identifier()"):
             if self.fail_system_id:
                 raise probe.psycopg.errors.InsufficientPrivilege("do-not-leak")
             return FakeCursor((self.system_id,))
@@ -145,7 +146,7 @@ class RuntimeAttestationTests(unittest.TestCase):
         output = StringIO()
         with (
             patch.object(probe.psycopg, "connect", return_value=connection),
-            patch.dict("os.environ", {"MIGRATION_DATABASE_URL": RAW_URL}),
+            patch.dict("os.environ", {"PRODUCTION_DB_READONLY_URL": RAW_URL}),
             redirect_stdout(output),
         ):
             exit_code = probe.main()
@@ -304,11 +305,22 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertEqual(result["status"], "VERIFIED")
         self.assertEqual(result["verdict"], "DIFFERENT_DATABASE")
 
-    def test_missing_secret_is_unverified_without_connecting(self):
+    def test_missing_readonly_secret_is_unverified_without_connecting(self):
         with patch.object(probe.psycopg, "connect") as connect:
             result = probe.run_attestation("")
         self.assertEqual(result["status"], "UNVERIFIED")
-        self.assertEqual(result["failure_category"], "migration_database_url_missing")
+        self.assertEqual(result["failure_category"], "production_db_readonly_url_missing")
+        connect.assert_not_called()
+
+    def test_migration_secret_is_never_used_as_attestation_fallback(self):
+        with (
+            patch.object(probe.psycopg, "connect") as connect,
+            patch.dict("os.environ", {"MIGRATION_DATABASE_URL": RAW_URL}),
+        ):
+            os.environ.pop("PRODUCTION_DB_READONLY_URL", None)
+            result = probe.run_attestation()
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["failure_category"], "production_db_readonly_url_missing")
         connect.assert_not_called()
 
 
@@ -326,9 +338,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("\n  pull_request:", trigger_block)
         self.assertNotIn("\n  push:", trigger_block)
         self.assertNotIn("\n  schedule:", trigger_block)
-        self.assertIn("name: production", workflow)
-        self.assertIn("secrets.MIGRATION_DATABASE_URL", workflow)
-        self.assertEqual(workflow.count("secrets.MIGRATION_DATABASE_URL"), 1)
+        self.assertIn("name: production-attestation", workflow)
+        self.assertIn("secrets.PRODUCTION_DB_READONLY_URL", workflow)
+        self.assertEqual(workflow.count("secrets.PRODUCTION_DB_READONLY_URL"), 1)
+        self.assertNotIn("secrets.MIGRATION_DATABASE_URL", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertNotIn("alembic upgrade", workflow)
         self.assertNotIn("upload-artifact", workflow)

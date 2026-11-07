@@ -105,9 +105,9 @@ def _failure(
 def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
     """Run all probes on one verified TLS connection in one READ ONLY transaction."""
     if raw_url is None:
-        raw_url = os.environ.get("MIGRATION_DATABASE_URL")
+        raw_url = os.environ.get("PRODUCTION_DB_READONLY_URL")
     if not raw_url:
-        return _failure("migration_database_url_missing")
+        return _failure("production_db_readonly_url_missing")
 
     try:
         conninfo, mode = connection_details(raw_url)
@@ -178,7 +178,7 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
             raise AttestationFailure("replica_status_unavailable")
 
         system_row = conn.execute(
-            "SELECT system_identifier::text FROM pg_control_system()"
+            "SELECT attestation_private.cluster_system_identifier()"
         ).fetchone()
         if system_row is None or not system_row[0]:
             raise AttestationFailure("cluster_system_id_unavailable")
