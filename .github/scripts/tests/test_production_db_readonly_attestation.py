@@ -323,6 +323,31 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertEqual(result["failure_category"], "production_db_readonly_url_missing")
         connect.assert_not_called()
 
+    def test_readonly_secret_wins_when_both_credentials_are_present(self):
+        connection = FakeConnection()
+        migration_url = (
+            "postgresql+psycopg://migration:must-not-be-used@migration.invalid:"
+            "5432/postgres"
+        )
+        expected_conninfo, _ = probe.connection_details(RAW_URL)
+        with (
+            patch.object(probe.psycopg, "connect", return_value=connection) as connect,
+            patch.dict(
+                "os.environ",
+                {
+                    "PRODUCTION_DB_READONLY_URL": RAW_URL,
+                    "MIGRATION_DATABASE_URL": migration_url,
+                },
+            ),
+        ):
+            result = probe.run_attestation()
+
+        self.assertEqual(result["status"], "VERIFIED")
+        connect.assert_called_once()
+        self.assertEqual(connect.call_args.args[0], expected_conninfo)
+        self.assertNotIn("migration.invalid", connect.call_args.args[0])
+        self.assertNotIn("must-not-be-used", connect.call_args.args[0])
+
 
 class WorkflowContractTests(unittest.TestCase):
     def test_runtime_workflow_is_dispatch_only_and_read_only(self):
