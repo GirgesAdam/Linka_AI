@@ -315,7 +315,7 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
                 )
 
     def test_public_acl_was_the_only_source_of_direct_execute(self):
-        self.assertTrue(self.control_public_execute_before)
+        self.assertTrue(self.public_execute_before)
         self.assertTrue(self.control_acl_uses_default)
         self.assertIsNone(self.control_acl_before)
         self.assertTrue(self.attestor_effective_execute_before)
@@ -323,6 +323,74 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
         self.assertFalse(self.public_execute_after)
         self.assertFalse(self.attestor_effective_execute_after)
         self.assertFalse(self.attestor_direct_execute_after)
+
+    def test_role_cannot_change_table_or_function_acls(self):
+        snapshot_query = """
+            SELECT
+                (
+                    SELECT relacl::text
+                    FROM pg_catalog.pg_class
+                    WHERE oid = 'public.alembic_version'::regclass
+                ),
+                (
+                    SELECT proacl::text
+                    FROM pg_catalog.pg_proc
+                    WHERE oid = 'pg_catalog.pg_control_system()'::regprocedure
+                ),
+                (
+                    SELECT proacl::text
+                    FROM pg_catalog.pg_proc
+                    WHERE oid =
+                        'attestation_private.cluster_system_identifier()'::regprocedure
+                )
+        """
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            before = admin.execute(snapshot_query).fetchone()
+
+        # PostgreSQL may report GRANT/REVOKE by a non-owner as successful no-ops
+        # with warnings. Verify the actual ACL catalog state, not just SQLSTATE.
+        with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
+            conn.execute("SET default_transaction_read_only = off")
+            conn.execute(
+                "GRANT INSERT ON TABLE public.alembic_version TO PUBLIC"
+            )
+            conn.execute(
+                "REVOKE SELECT ON TABLE public.alembic_version FROM PUBLIC"
+            )
+            conn.execute(
+                "GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC"
+            )
+            conn.execute(
+                "GRANT EXECUTE ON FUNCTION "
+                "attestation_private.cluster_system_identifier() TO PUBLIC"
+            )
+            conn.execute(
+                "REVOKE EXECUTE ON FUNCTION "
+                "attestation_private.cluster_system_identifier() FROM PUBLIC"
+            )
+
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            after = admin.execute(snapshot_query).fetchone()
+            self.assertEqual(after, before)
+            privileges = admin.execute(
+                """
+                SELECT
+                    pg_catalog.has_function_privilege(
+                        'tia_attestor_ci',
+                        'pg_catalog.pg_control_system()',
+                        'EXECUTE'
+                    ),
+                    pg_catalog.has_function_privilege(
+                        'tia_attestor_ci',
+                        'attestation_private.cluster_system_identifier()',
+                        'EXECUTE'
+                    ),
+                    pg_catalog.has_table_privilege(
+                        'tia_attestor_ci', 'public.alembic_version', 'INSERT'
+                    )
+                """
+            ).fetchone()
+            self.assertEqual(privileges, (False, True, False))
 
     def test_role_reads_only_the_wrapper_surface_and_cannot_escalate(self):
         with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
@@ -451,8 +519,6 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             "SELECT setval('public.attestor_guard_sequence', 2)",
             "ALTER SEQUENCE public.attestor_guard_sequence INCREMENT BY 2",
             "DROP SEQUENCE public.attestor_guard_sequence",
-            "GRANT SELECT ON TABLE public.alembic_version TO PUBLIC",
-            "REVOKE SELECT ON TABLE public.alembic_version FROM PUBLIC",
             "CREATE ROLE tia_attestor_escalated NOLOGIN",
             "ALTER ROLE postgres SUPERUSER",
             "SET ROLE postgres",

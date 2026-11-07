@@ -372,6 +372,25 @@ WHERE p.oid =
     'attestation_private.cluster_system_identifier()'::regprocedure;
 ```
 
+ACL snapshot for any role-initiated GRANT/REVOKE verification:
+
+```sql
+SELECT
+    c.relacl::text AS alembic_version_acl,
+    control.proacl::text AS control_function_acl,
+    wrapper.proacl::text AS fingerprint_wrapper_acl
+FROM pg_catalog.pg_class AS c
+CROSS JOIN pg_catalog.pg_proc AS control
+CROSS JOIN pg_catalog.pg_proc AS wrapper
+WHERE c.oid = 'public.alembic_version'::regclass
+  AND control.oid = 'pg_catalog.pg_control_system()'::regprocedure
+  AND wrapper.oid =
+      'attestation_private.cluster_system_identifier()'::regprocedure;
+```
+
+Retain this output before and after the attestor's GRANT/REVOKE attempts. The ACL
+values and effective privileges must remain unchanged.
+
 Required results:
 
 - `rolcanlogin = true` after password setup; all other elevated role attributes
@@ -407,8 +426,12 @@ Then connect as `tia_production_attestor` and verify:
 - `SELECT pg_is_in_recovery()` succeeds.
 - The current-session `pg_stat_ssl` row is readable.
 - Direct `SELECT pg_catalog.pg_control_system()` fails with insufficient privilege.
-- CREATE, ALTER, DROP, TRUNCATE, INSERT, UPDATE, DELETE, sequence writes, GRANT,
-  REVOKE, CREATE ROLE, and `SET ROLE postgres` fail with insufficient privilege.
+- CREATE, ALTER, DROP, TRUNCATE, INSERT, UPDATE, DELETE, sequence writes,
+  CREATE ROLE, and `SET ROLE postgres` fail with insufficient privilege.
+- A non-owner's GRANT/REVOKE statements may return warnings without raising an
+  error. Verify before/after `pg_class.relacl` and `pg_proc.proacl` snapshots are
+  identical and that effective privileges did not change; a successful command
+  response alone is not evidence that a grant or revoke took effect.
 
 If direct access still succeeds, or wrapper access fails, STOP. Do not grant
 `pg_monitor` or any wider role.
