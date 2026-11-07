@@ -358,9 +358,6 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
                 "REVOKE SELECT ON TABLE public.alembic_version FROM PUBLIC"
             )
             conn.execute(
-                "GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC"
-            )
-            conn.execute(
                 "GRANT EXECUTE ON FUNCTION "
                 "attestation_private.cluster_system_identifier() TO PUBLIC"
             )
@@ -498,6 +495,7 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
 
         denied_statements = (
             "SELECT pg_catalog.pg_control_system()",
+            "GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC",
             "CREATE TABLE public.attestor_must_not_create(id integer)",
             "CREATE TABLE attestation_private.attestor_must_not_create(id integer)",
             (

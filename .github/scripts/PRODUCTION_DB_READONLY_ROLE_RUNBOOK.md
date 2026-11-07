@@ -428,9 +428,11 @@ Then connect as `tia_production_attestor` and verify:
 - Direct `SELECT pg_catalog.pg_control_system()` fails with insufficient privilege.
 - CREATE, ALTER, DROP, TRUNCATE, INSERT, UPDATE, DELETE, sequence writes,
   CREATE ROLE, and `SET ROLE postgres` fail with insufficient privilege.
-- A non-owner's GRANT/REVOKE statements may return warnings without raising an
-  error. Verify before/after `pg_class.relacl` and `pg_proc.proacl` snapshots are
-  identical and that effective privileges did not change; a successful command
+- A non-owner's GRANT/REVOKE statements may either be denied or return warnings
+  without changing ACLs, depending on the privilege and grant option held. In
+  particular, `GRANT EXECUTE` on `pg_control_system()` must be denied. For all
+  attempts, verify before/after `pg_class.relacl` and `pg_proc.proacl` snapshots
+  are identical and effective privileges did not change; a successful command
   response alone is not evidence that a grant or revoke took effect.
 
 If direct access still succeeds, or wrapper access fails, STOP. Do not grant
