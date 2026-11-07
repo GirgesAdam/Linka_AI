@@ -534,5 +534,917 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
                 conn.execute(statement)
 
 
+
+
+class DatabaseConnectIsolationPostgres176Tests(unittest.TestCase):
+    """Verify cluster-wide CONNECT isolation without changing application access."""
+
+    TARGET_DATABASE = "attestation_ci"
+    GUARD_DATABASE = "attestor_drop_guard_ci"
+    UNEXPECTED_DATABASE = "attestor_must_not_create_ci"
+    FUTURE_UNGUARDED_DATABASE = "attestor_future_unprotected_ci"
+    FUTURE_GUARDED_DATABASE = "attestor_future_guarded_ci"
+    ATTESTOR_ROLE = "tia_connect_attestor_ci"
+    APP_GROUP_ROLE = "tia_connect_app_group_ci"
+    APP_RUNTIME_ROLE = "tia_connect_app_runtime_ci"
+    MIGRATION_ROLE = "tia_connect_migration_ci"
+    LEGACY_APP_ROLE = "tia_connect_legacy_app_ci"
+
+    @classmethod
+    def _has_database_privilege(cls, conn, role_name, database_name):
+        return conn.execute(
+            "SELECT pg_catalog.has_database_privilege(%s, %s, 'CONNECT')",
+            (role_name, database_name),
+        ).fetchone()[0]
+
+    @classmethod
+    def _has_acl_grant(cls, conn, role_name, database_name):
+        return conn.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_database AS d
+                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                    COALESCE(
+                        d.datacl,
+                        pg_catalog.acldefault('d', d.datdba)
+                    )
+                ) AS acl
+                WHERE d.datname = %s
+                  AND acl.grantee = (
+                      SELECT oid
+                      FROM pg_catalog.pg_roles
+                      WHERE rolname = %s
+                  )
+                  AND acl.privilege_type = 'CONNECT'
+            )
+            """,
+            (database_name, role_name),
+        ).fetchone()[0]
+
+    @classmethod
+    def _public_connect(cls, conn, database_name):
+        return conn.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_database AS d
+                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                    COALESCE(
+                        d.datacl,
+                        pg_catalog.acldefault('d', d.datdba)
+                    )
+                ) AS acl
+                WHERE d.datname = %s
+                  AND acl.grantee = 0
+                  AND acl.privilege_type = 'CONNECT'
+            )
+            """,
+            (database_name,),
+        ).fetchone()[0]
+
+    @classmethod
+    def _cleanup(cls):
+        if not getattr(cls, "admin_conninfo", None):
+            return
+        try:
+            with psycopg.connect(cls.admin_conninfo, autocommit=True) as admin:
+                role_names = (
+                    cls.ATTESTOR_ROLE,
+                    cls.APP_GROUP_ROLE,
+                    cls.APP_RUNTIME_ROLE,
+                    cls.MIGRATION_ROLE,
+                    cls.LEGACY_APP_ROLE,
+                )
+                existing_roles = {
+                    row[0]
+                    for row in admin.execute(
+                        """
+                        SELECT rolname
+                        FROM pg_catalog.pg_roles
+                        WHERE rolname = ANY(%s)
+                        """,
+                        (list(role_names),),
+                    ).fetchall()
+                }
+
+                if getattr(cls, "database_inventory", None):
+                    for database_name, _datallowconn in cls.database_inventory:
+                        if database_name == cls.TARGET_DATABASE:
+                            continue
+                        for role_name in role_names:
+                            if role_name not in existing_roles:
+                                continue
+                            admin.execute(
+                                sql.SQL("REVOKE CONNECT ON DATABASE {} FROM {}").format(
+                                    sql.Identifier(database_name),
+                                    sql.Identifier(role_name),
+                                )
+                            )
+                        if cls.public_connect_before.get(database_name, False):
+                            admin.execute(
+                                sql.SQL("GRANT CONNECT ON DATABASE {} TO PUBLIC").format(
+                                    sql.Identifier(database_name)
+                                )
+                            )
+
+                if cls.ATTESTOR_ROLE in existing_roles:
+                    admin.execute(
+                        sql.SQL("REVOKE CONNECT ON DATABASE {} FROM {}").format(
+                            sql.Identifier(cls.TARGET_DATABASE),
+                            sql.Identifier(cls.ATTESTOR_ROLE),
+                        )
+                    )
+                if {
+                    cls.APP_GROUP_ROLE,
+                    cls.APP_RUNTIME_ROLE,
+                }.issubset(existing_roles):
+                    admin.execute(
+                        sql.SQL("REVOKE {} FROM {}").format(
+                            sql.Identifier(cls.APP_GROUP_ROLE),
+                            sql.Identifier(cls.APP_RUNTIME_ROLE),
+                        )
+                    )
+                for database_name in reversed(
+                    getattr(cls, "created_databases", [])
+                ):
+                    admin.execute(
+                        sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                            sql.Identifier(database_name)
+                        )
+                    )
+                for role_name in reversed(getattr(cls, "created_roles", [])):
+                    if role_name in existing_roles:
+                        admin.execute(
+                            sql.SQL("DROP ROLE IF EXISTS {}").format(
+                                sql.Identifier(role_name)
+                            )
+                        )
+        except psycopg.Error:
+            # Preserve the original test failure; the disposable CI cluster is destroyed.
+            pass
+
+    @classmethod
+    def setUpClass(cls):
+        raw_url = os.environ.get("ATTESTATION_TEST_DATABASE_URL")
+        if not raw_url:
+            raise unittest.SkipTest("ATTESTATION_TEST_DATABASE_URL is not configured")
+        url = make_url(raw_url)
+        if (
+            url.host not in {"127.0.0.1", "localhost"}
+            or url.database != cls.TARGET_DATABASE
+            or url.username != "postgres"
+        ):
+            raise RuntimeError(
+                "CONNECT isolation test refuses a non-local attestation_ci database"
+            )
+
+        cls.admin_conninfo = raw_url
+        cls.base_url = url
+        cls.created_roles = []
+        cls.created_databases = []
+        cls.database_inventory = []
+        cls.public_connect_before = {}
+
+        try:
+            with psycopg.connect(raw_url, autocommit=True) as admin:
+                version_num = int(
+                    admin.execute("SHOW server_version_num").fetchone()[0]
+                )
+                if version_num != 170006:
+                    raise RuntimeError(
+                        "expected PostgreSQL 17.6, "
+                        f"got server_version_num={version_num}"
+                    )
+
+                existing_guard_databases = admin.execute(
+                    """
+                    SELECT datname
+                    FROM pg_catalog.pg_database
+                    WHERE datname = ANY(%s)
+                    """,
+                    ([
+                        cls.GUARD_DATABASE,
+                        cls.UNEXPECTED_DATABASE,
+                        cls.FUTURE_UNGUARDED_DATABASE,
+                        cls.FUTURE_GUARDED_DATABASE,
+                    ],),
+                ).fetchall()
+                if existing_guard_databases:
+                    raise RuntimeError(
+                        "database guard fixtures already exist; refusing to reuse them"
+                    )
+                admin.execute(
+                    sql.SQL("CREATE DATABASE {}").format(
+                        sql.Identifier(cls.GUARD_DATABASE)
+                    )
+                )
+                cls.created_databases.append(cls.GUARD_DATABASE)
+
+                rows = admin.execute(
+                    """
+                    SELECT datname, datallowconn
+                    FROM pg_catalog.pg_database
+                    ORDER BY datname
+                    """
+                ).fetchall()
+                cls.database_inventory = [
+                    (str(database_name), bool(datallowconn))
+                    for database_name, datallowconn in rows
+                ]
+                database_names = {
+                    database_name
+                    for database_name, _datallowconn in cls.database_inventory
+                }
+                if cls.TARGET_DATABASE not in database_names:
+                    raise RuntimeError("the disposable target database is missing")
+
+                non_target_databases = [
+                    database_name
+                    for database_name, _datallowconn in cls.database_inventory
+                    if database_name != cls.TARGET_DATABASE
+                ]
+                if not non_target_databases:
+                    raise RuntimeError(
+                        "the PostgreSQL cluster has no non-target database to test"
+                    )
+
+                role_names = (
+                    cls.ATTESTOR_ROLE,
+                    cls.APP_GROUP_ROLE,
+                    cls.APP_RUNTIME_ROLE,
+                    cls.MIGRATION_ROLE,
+                    cls.LEGACY_APP_ROLE,
+                )
+                existing = admin.execute(
+                    """
+                    SELECT rolname
+                    FROM pg_catalog.pg_roles
+                    WHERE rolname = ANY(%s)
+                    """,
+                    (list(role_names),),
+                ).fetchall()
+                if existing:
+                    raise RuntimeError(
+                        "test roles already exist; refusing to reuse them: "
+                        + ", ".join(row[0] for row in existing)
+                    )
+
+                for database_name in non_target_databases:
+                    public_connect = cls._public_connect(admin, database_name)
+                    cls.public_connect_before[database_name] = public_connect
+                    if not public_connect:
+                        raise RuntimeError(
+                            "expected stock PUBLIC CONNECT on non-target database "
+                            f"{database_name!r}; refusing to infer its original ACL"
+                        )
+
+                passwords = {
+                    cls.ATTESTOR_ROLE: secrets.token_urlsafe(32),
+                    cls.APP_RUNTIME_ROLE: secrets.token_urlsafe(32),
+                    cls.MIGRATION_ROLE: secrets.token_urlsafe(32),
+                    cls.LEGACY_APP_ROLE: secrets.token_urlsafe(32),
+                }
+                cls.connection_urls = {
+                    role_name: url.set(
+                        username=role_name,
+                        password=password,
+                    )
+                    for role_name, password in passwords.items()
+                }
+
+                create_login = """
+                    CREATE ROLE {} LOGIN PASSWORD {}
+                    NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+                    NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2
+                """
+                for role_name in (
+                    cls.ATTESTOR_ROLE,
+                    cls.APP_RUNTIME_ROLE,
+                    cls.MIGRATION_ROLE,
+                    cls.LEGACY_APP_ROLE,
+                ):
+                    admin.execute(
+                        sql.SQL(create_login).format(
+                            sql.Identifier(role_name),
+                            sql.Literal(passwords[role_name]),
+                        )
+                    )
+                    cls.created_roles.append(role_name)
+
+                admin.execute(
+                    sql.SQL("CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE").format(
+                        sql.Identifier(cls.APP_GROUP_ROLE)
+                    )
+                )
+                cls.created_roles.append(cls.APP_GROUP_ROLE)
+                admin.execute(
+                    sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET TRUE").format(
+                        sql.Identifier(cls.APP_GROUP_ROLE),
+                        sql.Identifier(cls.APP_RUNTIME_ROLE),
+                    )
+                )
+
+                admin.execute(
+                    sql.SQL("ALTER ROLE {} SET default_transaction_read_only = on").format(
+                        sql.Identifier(cls.ATTESTOR_ROLE)
+                    )
+                )
+                admin.execute(
+                    sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                        sql.Identifier(cls.TARGET_DATABASE),
+                        sql.Identifier(cls.ATTESTOR_ROLE),
+                    )
+                )
+
+                # Establish three different pre-existing application access paths:
+                # direct grant, inherited group grant, and PUBLIC-only access.
+                for database_name, datallowconn in cls.database_inventory:
+                    if database_name == cls.TARGET_DATABASE or not datallowconn:
+                        continue
+                    admin.execute(
+                        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                            sql.Identifier(database_name),
+                            sql.Identifier(cls.APP_GROUP_ROLE),
+                        )
+                    )
+                    admin.execute(
+                        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                            sql.Identifier(database_name),
+                            sql.Identifier(cls.MIGRATION_ROLE),
+                        )
+                    )
+
+                for database_name in non_target_databases:
+                    if not cls._has_database_privilege(
+                        admin, cls.ATTESTOR_ROLE, database_name
+                    ):
+                        raise RuntimeError(
+                            f"expected PUBLIC to give attestor CONNECT on {database_name}"
+                        )
+                    if cls._has_acl_grant(admin, cls.ATTESTOR_ROLE, database_name):
+                        raise RuntimeError(
+                            f"unexpected direct attestor CONNECT grant on {database_name}"
+                        )
+                    if not cls._has_database_privilege(
+                        admin, cls.APP_RUNTIME_ROLE, database_name
+                    ):
+                        raise RuntimeError(
+                            f"runtime role lacks its pre-change CONNECT on {database_name}"
+                        )
+                    if not cls._has_database_privilege(
+                        admin, cls.MIGRATION_ROLE, database_name
+                    ):
+                        raise RuntimeError(
+                            f"migration role lacks its pre-change CONNECT on {database_name}"
+                        )
+                    if not cls._has_database_privilege(
+                        admin, cls.LEGACY_APP_ROLE, database_name
+                    ):
+                        raise RuntimeError(
+                            f"legacy application role lacks PUBLIC CONNECT on {database_name}"
+                        )
+
+                # Prove a direct REVOKE is not a DENY while PUBLIC still grants CONNECT.
+                proof_database = next(
+                    database_name
+                    for database_name, datallowconn in cls.database_inventory
+                    if database_name != cls.TARGET_DATABASE and datallowconn
+                )
+                admin.execute(
+                    sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                        sql.Identifier(proof_database),
+                        sql.Identifier(cls.ATTESTOR_ROLE),
+                    )
+                )
+                admin.execute(
+                    sql.SQL("REVOKE CONNECT ON DATABASE {} FROM {}").format(
+                        sql.Identifier(proof_database),
+                        sql.Identifier(cls.ATTESTOR_ROLE),
+                    )
+                )
+                if not cls._has_database_privilege(
+                    admin, cls.ATTESTOR_ROLE, proof_database
+                ):
+                    raise RuntimeError(
+                        "direct REVOKE unexpectedly overrode PUBLIC CONNECT"
+                    )
+
+                # A missing service-owner regrant must abort the ACL transaction.
+                try:
+                    with admin.transaction():
+                        admin.execute(
+                            sql.SQL(
+                                "REVOKE CONNECT ON DATABASE {} FROM PUBLIC"
+                            ).format(sql.Identifier(proof_database))
+                        )
+                        if cls._has_database_privilege(
+                            admin, cls.LEGACY_APP_ROLE, proof_database
+                        ):
+                            raise RuntimeError(
+                                "expected PUBLIC-only application role to lose CONNECT"
+                            )
+                        raise RuntimeError("missing approved CONNECT regrant")
+                except RuntimeError as exc:
+                    if str(exc) != "missing approved CONNECT regrant":
+                        raise
+                else:
+                    raise RuntimeError("incomplete CONNECT allowlist did not abort")
+                if not cls._public_connect(admin, proof_database) or not cls._has_database_privilege(
+                    admin, cls.LEGACY_APP_ROLE, proof_database
+                ):
+                    raise RuntimeError("incomplete CONNECT allowlist did not roll back")
+                cls.fail_closed_rollback_verified = True
+
+                # Execute the same fail-closed inventory/allowlist algorithm documented
+                # in the DBA runbook. The attestor is excluded because Production SQL
+                # creates it only after the non-target PUBLIC ACLs have been repaired.
+                with admin.transaction():
+                    admin.execute(
+                        """
+                        CREATE TEMP TABLE connect_before ON COMMIT DROP AS
+                        SELECT d.datname AS database_name, r.rolname AS role_name
+                        FROM pg_catalog.pg_database AS d
+                        CROSS JOIN pg_catalog.pg_roles AS r
+                        WHERE d.datname <> %s
+                          AND d.datallowconn
+                          AND r.rolcanlogin
+                          AND r.rolname <> %s
+                          AND pg_catalog.has_database_privilege(
+                              r.rolname, d.datname, 'CONNECT'
+                          )
+                        """,
+                        (cls.TARGET_DATABASE, cls.ATTESTOR_ROLE),
+                    )
+                    admin.execute(
+                        """
+                        CREATE TEMP TABLE public_connect_before ON COMMIT DROP AS
+                        SELECT
+                            d.datname AS database_name,
+                            d.datacl::text AS stored_datacl,
+                            d.datdba AS database_owner_oid
+                        FROM pg_catalog.pg_database AS d
+                        WHERE d.datname <> %s
+                          AND EXISTS (
+                              SELECT 1
+                              FROM pg_catalog.aclexplode(
+                                  COALESCE(
+                                      d.datacl,
+                                      pg_catalog.acldefault('d', d.datdba)
+                                  )
+                              ) AS acl
+                              WHERE acl.grantee = 0
+                                AND acl.privilege_type = 'CONNECT'
+                          )
+                        """,
+                        (cls.TARGET_DATABASE,),
+                    )
+                    admin.execute(
+                        """
+                        CREATE TEMP TABLE approved_connect_regrant (
+                            database_name name NOT NULL,
+                            role_name name NOT NULL,
+                            PRIMARY KEY (database_name, role_name)
+                        ) ON COMMIT DROP
+                        """
+                    )
+                    admin.execute(
+                        """
+                        CREATE TEMP TABLE connect_regrants_added (
+                            database_name name NOT NULL,
+                            role_name name NOT NULL,
+                            PRIMARY KEY (database_name, role_name)
+                        ) ON COMMIT DROP
+                        """
+                    )
+                    for database_name, datallowconn in cls.database_inventory:
+                        if database_name != cls.TARGET_DATABASE and datallowconn:
+                            admin.execute(
+                                """
+                                INSERT INTO pg_temp.approved_connect_regrant
+                                    (database_name, role_name)
+                                VALUES (%s, %s)
+                                """,
+                                (database_name, cls.LEGACY_APP_ROLE),
+                            )
+
+                    admin.execute(
+                        """
+                        DO $connect_isolation$
+                        DECLARE
+                            v_database record;
+                            v_grant record;
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1
+                                FROM pg_temp.public_connect_before AS before_acl
+                                JOIN pg_catalog.pg_database AS d
+                                  ON d.datname = before_acl.database_name
+                                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                                    COALESCE(
+                                        d.datacl,
+                                        pg_catalog.acldefault('d', d.datdba)
+                                    )
+                                ) AS acl
+                                WHERE acl.grantee = 0
+                                  AND acl.privilege_type = 'CONNECT'
+                                  AND (
+                                      acl.is_grantable
+                                      OR acl.grantor <> d.datdba
+                                      OR d.datdba <> (
+                                          SELECT oid
+                                          FROM pg_catalog.pg_roles
+                                          WHERE rolname = current_user
+                                      )
+                                  )
+                            ) THEN
+                                RAISE EXCEPTION
+                                    'non-target PUBLIC CONNECT has grant option or non-owner grantor';
+                            END IF;
+
+                            IF EXISTS (
+                                SELECT 1
+                                FROM pg_temp.approved_connect_regrant AS a
+                                LEFT JOIN pg_catalog.pg_database AS d
+                                  ON d.datname = a.database_name
+                                LEFT JOIN pg_catalog.pg_roles AS r
+                                  ON r.rolname = a.role_name
+                                WHERE d.datname IS NULL
+                                   OR d.datname = 'attestation_ci'
+                                   OR NOT d.datallowconn
+                                   OR r.oid IS NULL
+                                   OR NOT pg_catalog.has_database_privilege(
+                                       a.role_name, a.database_name, 'CONNECT'
+                                   )
+                            ) THEN
+                                RAISE EXCEPTION
+                                    'approved CONNECT regrant is not a current effective role/database grant';
+                            END IF;
+
+                            FOR v_database IN
+                                SELECT database_name
+                                FROM pg_temp.public_connect_before
+                                ORDER BY database_name
+                            LOOP
+                                EXECUTE pg_catalog.format(
+                                    'REVOKE CONNECT ON DATABASE %I FROM PUBLIC',
+                                    v_database.database_name
+                                );
+                            END LOOP;
+
+                            FOR v_grant IN
+                                SELECT database_name, role_name
+                                FROM pg_temp.approved_connect_regrant
+                                WHERE NOT pg_catalog.has_database_privilege(
+                                    role_name, database_name, 'CONNECT'
+                                )
+                                ORDER BY database_name, role_name
+                            LOOP
+                                EXECUTE pg_catalog.format(
+                                    'GRANT CONNECT ON DATABASE %I TO %I',
+                                    v_grant.database_name,
+                                    v_grant.role_name
+                                );
+                                INSERT INTO pg_temp.connect_regrants_added
+                                    (database_name, role_name)
+                                VALUES (v_grant.database_name, v_grant.role_name);
+                            END LOOP;
+
+                            IF EXISTS (
+                                SELECT 1
+                                FROM pg_temp.connect_before AS b
+                                WHERE NOT pg_catalog.has_database_privilege(
+                                    b.role_name, b.database_name, 'CONNECT'
+                                )
+                            ) THEN
+                                RAISE EXCEPTION
+                                    'post-repair effective CONNECT differs from pre-change login inventory';
+                            END IF;
+
+                            IF EXISTS (
+                                SELECT 1
+                                FROM pg_catalog.pg_database AS d
+                                CROSS JOIN LATERAL pg_catalog.aclexplode(
+                                    COALESCE(
+                                        d.datacl,
+                                        pg_catalog.acldefault('d', d.datdba)
+                                    )
+                                ) AS acl
+                                WHERE d.datname <> 'attestation_ci'
+                                  AND acl.grantee = 0
+                                  AND acl.privilege_type = 'CONNECT'
+                            ) THEN
+                                RAISE EXCEPTION
+                                    'PUBLIC CONNECT remains on a non-target database';
+                            END IF;
+                        END
+                        $connect_isolation$;
+                        """
+                    )
+                    cls.connect_regrants_added = admin.execute(
+                        """
+                        SELECT database_name, role_name
+                        FROM pg_temp.connect_regrants_added
+                        ORDER BY database_name, role_name
+                        """
+                    ).fetchall()
+                    expected_regrants = {
+                        (database_name, cls.LEGACY_APP_ROLE)
+                        for database_name, datallowconn in cls.database_inventory
+                        if database_name != cls.TARGET_DATABASE and datallowconn
+                    }
+                    if set(cls.connect_regrants_added) != expected_regrants:
+                        raise RuntimeError(
+                            "CONNECT regrant manifest differs from approved public-only roles"
+                        )
+
+                for database_name in non_target_databases:
+                    if cls._public_connect(admin, database_name):
+                        raise RuntimeError(
+                            f"PUBLIC CONNECT remains on non-target database {database_name}"
+                        )
+                    if cls._has_database_privilege(
+                        admin, cls.ATTESTOR_ROLE, database_name
+                    ):
+                        raise RuntimeError(
+                            f"attestor retains effective CONNECT on {database_name}"
+                        )
+                    if cls._has_acl_grant(admin, cls.ATTESTOR_ROLE, database_name):
+                        raise RuntimeError(
+                            f"attestor has a direct CONNECT ACL on {database_name}"
+                        )
+
+                for database_name, datallowconn in cls.database_inventory:
+                    if database_name == cls.TARGET_DATABASE or not datallowconn:
+                        continue
+                    for role_name in (
+                        cls.APP_RUNTIME_ROLE,
+                        cls.MIGRATION_ROLE,
+                        cls.LEGACY_APP_ROLE,
+                    ):
+                        if not cls._has_database_privilege(
+                            admin, role_name, database_name
+                        ):
+                            raise RuntimeError(
+                                f"application role {role_name} lost CONNECT on {database_name}"
+                            )
+        except Exception:
+            cls._cleanup()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._cleanup()
+
+    def _connect_as(self, role_name, database_name):
+        conninfo = self.connection_urls[role_name].set(
+            database=database_name
+        ).render_as_string(hide_password=False)
+        return psycopg.connect(conninfo, connect_timeout=3, autocommit=True)
+
+    def test_incomplete_allowlist_is_rolled_back(self):
+        self.assertTrue(self.fail_closed_rollback_verified)
+
+    def test_attestor_has_effective_connect_only_on_the_target_database(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            for database_name, _datallowconn in self.database_inventory:
+                with self.subTest(database=database_name):
+                    expected = database_name == self.TARGET_DATABASE
+                    self.assertEqual(
+                        self._has_database_privilege(
+                            admin, self.ATTESTOR_ROLE, database_name
+                        ),
+                        expected,
+                    )
+
+        with self._connect_as(self.ATTESTOR_ROLE, self.TARGET_DATABASE) as conn:
+            self.assertEqual(
+                conn.execute("SELECT current_database()").fetchone()[0],
+                self.TARGET_DATABASE,
+            )
+
+        for database_name, datallowconn in self.database_inventory:
+            if database_name == self.TARGET_DATABASE:
+                continue
+            with self.subTest(denied_database=database_name):
+                if datallowconn:
+                    with self.assertRaises(psycopg.OperationalError) as denied:
+                        self._connect_as(self.ATTESTOR_ROLE, database_name)
+                    self.assertIn("permission denied for database", str(denied.exception))
+                    self.assertIn("CONNECT privilege", str(denied.exception))
+                else:
+                    # template0 is independently non-connectable; the ACL check above
+                    # still proves the attestor has no effective CONNECT privilege.
+                    with self.assertRaises(psycopg.Error):
+                        self._connect_as(self.ATTESTOR_ROLE, database_name)
+
+    def test_future_database_creation_requires_a_pre_connect_acl_guard(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            try:
+                self.created_databases.append(self.FUTURE_UNGUARDED_DATABASE)
+                admin.execute(
+                    sql.SQL("CREATE DATABASE {}").format(
+                        sql.Identifier(self.FUTURE_UNGUARDED_DATABASE)
+                    )
+                )
+                self.assertTrue(
+                    self._has_database_privilege(
+                        admin, self.ATTESTOR_ROLE, self.FUTURE_UNGUARDED_DATABASE
+                    )
+                )
+                with self._connect_as(
+                    self.ATTESTOR_ROLE, self.FUTURE_UNGUARDED_DATABASE
+                ) as conn:
+                    self.assertEqual(
+                        conn.execute("SELECT current_database()").fetchone()[0],
+                        self.FUTURE_UNGUARDED_DATABASE,
+                    )
+                admin.execute(
+                    sql.SQL("DROP DATABASE {}").format(
+                        sql.Identifier(self.FUTURE_UNGUARDED_DATABASE)
+                    )
+                )
+
+                self.created_databases.append(self.FUTURE_GUARDED_DATABASE)
+                admin.execute(
+                    sql.SQL("CREATE DATABASE {} WITH ALLOW_CONNECTIONS false").format(
+                        sql.Identifier(self.FUTURE_GUARDED_DATABASE)
+                    )
+                )
+                admin.execute(
+                    sql.SQL("REVOKE CONNECT ON DATABASE {} FROM PUBLIC").format(
+                        sql.Identifier(self.FUTURE_GUARDED_DATABASE)
+                    )
+                )
+                admin.execute(
+                    sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                        sql.Identifier(self.FUTURE_GUARDED_DATABASE),
+                        sql.Identifier(self.APP_GROUP_ROLE),
+                    )
+                )
+                admin.execute(
+                    sql.SQL("ALTER DATABASE {} WITH ALLOW_CONNECTIONS true").format(
+                        sql.Identifier(self.FUTURE_GUARDED_DATABASE)
+                    )
+                )
+
+                self.assertFalse(
+                    self._has_database_privilege(
+                        admin, self.ATTESTOR_ROLE, self.FUTURE_GUARDED_DATABASE
+                    )
+                )
+                self.assertTrue(
+                    self._has_database_privilege(
+                        admin, self.APP_RUNTIME_ROLE, self.FUTURE_GUARDED_DATABASE
+                    )
+                )
+                with self._connect_as(
+                    self.APP_RUNTIME_ROLE, self.FUTURE_GUARDED_DATABASE
+                ) as conn:
+                    self.assertEqual(
+                        conn.execute("SELECT current_database()").fetchone()[0],
+                        self.FUTURE_GUARDED_DATABASE,
+                    )
+                with self.assertRaises(psycopg.OperationalError) as denied:
+                    self._connect_as(
+                        self.ATTESTOR_ROLE, self.FUTURE_GUARDED_DATABASE
+                    )
+                self.assertIn(
+                    "permission denied for database", str(denied.exception)
+                )
+                self.assertIn("CONNECT privilege", str(denied.exception))
+            finally:
+                admin.execute(
+                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                        sql.Identifier(self.FUTURE_UNGUARDED_DATABASE)
+                    )
+                )
+                admin.execute(
+                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                        sql.Identifier(self.FUTURE_GUARDED_DATABASE)
+                    )
+                )
+
+    def test_public_is_removed_but_application_access_paths_are_preserved(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            for database_name, datallowconn in self.database_inventory:
+                if database_name == self.TARGET_DATABASE:
+                    continue
+                with self.subTest(database=database_name):
+                    self.assertFalse(self._public_connect(admin, database_name))
+                    self.assertFalse(
+                        self._has_database_privilege(
+                            admin, self.ATTESTOR_ROLE, database_name
+                        )
+                    )
+                    if not datallowconn:
+                        continue
+
+                    self.assertTrue(
+                        self._has_database_privilege(
+                            admin, self.APP_RUNTIME_ROLE, database_name
+                        )
+                    )
+                    self.assertFalse(
+                        self._has_acl_grant(
+                            admin, self.APP_RUNTIME_ROLE, database_name
+                        )
+                    )
+                    self.assertTrue(
+                        admin.execute(
+                            "SELECT pg_catalog.pg_has_role(%s, %s, 'USAGE')",
+                            (self.APP_RUNTIME_ROLE, self.APP_GROUP_ROLE),
+                        ).fetchone()[0]
+                    )
+                    self.assertTrue(
+                        self._has_acl_grant(
+                            admin, self.MIGRATION_ROLE, database_name
+                        )
+                    )
+                    self.assertTrue(
+                        self._has_acl_grant(
+                            admin, self.LEGACY_APP_ROLE, database_name
+                        )
+                    )
+
+        for role_name in (
+            self.APP_RUNTIME_ROLE,
+            self.MIGRATION_ROLE,
+            self.LEGACY_APP_ROLE,
+        ):
+            for database_name, datallowconn in self.database_inventory:
+                if database_name == self.TARGET_DATABASE or not datallowconn:
+                    continue
+                with (
+                    self.subTest(role=role_name, database=database_name),
+                    self._connect_as(role_name, database_name) as conn,
+                ):
+                    self.assertEqual(
+                        conn.execute("SELECT current_database()").fetchone()[0],
+                        database_name,
+                    )
+
+    def test_attestor_has_no_role_escalation_path(self):
+        with self._connect_as(self.ATTESTOR_ROLE, self.TARGET_DATABASE) as conn:
+            # Disable the read-only GUC so CREATE/DROP denials prove role privileges,
+            # not the session default.
+            conn.execute("SET default_transaction_read_only = off")
+            attrs = conn.execute(
+                """
+                SELECT rolcanlogin, rolsuper, rolcreaterole, rolcreatedb,
+                       rolreplication, rolbypassrls, rolinherit
+                FROM pg_catalog.pg_roles
+                WHERE rolname = current_user
+                """
+            ).fetchone()
+            self.assertEqual(attrs, (True, False, False, False, False, False, False))
+
+            self.assertEqual(
+                conn.execute(
+                    """
+                    SELECT count(*)
+                    FROM pg_catalog.pg_auth_members AS m
+                    JOIN pg_catalog.pg_roles AS member ON member.oid = m.member
+                    WHERE member.rolname = current_user
+                    """
+                ).fetchone()[0],
+                0,
+            )
+            self.assertFalse(
+                conn.execute(
+                    "SELECT pg_catalog.pg_has_role(current_user, 'pg_monitor', 'MEMBER')"
+                ).fetchone()[0]
+            )
+            for role_name in (
+                "postgres",
+                self.APP_GROUP_ROLE,
+                self.APP_RUNTIME_ROLE,
+                self.MIGRATION_ROLE,
+                self.LEGACY_APP_ROLE,
+            ):
+                with (
+                    self.subTest(set_role=role_name),
+                    self.assertRaises(psycopg.errors.InsufficientPrivilege),
+                ):
+                    conn.execute(
+                        sql.SQL("SET ROLE {}").format(sql.Identifier(role_name))
+                    )
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SET SESSION AUTHORIZATION postgres")
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(
+                    sql.SQL("DROP DATABASE {}").format(
+                        sql.Identifier(self.GUARD_DATABASE)
+                    )
+                )
+            self.created_databases.append(self.UNEXPECTED_DATABASE)
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(
+                    sql.SQL("CREATE DATABASE {}").format(
+                        sql.Identifier(self.UNEXPECTED_DATABASE)
+                    )
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
