@@ -1,4 +1,4 @@
-"""Validation contract for a future admin-only member permission editor."""
+"""API schemas for Admin-managed binary Member page permissions."""
 
 from typing import Annotated
 
@@ -21,3 +21,9 @@ class MemberPagePermissionsUpdate(BaseModel):
     ) -> dict[str, PagePermissionLevel]:
         validate_complete_page_permissions(value)
         return value
+
+
+class MemberPagePermissionsRead(BaseModel):
+    membership_id: str
+    page_permissions: dict[str, PagePermissionLevel]
+    permissions_version: int
