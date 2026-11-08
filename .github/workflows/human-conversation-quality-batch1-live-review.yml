@@ -1,15 +1,8 @@
 ﻿name: Human Conversation Quality Batch 1 Live Review
 
+# Real Agent runs consume staging database/provider credentials.
+# Keep them off PR events; dispatch only from the protected default branch.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    branches:
-      - main
-    paths:
-      - .github/workflows/human-conversation-quality-batch1-live-review.yml
-      - backend/scripts/run_human_conversation_quality_batch1_review.py
-      - backend/app/agents/v2/**
-      - backend/app/services/agent_v2/**
   workflow_dispatch:
 
 permissions:
@@ -17,7 +10,7 @@ permissions:
 
 jobs:
   human-conversation-quality:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.ref == 'refs/heads/main'
     name: Real Agent RA-H1 through RA-H8
     runs-on: ubuntu-latest
     timeout-minutes: 35
