@@ -6,7 +6,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess
+from app.api.dependencies.page_permissions import require_page_permission
 from app.database.session import get_db
 from app.schemas.analytics_saved_view import AnalyticsSavedViewCreate, AnalyticsSavedViewRead
 from app.services.analytics_saved_views import (
@@ -22,7 +23,7 @@ router = APIRouter()
 
 @router.get("/views", response_model=list[AnalyticsSavedViewRead])
 def get_saved_analytics_views(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("analytics.overview", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     limit: int = 20,
 ) -> list[AnalyticsSavedViewRead]:
