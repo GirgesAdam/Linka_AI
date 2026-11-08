@@ -1,8 +1,4 @@
-"""Page-based permission catalog, validation and future atomic-update contract.
-
-This module does not change any API route's authorization. A NULL matrix
-preserves each endpoint's explicitly declared legacy reader/admin policy.
-"""
+"""Binary page-permission catalog and atomic Member permission updates."""
 
 from __future__ import annotations
 
@@ -20,8 +16,7 @@ from app.models.workspace_member import (
     WorkspaceMember,
 )
 
-PagePermissionLevel = Literal["none", "view", "manage"]
-PagePermissionAction = Literal["view", "manage"]
+PagePermissionLevel = Literal["none", "manage"]
 LegacyPageAccess = Literal["reader", "admin"]
 
 PAGE_PERMISSION_KEYS: Final[tuple[str, ...]] = (
@@ -52,18 +47,12 @@ PAGE_PERMISSION_KEYS: Final[tuple[str, ...]] = (
     "demo.agent",
 )
 PAGE_PERMISSION_KEY_SET: Final = frozenset(PAGE_PERMISSION_KEYS)
-PAGE_PERMISSION_LEVELS: Final = frozenset({"none", "view", "manage"})
-_LEVEL_RANK: Final = {"none": 0, "view": 1, "manage": 2}
+PAGE_PERMISSION_LEVELS: Final = frozenset({"none", "manage"})
 
 
 def validate_page_key(page_key: str) -> None:
     if page_key not in PAGE_PERMISSION_KEY_SET:
         raise ValueError(f"Unknown page permission key: {page_key!r}")
-
-
-def validate_page_action(action: str) -> None:
-    if action not in {"view", "manage"}:
-        raise ValueError(f"Unknown page permission action: {action!r}")
 
 
 def validate_legacy_access(legacy_access: str) -> None:
@@ -72,11 +61,7 @@ def validate_legacy_access(legacy_access: str) -> None:
 
 
 def validate_complete_page_permissions(matrix: Mapping[str, str]) -> dict[str, str]:
-    """Validate a full explicit matrix for a future admin-only write endpoint.
-
-    Runtime interpretation intentionally treats missing keys in already-stored
-    partial maps as 'none'; the write contract requires every catalog key.
-    """
+    """Validate a complete explicit matrix; no partial writes or hidden levels."""
     if not isinstance(matrix, Mapping):
         raise ValueError("Page permissions must be an object.")
     unknown = set(matrix) - PAGE_PERMISSION_KEY_SET
@@ -88,8 +73,8 @@ def validate_complete_page_permissions(matrix: Mapping[str, str]) -> dict[str, s
     for key, level in matrix.items():
         if not isinstance(level, str) or level not in PAGE_PERMISSION_LEVELS:
             raise ValueError(f"Invalid page permission level for {key!r}.")
-        if key == "team" and level == "manage":
-            raise ValueError("Only Admins may manage team roles and permissions.")
+        if key == "team" and level != "none":
+            raise ValueError("Team management is Admin-only.")
     return dict(matrix)
 
 
@@ -99,12 +84,10 @@ def page_permission_allows(
     workspace_id: UUID,
     user_id: UUID,
     page_key: str,
-    action: PagePermissionAction,
     legacy_access: LegacyPageAccess,
 ) -> bool:
-    """Honor original endpoint access for NULL; explicit maps replace role gates."""
+    """Admin always passes; NULL retains legacy role behavior; explicit manage grants."""
     validate_page_key(page_key)
-    validate_page_action(action)
     validate_legacy_access(legacy_access)
     if (
         not membership.is_active
@@ -114,29 +97,23 @@ def page_permission_allows(
         return False
     if membership.role == WORKSPACE_ROLE_ADMIN:
         return True
-    if membership.role != WORKSPACE_ROLE_MEMBER:
-        return False
-    if page_key == "team" and action == "manage":
-        # The team-management operation always requires the Admin role.
+    if membership.role != WORKSPACE_ROLE_MEMBER or page_key == "team":
         return False
 
     matrix = membership.page_permissions
     if matrix is None:
-        # Preserve the original endpoint's role requirement, including when
-        # a legacy admin-only operation is requested as a page 'view'.
         return legacy_access == "reader"
     if not isinstance(matrix, dict):
         return False
-    # Fail closed on corrupt/unknown stored data (but a missing key is 'none').
     if any(
         key not in PAGE_PERMISSION_KEY_SET
         or not isinstance(level, str)
         or level not in PAGE_PERMISSION_LEVELS
-        or (key == "team" and level == "manage")
+        or (key == "team" and level != "none")
         for key, level in matrix.items()
     ):
         return False
-    return _LEVEL_RANK[matrix.get(page_key, "none")] >= _LEVEL_RANK[action]
+    return matrix.get(page_key) == "manage"
 
 
 def build_page_permissions_compare_and_swap(
@@ -147,12 +124,7 @@ def build_page_permissions_compare_and_swap(
     expected_version: int,
     page_permissions: Mapping[str, str],
 ) -> Update:
-    """Build, but DO NOT execute, a future admin-only atomic permission update.
-
-    The future caller must first authorize the actor with get_workspace_admin.
-    Version is checked in the UPDATE predicate (not by a racy pre-read).
-    Excludes updates to the actor's own membership and any Admin membership.
-    """
+    """Build an atomic update restricted to another active Member in this workspace."""
     if type(expected_version) is not int or expected_version < 0:
         raise ValueError("Expected permission version must be a non-negative integer.")
     validated = validate_complete_page_permissions(page_permissions)
@@ -177,7 +149,6 @@ def build_page_permissions_compare_and_swap(
 def require_successful_permission_update(
     updated_version: int | None, *, expected_version: int
 ) -> int:
-    """Turn a zero-row CAS result into a conflict; never silently overwrite."""
     if updated_version is None or updated_version != expected_version + 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
