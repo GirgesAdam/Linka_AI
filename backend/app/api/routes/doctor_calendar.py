@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess
+from app.api.dependencies.page_permissions import require_page_permission
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
@@ -61,7 +62,7 @@ def _workspace_timezone(access: WorkspaceAccess) -> ZoneInfo:
 def get_doctor_calendar(
     start_date: date,
     end_date: date,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.calendar", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     doctor_id: UUID | None = None,
 ) -> DoctorCalendarRead:
