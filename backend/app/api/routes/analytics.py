@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.analytics import get_analytics_db, get_analytics_workspace_reader
+from app.api.dependencies.analytics import get_analytics_db, get_analytics_page_reader
 from app.api.dependencies.security import WorkspaceAccess
+from app.api.dependencies.page_permissions import require_page_permission
 from app.schemas.analytics import AnalyticsOverviewRead
 from app.schemas.analytics_catalog import (
     AnalyticsCatalogRead,
@@ -27,7 +28,7 @@ router = APIRouter()
 
 @router.get("/overview", response_model=AnalyticsOverviewRead)
 def get_analytics_overview(
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.overview"))],
     db: Annotated[Session, Depends(get_analytics_db)],
     days: int = 30,
 ) -> AnalyticsOverviewRead:
