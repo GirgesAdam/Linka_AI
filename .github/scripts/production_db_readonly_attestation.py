@@ -29,6 +29,9 @@ REFERENCE = {
 
 ALLOWED_DRIVERS = {"postgresql", "postgresql+psycopg"}
 SQLSTATE_PATTERN = re.compile(r"^[0-9A-Z]{5}$")
+EXPECTED_ATTESTOR_ROLE = "tia_production_attestor"
+WRAPPER_SCHEMA = "attestation_private"
+WRAPPER_NAME = "cluster_system_identifier"
 
 
 class AttestationFailure(Exception):
@@ -102,12 +105,179 @@ def _failure(
     return result
 
 
+def verify_runtime_identity(
+    conn: psycopg.Connection[Any],
+    expected_role: str = EXPECTED_ATTESTOR_ROLE,
+) -> None:
+    """Fail closed unless this connection is the dedicated least-privilege Attestor.
+
+    This guard only reads PostgreSQL catalogs and effective privilege predicates.
+    It never invokes a SECURITY DEFINER function. The sole approved wrapper is
+    called by run_attestation only after this function returns successfully.
+    """
+    identity_row = conn.execute(
+        """
+        SELECT
+            session_user::text,
+            current_user::text,
+            attestor_role.rolcanlogin,
+            attestor_role.rolsuper,
+            attestor_role.rolcreatedb,
+            attestor_role.rolcreaterole,
+            attestor_role.rolreplication,
+            attestor_role.rolbypassrls,
+            attestor_role.rolinherit,
+            (
+                SELECT count(*)
+                FROM pg_catalog.pg_auth_members AS membership
+                WHERE membership.member = pg_catalog.to_regrole(current_user::text)::oid
+            ) AS role_membership_count,
+            current_setting('default_transaction_read_only'),
+            pg_catalog.has_schema_privilege(current_user, 'public', 'CREATE'),
+            pg_catalog.has_function_privilege(
+                current_user,
+                'pg_catalog.pg_control_system()',
+                'EXECUTE'
+            ),
+            EXISTS (
+                SELECT 1
+                FROM pg_catalog.aclexplode(
+                    COALESCE(
+                        control.proacl,
+                        pg_catalog.acldefault('f', control.proowner)
+                    )
+                ) AS acl
+                WHERE acl.grantee = pg_catalog.to_regrole(current_user::text)::oid
+                  AND acl.privilege_type = 'EXECUTE'
+            ) AS direct_control_execute,
+            pg_catalog.has_schema_privilege(
+                current_user, 'attestation_private', 'USAGE'
+            ),
+            pg_catalog.has_function_privilege(
+                current_user, wrapper.oid, 'EXECUTE'
+            ),
+            EXISTS (
+                SELECT 1
+                FROM pg_catalog.aclexplode(
+                    COALESCE(
+                        wrapper.proacl,
+                        pg_catalog.acldefault('f', wrapper.proowner)
+                    )
+                ) AS acl
+                WHERE acl.grantee = 0
+                  AND acl.privilege_type = 'EXECUTE'
+            ) AS wrapper_public_execute,
+            wrapper.prosecdef,
+            pg_catalog.pg_get_userbyid(wrapper.proowner),
+            wrapper.pronargs,
+            wrapper.proconfig
+        FROM pg_catalog.pg_roles AS attestor_role
+        LEFT JOIN pg_catalog.pg_proc AS control
+          ON control.oid = pg_catalog.to_regprocedure(
+              'pg_catalog.pg_control_system()'
+          )
+        LEFT JOIN pg_catalog.pg_namespace AS wrapper_schema
+          ON wrapper_schema.nspname = 'attestation_private'
+        LEFT JOIN pg_catalog.pg_proc AS wrapper
+          ON wrapper.pronamespace = wrapper_schema.oid
+         AND wrapper.proname = 'cluster_system_identifier'
+         AND wrapper.pronargs = 0
+        WHERE attestor_role.rolname = current_user
+        """
+    ).fetchone()
+
+    if identity_row is None:
+        raise AttestationFailure("runtime_identity_unverified")
+
+    (
+        session_user,
+        current_user,
+        can_login,
+        is_superuser,
+        can_create_db,
+        can_create_role,
+        can_replicate,
+        bypass_rls,
+        inherit_roles,
+        membership_count,
+        default_transaction_read_only,
+        public_schema_create,
+        control_effective_execute,
+        control_direct_execute,
+        wrapper_schema_usage,
+        wrapper_effective_execute,
+        wrapper_public_execute,
+        wrapper_security_definer,
+        wrapper_owner,
+        wrapper_argument_count,
+        wrapper_config,
+    ) = identity_row
+
+    if session_user != expected_role or current_user != expected_role:
+        raise AttestationFailure("runtime_identity_mismatch")
+
+    if not (
+        can_login is True
+        and is_superuser is False
+        and can_create_db is False
+        and can_create_role is False
+        and can_replicate is False
+        and bypass_rls is False
+        and inherit_roles is False
+        and membership_count == 0
+        and str(default_transaction_read_only).lower() == "on"
+    ):
+        raise AttestationFailure("runtime_role_attributes_unverified")
+
+    if not (
+        public_schema_create is False
+        and control_effective_execute is False
+        and control_direct_execute is False
+        and wrapper_schema_usage is True
+        and wrapper_effective_execute is True
+        and wrapper_public_execute is False
+        and wrapper_security_definer is True
+        and wrapper_owner == "postgres"
+        and wrapper_argument_count == 0
+        and wrapper_config == ["search_path=pg_catalog"]
+    ):
+        raise AttestationFailure("runtime_effective_privilege_guard_failed")
+
+    exposed_functions = conn.execute(
+        """
+        SELECT
+            namespace.nspname,
+            procedure.proname,
+            procedure.pronargs,
+            pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+        FROM pg_catalog.pg_proc AS procedure
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = procedure.pronamespace
+        WHERE procedure.prosecdef
+          AND pg_catalog.has_schema_privilege(
+              current_user, namespace.oid, 'USAGE'
+          )
+          AND pg_catalog.has_function_privilege(
+              current_user, procedure.oid, 'EXECUTE'
+          )
+        ORDER BY namespace.nspname, procedure.proname,
+                 pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+        """
+    ).fetchall()
+
+    allowed_surface = [
+        (WRAPPER_SCHEMA, WRAPPER_NAME, 0, ""),
+    ]
+    if exposed_functions != allowed_surface:
+        raise AttestationFailure("unexpected_security_definer_surface")
+
+
 def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
     """Run all probes on one verified TLS connection in one READ ONLY transaction."""
     if raw_url is None:
-        raw_url = os.environ.get("MIGRATION_DATABASE_URL")
+        raw_url = os.environ.get("PRODUCTION_DB_READONLY_URL")
     if not raw_url:
-        return _failure("migration_database_url_missing")
+        return _failure("production_db_readonly_url_missing")
 
     try:
         conninfo, mode = connection_details(raw_url)
@@ -135,6 +305,9 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
         conn.execute("BEGIN READ ONLY")
         transaction_started = True
         conn.execute("SET LOCAL statement_timeout = '5s'")
+
+        phase = "runtime_identity_guard"
+        verify_runtime_identity(conn)
 
         phase = "runtime_probe"
         database_row = conn.execute(
@@ -178,7 +351,7 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
             raise AttestationFailure("replica_status_unavailable")
 
         system_row = conn.execute(
-            "SELECT system_identifier::text FROM pg_control_system()"
+            "SELECT attestation_private.cluster_system_identifier()"
         ).fetchone()
         if system_row is None or not system_row[0]:
             raise AttestationFailure("cluster_system_id_unavailable")
@@ -253,6 +426,8 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
             "backend_pid": int(backend_pid),
             "single_transaction": True,
             "transaction_read_only": True,
+            "runtime_identity_verified": True,
+            "security_definer_surface_verified": True,
             "tls": {
                 "enabled": True,
                 "version": str(tls_row[1]),

@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
-      name: production
+      name: production-attestation
     steps:
       - name: Checkout the exact main commit
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
@@ -64,7 +64,7 @@ jobs:
 
       - name: Attest Production database without exposing credentials
         env:
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          PRODUCTION_DB_READONLY_URL: ${{ secrets.PRODUCTION_DB_READONLY_URL }}
         shell: bash
         run: |
           set +x
