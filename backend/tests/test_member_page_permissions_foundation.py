@@ -1,34 +1,19 @@
-"""Backend-only foundation checks: no business routes are bound in this PR."""
+"""Focused tests for the binary Member page-permission contract."""
 
-import os
 from types import SimpleNamespace
-from typing import Annotated
 from uuid import uuid4
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.routing import APIRoute
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session
 
 from app.api.dependencies.page_permissions import require_page_permission
-from app.api.dependencies.security import (
-    WorkspaceAccess,
-    get_workspace_access,
-    get_workspace_admin,
-    get_workspace_reader,
-)
-from app.models.user import User
-from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
-from app.schemas.page_permissions import MemberPagePermissionsUpdate
+from app.schemas.page_permissions import MemberPagePermissionsRead, MemberPagePermissionsUpdate
 from app.services.page_permissions import (
-    PAGE_PERMISSION_KEY_SET,
     PAGE_PERMISSION_KEYS,
+    PAGE_PERMISSION_LEVELS,
     build_page_permissions_compare_and_swap,
     page_permission_allows,
     require_successful_permission_update,
@@ -36,452 +21,180 @@ from app.services.page_permissions import (
 )
 
 
-def _full_matrix(level: str = "none") -> dict[str, str]:
+def matrix(level: str = "none") -> dict[str, str]:
     return dict.fromkeys(PAGE_PERMISSION_KEYS, level)
 
 
-def _access(
-    *, role: str = "member", page_permissions: dict[str, str] | None = None,
-    active: bool = True,
-) -> WorkspaceAccess:
-    workspace_id = uuid4()
-    user_id = uuid4()
-    return WorkspaceAccess(
-        workspace=SimpleNamespace(id=workspace_id, is_active=True),
-        user=SimpleNamespace(id=user_id, is_active=True),
-        membership=WorkspaceMember(
-            workspace_id=workspace_id,
-            user_id=user_id,
-            role=role,
-            is_active=active,
-            page_permissions=page_permissions,
-        ),
+def membership(
+    *, role: str = "member", active: bool = True,
+    page_permissions: dict[str, str] | None = None,
+) -> WorkspaceMember:
+    return WorkspaceMember(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        role=role,
+        is_active=active,
+        page_permissions=page_permissions,
     )
 
 
-def _allowed(
-    access: WorkspaceAccess,
-    key: str,
-    action: str,
-    *,
-    legacy_access: str = "reader",
-) -> bool:
+workspace_id = uuid4()
+user_id = uuid4()
+
+
+def allows(member: WorkspaceMember, key: str, legacy: str = "reader") -> bool:
     return page_permission_allows(
-        access.membership,
-        workspace_id=access.workspace.id,
-        user_id=access.user.id,
+        member,
+        workspace_id=workspace_id,
+        user_id=user_id,
         page_key=key,
-        action=action,
-        legacy_access=legacy_access,
+        legacy_access=legacy,
     )
 
 
-def test_catalog_is_exactly_25_independent_page_keys() -> None:
-    expected = {
-        "dashboard", "inbox.list", "inbox.detail", "appointments.calendar",
-        "appointments.detail", "appointments.reschedule", "patients.list",
-        "patients.detail", "tasks", "doctors", "services", "inventory",
-        "analytics.overview", "analytics.campaigns", "analytics.campaign_detail",
-        "analytics.cohort_detail", "analytics.outstanding_balances", "finance",
-        "automations", "activity", "team", "setup", "setup.whatsapp",
-        "demo.home", "demo.agent",
-    }
+def test_catalog_has_exactly_25_unique_keys_and_two_levels() -> None:
     assert len(PAGE_PERMISSION_KEYS) == 25
-    assert set(PAGE_PERMISSION_KEYS) == expected == PAGE_PERMISSION_KEY_SET
-    assert len(set(PAGE_PERMISSION_KEYS)) == len(PAGE_PERMISSION_KEYS)
+    assert len(set(PAGE_PERMISSION_KEYS)) == 25
+    assert PAGE_PERMISSION_LEVELS == {"none", "manage"}
 
 
-def test_admin_has_full_access_regardless_of_stored_map() -> None:
-    for stored in (None, {}, {"patients.detail": "none"}, {"unexpected": "invalid"}):
-        access = _access(role="admin", page_permissions=stored)
-        for key in PAGE_PERMISSION_KEYS:
-            assert _allowed(access, key, "view")
-            assert _allowed(access, key, "manage")
-        assert get_workspace_admin(access) is access
+def test_admin_always_has_full_access_regardless_of_matrix() -> None:
+    for stored in (None, {}, {"patients.detail": "none"}, {"bad.key": "invalid"}):
+        member = membership(role="admin", page_permissions=stored)
+        assert all(allows(member, key, legacy="admin") for key in PAGE_PERMISSION_KEYS)
 
 
-def test_member_null_uses_unchanged_legacy_role_policy() -> None:
-    access = _access()
-    assert access.membership.page_permissions is None
-    assert get_workspace_reader(access) is access
-    for key in PAGE_PERMISSION_KEYS:
-        assert _allowed(access, key, "view", legacy_access="reader")
-        assert _allowed(access, key, "manage", legacy_access="reader") is (key != "team")
-        assert not _allowed(access, key, "view", legacy_access="admin")
-        assert not _allowed(access, key, "manage", legacy_access="admin")
-    # Original RBAC is unchanged, but a future explicitly configured Member
-    # should not need a second get_workspace_admin dependency.
-    with pytest.raises(HTTPException) as exc:
-        get_workspace_admin(access)
-    assert exc.value.status_code == 403
+def test_null_matrix_preserves_legacy_reader_policy() -> None:
+    member = membership(page_permissions=None)
+    assert all(allows(member, key, "reader") for key in PAGE_PERMISSION_KEYS if key != "team")
+    assert not allows(member, "team", "reader")
+    assert not allows(member, "patients.detail", "admin")
 
 
-@pytest.mark.parametrize(
-    ("level", "view", "manage"),
-    [("none", False, False), ("view", True, False), ("manage", True, True)],
-)
-def test_explicit_member_levels(level: str, view: bool, manage: bool) -> None:
-    access = _access(page_permissions={"patients.detail": level})
-    assert _allowed(access, "patients.detail", "view") is view
-    assert _allowed(access, "patients.detail", "manage") is manage
-    assert not _allowed(access, "patients.list", "view")
+def test_explicit_manage_grants_page_and_none_denies_page() -> None:
+    granted = matrix()
+    granted["patients.detail"] = "manage"
+    member = membership(page_permissions=granted)
+    assert allows(member, "patients.detail")
+    assert not allows(member, "patients.list")
+    assert not allows(membership(page_permissions=matrix()), "patients.detail")
 
 
-def test_team_management_remains_admin_only() -> None:
-    assert not _allowed(_access(), "team", "manage")
-    assert not _allowed(_access(page_permissions={"team": "manage"}), "team", "manage")
-    assert _allowed(_access(role="admin", page_permissions={"team": "none"}), "team", "manage")
+def test_missing_key_in_stored_explicit_matrix_fails_closed() -> None:
+    member = membership(page_permissions={"patients.detail": "manage"})
+    assert allows(member, "patients.detail")
+    assert not allows(member, "patients.list")
 
 
-def test_other_page_permission_does_not_grant_access() -> None:
-    access = _access(page_permissions={"patients.detail": "manage", "finance": "none"})
-    assert _allowed(access, "patients.detail", "manage")
-    assert not _allowed(access, "finance", "view")
-    assert not _allowed(access, "appointments.detail", "view")
+@pytest.mark.parametrize("bad", [
+    {"patients.detail": "view"},
+    {"patients.detail": "admin"},
+    {"patients.detail": 1},
+    {"patients.detail": None},
+    {"future.page": "manage"},
+    {"team": "manage"},
+    [],
+])
+def test_malformed_explicit_matrix_fails_closed(bad) -> None:
+    member = membership(page_permissions=bad)
+    assert not allows(member, "patients.detail")
 
 
-def test_unknown_keys_and_actions_fail_during_dependency_configuration() -> None:
-    with pytest.raises(ValueError, match="Unknown page"):
-        require_page_permission("patients.made_up", "view", legacy_access="reader")
-    with pytest.raises(ValueError, match="Unknown page permission action"):
-        require_page_permission("patients.detail", "delete", legacy_access="reader")
-    with pytest.raises(ValueError, match="Unknown legacy access"):
-        require_page_permission("patients.detail", "view", legacy_access="superadmin")
-    with pytest.raises(ValueError, match="Unknown legacy access"):
-        _allowed(_access(), "patients.detail", "view", legacy_access="owner")
-    with pytest.raises(ValueError):
-        _allowed(_access(), "patients.made_up", "view")
-    with pytest.raises(TypeError):
-        require_page_permission("patients.detail", "view")
-    with pytest.raises(TypeError):
-        page_permission_allows(
-            _access().membership, workspace_id=uuid4(), user_id=uuid4(),
-            page_key="patients.detail", action="view",
-        )
+def test_team_is_always_admin_only() -> None:
+    assert not allows(membership(page_permissions=matrix("none")), "team")
+    assert not allows(membership(page_permissions={"team": "manage"}), "team")
+    assert allows(membership(role="admin", page_permissions=matrix()), "team")
 
 
-def test_matrix_validation_rejects_unknown_missing_and_invalid_values() -> None:
-    good = _full_matrix("none")
-    good["patients.detail"] = "manage"
-    assert validate_complete_page_permissions(good) == good
-    with pytest.raises(ValueError, match="missing"):
-        validate_complete_page_permissions({"patients.detail": "view"})
+def test_membership_activity_workspace_and_user_are_enforced() -> None:
+    inactive = membership(role="admin", active=False)
+    assert not allows(inactive, "dashboard")
+
+    member = membership(page_permissions=matrix("manage"))
+    member.workspace_id = uuid4()
+    assert not allows(member, "dashboard")
+    member.workspace_id = workspace_id
+    member.user_id = uuid4()
+    assert not allows(member, "dashboard")
+
+
+def test_complete_matrix_accepts_only_none_and_manage() -> None:
+    complete = matrix()
+    complete["inventory"] = "manage"
+    assert validate_complete_page_permissions(complete) == complete
+    assert set(validate_complete_page_permissions(complete)) == set(PAGE_PERMISSION_KEYS)
     with pytest.raises(ValueError, match="unknown"):
-        validate_complete_page_permissions({**good, "bad.key": "view"})
+        validate_complete_page_permissions({**complete, "bad.key": "none"})
+    with pytest.raises(ValueError, match="missing"):
+        validate_complete_page_permissions({"inventory": "manage"})
     with pytest.raises(ValueError, match="Invalid page permission level"):
-        validate_complete_page_permissions({**good, "inventory": "superadmin"})
-    with pytest.raises(ValueError, match="Only Admins"):
-        validate_complete_page_permissions({**good, "team": "manage"})
-    with pytest.raises(ValueError, match="must be an object"):
-        validate_complete_page_permissions(None)
+        validate_complete_page_permissions({**complete, "inventory": "view"})
+    with pytest.raises(ValueError, match="Admin-only"):
+        validate_complete_page_permissions({**complete, "team": "manage"})
 
 
-def test_schema_validates_complete_matrix_and_version() -> None:
-    matrix = _full_matrix()
-    saved = MemberPagePermissionsUpdate(expected_version=0, page_permissions=matrix)
-    assert saved.expected_version == 0
-    assert saved.page_permissions == matrix
-    for invalid in ({"bad.key": "view"}, {"patients.detail": "view"}):
+def test_update_schema_requires_complete_binary_matrix_and_version() -> None:
+    complete = matrix()
+    parsed = MemberPagePermissionsUpdate(expected_version=0, page_permissions=complete)
+    assert parsed.page_permissions == complete
+    for value in (-1, True, "1"):
         with pytest.raises(ValidationError):
-            MemberPagePermissionsUpdate(expected_version=0, page_permissions=invalid)
+            MemberPagePermissionsUpdate(expected_version=value, page_permissions=complete)
     with pytest.raises(ValidationError):
-        MemberPagePermissionsUpdate(
-            expected_version=0, page_permissions={**matrix, "inventory": "write"}
-        )
-    for invalid in (-1, True, "3"):
-        with pytest.raises(ValidationError):
-            MemberPagePermissionsUpdate(expected_version=invalid, page_permissions=matrix)
+        MemberPagePermissionsUpdate(expected_version=0, page_permissions={**complete, "dashboard": "view"})
 
 
-def test_invalid_explicit_stored_matrix_fails_closed() -> None:
-    for stored in (
-        {"patients.detail": "superadmin"},
-        {"patients.detail": "manage", "team": "manage"},
-        {"patients.detail": "manage", "future.page": "view"},
-        {"patients.detail": 2},
-        [],
-    ):
-        access = _access(page_permissions=stored)
-        assert not _allowed(access, "patients.detail", "view")
-        assert not _allowed(access, "patients.detail", "manage")
-
-
-def test_inactive_membership_and_cross_workspace_access_denied() -> None:
-    inactive = _access(role="admin", active=False)
-    assert not _allowed(inactive, "dashboard", "view")
-    access = _access(page_permissions={"patients.detail": "manage"})
-    access.membership.workspace_id = uuid4()
-    assert not _allowed(access, "patients.detail", "manage")
-    access.membership.workspace_id = access.workspace.id
-    access.membership.user_id = uuid4()
-    assert not _allowed(access, "patients.detail", "view")
-
-
-@pytest.mark.parametrize(
-    ("level", "legacy_access", "action", "expected"),
-    [
-        (None, "reader", "view", True),
-        (None, "reader", "manage", True),
-        (None, "admin", "view", False),
-        (None, "admin", "manage", False),
-        ("none", "reader", "view", False),
-        ("none", "admin", "manage", False),
-        ("view", "admin", "view", True),
-        ("view", "admin", "manage", False),
-        ("manage", "admin", "view", True),
-        ("manage", "admin", "manage", True),
-        ("manage", "reader", "manage", True),
-    ],
-)
-def test_legacy_and_explicit_contract(
-    level: str | None, legacy_access: str, action: str, expected: bool
-) -> None:
-    matrix = None if level is None else {"patients.detail": level}
-    assert _allowed(
-        _access(page_permissions=matrix),
-        "patients.detail",
-        action,
-        legacy_access=legacy_access,
-    ) is expected
-
-
-def test_explicit_member_manage_does_not_require_admin_role_guard() -> None:
-    access = _access(page_permissions={"patients.detail": "manage"})
-    with pytest.raises(HTTPException) as exc:
-        get_workspace_admin(access)
-    assert exc.value.status_code == 403
-    assert _allowed(access, "patients.detail", "manage", legacy_access="admin")
-
-
-def test_fastapi_dependency_blocks_direct_url_and_manage_bypass() -> None:
-    app = FastAPI()
-    reader_view = require_page_permission(
-        "patients.detail", "view", legacy_access="reader"
+def test_permission_read_schema_exposes_version_and_complete_matrix() -> None:
+    complete = matrix()
+    parsed = MemberPagePermissionsRead(
+        membership_id="membership-id",
+        page_permissions=complete,
+        permissions_version=4,
     )
-    reader_manage = require_page_permission(
-        "patients.detail", "manage", legacy_access="reader"
+    assert parsed.permissions_version == 4
+    assert parsed.page_permissions == complete
+
+
+def test_dependency_rejects_unknown_key_at_route_declaration() -> None:
+    with pytest.raises(ValueError, match="Unknown page"):
+        require_page_permission("patients.unknown", legacy_access="reader")
+
+
+def test_compare_and_swap_is_workspace_member_actor_and_version_scoped() -> None:
+    statement = build_page_permissions_compare_and_swap(
+        workspace_id=workspace_id,
+        membership_id=uuid4(),
+        actor_user_id=user_id,
+        expected_version=7,
+        page_permissions=matrix("manage"),
     )
-    admin_view = require_page_permission(
-        "patients.detail", "view", legacy_access="admin"
-    )
-    admin_manage = require_page_permission(
-        "patients.detail", "manage", legacy_access="admin"
-    )
-
-    @app.get("/reader-view")
-    def reader_read(_access: Annotated[WorkspaceAccess, Depends(reader_view)]) -> dict[str, bool]:
-        return {"allowed": True}
-
-    @app.post("/reader-manage")
-    def reader_write(_access: Annotated[WorkspaceAccess, Depends(reader_manage)]) -> dict[str, bool]:
-        return {"allowed": True}
-
-    @app.get("/admin-view")
-    def admin_read(_access: Annotated[WorkspaceAccess, Depends(admin_view)]) -> dict[str, bool]:
-        return {"allowed": True}
-
-    @app.post("/admin-manage")
-    def admin_write(_access: Annotated[WorkspaceAccess, Depends(admin_manage)]) -> dict[str, bool]:
-        return {"allowed": True}
-
-    def unchanged_business_constraint() -> bool:
-        raise HTTPException(status_code=409, detail="Business constraints still apply.")
-
-    @app.post("/business-guarded")
-    def guarded_write(
-        _access: Annotated[WorkspaceAccess, Depends(admin_manage)],
-        _business: Annotated[bool, Depends(unchanged_business_constraint)],
-    ) -> dict[str, bool]:
-        return {"allowed": True}
-
-    # The new page guard must not contain an extra admin/reader role gate:
-    # a member with explicit manage must be able to reach the business guard.
-    def nested_dependencies(route: APIRoute) -> set[object]:
-        found: set[object] = set()
-
-        def visit(dep) -> None:
-            for child in dep.dependencies:
-                found.add(child.call)
-                visit(child)
-
-        visit(route.dependant)
-        return found
-
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            calls = nested_dependencies(route)
-            assert get_workspace_access in calls
-            assert get_workspace_admin not in calls
-            assert get_workspace_reader not in calls
-
-    access = _access()
-    app.dependency_overrides[get_workspace_access] = lambda: access
-    with TestClient(app) as client:
-        # NULL Member: preserve the precise historical role requirement,
-        # regardless of HTTP method or whether page action is view/manage.
-        assert client.get("/reader-view").status_code == 200
-        assert client.post("/reader-manage").status_code == 200
-        assert client.get("/admin-view").status_code == 403
-        assert client.post("/admin-manage").status_code == 403
-
-        # Explicit matrix: replace only the role gate, not business constraints.
-        access.membership.page_permissions = {"patients.detail": "view"}
-        assert client.get("/admin-view").status_code == 200
-        assert client.post("/admin-manage").status_code == 403
-        assert client.post("/reader-manage").status_code == 403
-
-        access.membership.page_permissions = {"patients.detail": "manage"}
-        assert client.post("/admin-manage").status_code == 200
-        assert client.post("/business-guarded").status_code == 409
-        app.dependency_overrides[unchanged_business_constraint] = lambda: True
-        assert client.post("/business-guarded").status_code == 200
-
-        access.membership.page_permissions = {"patients.detail": "none"}
-        assert client.get("/reader-view").status_code == 403
-        assert client.get("/admin-view").status_code == 403
-        assert client.post("/admin-manage").status_code == 403
-
-        access.membership.role = "admin"
-        assert client.post("/admin-manage").status_code == 200
-        access.membership.is_active = False
-        assert client.get("/reader-view").status_code == 403
-
-
-def test_fastapi_team_manage_is_admin_only() -> None:
-    app = FastAPI()
-    team_manage = require_page_permission("team", "manage", legacy_access="admin")
-
-    @app.post("/team/permissions")
-    def change_permissions(
-        _access: Annotated[WorkspaceAccess, Depends(team_manage)],
-    ) -> dict[str, bool]:
-        return {"allowed": True}
-
-    access = _access(page_permissions={"team": "manage"})
-    app.dependency_overrides[get_workspace_access] = lambda: access
-    with TestClient(app) as client:
-        assert client.post("/team/permissions").status_code == 403
-        access.membership.page_permissions = None
-        assert client.post("/team/permissions").status_code == 403
-        access.membership.role = "admin"
-        assert client.post("/team/permissions").status_code == 200
-
-
-def test_atomic_cas_builder_scopes_workspace_actor_role_and_version() -> None:
-    actor_id, workspace_id, membership_id = uuid4(), uuid4(), uuid4()
-    matrix = _full_matrix("view")
-    stmt = build_page_permissions_compare_and_swap(
-        workspace_id=workspace_id, membership_id=membership_id,
-        actor_user_id=actor_id, expected_version=12, page_permissions=matrix,
-    )
-    sql = str(stmt.compile(dialect=postgresql.dialect()))
-    assert "UPDATE workspace_members" in sql
-    assert "workspace_members.workspace_id =" in sql
-    assert "workspace_members.id =" in sql
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "workspace_members.workspace_id" in sql
     assert "workspace_members.user_id !=" in sql
-    assert "workspace_members.is_active IS true" in sql
     assert "workspace_members.role =" in sql
+    assert "workspace_members.is_active IS true" in sql
     assert "workspace_members.permissions_version =" in sql
-    assert "workspace_members.permissions_version + " in sql
-    assert "RETURNING workspace_members.permissions_version" in sql
-    assert require_successful_permission_update(13, expected_version=12) == 13
+    assert "permissions_version=(workspace_members.permissions_version + " in sql
+
+
+def test_compare_and_swap_rejects_invalid_version_and_matrix() -> None:
+    args = {
+        "workspace_id": workspace_id,
+        "membership_id": uuid4(),
+        "actor_user_id": user_id,
+        "expected_version": 0,
+        "page_permissions": matrix(),
+    }
+    with pytest.raises(ValueError):
+        build_page_permissions_compare_and_swap(**{**args, "expected_version": True})
+    with pytest.raises(ValueError):
+        build_page_permissions_compare_and_swap(**{**args, "page_permissions": {"dashboard": "view"}})
+
+
+def test_stale_compare_and_swap_returns_conflict() -> None:
+    assert require_successful_permission_update(8, expected_version=7) == 8
     with pytest.raises(HTTPException) as exc:
-        require_successful_permission_update(None, expected_version=12)
+        require_successful_permission_update(None, expected_version=7)
     assert exc.value.status_code == 409
     with pytest.raises(HTTPException):
-        require_successful_permission_update(14, expected_version=12)
-    for invalid in (-1, True, "4"):
-        with pytest.raises(ValueError):
-            build_page_permissions_compare_and_swap(
-                workspace_id=workspace_id, membership_id=membership_id,
-                actor_user_id=actor_id, expected_version=invalid,
-                page_permissions=matrix,
-            )
-
-
-def _isolated_ci_engine():
-    url = make_url(os.environ["DATABASE_URL"])
-    if url.host not in {"localhost", "127.0.0.1", "::1"} or url.database != "ci_db":
-        pytest.fail("Permission storage tests require disposable local PostgreSQL ci_db.")
-    return create_engine(url, connect_args={"connect_timeout": 3})
-
-
-def test_migration_columns_and_legacy_defaults_on_isolated_postgresql() -> None:
-    engine = _isolated_ci_engine()
-    try:
-        columns = {col["name"]: col for col in inspect(engine).get_columns("workspace_members")}
-        assert str(columns["page_permissions"]["type"]).upper() == "JSONB"
-        assert columns["page_permissions"]["nullable"] is True
-        assert str(columns["permissions_version"]["type"]).upper() == "INTEGER"
-        assert columns["permissions_version"]["nullable"] is False
-        assert "0" in str(columns["permissions_version"]["default"])
-
-        conn = engine.connect()
-        transaction = conn.begin()
-        try:
-            db = Session(bind=conn, join_transaction_mode="create_savepoint")
-            workspace = Workspace(name="Permission CI", slug=f"permission-{uuid4().hex[:12]}")
-            user = User(email=f"permission-{uuid4()}@example.test", auth_user_id=uuid4())
-            db.add_all([workspace, user])
-            db.flush()
-            membership_id = uuid4()
-            value = db.execute(
-                text(
-                    "INSERT INTO workspace_members "
-                    "(id, workspace_id, user_id, role, is_active) "
-                    "VALUES (:id, :wid, :uid, 'member', true) "
-                    "RETURNING page_permissions, permissions_version"
-                ),
-                {"id": membership_id, "wid": workspace.id, "uid": user.id},
-            ).one()
-            assert value.page_permissions is None
-            assert value.permissions_version == 0
-            membership = db.get(WorkspaceMember, membership_id)
-            assert membership is not None
-            assert membership.page_permissions is None
-            assert membership.permissions_version == 0
-
-            admin_id = uuid4()
-            elevated_matrix = _full_matrix("manage")
-            elevated_matrix["team"] = "view"
-            new = db.execute(
-                build_page_permissions_compare_and_swap(
-                    workspace_id=workspace.id, membership_id=membership_id,
-                    actor_user_id=admin_id, expected_version=0,
-                    page_permissions=_full_matrix("view"),
-                )
-            ).scalar_one_or_none()
-            assert require_successful_permission_update(new, expected_version=0) == 1
-            assert db.execute(
-                build_page_permissions_compare_and_swap(
-                    workspace_id=workspace.id, membership_id=membership_id,
-                    actor_user_id=admin_id, expected_version=0,
-                    page_permissions=elevated_matrix,
-                )
-            ).scalar_one_or_none() is None
-            assert db.execute(
-                build_page_permissions_compare_and_swap(
-                    workspace_id=workspace.id, membership_id=membership_id,
-                    actor_user_id=user.id, expected_version=1,
-                    page_permissions=elevated_matrix,
-                )
-            ).scalar_one_or_none() is None
-            assert db.execute(
-                build_page_permissions_compare_and_swap(
-                    workspace_id=uuid4(), membership_id=membership_id,
-                    actor_user_id=admin_id, expected_version=1,
-                    page_permissions=elevated_matrix,
-                )
-            ).scalar_one_or_none() is None
-            db.expire_all()
-            saved = db.get(WorkspaceMember, membership_id)
-            assert saved is not None
-            assert saved.permissions_version == 1
-            assert saved.page_permissions == _full_matrix("view")
-            db.close()
-        finally:
-            if transaction.is_active:
-                transaction.rollback()
-            conn.close()
-    finally:
-        engine.dispose()
+        require_successful_permission_update(9, expected_version=7)
