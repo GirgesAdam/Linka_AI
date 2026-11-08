@@ -115,7 +115,8 @@ def test_phase3_is_manual_opt_in_while_required_grouped_gates_remain_automatic()
 
 def test_phase3_manual_diagnostic_implementation_remains_available() -> None:
     source = GROUPED_WORKFLOW.read_text(encoding="utf-8")
-    assert "backend/scripts/run_phase3_real_world_agent_audit.py" in source
+    assert "  workflow_dispatch:" in source
+    assert "if: github.ref == 'refs/heads/main'" in source
     assert "python scripts/run_phase3_real_world_agent_audit.py" in source
     assert "phase3-real-world-agent-audit.log" in source
 

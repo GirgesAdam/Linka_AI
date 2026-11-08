@@ -1,14 +1,8 @@
 name: Grouped Multi-Service Intent Live Review
 
+# Real Agent runs consume provider credentials.
+# Keep them off PR events; dispatch only from the protected default branch.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - .github/workflows/grouped-multiservice-intent-live-review.yml
-      - backend/scripts/run_grouped_multiservice_intent_live_review.py
-      - backend/scripts/run_phase3_real_world_agent_audit.py
-      - backend/app/services/agent_v2/**
-      - backend/app/agents/v2/**
   workflow_dispatch:
     inputs:
       run_phase3:
@@ -22,7 +16,7 @@ permissions:
 
 jobs:
   standalone:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.ref == 'refs/heads/main'
     name: RA-G standalone #241
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -129,7 +123,7 @@ jobs:
           retention-days: 7
 
   batch1-compatibility:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: github.ref == 'refs/heads/main'
     name: RA-G Batch-1 compatibility overlay
     runs-on: ubuntu-latest
     timeout-minutes: 40
