@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Annotated
 from uuid import UUID
 
@@ -17,6 +17,7 @@ from app.api.dependencies.security import (
 )
 from app.database.session import AnalyticsSessionLocal, SessionLocal
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER
+from app.services.page_permissions import LegacyPageAccess, page_permission_allows, validate_legacy_access, validate_page_key
 from app.services.analytics_capacity import is_statement_timeout
 from app.services.supabase_auth import VerifiedAuthIdentity
 
@@ -66,3 +67,35 @@ def get_analytics_db() -> Generator[Session, None, None]:
         raise
     finally:
         db.close()
+
+
+def get_analytics_page_reader(
+    page_key: str,
+    *,
+    legacy_access: LegacyPageAccess = "reader",
+) -> Callable[..., WorkspaceAccess]:
+    """Resolve analytics access without holding the main DB pool and enforce its page."""
+    validate_page_key(page_key)
+    validate_legacy_access(legacy_access)
+
+    def dependency(
+        x_workspace_id: Annotated[UUID, Header(alias="X-Workspace-ID")],
+        identity: Annotated[VerifiedAuthIdentity, Depends(get_verified_identity)],
+    ) -> WorkspaceAccess:
+        with SessionLocal() as auth_db:
+            user = get_current_user(identity, auth_db)
+            access = get_workspace_access(x_workspace_id, user, auth_db)
+            if not page_permission_allows(
+                access.membership,
+                workspace_id=access.workspace.id,
+                user_id=access.user.id,
+                page_key=page_key,
+                legacy_access=legacy_access,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to access this page.",
+                )
+            return access
+
+    return dependency
