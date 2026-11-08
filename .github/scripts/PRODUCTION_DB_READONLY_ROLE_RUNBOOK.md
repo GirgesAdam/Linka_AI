@@ -308,17 +308,861 @@ has_function_privilege. The separate CONNECT root cause is database-local:
   is removed from those databases or an independently supported connection-layer
   restriction is used.
 
-The existing function-level finding remains separate: the stock PostgreSQL 17.6
-default pg_control_system() function ACL includes PUBLIC EXECUTE. The function
-repair revokes PUBLIC EXECUTE on that one function and grants the attestor only the
-narrow SECURITY DEFINER wrapper. It does not change any other pg_catalog
-function privilege.
+The earlier function-level repair revoked PUBLIC EXECUTE on
+pg_catalog.pg_control_system() and granted the attestor the narrow
+attestation_private.cluster_system_identifier() wrapper. It did not inventory
+other SECURITY DEFINER functions in application schemas. REPAIR-05 closes that
+coverage gap using a full database-local function inventory, an explicit
+attestor allowlist, fail-closed application-consumer manifests, owner-specific
+future-function defaults, and effective privilege/actual-call integration tests.
+This is not evidence that a Production function was exploited.
+
+
+## SECURITY DEFINER function inventory and isolation — REPAIR-05
+
+The original function repair covered only pg_catalog.pg_control_system() and
+the allowlisted attestation_private.cluster_system_identifier() wrapper. That
+did not prove that the attestor was unable to invoke other SECURITY DEFINER
+functions through PUBLIC EXECUTE in application schemas. A SECURITY DEFINER
+function executes with its owner's privileges. default_transaction_read_only
+is not an authorization boundary and can be changed inside the session.
+
+This is a privilege-coverage gap, not evidence that a Production function was
+exploited. No Production function inventory has been supplied or executed by
+this task. The following inventory and change procedure are DBA-only and must
+run in the intended database before any Production ACL change.
+
+### 1. Complete SECURITY DEFINER inventory
+
+The inventory includes all SECURITY DEFINER functions in the current database,
+not only public. It separately labels system schemas and extension-owned functions.
+A schema may host both extension functions and application functions; classification
+uses pg_depend membership for each function rather than namespace alone. It
+reports schema USAGE, direct/PUBLIC/inherited/effective EXECUTE, owner, grantor,
+grant option, function configuration, and function search_path. It expands
+default ACLs when proacl is NULL.
+
+~~~sql
+WITH RECURSIVE
+attestor AS (
+    SELECT oid
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'tia_production_attestor'
+),
+inherited_roles(role_oid) AS (
+    SELECT m.roleid
+    FROM pg_catalog.pg_auth_members AS m
+    CROSS JOIN attestor AS a
+    WHERE m.member = a.oid
+      AND m.inherit_option
+    UNION
+    SELECT m.roleid
+    FROM pg_catalog.pg_auth_members AS m
+    JOIN inherited_roles AS inherited
+      ON m.member = inherited.role_oid
+    WHERE m.inherit_option
+)
+SELECT
+    n.nspname AS schema_name,
+    p.proname AS function_name,
+    p.oid::regprocedure AS function_identity,
+    pg_catalog.pg_get_function_identity_arguments(p.oid) AS identity_arguments,
+    owner.rolname AS function_owner,
+    owner.rolsuper AS owner_is_superuser,
+    p.prosecdef AS security_definer,
+    CASE
+        WHEN n.nspname IN ('pg_catalog', 'information_schema')
+          OR pg_catalog.left(n.nspname, 8) = 'pg_toast'
+          OR pg_catalog.left(n.nspname, 8) = 'pg_temp_'
+          OR pg_catalog.left(n.nspname, 13) = 'pg_toast_temp_'
+        THEN 'SYSTEM'
+        WHEN EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_depend AS extension_member
+            WHERE extension_member.classid = 'pg_catalog.pg_proc'::regclass
+              AND extension_member.objid = p.oid
+              AND extension_member.refclassid = 'pg_catalog.pg_extension'::regclass
+              AND extension_member.deptype = 'e'
+        )
+        THEN 'EXTENSION'
+        ELSE 'APPLICATION'
+    END AS schema_class,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_extension AS e
+        WHERE e.extnamespace = n.oid
+    ) AS extension_owned_schema,
+    pg_catalog.has_schema_privilege(
+        attestor.oid, n.oid, 'USAGE'
+    ) AS attestor_schema_usage,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+        ) AS acl
+        WHERE acl.grantee = attestor.oid
+          AND acl.privilege_type = 'USAGE'
+    ) AS direct_schema_usage,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+        ) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'USAGE'
+    ) AS public_schema_usage,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+        ) AS acl
+        JOIN inherited_roles AS inherited
+          ON inherited.role_oid = acl.grantee
+        WHERE acl.privilege_type = 'USAGE'
+    ) AS inherited_schema_usage,
+    pg_catalog.has_function_privilege(
+        attestor.oid, p.oid, 'EXECUTE'
+    ) AS effective_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        WHERE acl.grantee = attestor.oid
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS direct_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS public_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        JOIN inherited_roles AS inherited
+          ON inherited.role_oid = acl.grantee
+        WHERE acl.privilege_type = 'EXECUTE'
+    ) AS inherited_execute,
+    p.proconfig AS function_configuration,
+    COALESCE(
+        (
+            SELECT pg_catalog.substr(cfg.setting, 13)
+            FROM pg_catalog.unnest(
+                COALESCE(p.proconfig, ARRAY[]::text[])
+            ) AS cfg(setting)
+            WHERE pg_catalog.left(cfg.setting, 12) = 'search_path='
+            LIMIT 1
+        ),
+        '<unset>'
+    ) AS function_search_path,
+    COALESCE(
+        (
+            SELECT pg_catalog.jsonb_agg(
+                pg_catalog.jsonb_build_object(
+                    'grantee',
+                    CASE
+                        WHEN acl.grantee = 0 THEN 'PUBLIC'
+                        ELSE pg_catalog.pg_get_userbyid(acl.grantee)
+                    END,
+                    'grantor', pg_catalog.pg_get_userbyid(acl.grantor),
+                    'grant_option', acl.is_grantable
+                )
+                ORDER BY acl.grantee
+            )
+            FROM pg_catalog.aclexplode(
+                COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+            ) AS acl
+            WHERE acl.privilege_type = 'EXECUTE'
+        ),
+        '[]'::jsonb
+    ) AS execute_acl_grantors
+FROM pg_catalog.pg_proc AS p
+JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+JOIN pg_catalog.pg_roles AS owner ON owner.oid = p.proowner
+CROSS JOIN attestor
+WHERE p.prosecdef
+ORDER BY schema_class, n.nspname, p.proname,
+         pg_catalog.pg_get_function_identity_arguments(p.oid);
+~~~
+
+The inventory must be retained as a review artifact. A NULL proacl is expanded
+with acldefault('f', proowner); it does not mean that EXECUTE is absent.
+has_function_privilege and has_schema_privilege are the effective checks.
+Function ownership and SUPERUSER are implicit privilege paths and must be
+reviewed separately. The ACL evidence records grantor and grant option.
+proconfig and function_search_path are evidence for DBA review; they do not
+prove that a function body is safe.
+
+### 2. Application consumer inventory
+
+Run the role/function matrix for every role, including NOLOGIN group roles.
+This identifies potential consumers; it does not prove that a role actually
+calls a function. The DBA must also search application source, migrations,
+background workers, scheduled jobs, operational scripts, dashboards, and
+external integrations.
+
+~~~sql
+WITH RECURSIVE role_inheritance(member_oid, inherited_oid) AS (
+    SELECT m.member, m.roleid
+    FROM pg_catalog.pg_auth_members AS m
+    WHERE m.inherit_option
+    UNION
+    SELECT inherited.member_oid, m.roleid
+    FROM role_inheritance AS inherited
+    JOIN pg_catalog.pg_auth_members AS m
+      ON m.member = inherited.inherited_oid
+    WHERE m.inherit_option
+)
+SELECT
+    n.nspname AS schema_name,
+    p.oid::regprocedure AS function_identity,
+    owner.rolname AS function_owner,
+    r.rolname AS consumer_role,
+    r.rolcanlogin,
+    r.rolsuper,
+    pg_catalog.has_schema_privilege(r.oid, n.oid, 'USAGE') AS schema_usage,
+    pg_catalog.has_function_privilege(r.oid, p.oid, 'EXECUTE') AS effective_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        WHERE acl.grantee = r.oid
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS direct_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS public_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        JOIN role_inheritance AS inherited
+          ON inherited.inherited_oid = acl.grantee
+         AND inherited.member_oid = r.oid
+        WHERE acl.privilege_type = 'EXECUTE'
+    ) AS inherited_execute
+FROM pg_catalog.pg_proc AS p
+JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+JOIN pg_catalog.pg_roles AS owner ON owner.oid = p.proowner
+CROSS JOIN pg_catalog.pg_roles AS r
+WHERE p.prosecdef
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND pg_catalog.left(n.nspname, 8) <> 'pg_toast'
+  AND pg_catalog.left(n.nspname, 8) <> 'pg_temp_'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_depend AS extension_member
+      WHERE extension_member.classid = 'pg_catalog.pg_proc'::regclass
+        AND extension_member.objid = p.oid
+        AND extension_member.refclassid = 'pg_catalog.pg_extension'::regclass
+        AND extension_member.deptype = 'e'
+  )
+ORDER BY function_identity, r.rolcanlogin DESC, r.rolname;
+~~~
+
+For each exposed function, the DBA must record one of:
+- approved application consumers and the exact role/group grants to preserve;
+- reviewed zero-consumer status with evidence;
+- unresolved consumer/owner/grantor status, which means ABORT.
+
+Do not infer an application consumer solely because PUBLIC EXECUTE made the
+function technically callable. Do not infer that it is unused from the absence
+of an obvious call site. If the actual consumer inventory is incomplete, make
+no ACL changes.
+
+### 3. Exact attestor allowlist
+
+The complete SECURITY DEFINER function allowlist for the attestor is exactly:
+
+~~~text
+attestation_private.cluster_system_identifier()
+~~~
+
+It must be zero-argument, owned by the reviewed postgres function owner,
+SECURITY DEFINER, and have SET search_path = pg_catalog. The attestor must have
+schema USAGE on attestation_private and one direct EXECUTE grant on this wrapper.
+PUBLIC EXECUTE must be absent. No other SECURITY DEFINER function in any
+application schema usable by the attestor may have effective EXECUTE.
+
+pg_catalog.pg_control_system() remains separately revoked from PUBLIC and must
+not be executable directly by the attestor.
+
+System and extension schemas are inventoried separately. If the attestor has
+both schema USAGE and effective EXECUTE on any SECURITY DEFINER function in a
+system or extension schema, STOP for a separately reviewed DBA plan. Do not
+apply blanket REVOKE to pg_catalog or extension-owned functions.
+
+### 4. Fail-closed function ACL review and repair
+
+This procedure is database-local. Do not run it until the DBA has retained the
+inventory and completed the application consumer assessment. The temporary
+manifests below are intentionally empty: if any exposed function is not
+reviewed and listed, the transaction aborts before the first ACL change.
+
+~~~sql
+CREATE TEMP TABLE approved_function_review (
+    function_identity regprocedure PRIMARY KEY,
+    reviewed_by name NOT NULL,
+    evidence_reference text NOT NULL,
+    consumer_inventory_complete boolean NOT NULL
+        CHECK (consumer_inventory_complete),
+    search_path_reviewed boolean NOT NULL
+        CHECK (search_path_reviewed)
+) ON COMMIT DROP;
+
+CREATE TEMP TABLE approved_function_regrant (
+    function_identity regprocedure NOT NULL,
+    role_name name NOT NULL,
+    approval_reference text NOT NULL,
+    PRIMARY KEY (function_identity, role_name)
+) ON COMMIT DROP;
+
+CREATE TEMP TABLE function_public_execute_before (
+    function_identity regprocedure PRIMARY KEY
+) ON COMMIT DROP;
+
+CREATE TEMP TABLE function_attestor_direct_before (
+    function_identity regprocedure PRIMARY KEY
+) ON COMMIT DROP;
+
+CREATE TEMP TABLE function_application_regrants_added (
+    function_identity regprocedure NOT NULL,
+    role_name name NOT NULL,
+    PRIMARY KEY (function_identity, role_name)
+) ON COMMIT DROP;
+~~~
+
+Populate approved_function_review for every exposed application SECURITY
+DEFINER function that the attestor can currently execute. Each row must include
+the DBA reviewer, evidence reference, complete consumer inventory confirmation,
+and search_path review confirmation. Populate approved_function_regrant only
+for the service-owner-approved application roles/groups that must retain access.
+Existing direct/inherited application grants are left intact and do not need a
+duplicate grant. PUBLIC-only application consumers require an explicit regrant.
+
+The following SQL is the fail-closed transaction fragment. Run it after the
+allowlisted wrapper has been created and granted, and before COMMIT in the
+administrator SQL. If an owner differs from current_user, use a separate
+owner-specific reviewed transaction; do not broaden authority silently.
+
+~~~sql
+CREATE TEMP TABLE security_definer_function_before ON COMMIT DROP AS
+WITH RECURSIVE
+attestor AS (
+    SELECT oid FROM pg_catalog.pg_roles
+    WHERE rolname = 'tia_production_attestor'
+),
+inherited_roles(role_oid) AS (
+    SELECT m.roleid
+    FROM pg_catalog.pg_auth_members AS m
+    CROSS JOIN attestor AS a
+    WHERE m.member = a.oid AND m.inherit_option
+    UNION
+    SELECT m.roleid
+    FROM pg_catalog.pg_auth_members AS m
+    JOIN inherited_roles AS inherited ON m.member = inherited.role_oid
+    WHERE m.inherit_option
+)
+SELECT
+    p.oid AS function_oid,
+    p.oid::regprocedure AS function_identity,
+    n.nspname AS schema_name,
+    p.proname AS function_name,
+    pg_catalog.pg_get_function_identity_arguments(p.oid) AS identity_arguments,
+    p.proowner AS owner_oid,
+    owner.rolname AS owner_name,
+    p.proacl::text AS stored_proacl,
+    p.proconfig,
+    pg_catalog.has_schema_privilege(attestor.oid, n.oid, 'USAGE')
+        AS attestor_schema_usage,
+    pg_catalog.has_function_privilege(attestor.oid, p.oid, 'EXECUTE')
+        AS attestor_effective_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        WHERE acl.grantee = attestor.oid
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS direct_attestor_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS public_execute,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+        ) AS acl
+        JOIN inherited_roles AS inherited ON inherited.role_oid = acl.grantee
+        WHERE acl.privilege_type = 'EXECUTE'
+    ) AS inherited_execute
+FROM pg_catalog.pg_proc AS p
+JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+JOIN pg_catalog.pg_roles AS owner ON owner.oid = p.proowner
+CROSS JOIN attestor
+WHERE p.prosecdef
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND pg_catalog.left(n.nspname, 8) <> 'pg_toast'
+  AND pg_catalog.left(n.nspname, 8) <> 'pg_temp_'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_depend AS extension_member
+      WHERE extension_member.classid = 'pg_catalog.pg_proc'::regclass
+        AND extension_member.objid = p.oid
+        AND extension_member.refclassid = 'pg_catalog.pg_extension'::regclass
+        AND extension_member.deptype = 'e'
+  );
+
+INSERT INTO pg_temp.function_public_execute_before(function_identity)
+SELECT function_identity
+FROM pg_temp.security_definer_function_before
+WHERE attestor_schema_usage
+  AND attestor_effective_execute
+  AND public_execute
+  AND function_identity <>
+      'attestation_private.cluster_system_identifier()'::regprocedure;
+
+INSERT INTO pg_temp.function_attestor_direct_before(function_identity)
+SELECT function_identity
+FROM pg_temp.security_definer_function_before
+WHERE attestor_schema_usage
+  AND attestor_effective_execute
+  AND direct_attestor_execute
+  AND function_identity <>
+      'attestation_private.cluster_system_identifier()'::regprocedure;
+
+DO $function_preflight$
+DECLARE
+    v_function record;
+    v_acl record;
+    v_attestor_oid oid;
+BEGIN
+    SELECT oid INTO v_attestor_oid
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'tia_production_attestor';
+
+    IF v_attestor_oid IS NULL
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.pg_roles
+           WHERE oid = v_attestor_oid AND rolsuper
+       )
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.pg_auth_members
+           WHERE member = v_attestor_oid
+       )
+       OR EXISTS (
+           SELECT 1
+           FROM pg_temp.security_definer_function_before
+           WHERE owner_oid = v_attestor_oid
+       )
+    THEN
+        RAISE EXCEPTION
+            'attestor ownership, SUPERUSER, or role membership violates isolation';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_temp.security_definer_function_before AS f
+        WHERE f.attestor_schema_usage
+          AND f.attestor_effective_execute
+          AND f.function_identity <>
+              'attestation_private.cluster_system_identifier()'::regprocedure
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pg_temp.approved_function_review AS review
+              WHERE review.function_identity = f.function_identity
+                AND review.evidence_reference <> ''
+                AND review.consumer_inventory_complete
+                AND review.search_path_reviewed
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'SECURITY DEFINER consumer inventory/search_path review is incomplete';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_proc AS p
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+        WHERE p.prosecdef
+          AND (
+              n.nspname IN ('pg_catalog', 'information_schema')
+              OR pg_catalog.left(n.nspname, 8) = 'pg_toast'
+              OR pg_catalog.left(n.nspname, 8) = 'pg_temp_'
+              OR EXISTS (
+                  SELECT 1
+                  FROM pg_catalog.pg_depend AS extension_member
+                  WHERE extension_member.classid = 'pg_catalog.pg_proc'::regclass
+                    AND extension_member.objid = p.oid
+                    AND extension_member.refclassid = 'pg_catalog.pg_extension'::regclass
+                    AND extension_member.deptype = 'e'
+              )
+          )
+          AND pg_catalog.has_schema_privilege(v_attestor_oid, n.oid, 'USAGE')
+          AND pg_catalog.has_function_privilege(v_attestor_oid, p.oid, 'EXECUTE')
+    ) THEN
+        RAISE EXCEPTION
+            'attestor can execute a SECURITY DEFINER function in a system/extension schema';
+    END IF;
+
+    FOR v_function IN
+        SELECT *
+        FROM pg_temp.security_definer_function_before AS f
+        WHERE f.attestor_schema_usage
+          AND f.attestor_effective_execute
+          AND f.function_identity <>
+              'attestation_private.cluster_system_identifier()'::regprocedure
+    LOOP
+        IF v_function.owner_oid <> (
+            SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
+        ) THEN
+            RAISE EXCEPTION
+                'function % has an unapproved/non-current owner %',
+                v_function.function_identity, v_function.owner_name;
+        END IF;
+
+        FOR v_acl IN
+            SELECT acl.grantee, acl.grantor, acl.is_grantable
+            FROM pg_catalog.pg_proc AS p
+            CROSS JOIN LATERAL pg_catalog.aclexplode(
+                COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+            ) AS acl
+            WHERE p.oid = v_function.function_oid
+              AND acl.privilege_type = 'EXECUTE'
+        LOOP
+            IF v_acl.grantor <> v_function.owner_oid THEN
+                RAISE EXCEPTION
+                    'function % has a non-owner EXECUTE grantor',
+                    v_function.function_identity;
+            END IF;
+            IF v_acl.is_grantable
+               AND v_acl.grantee <> v_function.owner_oid
+            THEN
+                RAISE EXCEPTION
+                    'function % has a non-owner EXECUTE grant option',
+                    v_function.function_identity;
+            END IF;
+            IF v_acl.grantee IN (0, v_attestor_oid)
+               AND v_acl.is_grantable
+            THEN
+                RAISE EXCEPTION
+                    'function % has an unapproved PUBLIC/attestor grant option',
+                    v_function.function_identity;
+            END IF;
+        END LOOP;
+
+        IF NOT (
+            v_function.public_execute
+            OR v_function.direct_attestor_execute
+            OR v_function.inherited_execute
+        ) THEN
+            RAISE EXCEPTION
+                'function % has an unclassified effective EXECUTE path',
+                v_function.function_identity;
+        END IF;
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_temp.approved_function_regrant AS a
+        LEFT JOIN pg_temp.security_definer_function_before AS f
+          ON f.function_identity = a.function_identity
+        LEFT JOIN pg_catalog.pg_roles AS r
+          ON r.rolname = a.role_name
+        WHERE f.function_oid IS NULL
+           OR NOT f.attestor_schema_usage
+           OR NOT f.attestor_effective_execute
+           OR r.oid IS NULL
+           OR r.rolsuper
+           OR a.role_name = 'tia_production_attestor'
+           OR a.approval_reference = ''
+           OR NOT pg_catalog.has_function_privilege(
+               a.role_name, a.function_identity, 'EXECUTE'
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'application function regrant manifest is not an approved pre-change consumer';
+    END IF;
+END
+$function_preflight$;
+
+DO $function_acl_repair$
+DECLARE
+    v_function record;
+    v_regrant record;
+BEGIN
+    FOR v_function IN
+        SELECT *
+        FROM pg_temp.security_definer_function_before AS f
+        WHERE f.attestor_schema_usage
+          AND f.attestor_effective_execute
+          AND f.function_identity <>
+              'attestation_private.cluster_system_identifier()'::regprocedure
+    LOOP
+        IF v_function.public_execute THEN
+            EXECUTE pg_catalog.format(
+                'REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC',
+                v_function.function_identity
+            );
+        END IF;
+        IF v_function.direct_attestor_execute THEN
+            EXECUTE pg_catalog.format(
+                'REVOKE EXECUTE ON FUNCTION %s FROM %I',
+                v_function.function_identity,
+                'tia_production_attestor'
+            );
+        END IF;
+    END LOOP;
+
+    FOR v_regrant IN
+        SELECT a.function_identity, a.role_name
+        FROM pg_temp.approved_function_regrant AS a
+        WHERE NOT pg_catalog.has_function_privilege(
+            a.role_name, a.function_identity, 'EXECUTE'
+        )
+        ORDER BY a.function_identity, a.role_name
+    LOOP
+        EXECUTE pg_catalog.format(
+            'GRANT EXECUTE ON FUNCTION %s TO %I',
+            v_regrant.function_identity,
+            v_regrant.role_name
+        );
+        INSERT INTO pg_temp.function_application_regrants_added
+            (function_identity, role_name)
+        VALUES (v_regrant.function_identity, v_regrant.role_name);
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_temp.security_definer_function_before AS f
+        WHERE f.attestor_schema_usage
+          AND f.attestor_effective_execute
+          AND f.function_identity <>
+              'attestation_private.cluster_system_identifier()'::regprocedure
+          AND pg_catalog.has_function_privilege(
+              'tia_production_attestor', f.function_identity, 'EXECUTE'
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'an unapproved SECURITY DEFINER function remains executable by attestor';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_temp.approved_function_regrant AS a
+        WHERE NOT pg_catalog.has_function_privilege(
+            a.role_name, a.function_identity, 'EXECUTE'
+        )
+    ) THEN
+        RAISE EXCEPTION
+            'an approved application SECURITY DEFINER function grant was not preserved';
+    END IF;
+END
+$function_acl_repair$;
+
+-- Retain all three result sets before COMMIT as the exact rollback manifests.
+SELECT function_identity
+FROM pg_temp.function_public_execute_before
+ORDER BY function_identity;
+
+SELECT function_identity
+FROM pg_temp.function_attestor_direct_before
+ORDER BY function_identity;
+
+SELECT function_identity, role_name
+FROM pg_temp.function_application_regrants_added
+ORDER BY function_identity, role_name;
+~~~
+
+The manifests must be populated and reviewed before the preflight DO block.
+An empty review manifest with an exposed function causes ABORT and transaction
+rollback. The fragment revokes only PUBLIC and direct attestor EXECUTE paths.
+Existing direct and inherited application grants remain unchanged; PUBLIC-only
+consumers receive explicit grants from the approved regrant manifest. The
+function owner must be current_user for this generic transaction. If an exposed
+function has another owner, grantor, grant option, membership path, or
+unclassified effective path, STOP and prepare an owner-specific reviewed plan.
+
+### 5. Future SECURITY DEFINER functions — owner-specific default ACL
+
+PostgreSQL grants EXECUTE to PUBLIC by default for new functions. Default
+privileges belong to the function creator/owner, not the cluster. A change for
+one owner does not protect functions created by another owner.
+
+The DBA must inventory every role that can create functions in an application
+schema: current function owners, schema owners, roles with effective CREATE,
+migration/deployment roles, roles that can SET ROLE to those owners, and
+superusers. Do not infer this list only from existing function owners.
+
+~~~sql
+SELECT
+    r.rolname AS potential_function_owner,
+    r.rolsuper,
+    n.nspname AS application_schema,
+    pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE') AS effective_create,
+    global_default.defaclacl::text AS global_function_default_acl,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            COALESCE(
+                global_default.defaclacl,
+                pg_catalog.acldefault('f', r.oid)
+            )
+        ) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS global_public_execute_default,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_extension AS e
+        WHERE e.extnamespace = n.oid
+    ) AS schema_contains_extension,
+    schema_default.defaclacl::text AS schema_function_default_acl,
+    EXISTS (
+        SELECT 1
+        FROM pg_catalog.aclexplode(
+            schema_default.defaclacl
+        ) AS acl
+        WHERE acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+    ) AS schema_public_execute_addition
+FROM pg_catalog.pg_roles AS r
+CROSS JOIN pg_catalog.pg_namespace AS n
+LEFT JOIN pg_catalog.pg_default_acl AS global_default
+  ON global_default.defaclrole = r.oid
+ AND global_default.defaclnamespace = 0
+ AND global_default.defaclobjtype = 'f'
+LEFT JOIN pg_catalog.pg_default_acl AS schema_default
+  ON schema_default.defaclrole = r.oid
+ AND schema_default.defaclnamespace = n.oid
+ AND schema_default.defaclobjtype = 'f'
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND pg_catalog.left(n.nspname, 8) <> 'pg_toast'
+  AND pg_catalog.left(n.nspname, 8) <> 'pg_temp_'
+
+  AND (
+      r.rolsuper
+      OR pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE')
+  )
+ORDER BY r.rolname, n.nspname;
+~~~
+
+For every DBA-approved function owner, the preferred default is a global,
+owner-specific revoke, followed by a per-schema revoke for each application
+schema where a schema-specific PUBLIC addition exists:
+
+~~~sql
+ALTER DEFAULT PRIVILEGES FOR ROLE reviewed_function_owner
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE reviewed_function_owner
+    IN SCHEMA reviewed_application_schema
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+~~~
+
+The global revoke is required: a schema-specific REVOKE alone cannot remove a
+PUBLIC EXECUTE privilege inherited from the global default. Conversely, a
+schema-specific GRANT is additive and can reintroduce PUBLIC EXECUTE even after
+the global revoke. Verify both levels after configuration.
+
+These defaults are per owner and the global change affects future functions
+created by that owner across schemas, including possible extension and
+operational functions. The DBA must review that impact before applying it.
+Explicitly GRANT EXECUTE on each required new function to the approved
+application role/group; never use PUBLIC for application compatibility.
+
+If a function owner cannot receive the default-ACL protection, require the
+deployment to create the SECURITY DEFINER function and REVOKE EXECUTE FROM
+PUBLIC in the same transaction before commit, then grant only approved
+application roles and run the effective privilege inventory before deployment
+completion. A post-commit cleanup is not sufficient. If the deployment path
+cannot guarantee this atomic sequence for every owner, do not enable Production
+attestation and do not grant the attestor USAGE on the affected application
+schema until the owner/default-ACL gap is closed.
+
+CREATE OR REPLACE FUNCTION does not reset an existing function ACL. Every
+deployment that creates or replaces a SECURITY DEFINER function must run the
+post-deployment inventory and effective privilege checks.
+
+### 6. Post-change effective privilege verification
+
+Re-run the complete inventory and role/function consumer matrix. Required:
+
+- The only SECURITY DEFINER function for which the attestor has both schema
+  USAGE and effective EXECUTE is
+  attestation_private.cluster_system_identifier().
+- The wrapper is zero-argument, owned by the reviewed owner, has
+  prosecdef = true, search_path = pg_catalog, no PUBLIC EXECUTE, and one direct
+  EXECUTE grant to the attestor.
+- pg_catalog.pg_control_system() is not executable directly by the attestor.
+- Every non-allowlisted SECURITY DEFINER function in every application schema
+  usable by the attestor has effective EXECUTE = false.
+- Any exposed system/extension SECURITY DEFINER function is a STOP condition.
+- All DBA-approved application role/function pairs retain effective EXECUTE,
+  and real application credentials can execute their approved functions.
+- The attestor has no role membership, no function ownership, no SUPERUSER path,
+  no unapproved grant option, and no non-owner grantor path.
+- The inventory retains identity arguments, owner, schema classification,
+  schema USAGE, direct/PUBLIC/inherited/effective EXECUTE, grantor, grant option,
+  proconfig, and search_path.
+
+
+
+
+### 7. REPAIR-05 local disposable verification evidence
+
+The focused PostgreSQL 17.6 fixture includes actual SECURITY DEFINER calls before
+and after ACL hardening, another application schema, PUBLIC and direct-attestor
+paths, direct and inherited application consumers, PUBLIC-only explicit regrant,
+unreviewed-manifest abort, owner-specific future defaults, schema-specific
+default override detection, and manifest rollback.
+
+The complete existing PostgreSQL role/CONNECT integration module plus the new
+SECURITY DEFINER class completed 20/20 tests successfully on a disposable
+PostgreSQL 17.6 container. The fixture installs hstore into public, then proves
+that application functions in that shared namespace remain APPLICATION while
+an explicitly extension-owned function is classified EXTENSION. A delegated
+non-owner grantor/grant-option fixture also proves that the generic repair
+aborts before changing ACLs. The exact runbook function ACL transaction was also
+executed on a disposable PostgreSQL 17.6 database: attestor effective EXECUTE
+was false after repair, the approved application role remained true, and PUBLIC
+EXECUTE was false. The runbook function rollback DO block was executed against
+a separate disposable fixture and restored the original PUBLIC and direct
+attestor paths while preserving application access. The rollback fixture also
+verified restoration of a global PUBLIC function default and removal of a
+schema-specific PUBLIC default addition.
+
+The inventory query, application consumer matrix, and default-owner inventory
+query were parsed/executed on disposable PostgreSQL 17.6. These are local
+integration results only; exact-head GitHub Actions is the required final gate.
+No Production database or role was accessed or changed.
 
 ## Scope and impact review — mandatory before any Production change
 
 The ACL of a built-in function is stored in the current database's
-`pg_catalog.pg_proc`. The function-level change affects the current database only;
+pg_catalog.pg_proc. The function-level change affects the current database only;
 it does not change function ACLs in other databases in the same PostgreSQL cluster.
+REPAIR-05 also changes only the current database's reviewed application function
+ACLs and owner-specific default privileges. PUBLIC EXECUTE removal can affect
+every role whose only effective path was PUBLIC, so it requires the full
+application consumer inventory and explicit regrant manifest above.
 
 The separate CONNECT isolation repair changes database ACLs on every inventoried
 non-target database in the cluster. It does not change application table or
@@ -706,6 +1550,13 @@ GRANT USAGE ON SCHEMA attestation_private TO tia_production_attestor;
 GRANT EXECUTE ON FUNCTION attestation_private.cluster_system_identifier()
     TO tia_production_attestor;
 
+-- REPAIR-05: before COMMIT, complete the full SECURITY DEFINER inventory,
+-- populate approved_function_review and approved_function_regrant from the
+-- DBA-approved consumer evidence, and execute the fail-closed function ACL
+-- fragment in the preceding REPAIR-05 section. Do not COMMIT this administrator
+-- change until that preflight, ACL repair, effective verification, and manifest
+-- capture all succeed. Empty/unreviewed manifests must abort the transaction.
+
 COMMIT;
 ```
 
@@ -761,6 +1612,11 @@ WHERE member.rolname = 'tia_production_attestor';
 ```
 
 Function ACL and effective access:
+
+Re-run the complete SECURITY DEFINER inventory and application role/function
+matrix from the REPAIR-05 section above. The only row with both schema USAGE and
+effective EXECUTE true for the attestor must be the allowlisted wrapper. Any
+other exposed row is a STOP condition.
 
 ```sql
 SELECT
@@ -1000,6 +1856,134 @@ $restore_connect_acl$;
 -- Compare expanded ACL rows, grantors, grant options, and the effective CONNECT
 -- matrix with the saved pre-change outputs before committing the rollback.
 -- Never blanket-GRANT PUBLIC or revoke an application role's pre-existing grant.
+-- Restore the exact reviewed SECURITY DEFINER ACL manifests. Populate only
+-- from retained pre-change outputs; do not infer or wildcard function names.
+CREATE TEMP TABLE rollback_function_public_execute (
+    function_identity regprocedure PRIMARY KEY
+) ON COMMIT DROP;
+CREATE TEMP TABLE rollback_function_attestor_direct (
+    function_identity regprocedure PRIMARY KEY
+) ON COMMIT DROP;
+CREATE TEMP TABLE rollback_function_application_regrants (
+    function_identity regprocedure NOT NULL,
+    role_name name NOT NULL,
+    PRIMARY KEY (function_identity, role_name)
+) ON COMMIT DROP;
+CREATE TEMP TABLE rollback_function_default_privileges (
+    owner_name name NOT NULL,
+    schema_name name NOT NULL DEFAULT '',
+    public_execute_before boolean NOT NULL,
+    PRIMARY KEY (owner_name, schema_name)
+) ON COMMIT DROP;
+
+-- Populate from saved function_public_execute_before,
+-- function_attestor_direct_before, function_application_regrants_added, and
+-- pre-change pg_default_acl evidence. Empty schema_name means global; a non-empty
+-- schema_name identifies a schema-specific default ACL row.
+
+DO $restore_function_acl$
+DECLARE
+    v_function regprocedure;
+    v_owner oid;
+    v_regrant record;
+    v_default record;
+BEGIN
+    FOR v_regrant IN
+        SELECT function_identity, role_name
+        FROM pg_temp.rollback_function_application_regrants
+        ORDER BY function_identity, role_name
+    LOOP
+        SELECT proowner INTO v_owner
+        FROM pg_catalog.pg_proc
+        WHERE oid = v_regrant.function_identity;
+        IF v_owner IS NULL OR v_owner <> (
+            SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
+        ) THEN
+            RAISE EXCEPTION 'rollback application grant owner is not authorized';
+        END IF;
+        EXECUTE pg_catalog.format(
+            'REVOKE EXECUTE ON FUNCTION %s FROM %I',
+            v_regrant.function_identity, v_regrant.role_name
+        );
+    END LOOP;
+
+    FOR v_function IN
+        SELECT function_identity
+        FROM pg_temp.rollback_function_public_execute
+        ORDER BY function_identity
+    LOOP
+        SELECT proowner INTO v_owner
+        FROM pg_catalog.pg_proc
+        WHERE oid = v_function;
+        IF v_owner IS NULL OR v_owner <> (
+            SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
+        ) THEN
+            RAISE EXCEPTION 'rollback PUBLIC grantor is not the function owner';
+        END IF;
+        EXECUTE pg_catalog.format(
+            'GRANT EXECUTE ON FUNCTION %s TO PUBLIC', v_function
+        );
+    END LOOP;
+
+    FOR v_function IN
+        SELECT function_identity
+        FROM pg_temp.rollback_function_attestor_direct
+        ORDER BY function_identity
+    LOOP
+        SELECT proowner INTO v_owner
+        FROM pg_catalog.pg_proc
+        WHERE oid = v_function;
+        IF v_owner IS NULL OR v_owner <> (
+            SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user
+        ) THEN
+            RAISE EXCEPTION 'rollback attestor grantor is not the function owner';
+        END IF;
+        EXECUTE pg_catalog.format(
+            'GRANT EXECUTE ON FUNCTION %s TO %I',
+            v_function, 'tia_production_attestor'
+        );
+    END LOOP;
+
+    FOR v_default IN
+        SELECT owner_name, schema_name, public_execute_before
+        FROM pg_temp.rollback_function_default_privileges
+        ORDER BY owner_name, schema_name
+    LOOP
+        IF v_default.schema_name = '' THEN
+            IF v_default.public_execute_before THEN
+                EXECUTE pg_catalog.format(
+                    'ALTER DEFAULT PRIVILEGES FOR ROLE %I '
+                    'GRANT EXECUTE ON FUNCTIONS TO PUBLIC',
+                    v_default.owner_name
+                );
+            ELSE
+                EXECUTE pg_catalog.format(
+                    'ALTER DEFAULT PRIVILEGES FOR ROLE %I '
+                    'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+                    v_default.owner_name
+                );
+            END IF;
+        ELSIF v_default.public_execute_before THEN
+            EXECUTE pg_catalog.format(
+                'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
+                'GRANT EXECUTE ON FUNCTIONS TO PUBLIC',
+                v_default.owner_name, v_default.schema_name
+            );
+        ELSE
+            EXECUTE pg_catalog.format(
+                'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
+                'REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+                v_default.owner_name, v_default.schema_name
+            );
+        END IF;
+    END LOOP;
+END
+$restore_function_acl$;
+
+-- Compare expanded ACL semantics, grantors, grant options, effective
+-- application role/function privileges, and default ACL evidence before COMMIT.
+-- Do not update PostgreSQL system catalogs directly.
+
 REVOKE SELECT ON TABLE public.alembic_version FROM tia_production_attestor;
 
 DROP ROLE tia_production_attestor;
@@ -1021,9 +2005,13 @@ pre-change snapshots. PostgreSQL may store a semantically restored default ACL
 as an explicit ACL rather than returning datacl to NULL; never update
 pg_catalog.pg_database directly to force a catalog representation.
 
-The function rollback likewise restores the original effective EXECUTE permission
-for PUBLIC. PostgreSQL may store the restored grant as an explicit ACL instead of
-returning proacl to NULL; compare the expanded ACL with the retained snapshot.
+The function rollback restores only PUBLIC and direct-attestor grants present
+in the retained pre-change manifests, and removes only application grants added
+by the repair. Restore owner-specific global and schema default privileges from
+the retained pg_default_acl manifest. PostgreSQL may store restored effective
+permissions as explicit ACLs instead of returning proacl or defaclacl to NULL;
+compare expanded ACL semantics, grantors, grant options, and effective
+role/function privileges with the retained snapshots.
 
 If the pre-change ACL did not meet the runbook's default-ACL precondition, this
 generic rollback is not valid. Stop and use the exact ACL snapshot to prepare a
