@@ -13,7 +13,7 @@ from app.api.dependencies.security import (
 )
 from app.database.session import get_db
 from app.models.user import User
-from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
+from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER, WorkspaceMember
 from app.schemas.auth import (
     CurrentUserRead,
     MeRead,
@@ -22,6 +22,11 @@ from app.schemas.auth import (
     WorkspaceInvitationRead,
     WorkspaceMemberRead,
     WorkspaceMemberRoleUpdate,
+)
+from app.schemas.page_permissions import MemberPagePermissionsRead, MemberPagePermissionsUpdate
+from app.services.page_permissions import (
+    build_page_permissions_compare_and_swap,
+    require_successful_permission_update,
 )
 from app.services.activity import record_activity_event
 from app.services.supabase_auth import SupabaseAuthError, invite_user_by_email
@@ -296,6 +301,82 @@ def update_workspace_member_role(
     db.commit()
     db.refresh(membership)
     return member_read(membership, membership.user)
+
+
+
+@router.get(
+    "/workspace/members/{membership_id}/page-permissions",
+    response_model=MemberPagePermissionsRead,
+)
+def get_member_page_permissions(
+    membership_id: UUID,
+    access: WorkspaceAccess = Depends(get_workspace_admin),
+    db: Session = Depends(get_db),
+) -> MemberPagePermissionsRead:
+    membership = db.scalar(
+        select(WorkspaceMember).where(
+            WorkspaceMember.id == membership_id,
+            WorkspaceMember.workspace_id == access.workspace.id,
+        )
+    )
+    if (
+        membership is None
+        or not membership.is_active
+        or membership.role != WORKSPACE_ROLE_MEMBER
+        or membership.user_id == access.user.id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found.")
+    return MemberPagePermissionsRead(
+        membership_id=membership.id,
+        page_permissions=membership.page_permissions,
+        permissions_version=membership.permissions_version,
+        is_legacy=membership.page_permissions is None,
+    )
+
+
+@router.put(
+    "/workspace/members/{membership_id}/page-permissions",
+    response_model=MemberPagePermissionsRead,
+)
+def update_member_page_permissions(
+    membership_id: UUID,
+    payload: MemberPagePermissionsUpdate,
+    access: WorkspaceAccess = Depends(get_workspace_admin),
+    db: Session = Depends(get_db),
+) -> MemberPagePermissionsRead:
+    membership = db.scalar(
+        select(WorkspaceMember).where(
+            WorkspaceMember.id == membership_id,
+            WorkspaceMember.workspace_id == access.workspace.id,
+        )
+    )
+    if (
+        membership is None
+        or not membership.is_active
+        or membership.role != WORKSPACE_ROLE_MEMBER
+        or membership.user_id == access.user.id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found.")
+
+    statement = build_page_permissions_compare_and_swap(
+        workspace_id=access.workspace.id,
+        membership_id=membership.id,
+        actor_user_id=access.user.id,
+        expected_version=payload.expected_version,
+        page_permissions=payload.page_permissions,
+    )
+    updated_version = db.execute(statement).scalar_one_or_none()
+    require_successful_permission_update(
+        updated_version, expected_version=payload.expected_version
+    )
+    db.commit()
+    db.refresh(membership)
+    return MemberPagePermissionsRead(
+        membership_id=membership.id,
+        page_permissions=membership.page_permissions,
+        permissions_version=membership.permissions_version,
+        is_legacy=False,
+    )
 
 
 @router.delete("/workspace/members/{membership_id}", status_code=status.HTTP_204_NO_CONTENT)
