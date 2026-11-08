@@ -3,10 +3,22 @@ from __future__ import annotations
 import os
 import secrets
 import unittest
+from pathlib import Path
+from runpy import run_path
+from types import SimpleNamespace
 
 import psycopg
 from psycopg import sql
 from sqlalchemy.engine import make_url
+
+runtime_probe = SimpleNamespace(
+    **run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "production_db_readonly_attestation.py"
+        )
+    )
+)
 
 
 class ReadOnlyRolePostgres176Tests(unittest.TestCase):
@@ -548,6 +560,10 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
     FUTURE_OWNER_ROLE = "sd_future_owner_ci"
     UNCONFIGURED_OWNER_ROLE = "sd_unconfigured_owner_ci"
     DELEGATED_GRANTOR_ROLE = "sd_delegated_grantor_ci"
+    RUNTIME_CREATEROLE_ROLE = "sd_runtime_createrole_ci"
+    RUNTIME_CREATEDB_ROLE = "sd_runtime_createdb_ci"
+    RUNTIME_BYPASSRLS_ROLE = "sd_runtime_bypassrls_ci"
+    RUNTIME_INHERIT_ROLE = "sd_runtime_inherit_ci"
 
     OPS_SCHEMA = "sd_ops_private_ci"
     WRAPPER_SCHEMA = "attestation_private"
@@ -1175,6 +1191,13 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                 "DROP FUNCTION IF EXISTS pg_catalog.sd_system_exposure_probe_ci()"
             )
             admin.execute("DROP EXTENSION IF EXISTS hstore")
+            admin.execute(
+                "DROP FUNCTION IF EXISTS public.sd_runtime_unexpected_definer_ci()"
+            )
+            if getattr(cls, "control_public_execute_before", False):
+                admin.execute(
+                    "GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC"
+                )
             for function_name in (
                 "sd_public_definer_probe_ci",
                 "sd_direct_definer_probe_ci",
@@ -1196,6 +1219,10 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                 cls.APP_INHERITED_ROLE,
                 cls.APP_PUBLIC_ROLE,
                 cls.UNCONFIGURED_OWNER_ROLE,
+                cls.RUNTIME_CREATEROLE_ROLE,
+                cls.RUNTIME_CREATEDB_ROLE,
+                cls.RUNTIME_BYPASSRLS_ROLE,
+                cls.RUNTIME_INHERIT_ROLE,
             )
             existing = {
                 row[0]
@@ -1222,6 +1249,10 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                 cls.APP_PUBLIC_ROLE,
                 cls.UNCONFIGURED_OWNER_ROLE,
                 cls.DELEGATED_GRANTOR_ROLE,
+                cls.RUNTIME_CREATEROLE_ROLE,
+                cls.RUNTIME_CREATEDB_ROLE,
+                cls.RUNTIME_BYPASSRLS_ROLE,
+                cls.RUNTIME_INHERIT_ROLE,
             ):
                 admin.execute(
                     sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role_name))
@@ -1262,6 +1293,10 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
             cls.APP_DIRECT_ROLE: secrets.token_urlsafe(32),
             cls.APP_INHERITED_ROLE: secrets.token_urlsafe(32),
             cls.APP_PUBLIC_ROLE: secrets.token_urlsafe(32),
+            cls.RUNTIME_CREATEROLE_ROLE: secrets.token_urlsafe(32),
+            cls.RUNTIME_CREATEDB_ROLE: secrets.token_urlsafe(32),
+            cls.RUNTIME_BYPASSRLS_ROLE: secrets.token_urlsafe(32),
+            cls.RUNTIME_INHERIT_ROLE: secrets.token_urlsafe(32),
         }
         cls.connection_urls = {
             role_name: url.set(
@@ -1273,11 +1308,25 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
         with psycopg.connect(raw_url, autocommit=True) as admin:
             if int(admin.execute("SHOW server_version_num").fetchone()[0]) != 170006:
                 raise RuntimeError("expected PostgreSQL 17.6")
+            cls.control_public_execute_before = admin.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_catalog.aclexplode(
+                        COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+                    ) AS acl
+                    WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+                )
+                FROM pg_catalog.pg_proc AS p
+                WHERE p.oid = 'pg_catalog.pg_control_system()'::regprocedure
+                """
+            ).fetchone()[0]
             role_names = (
                 cls.ATTESTOR_ROLE, cls.APP_DIRECT_ROLE, cls.APP_GROUP_ROLE,
                 cls.APP_INHERITED_ROLE, cls.APP_PUBLIC_ROLE,
                 cls.FUTURE_OWNER_ROLE, cls.UNCONFIGURED_OWNER_ROLE,
                 cls.DELEGATED_GRANTOR_ROLE,
+                cls.RUNTIME_CREATEROLE_ROLE, cls.RUNTIME_CREATEDB_ROLE,
+                cls.RUNTIME_BYPASSRLS_ROLE, cls.RUNTIME_INHERIT_ROLE,
             )
             for role_name in role_names:
                 if admin.execute(
@@ -1339,13 +1388,53 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
             cls.resources_created = True
             try:
                 with admin.transaction():
+                    admin.execute(
+                        "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC"
+                    )
+                    noinherit_roles = {
+                        cls.ATTESTOR_ROLE,
+                        cls.RUNTIME_CREATEROLE_ROLE,
+                        cls.RUNTIME_CREATEDB_ROLE,
+                        cls.RUNTIME_BYPASSRLS_ROLE,
+                    }
                     for role_name, password in cls.passwords.items():
+                        inheritance = (
+                            "NOINHERIT" if role_name in noinherit_roles else "INHERIT"
+                        )
                         admin.execute(
                             sql.SQL(
                                 "CREATE ROLE {} LOGIN PASSWORD {} "
-                                "NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT "
+                                "NOSUPERUSER NOCREATEDB NOCREATEROLE {} "
                                 "NOREPLICATION NOBYPASSRLS"
-                            ).format(sql.Identifier(role_name), sql.Literal(password))
+                            ).format(
+                                sql.Identifier(role_name),
+                                sql.Literal(password),
+                                sql.SQL(inheritance),
+                            )
+                        )
+                    for role_name, option in (
+                        (cls.RUNTIME_CREATEROLE_ROLE, "CREATEROLE"),
+                        (cls.RUNTIME_CREATEDB_ROLE, "CREATEDB"),
+                        (cls.RUNTIME_BYPASSRLS_ROLE, "BYPASSRLS"),
+                    ):
+                        admin.execute(
+                            sql.SQL("ALTER ROLE {} WITH {}").format(
+                                sql.Identifier(role_name), sql.SQL(option)
+                            )
+                        )
+                        admin.execute(
+                            sql.SQL(
+                                "ALTER ROLE {} SET default_transaction_read_only = on"
+                            ).format(sql.Identifier(role_name))
+                        )
+                    for role_name in (
+                        cls.ATTESTOR_ROLE,
+                        cls.RUNTIME_INHERIT_ROLE,
+                    ):
+                        admin.execute(
+                            sql.SQL(
+                                "ALTER ROLE {} SET default_transaction_read_only = on"
+                            ).format(sql.Identifier(role_name))
                         )
                     admin.execute(
                         sql.SQL(
@@ -1394,6 +1483,11 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                         )
                     )
 
+                    admin.execute(
+                        sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(
+                            sql.Identifier(cls.ATTESTOR_ROLE)
+                        )
+                    )
                     for schema_name in ("public", cls.OPS_SCHEMA):
                         admin.execute(
                             sql.SQL("GRANT USAGE ON SCHEMA {} TO {}, {}, {}, {}, {}").format(
@@ -1897,6 +1991,230 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
             with self.assertRaises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(
                     sql.SQL("SET ROLE {}").format(sql.Identifier(self.APP_GROUP_ROLE))
+                )
+
+    def _assert_runtime_guard_rejects(self, conn, expected_role, category):
+        conn.execute("BEGIN READ ONLY")
+        try:
+            with self.assertRaises(runtime_probe.AttestationFailure) as failure:
+                runtime_probe.verify_runtime_identity(conn, expected_role=expected_role)
+            self.assertEqual(failure.exception.category, category)
+        finally:
+            conn.execute("ROLLBACK")
+
+    def test_runtime_guard_accepts_only_dedicated_attestor_and_approved_wrapper(self):
+        with self._connect_as(self.ATTESTOR_ROLE) as conn:
+            conn.execute("BEGIN READ ONLY")
+            try:
+                runtime_probe.verify_runtime_identity(
+                    conn, expected_role=self.ATTESTOR_ROLE
+                )
+                cluster_identifier = conn.execute(
+                    "SELECT attestation_private.cluster_system_identifier()"
+                ).fetchone()[0]
+                self.assertRegex(cluster_identifier, r"^[0-9]{10,30}$")
+            finally:
+                conn.execute("ROLLBACK")
+
+    def test_runtime_guard_rejects_postgres_migration_identity_even_when_wrapper_is_callable(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as migration_conn:
+            self.assertTrue(
+                migration_conn.execute(
+                    "SELECT pg_catalog.has_function_privilege(current_user, "
+                    "'attestation_private.cluster_system_identifier()', 'EXECUTE')"
+                ).fetchone()[0]
+            )
+            self._assert_runtime_guard_rejects(
+                migration_conn, self.ATTESTOR_ROLE, "runtime_identity_mismatch"
+            )
+
+    def test_runtime_guard_rejects_superuser_even_when_wrapper_is_callable(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as superuser_conn:
+            self.assertTrue(
+                superuser_conn.execute(
+                    "SELECT pg_catalog.has_function_privilege(current_user, "
+                    "'attestation_private.cluster_system_identifier()', 'EXECUTE')"
+                ).fetchone()[0]
+            )
+            self._assert_runtime_guard_rejects(
+                superuser_conn, "postgres", "runtime_role_attributes_unverified"
+            )
+
+    def test_runtime_guard_rejects_current_user_mismatch(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(self.APP_DIRECT_ROLE),
+                    sql.Identifier(self.ATTESTOR_ROLE),
+                )
+            )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as conn:
+                conn.execute("BEGIN READ ONLY")
+                conn.execute(
+                    sql.SQL("SET LOCAL ROLE {}").format(
+                        sql.Identifier(self.APP_DIRECT_ROLE)
+                    )
+                )
+                with self.assertRaises(runtime_probe.AttestationFailure) as failure:
+                    runtime_probe.verify_runtime_identity(
+                        conn, expected_role=self.ATTESTOR_ROLE
+                    )
+                self.assertEqual(failure.exception.category, "runtime_identity_mismatch")
+                conn.execute("ROLLBACK")
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+                admin.execute(
+                    sql.SQL("REVOKE {} FROM {}").format(
+                        sql.Identifier(self.APP_DIRECT_ROLE),
+                        sql.Identifier(self.ATTESTOR_ROLE),
+                    )
+                )
+
+    def test_runtime_guard_rejects_createrole_createdb_and_bypassrls(self):
+        for role_name in (
+            self.RUNTIME_CREATEROLE_ROLE,
+            self.RUNTIME_CREATEDB_ROLE,
+            self.RUNTIME_BYPASSRLS_ROLE,
+        ):
+            with self.subTest(role=role_name), self._connect_as(role_name) as conn:
+                self._assert_runtime_guard_rejects(
+                    conn, role_name, "runtime_role_attributes_unverified"
+                )
+
+    def test_runtime_guard_rejects_inherit_role_attribute(self):
+        with self._connect_as(self.RUNTIME_INHERIT_ROLE) as conn:
+            self._assert_runtime_guard_rejects(
+                conn,
+                self.RUNTIME_INHERIT_ROLE,
+                "runtime_role_attributes_unverified",
+            )
+
+    def test_runtime_guard_rejects_unexpected_role_membership(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(self.APP_GROUP_ROLE),
+                    sql.Identifier(self.ATTESTOR_ROLE),
+                )
+            )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as conn:
+                self._assert_runtime_guard_rejects(
+                    conn, self.ATTESTOR_ROLE, "runtime_role_attributes_unverified"
+                )
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+                admin.execute(
+                    sql.SQL("REVOKE {} FROM {}").format(
+                        sql.Identifier(self.APP_GROUP_ROLE),
+                        sql.Identifier(self.ATTESTOR_ROLE),
+                    )
+                )
+
+    def test_runtime_guard_rejects_public_schema_create(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("GRANT CREATE ON SCHEMA public TO {}").format(
+                    sql.Identifier(self.ATTESTOR_ROLE)
+                )
+            )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as conn:
+                self._assert_runtime_guard_rejects(
+                    conn,
+                    self.ATTESTOR_ROLE,
+                    "runtime_effective_privilege_guard_failed",
+                )
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+                admin.execute(
+                    sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(
+                        sql.Identifier(self.ATTESTOR_ROLE)
+                    )
+                )
+
+    def test_runtime_guard_rejects_direct_pg_control_system_execute(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            admin.execute(
+                "GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() "
+                "TO tia_attestor_function_ci"
+            )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as conn:
+                self._assert_runtime_guard_rejects(
+                    conn, self.ATTESTOR_ROLE, "runtime_effective_privilege_guard_failed"
+                )
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+                admin.execute(
+                    "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() "
+                    "FROM tia_attestor_function_ci"
+                )
+
+    def test_runtime_guard_rejects_non_allowlisted_public_security_definer(self):
+        function_name = "sd_runtime_unexpected_definer_ci"
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            if admin.execute(
+                """
+                SELECT 1 FROM pg_catalog.pg_proc AS p
+                JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.proname = %s
+                """,
+                (function_name,),
+            ).fetchone():
+                raise RuntimeError("runtime unexpected function fixture already exists")
+            admin.execute(
+                sql.SQL(
+                    """
+                    CREATE FUNCTION public.{}()
+                    RETURNS text LANGUAGE plpgsql SECURITY DEFINER
+                    SET search_path = pg_catalog
+                    AS $function$
+                    BEGIN
+                        RAISE EXCEPTION 'non-allowlisted function must never execute';
+                    END
+                    $function$
+                    """
+                ).format(sql.Identifier(function_name))
+            )
+            self.assertTrue(
+                admin.execute(
+                    "SELECT pg_catalog.has_function_privilege(%s, %s, 'EXECUTE')",
+                    (self.ATTESTOR_ROLE, f"public.{function_name}()"),
+                ).fetchone()[0]
+            )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as conn:
+                self._assert_runtime_guard_rejects(
+                    conn, self.ATTESTOR_ROLE, "unexpected_security_definer_surface"
+                )
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+                admin.execute(
+                    sql.SQL("DROP FUNCTION IF EXISTS public.{}()").format(
+                        sql.Identifier(function_name)
+                    )
+                )
+
+    def test_runtime_guard_rejects_missing_wrapper_privileges(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            admin.execute(
+                "REVOKE EXECUTE ON FUNCTION "
+                "attestation_private.cluster_system_identifier() "
+                "FROM tia_attestor_function_ci"
+            )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as conn:
+                self._assert_runtime_guard_rejects(
+                    conn, self.ATTESTOR_ROLE, "runtime_effective_privilege_guard_failed"
+                )
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+                admin.execute(
+                    "GRANT EXECUTE ON FUNCTION "
+                    "attestation_private.cluster_system_identifier() "
+                    "TO tia_attestor_function_ci"
                 )
 
     def test_atomic_future_function_publish_and_application_access_paths(self):

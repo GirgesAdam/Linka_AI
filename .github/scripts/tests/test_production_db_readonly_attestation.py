@@ -44,12 +44,63 @@ class FakeConnection:
         fail_system_id=False,
         database_oid="5",
         is_replica=False,
+        session_user="tia_production_attestor",
+        current_user=None,
+        can_login=True,
+        is_superuser=False,
+        can_create_db=False,
+        can_create_role=False,
+        can_replicate=False,
+        bypass_rls=False,
+        inherit_roles=False,
+        membership_count=0,
+        default_transaction_read_only="on",
+        public_schema_create=False,
+        control_effective_execute=False,
+        control_direct_execute=False,
+        wrapper_schema_usage=True,
+        wrapper_effective_execute=True,
+        wrapper_public_execute=False,
+        wrapper_security_definer=True,
+        wrapper_owner="postgres",
+        wrapper_argument_count=0,
+        wrapper_config=None,
+        security_definer_rows=None,
     ):
         self.system_id = system_id or probe.REFERENCE["cluster_system_id"]
         self.tls = tls
         self.fail_system_id = fail_system_id
         self.database_oid = database_oid
         self.is_replica = is_replica
+        self.session_user = session_user
+        self.current_user = current_user or session_user
+        self.role_attributes = (
+            can_login,
+            is_superuser,
+            can_create_db,
+            can_create_role,
+            can_replicate,
+            bypass_rls,
+            inherit_roles,
+            membership_count,
+            default_transaction_read_only,
+            public_schema_create,
+            control_effective_execute,
+            control_direct_execute,
+            wrapper_schema_usage,
+            wrapper_effective_execute,
+            wrapper_public_execute,
+            wrapper_security_definer,
+            wrapper_owner,
+            wrapper_argument_count,
+            wrapper_config if wrapper_config is not None else ["search_path=pg_catalog"],
+        )
+        self.security_definer_rows = (
+            security_definer_rows
+            if security_definer_rows is not None
+            else [("attestation_private", "cluster_system_identifier", 0, "")]
+        )
+        self.wrapper_invocations = 0
         self.info = SimpleNamespace(backend_pid=4242)
         self.queries = []
         self.closed = False
@@ -62,6 +113,18 @@ class FakeConnection:
             return FakeCursor()
         if normalized.startswith("SET LOCAL statement_timeout"):
             return FakeCursor()
+        if normalized.startswith(
+            "SELECT session_user::text, current_user::text, attestor_role.rolcanlogin"
+        ):
+            return FakeCursor(
+                (
+                    self.session_user,
+                    self.current_user,
+                    *self.role_attributes,
+                )
+            )
+        if normalized.startswith("SELECT namespace.nspname, procedure.proname"):
+            return FakeCursor(rows=self.security_definer_rows)
         if normalized.startswith("SELECT current_database()"):
             return FakeCursor(
                 (
@@ -76,6 +139,7 @@ class FakeConnection:
                 )
             )
         if normalized.startswith("SELECT attestation_private.cluster_system_identifier()"):
+            self.wrapper_invocations += 1
             if self.fail_system_id:
                 raise probe.psycopg.errors.InsufficientPrivilege("do-not-leak")
             return FakeCursor((self.system_id,))
@@ -142,11 +206,11 @@ class RuntimeAttestationTests(unittest.TestCase):
         result = probe.run_attestation(RAW_URL)
         return result, mocked
 
-    def _run_main_with_connection(self, connection):
+    def _run_main_with_connection(self, connection, raw_url=RAW_URL):
         output = StringIO()
         with (
             patch.object(probe.psycopg, "connect", return_value=connection),
-            patch.dict("os.environ", {"PRODUCTION_DB_READONLY_URL": RAW_URL}),
+            patch.dict("os.environ", {"PRODUCTION_DB_READONLY_URL": raw_url}),
             redirect_stdout(output),
         ):
             exit_code = probe.main()
@@ -186,7 +250,24 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertEqual(result["backend_pid"], 4242)
         self.assertTrue(result["single_transaction"])
         self.assertTrue(result["transaction_read_only"])
+        self.assertTrue(result["runtime_identity_verified"])
+        self.assertTrue(result["security_definer_surface_verified"])
         self.assertTrue(result["rollback_completed"])
+        self.assertEqual(connection.wrapper_invocations, 1)
+        identity_query_index = next(
+            index for index, query in enumerate(connection.queries)
+            if query.startswith("SELECT session_user::text")
+        )
+        wrapper_query_index = next(
+            index for index, query in enumerate(connection.queries)
+            if query.startswith("SELECT attestation_private.cluster_system_identifier()")
+        )
+        inventory_query_index = next(
+            index for index, query in enumerate(connection.queries)
+            if query.startswith("SELECT namespace.nspname, procedure.proname")
+        )
+        self.assertLess(identity_query_index, inventory_query_index)
+        self.assertLess(inventory_query_index, wrapper_query_index)
         self.assertTrue(result["tls"]["enabled"])
         self.assertEqual(result["tls"]["certificate_verification"], "verify-full")
         self.assertEqual(result["connection_mode"], "Supavisor session pooler")
@@ -214,6 +295,158 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertTrue(connection.closed)
         self._assert_no_database_writes(connection)
 
+    def _assert_runtime_guard_rejects_without_wrapper(self, connection, category):
+        result, connect = self._run_with_connection(connection)
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["failure_category"], category)
+        self.assertEqual(connection.wrapper_invocations, 0)
+        self.assertFalse(
+            any(
+                query.startswith("SELECT attestation_private.cluster_system_identifier()")
+                for query in connection.queries
+            )
+        )
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertTrue(connection.closed)
+        connect.assert_called_once()
+        serialized = json.dumps(result)
+        self.assertNotIn("tia_production_attestor", serialized)
+        self.assertNotIn("postgres", serialized)
+        self.assertNotIn("do-not-leak", serialized)
+
+    def test_dedicated_attestor_identity_is_verified_before_wrapper(self):
+        connection = FakeConnection()
+        result, _ = self._run_with_connection(connection)
+        self.assertEqual(result["status"], "VERIFIED")
+        self.assertEqual(connection.wrapper_invocations, 1)
+        self.assertTrue(result["runtime_identity_verified"])
+
+    def test_session_user_postgres_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(session_user="postgres", current_user="postgres"),
+            "runtime_identity_mismatch",
+        )
+
+    def test_current_user_mismatch_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(current_user="unexpected_role"),
+            "runtime_identity_mismatch",
+        )
+
+    def test_superuser_credentials_are_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(
+                session_user="tia_production_attestor",
+                current_user="tia_production_attestor",
+                is_superuser=True,
+            ),
+            "runtime_role_attributes_unverified",
+        )
+
+    def test_createrole_createdb_and_bypassrls_credentials_are_rejected(self):
+        cases = (
+            ("NOLOGIN", {"can_login": False}),
+            ("CREATEROLE", {"can_create_role": True}),
+            ("CREATEDB", {"can_create_db": True}),
+            ("REPLICATION", {"can_replicate": True}),
+            ("BYPASSRLS", {"bypass_rls": True}),
+        )
+        for label, attributes in cases:
+            with self.subTest(attribute=label):
+                self._assert_runtime_guard_rejects_without_wrapper(
+                    FakeConnection(**attributes),
+                    "runtime_role_attributes_unverified",
+                )
+
+    def test_wrapper_security_definer_owner_arguments_and_search_path_are_enforced(self):
+        cases = (
+            ("not_security_definer", {"wrapper_security_definer": False}),
+            ("wrong_owner", {"wrapper_owner": "other_owner"}),
+            ("has_arguments", {"wrapper_argument_count": 1}),
+            ("unsafe_search_path", {"wrapper_config": ["search_path=public"]}),
+        )
+        for label, metadata in cases:
+            with self.subTest(wrapper_metadata=label):
+                self._assert_runtime_guard_rejects_without_wrapper(
+                    FakeConnection(**metadata),
+                    "runtime_effective_privilege_guard_failed",
+                )
+
+    def test_unexpected_role_membership_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(membership_count=1),
+            "runtime_role_attributes_unverified",
+        )
+
+    def test_direct_pg_control_system_execute_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(
+                control_effective_execute=True,
+                control_direct_execute=True,
+            ),
+            "runtime_effective_privilege_guard_failed",
+        )
+
+    def test_unexpected_security_definer_surface_is_rejected_without_invocation(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(
+                security_definer_rows=[
+                    ("attestation_private", "cluster_system_identifier", 0, ""),
+                    ("public", "unexpected_definer", 0, ""),
+                ]
+            ),
+            "unexpected_security_definer_surface",
+        )
+
+    def test_missing_wrapper_privileges_are_unverified_before_invocation(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(wrapper_effective_execute=False),
+            "runtime_effective_privilege_guard_failed",
+        )
+
+    def test_migration_uri_misconfiguration_rejects_postgres_even_when_wrapper_is_callable(self):
+        connection = FakeConnection(
+            session_user="postgres",
+            current_user="postgres",
+            wrapper_schema_usage=True,
+            wrapper_effective_execute=True,
+        )
+        migration_url = (
+            "postgresql+psycopg://postgres:must-not-be-logged@"
+            "db.example.supabase.co:5432/postgres"
+        )
+        exit_code, result = self._run_main_with_connection(
+            connection, raw_url=migration_url
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["failure_category"], "runtime_identity_mismatch")
+        self.assertEqual(connection.wrapper_invocations, 0)
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertTrue(connection.closed)
+        serialized = json.dumps(result)
+        self.assertNotIn("postgres", serialized)
+        self.assertNotIn("must-not-be-logged", serialized)
+        self.assertNotIn("db.example.supabase.co", serialized)
+
+    def test_default_transaction_read_only_off_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(default_transaction_read_only="off"),
+            "runtime_role_attributes_unverified",
+        )
+
+    def test_public_schema_create_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(public_schema_create=True),
+            "runtime_effective_privilege_guard_failed",
+        )
+
+    def test_wrapper_public_execute_is_rejected_before_wrapper(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(wrapper_public_execute=True),
+            "runtime_effective_privilege_guard_failed",
+        )
+
     def test_read_replica_is_unverified_and_cannot_be_same_database(self):
         connection = FakeConnection(is_replica=True)
         result, connect = self._run_with_connection(connection)
@@ -224,7 +457,13 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertNotIn("cluster_system_id", result)
         connect.assert_called_once()
         self.assertEqual(connection.queries.count("ROLLBACK"), 1)
-        self.assertFalse(any("pg_control_system()" in query for query in connection.queries))
+        self.assertEqual(connection.wrapper_invocations, 0)
+        self.assertFalse(
+            any(
+                query.startswith("SELECT pg_catalog.pg_control_system()")
+                for query in connection.queries
+            )
+        )
         self.assertTrue(connection.closed)
         self._assert_no_database_writes(connection)
         serialized = json.dumps(result)
@@ -241,7 +480,13 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertNotIn("verdict", result)
         connect.assert_called_once()
         self.assertEqual(connection.queries.count("ROLLBACK"), 1)
-        self.assertFalse(any("pg_control_system()" in query for query in connection.queries))
+        self.assertEqual(connection.wrapper_invocations, 0)
+        self.assertFalse(
+            any(
+                query.startswith("SELECT pg_catalog.pg_control_system()")
+                for query in connection.queries
+            )
+        )
         self.assertTrue(connection.closed)
         self._assert_no_database_writes(connection)
 
