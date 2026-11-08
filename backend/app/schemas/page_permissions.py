@@ -1,6 +1,7 @@
 """API schemas for Admin-managed binary Member page permissions."""
 
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -24,6 +25,7 @@ class MemberPagePermissionsUpdate(BaseModel):
 
 
 class MemberPagePermissionsRead(BaseModel):
-    membership_id: str
-    page_permissions: dict[str, PagePermissionLevel]
+    membership_id: UUID
+    page_permissions: dict[str, PagePermissionLevel] | None
     permissions_version: int
+    is_legacy: bool
