@@ -1088,18 +1088,143 @@ operational functions. The DBA must review that impact before applying it.
 Explicitly GRANT EXECUTE on each required new function to the approved
 application role/group; never use PUBLIC for application compatibility.
 
-If a function owner cannot receive the default-ACL protection, require the
-deployment to create the SECURITY DEFINER function and REVOKE EXECUTE FROM
-PUBLIC in the same transaction before commit, then grant only approved
-application roles and run the effective privilege inventory before deployment
-completion. A post-commit cleanup is not sufficient. If the deployment path
-cannot guarantee this atomic sequence for every owner, do not enable Production
-attestation and do not grant the attestor USAGE on the affected application
-schema until the owner/default-ACL gap is closed.
+Owner-specific default privileges are sufficient only when all principals
+that can create functions are known and controlled: the effective function
+owner after SET ROLE, schema owners, migration/deployment roles, roles that can
+SET ROLE to those owners, extension/operational owners, and DBA roles. For each
+owner, the global PUBLIC EXECUTE default must be revoked and every schema-specific
+PUBLIC addition must be absent or explicitly revoked. A global revoke alone is
+not sufficient because schema-specific GRANT is additive. Re-check the catalog
+after every owner/default-ACL change.
+
+If an owner is not fully configured, or a schema-specific default override is
+not controlled, use the atomic deployment transaction below. Do not create the
+function in one transaction and revoke PUBLIC in a later transaction. PostgreSQL
+transactional DDL keeps the new function and its ACL changes invisible to other
+sessions until COMMIT. The pre-commit guard must inspect the function ACL,
+effective Attestor EXECUTE, and approved application role paths. Any failed
+check raises an error and the entire transaction must ROLLBACK; no function or
+grant from that deployment may remain.
+
+~~~sql
+BEGIN;
+
+-- The deployment principal must be allowed to SET ROLE to this reviewed owner.
+SET LOCAL ROLE reviewed_function_owner;
+
+CREATE FUNCTION reviewed_application_schema.reviewed_function()
+RETURNS text
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    SELECT current_user::text;
+$function$;
+
+REVOKE EXECUTE
+ON FUNCTION reviewed_application_schema.reviewed_function()
+FROM PUBLIC;
+
+GRANT EXECUTE
+ON FUNCTION reviewed_application_schema.reviewed_function()
+TO approved_application_role;
+
+RESET ROLE;
+
+DO $verify_future_function$
+DECLARE
+    v_function_oid oid :=
+        pg_catalog.to_regprocedure(
+            'reviewed_application_schema.reviewed_function()'
+        )::oid;
+    v_function_owner name;
+BEGIN
+    IF v_function_oid IS NULL THEN
+        RAISE EXCEPTION 'new SECURITY DEFINER function is missing';
+    END IF;
+
+    SELECT pg_catalog.pg_get_userbyid(p.proowner)
+    INTO v_function_owner
+    FROM pg_catalog.pg_proc AS p
+    WHERE p.oid = v_function_oid;
+
+    IF v_function_owner <> 'reviewed_function_owner' THEN
+        RAISE EXCEPTION 'new SECURITY DEFINER function has an unexpected owner';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_proc AS p
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            COALESCE(
+                p.proacl,
+                pg_catalog.acldefault('f', p.proowner)
+            )
+        ) AS acl
+        WHERE p.oid = v_function_oid
+          AND acl.grantee = 0
+          AND acl.privilege_type = 'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'PUBLIC EXECUTE remains on the new function';
+    END IF;
+
+    IF pg_catalog.has_function_privilege(
+        'tia_production_attestor', v_function_oid, 'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'Attestor can execute the new function';
+    END IF;
+
+    IF NOT pg_catalog.has_function_privilege(
+        'approved_application_role', v_function_oid, 'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'approved application EXECUTE grant is missing';
+    END IF;
+END
+$verify_future_function$;
+
+COMMIT;
+~~~
+
+If the verification block raises, the transaction is aborted: issue ROLLBACK.
+The deployment runner must treat any failed statement or verification error as
+a failed deployment and roll back. If the connection is lost before COMMIT is
+confirmed, the outcome is unknown: reconnect and inspect the exact function
+identity, owner, PUBLIC ACL, effective Attestor privilege, and application
+grants before retrying. Never assume absence or retry blindly. Never perform
+post-commit ACL cleanup as a substitute.
+
+For an owner with no default-ACL protection, the expected state immediately
+after CREATE is PUBLIC EXECUTE = true. That state is acceptable only inside the
+uncommitted transaction; REVOKE and all approved application grants must occur
+before the pre-commit guard and COMMIT. The deployment test must use a separate
+Attestor connection to prove that the uncommitted function cannot be resolved
+or executed, and then prove that after COMMIT the Attestor is denied while
+approved direct and inherited application roles still work.
+
+Do not grant the Attestor USAGE on an application schema while any function
+owner in that schema is unconfigured or can bypass the approved deployment
+transaction. Keep schema USAGE revoked until the complete SECURITY DEFINER
+inventory and all owner/default-ACL paths are reviewed. If schema USAGE is
+operationally required, every possible creator must have protected defaults
+and every create/replace operation must pass the atomic pre-commit gate.
+The attestor should otherwise receive USAGE only on the narrowly required
+attestation schema(s).
 
 CREATE OR REPLACE FUNCTION does not reset an existing function ACL. Every
 deployment that creates or replaces a SECURITY DEFINER function must run the
-post-deployment inventory and effective privilege checks.
+pre-commit ACL verification and the post-deployment inventory/effective
+privilege checks. Replacing a function does not make an unsafe pre-existing
+ACL safe.
+
+These controls are deployment discipline, not an absolute PostgreSQL deny
+boundary. Default privileges are owner-specific and can be changed by owners
+with sufficient authority. A DBA/SUPERUSER can create or alter functions,
+change ACLs/default ACLs, grant schema USAGE, or bypass the documented process.
+Do not claim protection against unrestricted DBA/SUPERUSER actions. Do not add
+an event trigger as a substitute for role governance: superusers can bypass
+such controls. If direct SQL deployment cannot be restricted to the approved
+transaction, classify future-function protection as CONDITIONAL and keep
+Attestor USAGE revoked from affected application schemas.
 
 ### 6. Post-change effective privilege verification
 
@@ -1126,7 +1251,7 @@ Re-run the complete inventory and role/function consumer matrix. Required:
 
 
 
-### 7. REPAIR-05 local disposable verification evidence
+### 7. REPAIR-05 / REPAIR-06 local disposable verification evidence
 
 The focused PostgreSQL 17.6 fixture includes actual SECURITY DEFINER calls before
 and after ACL hardening, another application schema, PUBLIC and direct-attestor
@@ -1134,20 +1259,46 @@ paths, direct and inherited application consumers, PUBLIC-only explicit regrant,
 unreviewed-manifest abort, owner-specific future defaults, schema-specific
 default override detection, and manifest rollback.
 
-The complete existing PostgreSQL role/CONNECT integration module plus the new
-SECURITY DEFINER class completed 20/20 tests successfully on a disposable
-PostgreSQL 17.6 container. The fixture installs hstore into public, then proves
-that application functions in that shared namespace remain APPLICATION while
-an explicitly extension-owned function is classified EXTENSION. A delegated
-non-owner grantor/grant-option fixture also proves that the generic repair
-aborts before changing ACLs. The exact runbook function ACL transaction was also
-executed on a disposable PostgreSQL 17.6 database: attestor effective EXECUTE
-was false after repair, the approved application role remained true, and PUBLIC
-EXECUTE was false. The runbook function rollback DO block was executed against
-a separate disposable fixture and restored the original PUBLIC and direct
-attestor paths while preserving application access. The rollback fixture also
-verified restoration of a global PUBLIC function default and removal of a
-schema-specific PUBLIC default addition.
+The complete PostgreSQL role/CONNECT integration, read-only role, and
+SECURITY DEFINER isolation suite completed 24/24 tests successfully on a fresh,
+disposable PostgreSQL 17.6 container.
+
+REPAIR-06 adds the following regression evidence:
+- Atomic CREATE + REVOKE PUBLIC EXECUTE + approved application GRANT + effective
+  privilege verification occurs in one transaction before COMMIT.
+- A separate Attestor connection cannot resolve or execute the uncommitted
+  function. After COMMIT it is denied EXECUTE, while approved direct, inherited
+  group-role, and explicit application grants remain usable.
+- An unconfigured owner starts with the stock PUBLIC EXECUTE default. The
+  approved atomic path removes it before COMMIT. If application privilege
+  verification fails, the whole transaction rolls back and the function is
+  absent to both the DBA and Attestor connections.
+- A deployment attempt that leaves PUBLIC EXECUTE in place fails the pre-COMMIT
+  guard and rolls back; no function is published.
+- The schema-default regression explicitly proves global PUBLIC EXECUTE is
+  revoked while a schema-specific PUBLIC GRANT is additive and re-exposes the
+  function. The Attestor can execute the negative fixture until the schema
+  override is removed.
+- Effective Attestor exposure of both a pg_catalog SECURITY DEFINER function
+  and an extension-owned hstore function causes the generic policy to abort
+  without changing either ACL.
+- The duplicate @classmethod decorators on the SECURITY DEFINER fixture cleanup
+  method have been reduced to one.
+
+The runbook atomic transaction is a deployment pattern, not a PostgreSQL-wide
+deny boundary. The test harness proves the pattern and its rollback, but this
+PR does not install an enforced Production deployment runner or prevent
+privileged direct SQL. Function owners, schema owners, SET ROLE paths, migration
+roles, and DBA/SUPERUSER bypass remain subject to independent review. Until
+every possible creator is controlled by the approved transaction or protected
+owner defaults, keep Attestor USAGE revoked from affected application schemas
+and classify global Future Function Protection as CONDITIONAL.
+
+The prior runbook ACL repair and rollback transactions were also executed on
+disposable PostgreSQL 17.6: Attestor effective EXECUTE was false after repair,
+approved application access remained true, PUBLIC EXECUTE was false, and the
+rollback restored original PUBLIC/direct Attestor paths and owner-specific
+global/schema default ACL semantics.
 
 The inventory query, application consumer matrix, and default-owner inventory
 query were parsed/executed on disposable PostgreSQL 17.6. These are local

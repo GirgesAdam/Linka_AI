@@ -1005,7 +1005,156 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
         )
 
     @classmethod
-    @classmethod
+    def _atomic_create_future_function(
+        cls,
+        schema_name,
+        owner_role,
+        function_name,
+        *,
+        revoke_public,
+        approved_roles,
+        expected_default_public,
+    ):
+        """Model the approved deployment gate: create, harden, verify, then commit."""
+        function_identifier = sql.Identifier(schema_name, function_name)
+        function_identity = f"{schema_name}.{function_name}()"
+        with (
+            psycopg.connect(cls.admin_conninfo, autocommit=True) as admin,
+            admin.transaction(),
+        ):
+            admin.execute(
+                sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(owner_role))
+            )
+            admin.execute(
+                sql.SQL(
+                    """
+                    CREATE FUNCTION {}()
+                    RETURNS text
+                    LANGUAGE sql
+                    SECURITY DEFINER
+                    SET search_path = pg_catalog
+                    AS $function$ SELECT current_user::text $function$
+                    """
+                ).format(function_identifier)
+            )
+            default_public = admin.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.aclexplode(
+                        COALESCE(
+                            p.proacl,
+                            pg_catalog.acldefault('f', p.proowner)
+                        )
+                    ) AS acl
+                    WHERE acl.grantee = 0
+                      AND acl.privilege_type = 'EXECUTE'
+                )
+                FROM pg_catalog.pg_proc AS p
+                WHERE p.oid = pg_catalog.to_regprocedure(%s)::oid
+                """,
+                (function_identity,),
+            ).fetchone()[0]
+            if default_public is not expected_default_public:
+                raise RuntimeError(
+                    "unexpected owner-specific default PUBLIC EXECUTE state"
+                )
+
+            # A second session must not see or execute transactional DDL.
+            with psycopg.connect(
+                cls.connection_urls[cls.ATTESTOR_ROLE],
+                autocommit=True,
+            ) as observer:
+                visible_oid = observer.execute(
+                    "SELECT pg_catalog.to_regprocedure(%s)::oid",
+                    (function_identity,),
+                ).fetchone()[0]
+                if visible_oid is not None:
+                    raise RuntimeError(
+                        "uncommitted SECURITY DEFINER function became visible"
+                    )
+                try:
+                    observer.execute(
+                        sql.SQL("SELECT {}()").format(function_identifier)
+                    )
+                except psycopg.errors.UndefinedFunction:
+                    pass
+                else:
+                    raise RuntimeError(
+                        "attestor executed an uncommitted SECURITY DEFINER function"
+                    )
+
+            if revoke_public:
+                admin.execute(
+                    sql.SQL(
+                        "REVOKE EXECUTE ON FUNCTION {}() FROM PUBLIC"
+                    ).format(function_identifier)
+                )
+            for role_name in approved_roles:
+                admin.execute(
+                    sql.SQL("GRANT EXECUTE ON FUNCTION {}() TO {}").format(
+                        function_identifier,
+                        sql.Identifier(role_name),
+                    )
+                )
+            admin.execute("RESET ROLE")
+
+            state = admin.execute(
+                """
+                SELECT
+                    EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.aclexplode(
+                            COALESCE(
+                                p.proacl,
+                                pg_catalog.acldefault('f', p.proowner)
+                            )
+                        ) AS acl
+                        WHERE acl.grantee = 0
+                          AND acl.privilege_type = 'EXECUTE'
+                    ),
+                    pg_catalog.has_function_privilege(%s, p.oid, 'EXECUTE'),
+                    pg_catalog.has_function_privilege(%s, p.oid, 'EXECUTE'),
+                    pg_catalog.has_function_privilege(%s, p.oid, 'EXECUTE'),
+                    pg_catalog.has_function_privilege(%s, p.oid, 'EXECUTE'),
+                    pg_catalog.pg_get_userbyid(p.proowner)
+                FROM pg_catalog.pg_proc AS p
+                WHERE p.oid = pg_catalog.to_regprocedure(%s)::oid
+                """,
+                (
+                    cls.ATTESTOR_ROLE,
+                    cls.APP_DIRECT_ROLE,
+                    cls.APP_INHERITED_ROLE,
+                    cls.APP_PUBLIC_ROLE,
+                    function_identity,
+                ),
+            ).fetchone()
+            if state is None:
+                raise RuntimeError("new SECURITY DEFINER function disappeared")
+            (
+                public_execute,
+                attestor_execute,
+                app_direct,
+                app_inherited,
+                app_explicit,
+                actual_owner,
+            ) = state
+            if public_execute or attestor_execute:
+                raise RuntimeError(
+                    "pre-commit SECURITY DEFINER PUBLIC/attestor EXECUTE guard failed"
+                )
+            if not (app_direct and app_inherited and app_explicit):
+                raise RuntimeError(
+                    "pre-commit approved application EXECUTE verification failed"
+                )
+            if actual_owner != owner_role:
+                raise RuntimeError("future SECURITY DEFINER function owner mismatch")
+            function_oid = admin.execute(
+                "SELECT pg_catalog.to_regprocedure(%s)::oid",
+                (function_identity,),
+            ).fetchone()[0]
+        return function_oid
+
     @classmethod
     def _cleanup(cls):
         if not getattr(cls, "resources_created", False):
@@ -1022,6 +1171,9 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                         sql.Identifier(schema_name)
                     )
                 )
+            admin.execute(
+                "DROP FUNCTION IF EXISTS pg_catalog.sd_system_exposure_probe_ci()"
+            )
             admin.execute("DROP EXTENSION IF EXISTS hstore")
             for function_name in (
                 "sd_public_definer_probe_ci",
@@ -1166,6 +1318,16 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
             ).fetchone():
                 raise RuntimeError("hstore extension already exists in disposable database")
             if admin.execute(
+                """
+                SELECT 1
+                FROM pg_catalog.pg_proc AS p
+                JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'pg_catalog'
+                  AND p.proname = 'sd_system_exposure_probe_ci'
+                """
+            ).fetchone():
+                raise RuntimeError("system exposure test function already exists")
+            if admin.execute(
                 "SELECT 1 FROM pg_catalog.pg_class WHERE oid = to_regclass('public.sd_probe_secret_ci')"
             ).fetchone():
                 raise RuntimeError("test secret table already exists")
@@ -1254,6 +1416,19 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                             sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
                                 sql.Identifier(schema_name),
                                 sql.Identifier(cls.ATTESTOR_ROLE),
+                            )
+                        )
+
+                    for schema_name in (cls.FUTURE_SCHEMA, cls.UNCONFIGURED_SCHEMA):
+                        admin.execute(
+                            sql.SQL(
+                                "GRANT USAGE ON SCHEMA {} TO {}, {}, {}, {}"
+                            ).format(
+                                sql.Identifier(schema_name),
+                                sql.Identifier(cls.APP_DIRECT_ROLE),
+                                sql.Identifier(cls.APP_GROUP_ROLE),
+                                sql.Identifier(cls.APP_INHERITED_ROLE),
+                                sql.Identifier(cls.APP_PUBLIC_ROLE),
                             )
                         )
 
@@ -1724,6 +1899,126 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                     sql.SQL("SET ROLE {}").format(sql.Identifier(self.APP_GROUP_ROLE))
                 )
 
+    def test_atomic_future_function_publish_and_application_access_paths(self):
+        function_name = "future_atomic_publish_ci"
+        function_identifier = sql.Identifier(self.UNCONFIGURED_SCHEMA, function_name)
+        function_oid = self._atomic_create_future_function(
+            self.UNCONFIGURED_SCHEMA,
+            self.UNCONFIGURED_OWNER_ROLE,
+            function_name,
+            revoke_public=True,
+            approved_roles=(
+                self.APP_DIRECT_ROLE,
+                self.APP_GROUP_ROLE,
+                self.APP_PUBLIC_ROLE,
+            ),
+            expected_default_public=True,
+        )
+        try:
+            with self._connect_as(self.ATTESTOR_ROLE) as attestor:
+                self.assertFalse(
+                    attestor.execute(
+                        "SELECT pg_catalog.has_function_privilege(%s, %s, 'EXECUTE')",
+                        (self.ATTESTOR_ROLE, function_oid),
+                    ).fetchone()[0]
+                )
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                    attestor.execute(
+                        sql.SQL("SELECT {}()").format(function_identifier)
+                    )
+
+            for role_name in (
+                self.APP_DIRECT_ROLE,
+                self.APP_INHERITED_ROLE,
+                self.APP_PUBLIC_ROLE,
+            ):
+                with self._connect_as(role_name) as application:
+                    self.assertEqual(
+                        application.execute(
+                            sql.SQL("SELECT {}()").format(function_identifier)
+                        ).fetchone()[0],
+                        self.UNCONFIGURED_OWNER_ROLE,
+                    )
+        finally:
+            with psycopg.connect(self.admin_conninfo, autocommit=True) as cleanup:
+                cleanup.execute(
+                    sql.SQL("DROP FUNCTION IF EXISTS {}()").format(function_identifier)
+                )
+
+    def test_unconfigured_owner_atomic_verification_failure_rolls_back_everything(self):
+        function_name = "future_unconfigured_rollback_ci"
+        function_identifier = sql.Identifier(self.UNCONFIGURED_SCHEMA, function_name)
+        function_identity = f"{self.UNCONFIGURED_SCHEMA}.{function_name}()"
+        with self.assertRaisesRegex(
+            RuntimeError, "approved application EXECUTE verification failed"
+        ):
+            self._atomic_create_future_function(
+                self.UNCONFIGURED_SCHEMA,
+                self.UNCONFIGURED_OWNER_ROLE,
+                function_name,
+                revoke_public=True,
+                approved_roles=(self.APP_DIRECT_ROLE, self.APP_GROUP_ROLE),
+                expected_default_public=True,
+            )
+
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            self.assertIsNone(
+                admin.execute(
+                    "SELECT pg_catalog.to_regprocedure(%s)::oid",
+                    (function_identity,),
+                ).fetchone()[0]
+            )
+        with self._connect_as(self.ATTESTOR_ROLE) as attestor:
+            self.assertIsNone(
+                attestor.execute(
+                    "SELECT pg_catalog.to_regprocedure(%s)::oid",
+                    (function_identity,),
+                ).fetchone()[0]
+            )
+            with self.assertRaises(psycopg.errors.UndefinedFunction):
+                attestor.execute(
+                    sql.SQL("SELECT {}()").format(function_identifier)
+                )
+
+    def test_unprotected_future_deployment_is_rejected_before_commit(self):
+        function_name = "future_unprotected_rejected_ci"
+        function_identifier = sql.Identifier(self.UNCONFIGURED_SCHEMA, function_name)
+        function_identity = f"{self.UNCONFIGURED_SCHEMA}.{function_name}()"
+        with self.assertRaisesRegex(
+            RuntimeError, "PUBLIC/attestor EXECUTE guard failed"
+        ):
+            self._atomic_create_future_function(
+                self.UNCONFIGURED_SCHEMA,
+                self.UNCONFIGURED_OWNER_ROLE,
+                function_name,
+                revoke_public=False,
+                approved_roles=(
+                    self.APP_DIRECT_ROLE,
+                    self.APP_GROUP_ROLE,
+                    self.APP_PUBLIC_ROLE,
+                ),
+                expected_default_public=True,
+            )
+
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            self.assertIsNone(
+                admin.execute(
+                    "SELECT pg_catalog.to_regprocedure(%s)::oid",
+                    (function_identity,),
+                ).fetchone()[0]
+            )
+        with self._connect_as(self.ATTESTOR_ROLE) as attestor:
+            self.assertIsNone(
+                attestor.execute(
+                    "SELECT pg_catalog.to_regprocedure(%s)::oid",
+                    (function_identity,),
+                ).fetchone()[0]
+            )
+            with self.assertRaises(psycopg.errors.UndefinedFunction):
+                attestor.execute(
+                    sql.SQL("SELECT {}()").format(function_identifier)
+                )
+
     def test_future_function_defaults_are_owner_specific_and_fail_closed(self):
         with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
             admin.execute(
@@ -1741,6 +2036,39 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                     sql.Identifier(self.FUTURE_SCHEMA),
                 )
             )
+            default_override = admin.execute(
+                """
+                SELECT
+                    EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_default_acl AS d
+                        CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) AS acl
+                        WHERE d.defaclrole = (
+                            SELECT oid FROM pg_catalog.pg_roles WHERE rolname = %s
+                        )
+                          AND d.defaclnamespace = 0
+                          AND d.defaclobjtype = 'f'
+                          AND acl.grantee = 0
+                          AND acl.privilege_type = 'EXECUTE'
+                    ),
+                    EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_default_acl AS d
+                        CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) AS acl
+                        WHERE d.defaclrole = (
+                            SELECT oid FROM pg_catalog.pg_roles WHERE rolname = %s
+                        )
+                          AND d.defaclnamespace = (
+                              SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = %s
+                          )
+                          AND d.defaclobjtype = 'f'
+                          AND acl.grantee = 0
+                          AND acl.privilege_type = 'EXECUTE'
+                    )
+                """,
+                (self.FUTURE_OWNER_ROLE, self.FUTURE_OWNER_ROLE, self.FUTURE_SCHEMA),
+            ).fetchone()
+            self.assertEqual(default_override, (False, True))
             admin.execute(
                 sql.SQL("SET ROLE {}").format(sql.Identifier(self.FUTURE_OWNER_ROLE))
             )
@@ -1894,6 +2222,62 @@ class SecurityDefinerIsolationPostgres176Tests(unittest.TestCase):
                     sql.Identifier(self.UNCONFIGURED_SCHEMA)
                 )
             )
+
+    def test_system_and_extension_effective_attestor_exposure_aborts(self):
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            admin.execute(
+                """
+                CREATE FUNCTION pg_catalog.sd_system_exposure_probe_ci()
+                RETURNS text
+                LANGUAGE sql
+                SECURITY DEFINER
+                SET search_path = pg_catalog
+                AS $function$ SELECT current_user::text $function$
+                """
+            )
+            admin.execute(
+                "GRANT EXECUTE ON FUNCTION public.sd_extension_member_probe_ci() TO PUBLIC"
+            )
+            try:
+                inventory = self._inventory(admin)
+                system_row = next(
+                    row for row in inventory
+                    if row["schema_name"] == "pg_catalog"
+                    and row["function_name"] == "sd_system_exposure_probe_ci"
+                )
+                extension_row = next(
+                    row for row in inventory
+                    if row["schema_name"] == "public"
+                    and row["function_name"] == "sd_extension_member_probe_ci"
+                )
+                self.assertEqual(system_row["schema_class"], "SYSTEM")
+                self.assertEqual(extension_row["schema_class"], "EXTENSION")
+                for row in (system_row, extension_row):
+                    self.assertTrue(row["attestor_schema_usage"])
+                    self.assertTrue(row["attestor_effective_execute"])
+
+                system_before = self._state(admin, system_row["oid"])
+                extension_before = self._state(admin, extension_row["oid"])
+                with self.assertRaisesRegex(
+                    RuntimeError, "system/extension schema; DBA review required"
+                ):
+                    self._apply_function_policy(
+                        self.reviewed_oids,
+                        self.approved_regrants,
+                    )
+                self.assertEqual(self._state(admin, system_row["oid"]), system_before)
+                self.assertEqual(
+                    self._state(admin, extension_row["oid"]),
+                    extension_before,
+                )
+            finally:
+                admin.execute(
+                    "REVOKE EXECUTE ON FUNCTION public.sd_extension_member_probe_ci() "
+                    "FROM PUBLIC"
+                )
+                admin.execute(
+                    "DROP FUNCTION IF EXISTS pg_catalog.sd_system_exposure_probe_ci()"
+                )
 
     def test_inventory_separates_system_and_extension_schemas(self):
         with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
