@@ -53,6 +53,10 @@ class MetaWhatsAppTransportError(RuntimeError):
         self.code = code
 
 
+class MetaWhatsAppWebhookBindingError(MetaWhatsAppTransportError):
+    """Raised when a signed webhook payload is not bound to its URL connection."""
+
+
 _SUPPORTED_STATUSES = frozenset({"sent", "delivered", "read", "failed"})
 _PROVIDER_REFRESH_INTERVAL = timedelta(minutes=15)
 _PENDING_PROVIDER_REFRESH_INTERVAL = timedelta(minutes=2)
@@ -657,17 +661,66 @@ def _send_claimed_dispatch(
     return True
 
 
-def _connection_for_phone_number(
-    db: Session, phone_number_id: str
-) -> ChannelConnection | None:
-    return db.scalar(
-        select(ChannelConnection).where(
-            ChannelConnection.channel == "whatsapp",
-            ChannelConnection.provider == "meta_cloud",
-            ChannelConnection.external_account_id == phone_number_id,
-            ChannelConnection.status.in_(("active", "paused")),
+def validate_meta_webhook_connection_binding(
+    connection: ChannelConnection,
+    payload: dict[str, Any],
+) -> None:
+    """Validate every message/status event before a webhook can cause side effects.
+
+    Meta connections currently own one explicitly configured phone number through
+    ChannelConnection.external_account_id. The URL-authenticated connection is the
+    only connection allowed to receive events from this signed request.
+    """
+    phone_number_id = str(connection.external_account_id or "").strip()
+    config = connection.config_json if isinstance(connection.config_json, dict) else {}
+    configured_phone_number_id = str(config.get("phone_number_id") or "").strip()
+    if (
+        connection.channel != "whatsapp"
+        or connection.provider != "meta_cloud"
+        or connection.status not in {"active", "paused"}
+        or not phone_number_id
+        or (
+            configured_phone_number_id
+            and configured_phone_number_id != phone_number_id
         )
-    )
+    ):
+        raise MetaWhatsAppWebhookBindingError(
+            "Meta webhook is not authorized for this connection."
+        )
+
+    entries = payload.get("entry") if isinstance(payload.get("entry"), list) else []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        changes = entry.get("changes") if isinstance(entry.get("changes"), list) else []
+        for change in changes:
+            value = change.get("value") if isinstance(change, dict) else None
+            if not isinstance(value, dict):
+                continue
+
+            metadata = value.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            payload_phone_number_id = str(metadata.get("phone_number_id") or "").strip()
+            messages = value.get("messages")
+            statuses = value.get("statuses")
+            has_events = (
+                isinstance(messages, list)
+                and bool(messages)
+            ) or (
+                isinstance(statuses, list)
+                and bool(statuses)
+            )
+
+            if not payload_phone_number_id:
+                if has_events:
+                    raise MetaWhatsAppWebhookBindingError(
+                        "Meta webhook event is missing its authorized phone number."
+                    )
+                continue
+            if payload_phone_number_id != phone_number_id:
+                raise MetaWhatsAppWebhookBindingError(
+                    "Meta webhook is not authorized for this connection."
+                )
 
 
 def _normalize_inbound(value: dict[str, Any]) -> list[NormalizedInboundMessage]:
@@ -747,7 +800,14 @@ def _normalize_inbound(value: dict[str, Any]) -> list[NormalizedInboundMessage]:
     return normalized
 
 
-def ingest_meta_webhook(db: Session, payload: dict[str, Any]) -> dict[str, int]:
+def ingest_meta_webhook(
+    db: Session,
+    *,
+    connection: ChannelConnection,
+    payload: dict[str, Any],
+) -> dict[str, int]:
+    validate_meta_webhook_connection_binding(connection, payload)
+
     accepted = 0
     statuses = 0
     ignored = 0
@@ -760,12 +820,10 @@ def ingest_meta_webhook(db: Session, payload: dict[str, Any]) -> dict[str, int]:
             value = change.get("value") if isinstance(change, dict) else None
             if not isinstance(value, dict):
                 continue
-            phone_number_id = str((value.get("metadata") or {}).get("phone_number_id") or "").strip()
+            metadata = value.get("metadata")
+            metadata = metadata if isinstance(metadata, dict) else {}
+            phone_number_id = str(metadata.get("phone_number_id") or "").strip()
             if not phone_number_id:
-                ignored += 1
-                continue
-            connection = _connection_for_phone_number(db, phone_number_id)
-            if connection is None:
                 ignored += 1
                 continue
 
