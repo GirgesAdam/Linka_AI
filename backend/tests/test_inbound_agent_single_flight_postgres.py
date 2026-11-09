@@ -480,7 +480,11 @@ def test_provider_ingest_survives_worker_crash_and_becomes_retryable(p0_case, mo
     with Session(p0_case.engine) as db:
         connection = _connection(db, p0_case)
         payload["entry"][0]["changes"][0]["value"]["metadata"]["phone_number_id"] = connection.external_account_id
-        assert transport.ingest_meta_webhook(db, payload)["accepted_inbound"] == 1
+        assert transport.ingest_meta_webhook(
+            db,
+            connection=connection,
+            payload=payload,
+        )["accepted_inbound"] == 1
         event = db.scalar(select(ChannelInboundEvent).where(ChannelInboundEvent.workspace_id == p0_case.ids.workspace, ChannelInboundEvent.id != p0_case.ids.event).order_by(ChannelInboundEvent.created_at.desc()))
         event_id = event.id
         channels._claim_inbound_event(db, connection=connection, event_id=event_id)
@@ -527,7 +531,12 @@ def test_same_provider_timestamp_preserves_webhook_message_order(p0_case, monkey
         }}]}]
     }
     with Session(p0_case.engine) as db:
-        assert transport.ingest_meta_webhook(db, payload)["accepted_inbound"] == 2
+        connection = _connection(db, p0_case)
+        assert transport.ingest_meta_webhook(
+            db,
+            connection=connection,
+            payload=payload,
+        )["accepted_inbound"] == 2
 
     with Session(p0_case.engine) as db:
         rows = list(
