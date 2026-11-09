@@ -50,9 +50,21 @@ def migration_lock_database() -> Iterator[str]:
     try:
         with admin_engine.connect() as admin:
             admin.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
-    except OperationalError:
+    except OperationalError as exc:
         admin_engine.dispose()
-        pytest.skip("Disposable local PostgreSQL is not available for migration-lock tests.")
+        ci_enabled = any(
+            os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+            for name in ("CI", "GITHUB_ACTIONS")
+        )
+        if ci_enabled:
+            pytest.fail(
+                "Required disposable PostgreSQL database creation failed in CI; "
+                f"migration-lock integration tests cannot be skipped: {exc}"
+            )
+        pytest.skip(
+            "Disposable local PostgreSQL is unavailable for migration-lock tests: "
+            f"{exc}"
+        )
 
     target_url = base_url.set(database=database_name).render_as_string(hide_password=False)
     try:
