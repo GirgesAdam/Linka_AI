@@ -10,7 +10,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.page_permissions import (
+    require_page_permission,
+)
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_provider_credential import ChannelProviderCredential
@@ -55,7 +58,7 @@ def _safe_filename(message: Message) -> str:
 @router.get("/messages/{message_id}/media", include_in_schema=False)
 def stream_inbox_message_media(
     message_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     range_header: Annotated[str | None, Header(alias="Range")] = None,
 ) -> StreamingResponse:

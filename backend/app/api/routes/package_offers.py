@@ -6,7 +6,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.page_permissions import (
+    require_page_permission,
+)
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.schemas.package_offers import (
     PatientPackageOfferPurchase,
@@ -33,7 +36,7 @@ def _raise(exc: Exception) -> None:
 
 @router.get("/package-offers", response_model=list[ServicePackageOfferRead])
 def package_offers(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("services", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     service_id: UUID | None = None,
     active_only: bool = False,
@@ -49,7 +52,7 @@ def package_offers(
 @router.put("/package-offers", response_model=list[ServicePackageOfferRead])
 def set_package_offer(
     payload: ServicePackageOfferUpsert,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("services", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ServicePackageOfferRead]:
     try:
@@ -77,7 +80,7 @@ def set_package_offer(
 )
 def buy_package_offer(
     payload: PatientPackageOfferPurchase,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=128)] = None,
 ) -> PatientPackageRead:

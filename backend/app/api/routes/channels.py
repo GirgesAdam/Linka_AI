@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 from app.agents.llm_runtime import LLMProviderError, provider_error_http_status
 from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.page_permissions import (
+    require_any_page_permission,
+    require_page_permission,
+)
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.core.channel_adapter import generate_adapter_token
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
@@ -108,10 +112,11 @@ def _require_active(connection: ChannelConnection) -> None:
     "/connections",
     response_model=ChannelConnectionCreated,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_page_permission("setup.whatsapp", legacy_access="admin"))],
 )
 def create_channel_connection(
     payload: ChannelConnectionCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChannelConnectionCreated:
     adapter_token, adapter_token_hash = generate_adapter_token()
@@ -144,7 +149,15 @@ def create_channel_connection(
 
 @router.get("/connections", response_model=list[ChannelConnectionRead])
 def list_channel_connections(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[
+        WorkspaceAccess,
+        Depends(
+            require_any_page_permission(
+                ("setup.whatsapp", "admin"),
+                ("analytics.cohort_detail", "admin"),
+            )
+        ),
+    ],
     db: Annotated[Session, Depends(get_db)],
     connection_status: Annotated[
         ChannelConnectionStatus | None,
@@ -163,7 +176,7 @@ def list_channel_connections(
 )
 def get_channel_connection(
     connection_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup.whatsapp", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChannelConnection:
     return _get_workspace_connection(
@@ -180,7 +193,7 @@ def get_channel_connection(
 def update_channel_connection(
     connection_id: UUID,
     payload: ChannelConnectionUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup.whatsapp", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChannelConnection:
     connection = _get_workspace_connection(
@@ -207,10 +220,11 @@ def update_channel_connection(
 @router.post(
     "/connections/{connection_id}/rotate-token",
     response_model=ChannelTokenRotated,
+    dependencies=[Depends(require_page_permission("setup.whatsapp", legacy_access="admin"))],
 )
 def rotate_channel_token(
     connection_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChannelTokenRotated:
     connection = _get_workspace_connection(

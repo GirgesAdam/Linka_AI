@@ -72,3 +72,58 @@ export async function changeRole(
     return actionFeedbackFailure(error, "تعذر تحديث صلاحية العضو. حاول مرة أخرى.");
   }
 }
+
+type MemberPermissionsResponse = {
+  membership_id: string;
+  page_permissions: Record<string, "none" | "manage"> | null;
+  permissions_version: number;
+  is_legacy: boolean;
+};
+
+export async function getMemberPermissions(
+  membershipId: string,
+): Promise<{ data: MemberPermissionsResponse | null; error: string | null }> {
+  try {
+    const { getAppContext } = await import("@/lib/tia/workspace");
+    const { workspace } = await getAppContext();
+    if (workspace.role !== "admin") return { data: null, error: "هذه الصلاحيات متاحة للمدير فقط." };
+    const data = await tiaRequest<MemberPermissionsResponse>(
+      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/page-permissions",
+    );
+    return { data, error: null };
+  } catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "تعذر تحميل صلاحيات العضو.",
+    };
+  }
+}
+
+export async function saveMemberPermissions(
+  membershipId: string,
+  expectedVersion: number,
+  permissions: Record<string, "none" | "manage">,
+): Promise<{ data: MemberPermissionsResponse | null; error: string | null }> {
+  try {
+    const { getAppContext } = await import("@/lib/tia/workspace");
+    const { workspace } = await getAppContext();
+    if (workspace.role !== "admin") return { data: null, error: "هذه العملية متاحة للمدير فقط." };
+    const data = await tiaRequest<MemberPermissionsResponse>(
+      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/page-permissions",
+      {
+        method: "PUT",
+        body: JSON.stringify({ expected_version: expectedVersion, page_permissions: permissions }),
+      },
+    );
+    revalidatePath("/team");
+    return { data, error: null };
+  } catch (error) {
+    if (error instanceof TiaApiError && error.status === 409) {
+      return { data: null, error: "تم تغيير الصلاحيات من مكان آخر. أعد تحميلها قبل الحفظ." };
+    }
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "تعذر حفظ صلاحيات العضو.",
+    };
+  }
+}

@@ -1,12 +1,11 @@
-import Link from "next/link";
-import { CircleAlert, Clock3, MessageCircleMore, UserRound, Workflow } from "lucide-react";
+import { PermissionLink as Link } from "@/components/permission-link";
+import { CircleAlert, MessageCircleMore, UserRound, Workflow } from "lucide-react";
 
 import { AutomationTimingForm } from "@/components/automation-timing-form";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { SubmitButton } from "@/components/submit-button";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
 import { labelForStatus, toneForStatus } from "@/lib/status";

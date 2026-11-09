@@ -9,7 +9,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.page_permissions import (
+    require_page_permission,
+)
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.automation_job import AutomationJob
 from app.models.automation_rule import AutomationRule
@@ -78,7 +81,7 @@ def get_automation_worker_access(
 
 @router.get("/rules", response_model=list[AutomationRuleRead])
 def list_rules(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AutomationRule]:
     return [
@@ -92,7 +95,7 @@ def list_rules(
 def update_rule(
     rule_id: UUID,
     payload: AutomationRuleUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationRule:
     rule = db.scalar(
@@ -195,7 +198,7 @@ def update_rule(
 
 @router.get("/overview", response_model=AutomationOperationsOverview)
 def automation_overview(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationOperationsOverview:
     return automation_operations_overview(db, workspace_id=access.workspace.id)
@@ -203,7 +206,7 @@ def automation_overview(
 
 @router.get("/jobs", response_model=list[AutomationJobRead])
 def list_jobs(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
     job_status: Annotated[AutomationJobStatus | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -246,7 +249,7 @@ def list_jobs(
 @router.post("/jobs/{job_id}/retry", response_model=AutomationJobActionResponse)
 def retry_job(
     job_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationJobActionResponse:
     try:
@@ -269,7 +272,7 @@ def retry_job(
 @router.post("/jobs/{job_id}/cancel", response_model=AutomationJobActionResponse)
 def cancel_job(
     job_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationJobActionResponse:
     try:
@@ -292,7 +295,7 @@ def cancel_job(
 @router.post("/workers", response_model=AutomationWorkerCreated, status_code=201)
 def create_worker(
     payload: AutomationWorkerCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationWorkerCreated:
     raw, token_hash = generate_worker_token()
@@ -326,7 +329,7 @@ def create_worker(
 
 @router.get("/workers", response_model=list[AutomationWorkerRead])
 def list_workers(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AutomationWorker]:
     return list(
@@ -342,7 +345,7 @@ def list_workers(
 def update_worker_status(
     worker_id: UUID,
     payload: AutomationWorkerStatusUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("automations", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationWorker:
     worker = db.scalar(
@@ -372,10 +375,10 @@ def update_worker_status(
     return worker
 
 
-@router.post("/workers/{worker_id}/rotate-token", response_model=AutomationWorkerTokenRotated)
+@router.post("/workers/{worker_id}/rotate-token", response_model=AutomationWorkerTokenRotated, dependencies=[Depends(require_page_permission("automations", legacy_access="admin"))])
 def rotate_worker_token(
     worker_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AutomationWorkerTokenRotated:
     worker = db.scalar(

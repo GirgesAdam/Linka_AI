@@ -9,6 +9,7 @@ import { getAppContext } from "@/lib/tia/workspace";
 import type { WorkspaceMember } from "@/lib/types";
 import { changeRole } from "./actions";
 import { InviteMemberForm } from "./invite-member-form";
+import { MemberPermissionsPanel } from "./member-permissions-panel";
 
 const roleLabels = { admin: "مدير", member: "عضو فريق" } as const;
 
@@ -64,6 +65,7 @@ export default async function TeamPage() {
           </CardContent>
         </Card>
       </div>
+      <MemberPermissionsPanel members={members} />
     </>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { useActionState, useMemo, useState } from "react";
 import { CheckCircle2, LoaderCircle, Megaphone, ShieldCheck } from "lucide-react";
 

@@ -76,7 +76,7 @@ def _locked_appointment(db: Session, *, workspace_id: UUID, appointment_id: UUID
 
 @router.get("/products", response_model=list[ClinicProductRead])
 def products(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ClinicProductRead]:
     return [ClinicProductRead.model_validate(row) for row in list_products(db, workspace_id=access.workspace.id)]
@@ -85,7 +85,7 @@ def products(
 @router.post("/products", response_model=ClinicProductRead, status_code=status.HTTP_201_CREATED)
 def add_product(
     payload: ClinicProductCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicProductRead:
     try:
@@ -144,7 +144,7 @@ def remove_product_from_inventory(
 def update_product_quantity(
     product_id: UUID,
     payload: ClinicProductQuantityUpdate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicProductRead:
     try:
@@ -165,7 +165,7 @@ def update_product_quantity(
 @router.get("/appointments/{appointment_id}/products", response_model=list[AppointmentProductLineRead])
 def appointment_products(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AppointmentProductLineRead]:
     return list_appointment_products(db, workspace_id=access.workspace.id, appointment_id=appointment_id)
@@ -179,7 +179,7 @@ def appointment_products(
 def add_product_to_appointment(
     appointment_id: UUID,
     payload: AppointmentProductCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AppointmentProductLineRead]:
     try:
@@ -212,7 +212,7 @@ def add_product_to_appointment(
 def remove_product_from_appointment(
     appointment_id: UUID,
     line_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     try:
@@ -246,7 +246,7 @@ def remove_product_from_appointment(
 
 @router.get("/items", response_model=list[InventoryItemRead])
 def inventory_items(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[InventoryItemRead]:
     return list_inventory_items(db, workspace_id=access.workspace.id)
@@ -255,7 +255,7 @@ def inventory_items(
 @router.post("/items", response_model=InventoryItemRead, status_code=status.HTTP_201_CREATED)
 def add_inventory_item(
     payload: InventoryItemCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> InventoryItemRead:
     try:
@@ -292,7 +292,7 @@ def remove_inventory_item(
 def increase_inventory_stock(
     item_id: UUID,
     payload: InventoryItemAdjust,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> InventoryItemRead:
     try:
@@ -313,7 +313,7 @@ def increase_inventory_stock(
 def use_inventory_item(
     item_id: UUID,
     payload: InventoryUsageCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> InventoryUsageRead:
     try:
@@ -341,7 +341,7 @@ def use_inventory_item(
 
 @router.get("/laser-devices", response_model=list[ClinicLaserDeviceRead])
 def laser_devices(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[ClinicLaserDeviceRead]:
     return list_clinic_laser_devices(
@@ -415,7 +415,7 @@ def remove_laser_price(
 
 @router.get("/laser-prices", response_model=list[LaserDevicePriceRead])
 def laser_prices(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[LaserDevicePriceRead]:
     return list_laser_device_prices(db, workspace_id=access.workspace.id)
@@ -424,7 +424,7 @@ def laser_prices(
 @router.put("/laser-prices", response_model=list[LaserDevicePriceRead])
 def set_laser_price(
     payload: LaserDevicePriceUpsert,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inventory", legacy_access="admin"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[LaserDevicePriceRead]:
     try:

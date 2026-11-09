@@ -17,7 +17,7 @@ _ALLOWED_DAYS = {30, 90, 365}
 
 @router.get("/campaigns", response_model=CampaignAnalyticsOverviewRead)
 def get_campaign_analytics(
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.campaigns"))],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.campaigns", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_analytics_db)],
     days: Annotated[int | None, Query()] = 90,
     all_history: bool = False,
@@ -39,7 +39,7 @@ def get_campaign_analytics(
 @router.get("/campaigns/{campaign_id}", response_model=CampaignAnalyticsOverviewRead)
 def get_campaign_analytics_detail(
     campaign_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.campaign_detail"))],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.campaign_detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_analytics_db)],
 ) -> CampaignAnalyticsOverviewRead:
     result = campaign_analytics_overview(

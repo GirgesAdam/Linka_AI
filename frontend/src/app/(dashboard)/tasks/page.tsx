@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { CheckCircle2, CircleAlert, Clock3, ListTodo, MessageSquareMore, UserRound } from "lucide-react";
 
 import { ActionFeedbackForm } from "@/components/action-feedback-form";

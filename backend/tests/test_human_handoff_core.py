@@ -273,4 +273,4 @@ def test_manual_takeover_is_staff_sourced_and_claims_the_handoff() -> None:
     assert "created_by_user_id=access.user.id" in block
     assert "commit=False" in block
     assert block.index("create_handoff(") < block.index("claim_handoff(")
-    assert "get_workspace_reader" in block
+    assert 'require_page_permission("inbox.detail", legacy_access="reader")' in block

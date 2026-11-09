@@ -134,7 +134,7 @@ def test_phase75_uses_isolated_pool_timeout_cache_export_guards_and_payment_inde
     assert "get_analytics_page_reader" in dependency
     assert "HTTP_503_SERVICE_UNAVAILABLE" in dependency
     assert "get_analytics_db" in route
-    assert 'get_analytics_page_reader("analytics.overview")' in route
+    assert 'get_analytics_page_reader("analytics.overview", legacy_access="reader")' in route
     assert "get_workspace_reader" not in route
     assert "Depends(get_db)" not in route
     assert "use_cache=False" in route

@@ -36,7 +36,7 @@ def test_activity_period_contract_is_bounded_and_uses_integer_query_coercion() -
     assert "days: int = 7" in route
     assert "days not in ACTIVITY_ALLOWED_DAYS" in route
     assert "Literal[7, 30, 90]" not in route
-    assert "get_workspace_admin" in route
+    assert 'require_page_permission("activity", legacy_access="admin")' in route
 
 
 def test_activity_table_is_append_only_at_api_layer_and_workspace_indexed() -> None:

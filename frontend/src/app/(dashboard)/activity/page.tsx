@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { redirect } from "next/navigation";
 import { Bot, History, Settings2, UserRound } from "lucide-react";
 

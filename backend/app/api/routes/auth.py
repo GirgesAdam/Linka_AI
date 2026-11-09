@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies.page_permissions import require_any_page_permission
 from app.api.dependencies.security import (
     WorkspaceAccess,
     get_current_user,
@@ -27,6 +28,7 @@ from app.schemas.page_permissions import MemberPagePermissionsRead, MemberPagePe
 from app.services.activity import record_activity_event
 from app.services.page_permissions import (
     build_page_permissions_compare_and_swap,
+    empty_member_page_permissions,
     require_successful_permission_update,
 )
 from app.services.supabase_auth import SupabaseAuthError, invite_user_by_email
@@ -98,6 +100,8 @@ def me(
             workspace_slug=membership.workspace.slug,
             role=membership.role,
             is_demo=bool(membership.workspace.is_demo),
+            page_permissions=membership.page_permissions,
+            permissions_version=membership.permissions_version,
         )
         for membership in memberships
         if membership.workspace.is_active
@@ -130,6 +134,8 @@ def current_workspace(
         workspace_slug=access.workspace.slug,
         role=access.membership.role,
         is_demo=bool(access.workspace.is_demo),
+        page_permissions=access.membership.page_permissions,
+        permissions_version=access.membership.permissions_version,
     )
 
 
@@ -142,6 +148,30 @@ def list_workspace_members(
         db.scalars(
             select(WorkspaceMember)
             .where(WorkspaceMember.workspace_id == access.workspace.id)
+            .order_by(WorkspaceMember.created_at)
+        )
+    )
+    return [member_read(membership, membership.user) for membership in memberships]
+
+
+@router.get("/workspace/assignees", response_model=list[WorkspaceMemberRead])
+def list_workspace_assignees(
+    access: WorkspaceAccess = Depends(
+        require_any_page_permission(
+            ("tasks", "admin"),
+            ("inbox.detail", "admin"),
+        )
+    ),
+    db: Session = Depends(get_db),
+) -> list[WorkspaceMemberRead]:
+    """List active assignees for task and inbox operations, not team administration."""
+    memberships = list(
+        db.scalars(
+            select(WorkspaceMember)
+            .where(
+                WorkspaceMember.workspace_id == access.workspace.id,
+                WorkspaceMember.is_active.is_(True),
+            )
             .order_by(WorkspaceMember.created_at)
         )
     )
@@ -176,6 +206,11 @@ def invite_workspace_member(
                 workspace_id=access.workspace.id,
                 user_id=existing_user.id,
                 role=payload.role,
+                page_permissions=(
+                    empty_member_page_permissions()
+                    if payload.role == WORKSPACE_ROLE_MEMBER
+                    else None
+                ),
             )
             db.add(membership)
             db.flush()
@@ -226,6 +261,11 @@ def invite_workspace_member(
         workspace_id=access.workspace.id,
         user_id=existing_user.id,
         role=payload.role,
+        page_permissions=(
+            empty_member_page_permissions()
+            if payload.role == WORKSPACE_ROLE_MEMBER
+            else None
+        ),
     )
     db.add(membership)
     try:
@@ -282,6 +322,12 @@ def update_workspace_member_role(
 
     previous_role = membership.role
     membership.role = payload.role
+    if (
+        previous_role != WORKSPACE_ROLE_MEMBER
+        and membership.role == WORKSPACE_ROLE_MEMBER
+        and membership.page_permissions is None
+    ):
+        membership.page_permissions = empty_member_page_permissions()
     if membership.role != previous_role:
         record_activity_event(
             db,

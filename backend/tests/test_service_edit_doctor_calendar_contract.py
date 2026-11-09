@@ -48,7 +48,7 @@ def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
     page = (ROOT / "frontend/src/app/(dashboard)/doctors/page.tsx").read_text(encoding="utf-8")
     router = (ROOT / "backend/app/api/router.py").read_text(encoding="utf-8")
 
-    assert "get_workspace_admin" in route
+    assert 'require_page_permission("doctors", legacy_access="admin")' in route
     assert '"/doctor-admin/{doctor_id}/working-hours"' in route
     assert "branch_id" not in DoctorAdminCreate.model_fields
     assert "branch_id" not in actions

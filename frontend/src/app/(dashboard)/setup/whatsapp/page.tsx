@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { CheckCircle2, ExternalLink, Link2, MessageCircleMore } from "lucide-react";
 import { redirect } from "next/navigation";
 

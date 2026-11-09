@@ -8,10 +8,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.api.dependencies.page_permissions import (
+    require_page_permission,
+)
 from app.api.dependencies.security import (
     WorkspaceAccess,
-    get_workspace_admin,
-    get_workspace_reader,
+    get_workspace_access,
 )
 from app.database.session import get_db
 from app.models.conversation import Conversation
@@ -21,7 +23,6 @@ from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
 from app.models.patient import Patient
 from app.models.user import User
-from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
 from app.schemas.inbox import (
     ConversationOwnerType,
     ConversationReadReceipt,
@@ -57,8 +58,19 @@ from app.services.handoffs import (
     get_active_handoff,
     resolve_handoff,
 )
+from app.services.page_permissions import page_permission_allows
 
 router = APIRouter()
+
+
+def _can_manage_inbox_details(access: WorkspaceAccess) -> bool:
+    return page_permission_allows(
+        access.membership,
+        workspace_id=access.workspace.id,
+        user_id=access.user.id,
+        page_key="inbox.detail",
+        legacy_access="admin",
+    )
 
 
 def _not_found(resource: str) -> HTTPException:
@@ -189,7 +201,7 @@ def _queue_item(
 
 @router.get("/summary", response_model=InboxSummaryRead)
 def get_inbox_summary(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.list", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> InboxSummaryRead:
     unread_conversations = db.scalar(
@@ -204,7 +216,7 @@ def get_inbox_summary(
 
 @router.get("/conversations", response_model=list[InboxConversationListItem])
 def list_inbox_conversations(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.list", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     owner_type: ConversationOwnerType | None = None,
     conversation_status: Annotated[ConversationStatus | None, Query(alias="status")] = None,
@@ -344,7 +356,7 @@ def list_inbox_conversations(
 
 @router.get("/conversations/live-revision", response_model=InboxLiveRevisionRead)
 def get_inbox_conversations_live_revision(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.list", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     owner_type: ConversationOwnerType | None = None,
     conversation_status: Annotated[ConversationStatus | None, Query(alias="status")] = None,
@@ -372,7 +384,7 @@ def get_inbox_conversations_live_revision(
 
 @router.get("/handoffs", response_model=list[HandoffQueueItem])
 def list_handoffs(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.list", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     handoff_status: Annotated[HandoffStatus | None, Query(alias="status")] = None,
     category: HandoffCategory | None = None,
@@ -409,7 +421,7 @@ def list_handoffs(
 )
 def get_inbox_conversation_live_revision(
     conversation_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> InboxLiveRevisionRead:
     conversation = _get_conversation(
@@ -473,7 +485,7 @@ def get_inbox_conversation_live_revision(
 )
 def get_inbox_conversation(
     conversation_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> InboxConversationRead:
     conversation = _get_conversation(
@@ -578,7 +590,7 @@ def get_inbox_conversation(
 )
 def mark_inbox_conversation_read(
     conversation_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ConversationReadReceipt:
     conversation = _get_conversation(
@@ -601,7 +613,7 @@ def mark_inbox_conversation_read(
 )
 def claim_inbox_handoff(
     handoff_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
     handoff, conversation = _lock_handoff_and_conversation(
@@ -624,11 +636,12 @@ def claim_inbox_handoff(
 @router.post(
     "/handoffs/{handoff_id}/assign",
     response_model=HandoffRead,
+    dependencies=[Depends(require_page_permission("inbox.detail", legacy_access="admin"))],
 )
 def assign_inbox_handoff(
     handoff_id: UUID,
     payload: HandoffAssignRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
     handoff, conversation = _lock_handoff_and_conversation(
@@ -661,7 +674,7 @@ def assign_inbox_handoff(
 def take_over_conversation(
     conversation_id: UUID,
     payload: TakeoverRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
     conversation = _get_conversation(
@@ -714,7 +727,7 @@ def take_over_conversation(
 def send_staff_reply(
     conversation_id: UUID,
     payload: StaffReplyRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -829,7 +842,7 @@ def send_staff_reply(
 def resolve_inbox_handoff(
     handoff_id: UUID,
     payload: ResolveHandoffRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HandoffRequest:
     handoff, conversation = _lock_handoff_and_conversation(
@@ -838,8 +851,8 @@ def resolve_inbox_handoff(
         handoff_id=handoff_id,
     )
 
-    is_admin = access.membership.role == WORKSPACE_ROLE_ADMIN
-    if not is_admin and handoff.assigned_user_id != access.user.id:
+    can_manage_inbox = _can_manage_inbox_details(access)
+    if not can_manage_inbox and handoff.assigned_user_id != access.user.id:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

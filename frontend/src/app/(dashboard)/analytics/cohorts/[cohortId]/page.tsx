@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { CalendarClock, Megaphone, UsersRound } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";

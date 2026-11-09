@@ -62,7 +62,7 @@ def _workspace_timezone(access: WorkspaceAccess) -> ZoneInfo:
 def get_doctor_calendar(
     start_date: date,
     end_date: date,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.calendar", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_page_permission("doctors", legacy_access="reader"))],
     db: Annotated[Session, Depends(get_db)],
     doctor_id: UUID | None = None,
 ) -> DoctorCalendarRead:

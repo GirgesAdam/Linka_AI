@@ -5,12 +5,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.dependencies.page_permissions import (
+    require_page_permission,
+    require_page_permission_user_id,
+    require_page_permission_workspace,
+)
 from app.api.dependencies.security import (
     WorkspaceAccess,
-    get_current_workspace,
-    get_manageable_workspace,
-    get_workspace_admin,
-    get_workspace_admin_user_id,
 )
 from app.core.doctor_names import normalize_doctor_name_parts
 from app.database.session import get_db
@@ -124,7 +125,7 @@ def commit_or_conflict(db: Session, detail: str) -> None:
 
 @router.get("/knowledge", response_model=AgentKnowledgeSnapshot)
 def get_agent_knowledge(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> AgentKnowledgeSnapshot:
     return build_agent_knowledge_snapshot(db, workspace)
@@ -133,7 +134,7 @@ def get_agent_knowledge(
 @router.post("/knowledge/ai/propose", response_model=KnowledgeEditProposal)
 def propose_agent_knowledge_change(
     payload: KnowledgeEditProposeRequest,
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> KnowledgeEditProposal:
     try:
@@ -151,7 +152,7 @@ def propose_agent_knowledge_change(
 @router.post("/knowledge/ai/apply", response_model=KnowledgeEditApplyResponse)
 def apply_agent_knowledge_change(
     payload: KnowledgeEditApplyRequest,
-    access: WorkspaceAccess = Depends(get_workspace_admin),
+    access: WorkspaceAccess = Depends(require_page_permission("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> KnowledgeEditApplyResponse:
     try:
@@ -171,8 +172,8 @@ def apply_agent_knowledge_change(
 @router.post("/branches", response_model=BranchRead, status_code=status.HTTP_201_CREATED)
 def create_branch(
     payload: BranchCreate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Branch:
     branch = Branch(workspace_id=workspace.id, **payload.model_dump())
@@ -189,7 +190,7 @@ def create_branch(
 
 @router.get("/branches", response_model=list[BranchRead])
 def list_branches(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> list[Branch]:
     return list(
@@ -201,8 +202,8 @@ def list_branches(
 def update_branch(
     branch_id: UUID,
     payload: BranchUpdate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Branch:
     branch = db.scalar(
@@ -226,8 +227,8 @@ def update_branch(
 @router.post("/staff", response_model=StaffRead, status_code=status.HTTP_201_CREATED)
 def create_staff(
     payload: StaffCreate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Staff:
     staff = Staff(workspace_id=workspace.id, **payload.model_dump())
@@ -246,7 +247,7 @@ def create_staff(
 
 @router.get("/staff", response_model=list[StaffRead])
 def list_staff(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> list[Staff]:
     return list(
@@ -262,8 +263,8 @@ def list_staff(
 def update_staff(
     staff_id: UUID,
     payload: StaffUpdate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Staff:
     staff = db.scalar(select(Staff).where(Staff.id == staff_id, Staff.workspace_id == workspace.id))
@@ -293,8 +294,8 @@ def update_staff(
 @router.post("/doctors", response_model=DoctorRead, status_code=status.HTTP_201_CREATED)
 def create_doctor(
     payload: DoctorCreate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("doctors", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("doctors", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Doctor:
     staff = db.scalar(
@@ -319,7 +320,7 @@ def create_doctor(
 
 @router.get("/doctors", response_model=list[DoctorRead])
 def list_doctors(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("doctors", legacy_access="reader")),
     db: Session = Depends(get_db),
 ) -> list[Doctor]:
     return list(
@@ -333,8 +334,8 @@ def list_doctors(
 def update_doctor(
     doctor_id: UUID,
     payload: DoctorUpdate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("doctors", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("doctors", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Doctor:
     doctor = db.scalar(
@@ -360,8 +361,8 @@ def assign_doctor_to_branch(
     doctor_id: UUID,
     branch_id: UUID,
     payload: DoctorBranchAssignment,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("doctors", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("doctors", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> DoctorBranch:
     doctor = db.scalar(
@@ -460,8 +461,8 @@ def _sync_service_device_prices(
 @router.post("/services", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)
 def create_service(
     payload: ServiceCreate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("services", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("services", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Service:
     service_values = payload.model_dump(exclude={"device_prices", "requires_laser_device"})
@@ -501,7 +502,7 @@ def create_service(
 
 @router.get("/services", response_model=list[ServiceRead])
 def list_services(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("services", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> list[Service]:
     return list(
@@ -515,8 +516,8 @@ def list_services(
 def update_service(
     service_id: UUID,
     payload: ServiceUpdate,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("services", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("services", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> Service:
     service = db.scalar(
@@ -569,8 +570,8 @@ def assign_service_to_doctor(
     doctor_id: UUID,
     service_id: UUID,
     payload: DoctorServiceAssignment,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("doctors", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("doctors", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> DoctorService:
     doctor = db.scalar(
@@ -618,8 +619,8 @@ def assign_service_to_doctor(
 def replace_branch_working_hours(
     branch_id: UUID,
     payload: WorkingHoursReplace,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> list[BranchWorkingHour]:
     branch = db.scalar(
@@ -656,8 +657,8 @@ def replace_doctor_working_hours(
     doctor_id: UUID,
     branch_id: UUID,
     payload: WorkingHoursReplace,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("doctors", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("doctors", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> list[DoctorWorkingHour]:
     assignment = db.scalar(
@@ -702,7 +703,7 @@ def replace_doctor_working_hours(
 
 @router.get("/booking-settings", response_model=BookingSettingsRead)
 def get_booking_settings(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> BookingSettings:
     settings = db.scalar(
@@ -716,8 +717,8 @@ def get_booking_settings(
 @router.put("/booking-settings", response_model=BookingSettingsRead)
 def upsert_booking_settings(
     payload: BookingSettingsUpsert,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> BookingSettings:
     settings = db.scalar(
@@ -741,7 +742,7 @@ def upsert_booking_settings(
 
 @router.get("/integration", response_model=ClinicIntegrationRead)
 def get_clinic_integration(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicIntegration:
     integration = db.get(ClinicIntegration, workspace.id)
@@ -759,8 +760,8 @@ def get_clinic_integration(
 @router.put("/integration", response_model=ClinicIntegrationRead)
 def upsert_clinic_integration(
     payload: ClinicIntegrationUpsert,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicIntegration:
     integration = db.get(ClinicIntegration, workspace.id)
@@ -787,7 +788,7 @@ def upsert_clinic_integration(
 
 @router.get("/integration/authority", response_model=ClinicIntegrationAuthorityRead)
 def get_clinic_integration_authority(
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicIntegrationAuthorityRead:
     integration = db.get(ClinicIntegration, workspace.id)
@@ -805,8 +806,8 @@ def get_clinic_integration_authority(
 @router.put("/integration/authority", response_model=ClinicIntegrationAuthorityRead)
 def update_clinic_integration_authority(
     payload: ClinicIntegrationAuthorityUpsert,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicIntegrationAuthorityRead:
     integration = db.get(ClinicIntegration, workspace.id)
@@ -832,7 +833,7 @@ def update_clinic_integration_authority(
 
 @router.get("/integration/sync/schedule", response_model=ClinicSyncScheduleRead)
 def get_clinic_sync_schedule(
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicSyncScheduleRead:
     return read_sync_schedule(db, workspace_id=workspace.id)
@@ -841,8 +842,8 @@ def get_clinic_sync_schedule(
 @router.put("/integration/sync/schedule", response_model=ClinicSyncScheduleRead)
 def put_clinic_sync_schedule(
     payload: ClinicSyncScheduleUpsert,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicSyncScheduleRead:
     try:
@@ -863,7 +864,7 @@ def put_clinic_sync_schedule(
 @router.post("/integration/sync/run", response_model=ClinicSyncCycleRead)
 def run_clinic_sync_now(
     payload: ClinicSyncRunRequest,
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicSyncCycleRead:
     try:
@@ -881,7 +882,7 @@ def run_clinic_sync_now(
 
 @router.get("/integration/runtime", response_model=ClinicIntegrationRuntimeRead)
 def get_clinic_integration_runtime(
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicIntegrationRuntimeRead:
     try:
@@ -895,7 +896,7 @@ def get_clinic_integration_runtime(
 
 @router.get("/integration/data-issues", response_model=ClinicDataIssueListRead)
 def get_clinic_data_issues(
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicDataIssueListRead:
     return list_data_issues(db, workspace_id=workspace.id, limit=100)
@@ -905,7 +906,7 @@ def get_clinic_data_issues(
 def resolve_clinic_data_issue(
     issue_id: UUID,
     payload: ClinicDataIssueResolveRequest,
-    workspace: Workspace = Depends(get_manageable_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicDataIssueListRead:
     try:
@@ -922,7 +923,7 @@ def resolve_clinic_data_issue(
 
 @router.get("/integration/entity-links", response_model=list[ClinicEntityLinkRead])
 def list_clinic_entity_links(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> list[ClinicIntegrationEntityLink]:
     return list(
@@ -940,8 +941,8 @@ def list_clinic_entity_links(
 @router.put("/integration/entity-links", response_model=ClinicEntityLinkRead)
 def upsert_clinic_entity_link(
     payload: ClinicEntityLinkUpsert,
-    workspace: Workspace = Depends(get_manageable_workspace),
-    actor_user_id: UUID = Depends(get_workspace_admin_user_id),
+    workspace: Workspace = Depends(require_page_permission_workspace("setup", legacy_access="admin")),
+    actor_user_id: UUID = Depends(require_page_permission_user_id("setup", legacy_access="admin")),
     db: Session = Depends(get_db),
 ) -> ClinicIntegrationEntityLink:
     integration = db.get(ClinicIntegration, workspace.id)

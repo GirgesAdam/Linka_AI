@@ -50,6 +50,11 @@ PAGE_PERMISSION_KEY_SET: Final = frozenset(PAGE_PERMISSION_KEYS)
 PAGE_PERMISSION_LEVELS: Final = frozenset({"none", "manage"})
 
 
+def empty_member_page_permissions() -> dict[str, str]:
+    """Return a complete deny-by-default matrix for a newly created Member."""
+    return {key: "none" for key in PAGE_PERMISSION_KEYS}
+
+
 def validate_page_key(page_key: str) -> None:
     if page_key not in PAGE_PERMISSION_KEY_SET:
         raise ValueError(f"Unknown page permission key: {page_key!r}")

@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { canAccessPage, type PagePermissionKey } from "@/lib/page-permissions";
+import type { WorkspaceAccess } from "@/lib/types";
 
 const inboxPollIntervalMs = 15_000;
 
@@ -61,6 +63,24 @@ const managementAdminItems = [
 const coreItems = [...dailyItems, ...patientItems, ...clinicItems, ...managementItems];
 const mobilePrimaryHrefs = new Set(["/dashboard", "/inbox", "/appointments", "/patients"]);
 
+// Navigation is presentation only. Every protected backend route enforces its own page key.
+const pageForNavigation: Record<string, PagePermissionKey> = {
+  "/dashboard": "dashboard",
+  "/inbox": "inbox.list",
+  "/appointments": "appointments.calendar",
+  "/patients": "patients.list",
+  "/tasks": "tasks",
+  "/doctors": "doctors",
+  "/services": "services",
+  "/inventory": "inventory",
+  "/analytics": "analytics.overview",
+  "/finance": "finance",
+  "/automations": "automations",
+  "/team": "team",
+  "/setup": "setup",
+  "/activity": "activity",
+};
+
 type InboxSummary = {
   unread_conversations: number;
 };
@@ -70,10 +90,11 @@ function activeFor(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function useInboxUnreadCount(mediaQuery: string) {
+function useInboxUnreadCount(mediaQuery: string, enabled: boolean) {
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
+    if (!enabled) return;
     const media = window.matchMedia(mediaQuery);
     let cancelled = false;
 
@@ -108,7 +129,7 @@ function useInboxUnreadCount(mediaQuery: string) {
       media.removeEventListener("change", refreshWhenRelevant);
       document.removeEventListener("visibilitychange", refreshWhenRelevant);
     };
-  }, [mediaQuery]);
+  }, [mediaQuery, enabled]);
 
   return unreadCount;
 }
@@ -164,14 +185,15 @@ function DesktopNavItem({
   );
 }
 
-export function DesktopNavigation({ isAdmin }: { isAdmin: boolean }) {
+export function DesktopNavigation({ workspace }: { workspace: WorkspaceAccess }) {
   const pathname = usePathname();
-  const unreadCount = useInboxUnreadCount("(min-width: 1024px)");
+  const canShow = (href: string) => canAccessPage(workspace, pageForNavigation[href]);
+  const unreadCount = useInboxUnreadCount("(min-width: 1024px)", canShow("/inbox"));
   const groups = [
-    { label: "اليوم", items: [...dailyItems] },
-    { label: "العملاء والمتابعة", items: [...patientItems] },
-    { label: "تشغيل العيادة", items: [...clinicItems, ...(isAdmin ? clinicAdminItems : [])] },
-    { label: "الإدارة", items: [...managementItems, ...(isAdmin ? managementAdminItems : [])] },
+    { label: "اليوم", items: dailyItems.filter((item) => canShow(item.href)) },
+    { label: "العملاء والمتابعة", items: patientItems.filter((item) => canShow(item.href)) },
+    { label: "تشغيل العيادة", items: [...clinicItems, ...clinicAdminItems].filter((item) => canShow(item.href)) },
+    { label: "الإدارة", items: [...managementItems, ...managementAdminItems].filter((item) => canShow(item.href)) },
   ];
 
   return (
@@ -240,14 +262,15 @@ function MobileSection({
   );
 }
 
-export function MobileNavigation({ isAdmin }: { isAdmin: boolean }) {
+export function MobileNavigation({ workspace }: { workspace: WorkspaceAccess }) {
   const pathname = usePathname();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const unreadCount = useInboxUnreadCount("(max-width: 1023px)");
-  const mobilePrimary = coreItems.filter((item) => mobilePrimaryHrefs.has(item.href));
-  const morePatient = patientItems.filter((item) => !mobilePrimaryHrefs.has(item.href));
-  const moreClinic = [...clinicItems, ...(isAdmin ? clinicAdminItems : [])];
-  const moreManagement = [...managementItems, ...(isAdmin ? managementAdminItems : [])];
+  const canShow = (href: string) => canAccessPage(workspace, pageForNavigation[href]);
+  const unreadCount = useInboxUnreadCount("(max-width: 1023px)", canShow("/inbox"));
+  const mobilePrimary = coreItems.filter((item) => mobilePrimaryHrefs.has(item.href) && canShow(item.href));
+  const morePatient = patientItems.filter((item) => !mobilePrimaryHrefs.has(item.href) && canShow(item.href));
+  const moreClinic = [...clinicItems, ...clinicAdminItems].filter((item) => canShow(item.href));
+  const moreManagement = [...managementItems, ...managementAdminItems].filter((item) => canShow(item.href));
   const moreActive = [...morePatient, ...moreClinic, ...moreManagement].some((item) => activeFor(pathname, item.href));
 
   const close = () => dialogRef.current?.close();

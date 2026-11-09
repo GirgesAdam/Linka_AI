@@ -9,7 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
+from app.api.dependencies.page_permissions import (
+    require_page_permission,
+)
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.automation_job import AutomationJob
 from app.models.crm_task import CRMTask
@@ -83,11 +86,11 @@ def _queue_ai_job(db: Session, *, task: CRMTask, job: AutomationJob | None) -> N
     )
 
 
-@router.patch("/tasks/{task_id}/executor", response_model=CRMTaskExecutorRead)
+@router.patch("/tasks/{task_id}/executor", response_model=CRMTaskExecutorRead, dependencies=[Depends(require_page_permission("tasks", legacy_access="admin"))])
 def update_task_executor(
     task_id: UUID,
     payload: CRMTaskExecutorUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMTaskExecutorRead:
     task = db.scalar(

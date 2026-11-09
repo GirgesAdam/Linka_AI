@@ -14,7 +14,6 @@ from app.api.dependencies.page_permissions import require_page_permission
 from app.api.dependencies.security import (
     WorkspaceAccess,
     get_workspace_access,
-    get_workspace_admin,
 )
 from app.models.workspace_member import WorkspaceMember
 from app.schemas.page_permissions import MemberPagePermissionsRead, MemberPagePermissionsUpdate
@@ -22,6 +21,7 @@ from app.services.page_permissions import (
     PAGE_PERMISSION_KEYS,
     PAGE_PERMISSION_LEVELS,
     build_page_permissions_compare_and_swap,
+    empty_member_page_permissions,
     page_permission_allows,
     require_successful_permission_update,
     validate_complete_page_permissions,
@@ -198,18 +198,24 @@ def test_dependency_rejects_unknown_key_at_route_declaration() -> None:
         require_page_permission("patients.unknown", legacy_access="reader")
 
 
-def test_explicit_member_manage_does_not_bypass_admin_role_guard() -> None:
-    access = workspace_access(page_permissions=matrix("manage"))
+def test_explicit_page_grant_overrides_legacy_admin_fallback() -> None:
+    explicit_access = workspace_access(page_permissions=matrix("manage"))
     assert page_permission_allows(
-        access.membership,
-        workspace_id=access.workspace.id,
-        user_id=access.user.id,
+        explicit_access.membership,
+        workspace_id=explicit_access.workspace.id,
+        user_id=explicit_access.user.id,
         page_key="patients.detail",
         legacy_access="admin",
     )
-    with pytest.raises(HTTPException) as exc:
-        get_workspace_admin(access)
-    assert exc.value.status_code == 403
+
+    legacy_access = workspace_access(page_permissions=None)
+    assert not page_permission_allows(
+        legacy_access.membership,
+        workspace_id=legacy_access.workspace.id,
+        user_id=legacy_access.user.id,
+        page_key="patients.detail",
+        legacy_access="admin",
+    )
 
 
 def test_fastapi_direct_route_denies_before_database_or_business_side_effects() -> None:
@@ -308,3 +314,23 @@ def test_stale_compare_and_swap_returns_conflict() -> None:
     assert exc.value.status_code == 409
     with pytest.raises(HTTPException):
         require_successful_permission_update(9, expected_version=7)
+
+
+@pytest.mark.parametrize("page_key", ["inventory", "services", "automations", "setup"])
+def test_legacy_hidden_pages_are_denied_but_explicit_manage_overrides_legacy(page_key: str) -> None:
+    legacy_member = membership(page_permissions=None)
+    assert not allows(legacy_member, page_key, legacy="admin")
+
+    explicit = matrix()
+    explicit[page_key] = "manage"
+    explicitly_granted = membership(page_permissions=explicit)
+    assert allows(explicitly_granted, page_key, legacy="admin")
+    assert not allows(explicitly_granted, "team", legacy="admin")
+
+
+def test_new_member_permission_factory_is_complete_and_deny_by_default() -> None:
+    created = empty_member_page_permissions()
+    assert set(created) == set(PAGE_PERMISSION_KEYS)
+    assert len(created) == 25
+    assert set(created.values()) == {"none"}
+    assert created["team"] == "none"

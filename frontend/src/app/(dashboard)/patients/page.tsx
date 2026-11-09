@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { requirePageAccess } from "@/lib/tia/require-page-access";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { ChevronLeft, Phone, Search, UsersRound } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
@@ -22,6 +23,7 @@ function statusDescription(patient: Patient) {
 }
 
 export default async function PatientsPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
+  await requirePageAccess("patients.list");
   const { q = "" } = await searchParams;
   const query = new URLSearchParams({ limit: "100" });
   if (q) query.set("q", q);

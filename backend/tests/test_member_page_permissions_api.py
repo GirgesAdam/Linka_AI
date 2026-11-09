@@ -1,7 +1,7 @@
 """Direct API regressions for Admin-managed Member page permissions."""
 
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -16,7 +16,10 @@ from app.database.session import get_db
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
-from app.services.page_permissions import PAGE_PERMISSION_KEYS
+from app.services.page_permissions import (
+    PAGE_PERMISSION_KEYS,
+    empty_member_page_permissions,
+)
 
 
 def _matrix(granted_key: str | None = None) -> dict[str, str]:
@@ -299,5 +302,62 @@ def test_permission_api_self_target_check_is_retained() -> None:
             )
         assert response.status_code == 404
         assert write.status_code == 404
+    finally:
+        engine.dispose()
+
+
+def test_new_member_invitation_starts_with_complete_all_none_matrix(monkeypatch) -> None:
+    monkeypatch.setattr("app.api.routes.auth.record_activity_event", lambda *args, **kwargs: None)
+    engine, factory, ids = _database()
+    new_user_id = uuid4()
+    with factory() as db:
+        user = User(
+            email=f"new-member-{new_user_id}@example.test",
+            auth_user_id=uuid4(),
+        )
+        db.add(user)
+        db.commit()
+        email = user.email
+
+    client, _access = _client(
+        factory, workspace_id=ids["workspace_id"], actor_id=ids["actor_id"]
+    )
+    try:
+        with client:
+            response = client.post(
+                "/auth/workspace/invitations", json={"email": email, "role": "member"}
+            )
+        assert response.status_code == 201, response.text
+        membership_id = response.json()["membership"]["membership_id"]
+        with factory() as db:
+            created = db.get(WorkspaceMember, UUID(membership_id))
+            assert created is not None
+            assert created.page_permissions == empty_member_page_permissions()
+            assert set(created.page_permissions) == set(PAGE_PERMISSION_KEYS)
+            assert set(created.page_permissions.values()) == {"none"}
+    finally:
+        engine.dispose()
+
+
+def test_admin_role_changed_to_member_receives_all_none_without_rewriting_legacy_members(monkeypatch) -> None:
+    monkeypatch.setattr("app.api.routes.auth.record_activity_event", lambda *args, **kwargs: None)
+    engine, factory, ids = _database()
+    client, _access = _client(
+        factory, workspace_id=ids["workspace_id"], actor_id=ids["actor_id"]
+    )
+    try:
+        with client:
+            response = client.patch(
+                f"/auth/workspace/members/{ids['admin_target_id']}",
+                json={"role": "member"},
+            )
+        assert response.status_code == 200, response.text
+        with factory() as db:
+            demoted = db.get(WorkspaceMember, ids["admin_target_id"])
+            legacy_member = db.get(WorkspaceMember, ids["target_id"])
+            assert demoted is not None
+            assert demoted.page_permissions == empty_member_page_permissions()
+            assert legacy_member is not None
+            assert legacy_member.page_permissions is None
     finally:
         engine.dispose()

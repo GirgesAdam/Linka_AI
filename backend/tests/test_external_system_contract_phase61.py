@@ -207,7 +207,7 @@ def test_admin_runtime_diagnostics_expose_capabilities_and_link_counts() -> None
     route_source = (backend / "app/api/routes/clinic.py").read_text(encoding="utf-8")
     service_source = (backend / "app/services/clinic_integration_runtime.py").read_text(encoding="utf-8")
     assert '@router.get("/integration/runtime"' in route_source
-    assert "get_manageable_workspace" in route_source
+    assert 'require_page_permission_workspace("setup", legacy_access="admin")' in route_source
     assert "build_clinic_integration_runtime" in route_source
     assert "adapter.capabilities.as_dict()" in service_source
     assert "func.count(ClinicIntegrationEntityLink.id)" in service_source

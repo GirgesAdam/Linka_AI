@@ -32,6 +32,9 @@ class WorkspaceAccessRead(BaseModel):
     workspace_slug: str
     role: WorkspaceRole
     is_demo: bool = False
+    # The authenticated member's current DB-backed permission matrix, not JWT claims.
+    page_permissions: dict[str, str] | None = None
+    permissions_version: int = 0
 
 
 class MeRead(BaseModel):

@@ -233,9 +233,9 @@ def test_add_clinic_cta_reuses_onboarding_flow() -> None:
 
 def test_setup_api_is_workspace_scoped_through_access_dependency() -> None:
     source = Path("app/api/routes/clinic_setup_v2.py").read_text(encoding="utf-8")
-    assert "Depends(get_workspace_reader)" in source
-    assert "Depends(get_workspace_admin)" in source
-    assert "workspace=access.workspace" in source
+    assert 'Depends(require_page_permission("setup", legacy_access="admin"))' in source
+    assert "WorkspaceAccess" in source
+    assert "access.workspace" in source
 
 
 def test_arabic_name_slug_fallback_remains_internal_and_unique_contract() -> None:

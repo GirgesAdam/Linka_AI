@@ -11,6 +11,8 @@ export interface WorkspaceAccess {
   workspace_name: string;
   workspace_slug: string;
   role: WorkspaceRole;
+  page_permissions?: Record<string, "none" | "manage"> | null;
+  permissions_version?: number;
 }
 export interface MeResponse { user: CurrentUser; workspaces: WorkspaceAccess[]; }
 

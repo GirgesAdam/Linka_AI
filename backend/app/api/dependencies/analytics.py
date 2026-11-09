@@ -77,7 +77,7 @@ def get_analytics_db() -> Generator[Session, None, None]:
 def get_analytics_page_reader(
     page_key: str,
     *,
-    legacy_access: LegacyPageAccess = "reader",
+    legacy_access: LegacyPageAccess,
 ) -> Callable[..., WorkspaceAccess]:
     """Resolve analytics access without holding the main DB pool and enforce its page."""
     validate_page_key(page_key)
