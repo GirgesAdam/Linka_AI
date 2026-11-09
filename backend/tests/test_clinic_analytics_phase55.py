@@ -39,7 +39,7 @@ def test_analytics_route_is_read_only_workspace_scoped_and_period_limited() -> N
     route = (root / "backend/app/api/routes/analytics.py").read_text(encoding="utf-8")
     router = (root / "backend/app/api/router.py").read_text(encoding="utf-8")
     assert '@router.get("/overview"' in route
-    assert "get_analytics_workspace_reader" in route
+    assert 'get_analytics_page_reader("analytics.overview")' in route
     assert "days: int = 30" in route
     assert "Literal[7, 30, 90]" not in route
     assert "days not in ANALYTICS_ALLOWED_DAYS" in route

@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies.analytics import get_analytics_db, get_analytics_page_reader
 from app.api.dependencies.security import WorkspaceAccess
-from app.api.dependencies.page_permissions import require_page_permission
 from app.schemas.analytics import AnalyticsOverviewRead
 from app.schemas.analytics_catalog import (
     AnalyticsCatalogRead,
@@ -44,7 +43,7 @@ def get_analytics_overview(
 
 @router.get("/history", response_model=HistoricalAnalyticsRead)
 def get_historical_analytics(
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.overview"))],
     db: Annotated[Session, Depends(get_analytics_db)],
 ) -> HistoricalAnalyticsRead:
     return historical_analytics(db, workspace_id=access.workspace.id)
@@ -52,7 +51,7 @@ def get_historical_analytics(
 
 @router.get("/catalog", response_model=AnalyticsCatalogRead)
 def get_analytics_catalog(
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.overview"))],
     db: Annotated[Session, Depends(get_analytics_db)],
 ) -> AnalyticsCatalogRead:
     """Return the admin-selectable analytics library."""
@@ -62,7 +61,7 @@ def get_analytics_catalog(
 @router.post("/catalog/run", response_model=AnalyticsCatalogRunRead)
 def run_selected_analytics(
     payload: AnalyticsCatalogRunRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.overview"))],
     db: Annotated[Session, Depends(get_analytics_db)],
 ) -> AnalyticsCatalogRunRead:
     """Execute one registered analytics function with explicit validated filters."""
@@ -88,7 +87,7 @@ def run_selected_analytics(
 @router.post("/catalog/export")
 def export_selected_analytics(
     payload: AnalyticsCatalogRunRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_page_reader("analytics.overview"))],
     db: Annotated[Session, Depends(get_analytics_db)],
 ) -> Response:
     """Re-run the selected analysis server-side and export the current result."""

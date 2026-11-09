@@ -17,8 +17,13 @@ from app.api.dependencies.security import (
 )
 from app.database.session import AnalyticsSessionLocal, SessionLocal
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER
-from app.services.page_permissions import LegacyPageAccess, page_permission_allows, validate_legacy_access, validate_page_key
 from app.services.analytics_capacity import is_statement_timeout
+from app.services.page_permissions import (
+    LegacyPageAccess,
+    page_permission_allows,
+    validate_legacy_access,
+    validate_page_key,
+)
 from app.services.supabase_auth import VerifiedAuthIdentity
 
 

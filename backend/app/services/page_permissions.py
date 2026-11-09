@@ -105,15 +105,11 @@ def page_permission_allows(
         return legacy_access == "reader"
     if not isinstance(matrix, dict):
         return False
-    if any(
-        key not in PAGE_PERMISSION_KEY_SET
-        or not isinstance(level, str)
-        or level not in PAGE_PERMISSION_LEVELS
-        or (key == "team" and level != "none")
-        for key, level in matrix.items()
-    ):
+    try:
+        validated_matrix = validate_complete_page_permissions(matrix)
+    except (TypeError, ValueError):
         return False
-    return matrix.get(page_key) == "manage"
+    return validated_matrix[page_key] == "manage"
 
 
 def build_page_permissions_compare_and_swap(

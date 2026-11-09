@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess
 from app.api.dependencies.page_permissions import require_page_permission
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.schemas.inventory import (

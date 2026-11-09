@@ -24,11 +24,11 @@ from app.schemas.auth import (
     WorkspaceMemberRoleUpdate,
 )
 from app.schemas.page_permissions import MemberPagePermissionsRead, MemberPagePermissionsUpdate
+from app.services.activity import record_activity_event
 from app.services.page_permissions import (
     build_page_permissions_compare_and_swap,
     require_successful_permission_update,
 )
-from app.services.activity import record_activity_event
 from app.services.supabase_auth import SupabaseAuthError, invite_user_by_email
 
 router = APIRouter()

@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess
 from app.api.dependencies.page_permissions import require_page_permission
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
