@@ -26,6 +26,8 @@ from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_delivery_event import ChannelDeliveryEvent
 from app.models.channel_identity import ChannelIdentity
+from app.models.channel_inbound_event import ChannelInboundEvent
+from app.models.conversation import Conversation
 from app.models.doctor import Doctor
 from app.models.message import Message
 from app.models.message_dispatch import MessageDispatch
@@ -184,7 +186,8 @@ def record(case, dispatch_id, status="sent", provider_id="wamid.gate", retry=Non
 def webhook(case, status, timestamp=None, provider_id="wamid.gate"):
     return transport.ingest_meta_webhook(
         case.db,
-        {
+        connection=case.connection,
+        payload={
             "entry": [
                 {
                     "changes": [
@@ -1155,3 +1158,128 @@ def test_scheduler_preflight_skips_stable_confirmation_job(case):
         planning_horizon_days=14,
         now=case.now,
     ) is False
+
+
+
+def test_meta_webhook_rejects_cross_connection_batch_before_postgres_writes(case):
+    other_workspace = Workspace(
+        name="Other webhook workspace",
+        slug=f"other-webhook-{uuid4()}",
+        timezone="UTC",
+    )
+    case.db.add(other_workspace)
+    case.db.flush()
+
+    other_phone_number_id = f"phone-{uuid4()}"
+    other_connection = ChannelConnection(
+        workspace_id=other_workspace.id,
+        channel="whatsapp",
+        provider="meta_cloud",
+        display_name="Other webhook connection",
+        status="active",
+        external_account_id=other_phone_number_id,
+        adapter_token_hash=uuid4().hex + uuid4().hex,
+        config_json={"phone_number_id": other_phone_number_id},
+    )
+    case.db.add(other_connection)
+    case.db.flush()
+
+    other_patient = Patient(
+        workspace_id=other_workspace.id,
+        first_name="Webhook target",
+        phone="201001112223",
+        status="active",
+        whatsapp_opt_in=True,
+    )
+    case.db.add(other_patient)
+    case.db.flush()
+    other_conversation = Conversation(
+        workspace_id=other_workspace.id,
+        patient_id=other_patient.id,
+        channel="whatsapp",
+        external_conversation_id="201001112223",
+        channel_connection_id=other_connection.id,
+        started_at=case.now,
+    )
+    case.db.add(other_conversation)
+    case.db.flush()
+    target_message = Message(
+        workspace_id=other_workspace.id,
+        conversation_id=other_conversation.id,
+        channel_connection_id=other_connection.id,
+        sender_type="ai",
+        direction="outbound",
+        message_type="text",
+        content="target dispatch",
+        external_message_id="wamid.other-target-message",
+        delivery_status="sent",
+    )
+    case.db.add(target_message)
+    case.db.flush()
+    target_dispatch = MessageDispatch(
+        workspace_id=other_workspace.id,
+        channel_connection_id=other_connection.id,
+        message_id=target_message.id,
+        status="sent",
+        attempts=1,
+        provider_message_id="wamid.other-target",
+    )
+    case.db.add(target_dispatch)
+    case.db.flush()
+
+    models = (Message, ChannelInboundEvent, ChannelDeliveryEvent)
+
+    def counts():
+        return tuple(
+            case.db.scalar(select(func.count()).select_from(model)) for model in models
+        )
+
+    before = counts()
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "metadata": {
+                                "phone_number_id": case.connection.external_account_id
+                            },
+                            "messages": [
+                                {
+                                    "id": f"wamid.same-{uuid4()}",
+                                    "from": "201001112223",
+                                    "type": "text",
+                                    "text": {"body": "valid source event"},
+                                }
+                            ],
+                        }
+                    },
+                    {
+                        "value": {
+                            "metadata": {"phone_number_id": other_phone_number_id},
+                            "statuses": [
+                                {
+                                    "id": "wamid.other-target",
+                                    "status": "delivered",
+                                    "timestamp": str(int(case.now.timestamp())),
+                                }
+                            ],
+                        }
+                    },
+                ]
+            }
+        ]
+    }
+
+    with pytest.raises(transport.MetaWhatsAppWebhookBindingError):
+        transport.ingest_meta_webhook(
+            case.db,
+            connection=case.connection,
+            payload=payload,
+        )
+
+    assert counts() == before
+    case.db.refresh(target_dispatch)
+    case.db.refresh(target_message)
+    assert target_dispatch.status == "sent"
+    assert target_message.delivery_status == "sent"

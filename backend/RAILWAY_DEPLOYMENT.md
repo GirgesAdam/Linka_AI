@@ -26,7 +26,17 @@ Configure the backend with the production/staging values documented in the repos
 
 Do not commit secret values.
 
-Database migrations remain an explicit deployment operation. The GitHub `Database Migration` workflow runs `alembic upgrade head`; the application container does not mutate schema on startup.
+## Database migrations
+
+Railway currently runs `python -m alembic upgrade head` in the `preDeployCommand` of both production application services, `tia-api` and `tia-whatsapp`. Either service can be deployed independently, so each keeps this command. No dedicated migration service is required.
+
+Every online Alembic run acquires the same PostgreSQL **session-level advisory lock** in `alembic/env.py` before Alembic reads the current revision or applies migrations. The lock is shared by the API, WhatsApp, and online GitHub migration workflows because it is enforced by PostgreSQL, not by a service-specific or workflow-specific mutex.
+
+The lock is held on the same PostgreSQL connection for the complete migration run. Session-level locking survives transaction commits and Alembic `autocommit_block()` boundaries, including the `CREATE INDEX CONCURRENTLY` operation in migration `0043_analytics_scale_guards`. SQLAlchemy's autobegun transaction is committed immediately after each try-lock statement so Alembic starts with an idle connection. The lock is explicitly released in a `finally` path; the `NullPool` connection is closed at the end of the run, which also releases the PostgreSQL session lock if the process or connection fails.
+
+A process waits up to **300 seconds** for the shared lock, polling once per second. If the lock is not acquired within that bound, Alembic exits with a clear timeout error and the pre-deploy operation fails; the application deployment must not proceed on a failed migration command. The timeout is a code default and requires no Railway variable.
+
+This database-level lock also serializes online Alembic commands started by GitHub Actions. GitHub Actions concurrency groups remain useful for ordering runs within a workflow, but they are not the cross-service protection mechanism.
 
 ## Wire the public API to Tia runtimes
 
