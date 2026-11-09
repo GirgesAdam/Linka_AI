@@ -30,7 +30,12 @@ from app.services.meta_whatsapp_onboarding import (
     finish_direct_meta_setup,
     verify_direct_webhook_challenge,
 )
-from app.services.meta_whatsapp_transport import ingest_meta_webhook, run_meta_transport_tick
+from app.services.meta_whatsapp_transport import (
+    MetaWhatsAppWebhookBindingError,
+    ingest_meta_webhook,
+    run_meta_transport_tick,
+    validate_meta_webhook_connection_binding,
+)
 from app.services.provider_credentials import ProviderCredentialError, decrypt_provider_secret
 from app.services.workspace_runtime_policy import (
     demo_whatsapp_reply_test_enabled,
@@ -132,6 +137,14 @@ async def whatsapp_meta_webhook_receive(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Meta webhook JSON.") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Meta webhook payload.")
+    try:
+        validate_meta_webhook_connection_binding(connection, payload)
+    except MetaWhatsAppWebhookBindingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Meta webhook is not authorized for this connection.",
+        ) from exc
+
     workspace = db.get(Workspace, connection.workspace_id)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found.")
@@ -141,7 +154,7 @@ async def whatsapp_meta_webhook_receive(
     ):
         return {"received": True, "ignored": True}
     media_result = ingest_meta_media_webhook(db, connection=connection, payload=payload)
-    result = ingest_meta_webhook(db, payload)
+    result = ingest_meta_webhook(db, connection=connection, payload=payload)
     return {"received": True, **result, **media_result}
 
 
