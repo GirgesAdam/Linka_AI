@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 from app import models  # noqa: F401
 from app.database.base import Base
+from app.database.migration_lock import migration_session_lock
 
 
 class MigrationSettings(BaseSettings):
@@ -55,15 +56,19 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-            compare_server_default=True,
-        )
+        # The session-level lock is held across Alembic transactions and
+        # PostgreSQL AUTOCOMMIT blocks (e.g. CREATE INDEX CONCURRENTLY).
+        # It serializes independent Railway services sharing this database.
+        with migration_session_lock(connection):
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                compare_type=True,
+                compare_server_default=True,
+            )
 
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
 
 
 if context.is_offline_mode():
