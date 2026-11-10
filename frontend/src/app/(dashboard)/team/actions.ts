@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
+import type { MemberSectionAccess } from "@/lib/types";
 
 export type InviteMemberState = {
   notice: string | null;
@@ -70,5 +71,60 @@ export async function changeRole(
     return { notice: "تم تحديث صلاحية العضو بنجاح.", error: null };
   } catch (error) {
     return actionFeedbackFailure(error, "تعذر تحديث صلاحية العضو. حاول مرة أخرى.");
+  }
+}
+
+type MemberSectionAccessResponse = {
+  membership_id: string;
+  section_access: MemberSectionAccess;
+  permissions_version: number;
+  is_legacy: boolean;
+};
+
+export async function getMemberSectionAccess(
+  membershipId: string,
+): Promise<{ data: MemberSectionAccessResponse | null; error: string | null }> {
+  try {
+    const { getAppContext } = await import("@/lib/tia/workspace");
+    const { workspace } = await getAppContext();
+    if (workspace.role !== "admin") return { data: null, error: "هذه الإعدادات متاحة للمدير فقط." };
+    const data = await tiaRequest<MemberSectionAccessResponse>(
+      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/section-access",
+    );
+    return { data, error: null };
+  } catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "تعذر تحميل إعدادات الوصول.",
+    };
+  }
+}
+
+export async function saveMemberSectionAccess(
+  membershipId: string,
+  expectedVersion: number,
+  sectionAccess: MemberSectionAccess,
+): Promise<{ data: MemberSectionAccessResponse | null; error: string | null }> {
+  try {
+    const { getAppContext } = await import("@/lib/tia/workspace");
+    const { workspace } = await getAppContext();
+    if (workspace.role !== "admin") return { data: null, error: "هذه العملية متاحة للمدير فقط." };
+    const data = await tiaRequest<MemberSectionAccessResponse>(
+      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/section-access",
+      {
+        method: "PUT",
+        body: JSON.stringify({ expected_version: expectedVersion, section_access: sectionAccess }),
+      },
+    );
+    revalidatePath("/team");
+    return { data, error: null };
+  } catch (error) {
+    if (error instanceof TiaApiError && error.status === 409) {
+      return { data: null, error: "تم تغيير إعدادات الوصول من مكان آخر. أعد تحميلها قبل الحفظ." };
+    }
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "تعذر حفظ إعدادات الوصول.",
+    };
   }
 }

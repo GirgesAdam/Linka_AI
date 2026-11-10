@@ -41,19 +41,19 @@ def test_service_editor_handles_conflicts_inline() -> None:
     assert "Ø" not in error_mapper
 
 
-def test_doctor_admin_is_admin_only_and_branchless_in_the_ui() -> None:
+def test_doctor_admin_is_section_gated_and_branchless_in_the_ui() -> None:
     route = (ROOT / "backend/app/api/routes/doctor_admin.py").read_text(encoding="utf-8")
     actions = (ROOT / "frontend/src/app/(dashboard)/doctors/actions.ts").read_text(encoding="utf-8")
     panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-management.tsx").read_text(encoding="utf-8")
     page = (ROOT / "frontend/src/app/(dashboard)/doctors/page.tsx").read_text(encoding="utf-8")
     router = (ROOT / "backend/app/api/router.py").read_text(encoding="utf-8")
 
-    assert "get_workspace_admin" in route
+    assert 'require_section_access("clinic_operations")' in route
     assert '"/doctor-admin/{doctor_id}/working-hours"' in route
     assert "branch_id" not in DoctorAdminCreate.model_fields
     assert "branch_id" not in actions
     assert "الفرع" not in panel
-    assert 'ctx.workspace.role === "admin"' in page
+    assert 'canAccessSection(ctx.workspace, "clinic_operations")' in page
     assert "DoctorManagementPanel" in page
     assert "doctor_admin_read_router" in router
 

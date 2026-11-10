@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.models.pulse_billing import PatientPulsePack
@@ -56,7 +57,7 @@ def _raise(exc: Exception) -> None:
 
 @router.get("/pulse-settings", response_model=PulseBillingSettingsRead)
 def read_pulse_settings(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PulseBillingSettingsRead:
     """Backward-compatible single-device view; new clients use /pulse-device-prices."""
@@ -75,7 +76,7 @@ def read_pulse_settings(
 @router.put("/pulse-settings", response_model=PulseBillingSettingsRead)
 def save_pulse_settings(
     payload: PulseBillingSettingsUpsert,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> PulseBillingSettingsRead:
     """Backward-compatible endpoint that updates the requested device."""
@@ -103,7 +104,7 @@ def save_pulse_settings(
     response_model=list[PulseBillingSettingsRead],
 )
 def pulse_device_prices(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PulseBillingSettingsRead]:
     return list_pulse_billing_settings(
@@ -118,7 +119,7 @@ def pulse_device_prices(
 )
 def save_pulse_device_price(
     payload: PulseBillingSettingsUpsert,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PulseBillingSettingsRead]:
     try:
@@ -141,7 +142,7 @@ def save_pulse_device_price(
 
 @router.get("/pulse-pack-offers", response_model=list[PulsePackOfferRead])
 def pulse_pack_offers(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     active_only: bool = False,
 ) -> list[PulsePackOfferRead]:
@@ -155,7 +156,7 @@ def pulse_pack_offers(
 @router.put("/pulse-pack-offers", response_model=list[PulsePackOfferRead])
 def save_pulse_pack_offer(
     payload: PulsePackOfferUpsert,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PulsePackOfferRead]:
     try:
@@ -180,7 +181,7 @@ def save_pulse_pack_offer(
 )
 def buy_pulse_pack_offer(
     payload: PulsePackPurchase,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -214,7 +215,7 @@ def buy_pulse_pack_offer(
 )
 def patient_pulse_packs(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PatientPulsePackRead]:
     return list_patient_pulse_packs(
@@ -231,7 +232,7 @@ def patient_pulse_packs(
 )
 def patient_pulse_balance(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PulseBalanceRead]:
     return list_patient_pulse_balances(
@@ -249,7 +250,7 @@ def patient_pulse_balance(
 def add_pulse_pack_payment(
     pack_id: UUID,
     payload: PulsePackPaymentCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -289,7 +290,7 @@ def add_pulse_pack_payment(
 )
 def read_appointment_pulse_settlement(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentPulseSettlementRead | None:
     appointment = db.scalar(
@@ -320,7 +321,7 @@ def read_appointment_pulse_settlement(
 )
 def charge_pulse_overage(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentPulseSettlementRead:
     try:
@@ -353,7 +354,7 @@ def charge_pulse_overage(
 def cover_pulse_deficit_with_pack(
     appointment_id: UUID,
     payload: PulseDeficitPackResolution,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,

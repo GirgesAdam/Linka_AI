@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Annotated
 from uuid import UUID
 
@@ -18,6 +18,7 @@ from app.api.dependencies.security import (
 from app.database.session import AnalyticsSessionLocal, SessionLocal
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER
 from app.services.analytics_capacity import is_statement_timeout
+from app.services.section_access import SectionAccessKey, section_access_allows
 from app.services.supabase_auth import VerifiedAuthIdentity
 
 
@@ -66,3 +67,32 @@ def get_analytics_db() -> Generator[Session, None, None]:
         raise
     finally:
         db.close()
+
+
+def get_analytics_section_reader(
+    section: SectionAccessKey,
+) -> Callable[..., WorkspaceAccess]:
+    """Enforce section access while releasing the primary DB session before analytics queries."""
+    if section not in {"clinic_operations", "administration"}:
+        raise ValueError(f"Unknown member access section: {section!r}")
+
+    def dependency(
+        x_workspace_id: Annotated[UUID, Header(alias="X-Workspace-ID")],
+        identity: Annotated[VerifiedAuthIdentity, Depends(get_verified_identity)],
+    ) -> WorkspaceAccess:
+        with SessionLocal() as auth_db:
+            user = get_current_user(identity, auth_db)
+            access = get_workspace_access(x_workspace_id, user, auth_db)
+            if not section_access_allows(
+                access.membership,
+                workspace_id=access.workspace.id,
+                user_id=access.user.id,
+                section=section,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to access this section.",
+                )
+            return access
+
+    return dependency

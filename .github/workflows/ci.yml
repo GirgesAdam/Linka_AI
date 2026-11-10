@@ -62,7 +62,7 @@ jobs:
           ruff check .github/scripts/production_db_readonly_attestation.py .github/scripts/tests/test_production_db_readonly_attestation.py
           python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0096_patient_customer_id (head)"
+        run: test "$(python -m alembic heads)" = "0097_member_page_permissions (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
@@ -162,9 +162,13 @@ jobs:
       - run: npm ci
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+      - name: Install Chromium for Playwright browser verification
+        run: npx playwright install --with-deps chromium
       - name: Verify financial UI idempotency contract
         run: npx playwright test e2e/idempotent-financial-submit.spec.ts
-      - name: Verify historical preview timeout contract
+      - name: Verify member section route policy in Chromium
+        run: npx playwright test e2e/member-section-access-browser.spec.ts
+      - name: Verify historical preview timeout and section access contracts
         run: npm run test:unit
       - run: npm run lint
       - run: npx next typegen

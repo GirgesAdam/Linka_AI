@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import {
   ArrowLeft,
   Bot,

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
+import { canAccessSection } from "@/lib/section-access";
 
 import {
   addClinicProductStock,
@@ -52,7 +53,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
     tiaRequest<Product[]>("/inventory/products").catch(() => []),
     searchParams,
   ]);
-  const isAdmin = workspace.role === "admin";
+  const canManageClinic = canAccessSection(workspace, "clinic_operations");
   const notice = params.notice ? noticeMessages[params.notice] : null;
   const noticeIsError = params.notice === "delete_failed";
 
@@ -78,7 +79,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isAdmin ? (
+          {canManageClinic ? (
             <ActionFeedbackForm
               action={createClinicProduct}
               className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(220px,2fr)_120px_auto]"
@@ -95,7 +96,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
             <div className="overflow-x-auto rounded-xl border border-slate-200">
               <table className="data-table min-w-[760px]">
                 <thead>
-                  <tr><th>المنتج</th><th>الوصف</th><th>العدد المتاح</th><th>إضافة كمية جديدة</th>{isAdmin ? <th>حذف</th> : null}</tr>
+                  <tr><th>المنتج</th><th>الوصف</th><th>العدد المتاح</th><th>إضافة كمية جديدة</th>{canManageClinic ? <th>حذف</th> : null}</tr>
                 </thead>
                 <tbody>
                   {products.map((product) => (
@@ -104,7 +105,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
                       <td>{product.description || "—"}</td>
                       <td className="font-black">{product.quantity_on_hand.toLocaleString("ar-EG")}</td>
                       <td>
-                        {isAdmin ? (
+                        {canManageClinic ? (
                           <ActionFeedbackForm
                             action={addClinicProductStock}
                             className="flex flex-wrap items-center gap-2"
@@ -118,7 +119,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
                           </ActionFeedbackForm>
                         ) : "—"}
                       </td>
-                      {isAdmin ? (
+                      {canManageClinic ? (
                         <td>
                           <ConfirmActionForm
                             action={deleteClinicProduct}
@@ -141,7 +142,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
         </CardContent>
       </Card>
 
-      {isAdmin ? (
+      {canManageClinic ? (
         <Card className="mb-5">
           <CardHeader><CardTitle className="flex items-center gap-2"><PackagePlus size={18} /> إضافة حقنة للمخزن</CardTitle></CardHeader>
           <CardContent>
@@ -171,7 +172,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
                 <div><CardTitle className="flex items-center gap-2"><Syringe size={17} />{item.name}</CardTitle></div>
                 <div className="flex items-center gap-2">
                   <span className={"rounded-full px-2.5 py-1 text-xs font-bold " + (low ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")}>{low ? "مخزون منخفض" : "متاح"}</span>
-                  {isAdmin ? (
+                  {canManageClinic ? (
                     <ConfirmActionForm
                       action={deleteInventoryItem}
                       className="flex items-center"
@@ -185,7 +186,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="rounded-xl bg-slate-50 p-3"><div className="text-[11px] font-bold text-slate-500">المتبقي</div><div className="mt-1 text-xl font-black">{quantityMl.toLocaleString("ar-EG")} mL</div></div>
-                {isAdmin ? (
+                {canManageClinic ? (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <ActionFeedbackForm
                       action={addInventoryStock}

@@ -10,7 +10,8 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
@@ -32,7 +33,6 @@ from app.models.patient_package import PatientPackage
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.working_hours import BranchWorkingHour
-from app.models.workspace_member import WORKSPACE_ROLE_ADMIN
 from app.schemas.booking import (
     AppointmentAutomationRead,
     AppointmentCancel,
@@ -101,8 +101,18 @@ from app.services.pulse_billing import (
     settle_appointment_pulses,
     validate_pulse_booking,
 )
+from app.services.section_access import section_access_allows
 
 router = APIRouter()
+
+
+def _can_access_administration_section(access: WorkspaceAccess) -> bool:
+    return section_access_allows(
+        access.membership,
+        workspace_id=access.workspace.id,
+        user_id=access.user.id,
+        section="administration",
+    )
 
 
 def not_found(entity: str) -> HTTPException:
@@ -368,7 +378,7 @@ def _availability_block_duplicate_exists(
 
 @router.get("/availability-blocks", response_model=list[AvailabilityBlockRead])
 def list_availability_blocks(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     branch_id: UUID = Query(...),
     date_value: date | None = Query(default=None, alias="date"),
@@ -405,7 +415,7 @@ def list_availability_blocks(
 )
 def create_availability_block(
     payload: AvailabilityBlockCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AvailabilityBlockRead:
     require_local_appointment_write(db, access.workspace.id)
@@ -584,7 +594,7 @@ def create_availability_block(
 @router.delete("/availability-blocks/{block_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_availability_block(
     block_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     require_local_appointment_write(db, access.workspace.id)
@@ -604,7 +614,7 @@ def get_availability(
     branch_id: UUID,
     service_id: UUID,
     booking_date: Annotated[date, Query(alias="date")],
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     doctor_id: UUID | None = None,
     laser_device_key: str | None = None,
@@ -643,7 +653,7 @@ def get_availability(
 )
 def create_appointment(
     payload: AppointmentCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -808,7 +818,7 @@ def create_appointment(
 )
 def create_quick_appointment(
     payload: QuickAppointmentCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=128)] = None,
 ) -> Appointment:
@@ -963,7 +973,7 @@ def create_quick_appointment(
 @router.get("/patients/{patient_id}/packages", response_model=list[PatientPackageRead])
 def get_patient_packages(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     service_id: UUID | None = None,
     usable_only: bool = False,
@@ -986,7 +996,7 @@ def get_patient_packages(
 )
 def create_package_sale(
     payload: PatientPackageCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None, Header(alias="Idempotency-Key", max_length=128)
@@ -1026,7 +1036,7 @@ def create_package_sale(
 def create_package_payment(
     package_id: UUID,
     payload: PatientPackagePaymentCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None, Header(alias="Idempotency-Key", max_length=128)
@@ -1058,11 +1068,12 @@ def create_package_payment(
     "/patient-packages/{package_id}/cancel-refund",
     response_model=PatientPackageCancelRefundRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_section_access("administration"))],
 )
 def cancel_package_and_refund(
     package_id: UUID,
     payload: PatientPackageCancelRefundCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None, Header(alias="Idempotency-Key", max_length=128)
@@ -1112,7 +1123,7 @@ def cancel_package_and_refund(
 
 @router.get("/appointments", response_model=list[AppointmentRead])
 def list_appointments(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     patient_id: UUID | None = None,
     doctor_id: UUID | None = None,
@@ -1188,7 +1199,7 @@ def list_appointments(
 @router.get("/appointments/{appointment_id}", response_model=AppointmentRead)
 def get_appointment(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
     return get_appointment_or_404(db, access.workspace.id, appointment_id)
@@ -1200,7 +1211,7 @@ def get_appointment(
 )
 def get_appointment_history(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AppointmentStatusHistory]:
     get_appointment_or_404(db, access.workspace.id, appointment_id)
@@ -1219,7 +1230,7 @@ def get_appointment_history(
 @router.get("/appointments/{appointment_id}/operations", response_model=AppointmentOperationsRead)
 def get_appointment_operations(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentOperationsRead:
     row = db.execute(
@@ -1268,6 +1279,7 @@ def get_appointment_operations(
         raise not_found("Appointment")
 
     appointment, patient, branch, service, doctor, staff = row
+    can_view_administration_details = _can_access_administration_section(access)
     history = list(
         db.scalars(
             select(AppointmentStatusHistory)
@@ -1278,33 +1290,40 @@ def get_appointment_operations(
             .order_by(AppointmentStatusHistory.created_at)
         )
     )
-    automation_rows = list(
-        db.execute(
-            select(AutomationJob, AutomationRule)
-            .join(
-                AutomationRule,
-                and_(
-                    AutomationRule.workspace_id == AutomationJob.workspace_id,
-                    AutomationRule.id == AutomationJob.rule_id,
-                ),
-            )
-            .where(
-                AutomationJob.workspace_id == access.workspace.id,
-                AutomationJob.appointment_id == appointment.id,
-                AutomationJob.job_kind == "appointment_rule",
-            )
-            .order_by(AutomationJob.scheduled_for, AutomationJob.created_at)
-        ).all()
+    automation_rows = (
+        list(
+            db.execute(
+                select(AutomationJob, AutomationRule)
+                .join(
+                    AutomationRule,
+                    and_(
+                        AutomationRule.workspace_id == AutomationJob.workspace_id,
+                        AutomationRule.id == AutomationJob.rule_id,
+                    ),
+                )
+                .where(
+                    AutomationJob.workspace_id == access.workspace.id,
+                    AutomationJob.appointment_id == appointment.id,
+                    AutomationJob.job_kind == "appointment_rule",
+                )
+                .order_by(AutomationJob.scheduled_for, AutomationJob.created_at)
+            ).all()
+        )
+        if can_view_administration_details
+        else []
     )
 
     now = datetime.now(UTC)
-    settings = get_effective_booking_settings(db, access.workspace.id)
-    override_required = cancellation_override_required(
-        appointment_status=appointment.status,
-        start_at=appointment.start_at,
-        cancellation_notice_minutes=settings.cancellation_notice_minutes,
-        now=now,
-    )
+    if can_view_administration_details:
+        settings = get_effective_booking_settings(db, access.workspace.id)
+        override_required = cancellation_override_required(
+            appointment_status=appointment.status,
+            start_at=appointment.start_at,
+            cancellation_notice_minutes=settings.cancellation_notice_minutes,
+            now=now,
+        )
+    else:
+        override_required = False
     patient_name = f"{patient.first_name or ''} {patient.last_name or ''}".strip() or patient.first_name or "العميل"
     doctor_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip() or "الدكتور"
 
@@ -1336,7 +1355,7 @@ def get_appointment_operations(
             )
         ),
         cancellation_override_required=override_required,
-        can_override_cancellation_policy=(access.membership.role == WORKSPACE_ROLE_ADMIN),
+        can_override_cancellation_policy=_can_access_administration_section(access),
     )
 
 
@@ -1344,7 +1363,7 @@ def get_appointment_operations(
 def update_appointment_laser_usage(
     appointment_id: UUID,
     payload: AppointmentLaserUsageUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
     require_local_appointment_write(db, access.workspace.id)
@@ -1389,7 +1408,7 @@ def update_appointment_laser_usage(
 @router.post("/appointments/{appointment_id}/confirm", response_model=AppointmentRead)
 def confirm_appointment(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
     require_local_appointment_write(db, access.workspace.id)
@@ -1416,7 +1435,7 @@ def confirm_appointment(
 def cancel_appointment(
     appointment_id: UUID,
     payload: AppointmentCancel,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
     require_local_appointment_write(db, access.workspace.id)
@@ -1428,7 +1447,7 @@ def cancel_appointment(
             changed_by_user_id=access.user.id,
             reason=payload.reason,
             override_policy=payload.override_policy,
-            actor_is_admin=(access.membership.role == WORKSPACE_ROLE_ADMIN),
+            actor_is_admin=_can_access_administration_section(access),
         )
         db.commit()
     except AppointmentOperationNotFound as exc:
@@ -1451,7 +1470,7 @@ def cancel_appointment(
 def reschedule_appointment(
     appointment_id: UUID,
     payload: AppointmentReschedule,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -1492,7 +1511,7 @@ def reschedule_appointment(
 def update_operational_status(
     appointment_id: UUID,
     payload: AppointmentOperationalStatusUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Appointment:
     require_local_appointment_write(db, access.workspace.id)

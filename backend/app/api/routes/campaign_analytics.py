@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.analytics import get_analytics_db, get_analytics_workspace_reader
+from app.api.dependencies.analytics import get_analytics_db, get_analytics_section_reader
 from app.api.dependencies.security import WorkspaceAccess
 from app.schemas.campaign_analytics import CampaignAnalyticsOverviewRead
 from app.services.campaign_analytics import campaign_analytics_overview
@@ -17,7 +17,7 @@ _ALLOWED_DAYS = {30, 90, 365}
 
 @router.get("/campaigns", response_model=CampaignAnalyticsOverviewRead)
 def get_campaign_analytics(
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_section_reader("administration"))],
     db: Annotated[Session, Depends(get_analytics_db)],
     days: Annotated[int | None, Query()] = 90,
     all_history: bool = False,
@@ -39,7 +39,7 @@ def get_campaign_analytics(
 @router.get("/campaigns/{campaign_id}", response_model=CampaignAnalyticsOverviewRead)
 def get_campaign_analytics_detail(
     campaign_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_analytics_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_analytics_section_reader("administration"))],
     db: Annotated[Session, Depends(get_analytics_db)],
 ) -> CampaignAnalyticsOverviewRead:
     result = campaign_analytics_overview(
