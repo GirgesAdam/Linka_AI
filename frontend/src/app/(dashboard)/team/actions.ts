@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
 import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
+import type { MemberSectionAccess } from "@/lib/types";
 
 export type InviteMemberState = {
   notice: string | null;
@@ -73,57 +74,57 @@ export async function changeRole(
   }
 }
 
-type MemberPermissionsResponse = {
+type MemberSectionAccessResponse = {
   membership_id: string;
-  page_permissions: Record<string, "none" | "manage"> | null;
+  section_access: MemberSectionAccess;
   permissions_version: number;
   is_legacy: boolean;
 };
 
-export async function getMemberPermissions(
+export async function getMemberSectionAccess(
   membershipId: string,
-): Promise<{ data: MemberPermissionsResponse | null; error: string | null }> {
+): Promise<{ data: MemberSectionAccessResponse | null; error: string | null }> {
   try {
     const { getAppContext } = await import("@/lib/tia/workspace");
     const { workspace } = await getAppContext();
-    if (workspace.role !== "admin") return { data: null, error: "هذه الصلاحيات متاحة للمدير فقط." };
-    const data = await tiaRequest<MemberPermissionsResponse>(
-      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/page-permissions",
+    if (workspace.role !== "admin") return { data: null, error: "هذه الإعدادات متاحة للمدير فقط." };
+    const data = await tiaRequest<MemberSectionAccessResponse>(
+      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/section-access",
     );
     return { data, error: null };
   } catch (error) {
     return {
       data: null,
-      error: error instanceof Error ? error.message : "تعذر تحميل صلاحيات العضو.",
+      error: error instanceof Error ? error.message : "تعذر تحميل إعدادات الوصول.",
     };
   }
 }
 
-export async function saveMemberPermissions(
+export async function saveMemberSectionAccess(
   membershipId: string,
   expectedVersion: number,
-  permissions: Record<string, "none" | "manage">,
-): Promise<{ data: MemberPermissionsResponse | null; error: string | null }> {
+  sectionAccess: MemberSectionAccess,
+): Promise<{ data: MemberSectionAccessResponse | null; error: string | null }> {
   try {
     const { getAppContext } = await import("@/lib/tia/workspace");
     const { workspace } = await getAppContext();
     if (workspace.role !== "admin") return { data: null, error: "هذه العملية متاحة للمدير فقط." };
-    const data = await tiaRequest<MemberPermissionsResponse>(
-      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/page-permissions",
+    const data = await tiaRequest<MemberSectionAccessResponse>(
+      "/auth/workspace/members/" + encodeURIComponent(membershipId) + "/section-access",
       {
         method: "PUT",
-        body: JSON.stringify({ expected_version: expectedVersion, page_permissions: permissions }),
+        body: JSON.stringify({ expected_version: expectedVersion, section_access: sectionAccess }),
       },
     );
     revalidatePath("/team");
     return { data, error: null };
   } catch (error) {
     if (error instanceof TiaApiError && error.status === 409) {
-      return { data: null, error: "تم تغيير الصلاحيات من مكان آخر. أعد تحميلها قبل الحفظ." };
+      return { data: null, error: "تم تغيير إعدادات الوصول من مكان آخر. أعد تحميلها قبل الحفظ." };
     }
     return {
       data: null,
-      error: error instanceof Error ? error.message : "تعذر حفظ صلاحيات العضو.",
+      error: error instanceof Error ? error.message : "تعذر حفظ إعدادات الوصول.",
     };
   }
 }

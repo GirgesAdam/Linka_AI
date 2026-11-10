@@ -179,9 +179,8 @@ def test_phase76_routes_migration_and_frontend_are_explicit_about_attribution() 
     assert 'REVOKE ALL ON TABLE public."crm_campaign_conversions" FROM anon, authenticated' in migration
     assert 'EXPECTED_MIGRATION_HEAD = "0072_workspace_demo_policy"' in readiness
     assert '@router.get("/campaigns"' in route and '@router.get("/campaigns/{campaign_id}"' in route
-    assert "get_analytics_db" in route and "get_analytics_page_reader" in route
-    assert 'Depends(get_analytics_page_reader("analytics.campaigns", legacy_access="reader"))' in route
-    assert 'Depends(get_analytics_page_reader("analytics.campaign_detail", legacy_access="reader"))' in route
+    assert "get_analytics_db" in route and "get_analytics_section_reader" in route
+    assert route.count('Depends(get_analytics_section_reader("administration"))') == 2
     assert "direct_same_conversation_response" in attribution
     assert "MessageDispatch.sent_at" in attribution
     assert "Message.direction == \"inbound\"" in attribution

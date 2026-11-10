@@ -9,9 +9,6 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.automation_job import AutomationJob
@@ -86,7 +83,7 @@ def _queue_ai_job(db: Session, *, task: CRMTask, job: AutomationJob | None) -> N
     )
 
 
-@router.patch("/tasks/{task_id}/executor", response_model=CRMTaskExecutorRead, dependencies=[Depends(require_page_permission("tasks", legacy_access="admin"))])
+@router.patch("/tasks/{task_id}/executor", response_model=CRMTaskExecutorRead, dependencies=[Depends(get_workspace_access)])
 def update_task_executor(
     task_id: UUID,
     payload: CRMTaskExecutorUpdate,

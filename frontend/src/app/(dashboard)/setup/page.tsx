@@ -1,4 +1,3 @@
-import { requirePageAccess } from "@/lib/tia/require-page-access";
 import { PermissionLink as Link } from "@/components/permission-link";
 import { CheckCircle2, Clock3, MessageCircleMore } from "lucide-react";
 
@@ -18,7 +17,6 @@ import { ClinicSettingsPanel } from "./clinic-settings-panel";
 export const maxDuration = 300;
 
 export default async function SetupPage() {
-  await requirePageAccess("setup");
   const [setup, knowledge, batchLookup, laserDevices, ctx] = await Promise.all([
     tiaRequest<ClinicSetupV2Snapshot>("/clinic/setup-v2"),
     tiaRequest<ClinicKnowledgeText>("/clinic/knowledge-text"),

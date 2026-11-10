@@ -1,4 +1,3 @@
-import { requirePageAccess } from "@/lib/tia/require-page-access";
 import { PermissionLink as Link } from "@/components/permission-link";
 import {
   ArrowRight,
@@ -138,7 +137,6 @@ export default async function AppointmentOperationsPage({
   params: Promise<{ appointmentId: string }>;
   searchParams: Promise<{ visit_error?: string; visit_saved?: string }>;
 }) {
-  await requirePageAccess("appointments.detail");
   const { appointmentId } = await params;
   const feedback = await searchParams;
   const [

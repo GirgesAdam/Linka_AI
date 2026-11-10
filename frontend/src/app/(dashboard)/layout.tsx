@@ -1,13 +1,13 @@
 import { DashboardShell } from "@/components/dashboard-shell";
-import { PagePermissionsProvider } from "@/components/permission-link";
+import { SectionAccessProvider } from "@/components/permission-link";
 import { getAppContext } from "@/lib/tia/workspace";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { me, workspace } = await getAppContext();
   const demoMode = "is_demo" in workspace && workspace.is_demo === true;
   return (
-    <PagePermissionsProvider workspace={workspace}>
+    <SectionAccessProvider workspace={workspace}>
       <DashboardShell me={me} workspace={workspace} demoMode={demoMode}>{children}</DashboardShell>
-    </PagePermissionsProvider>
+    </SectionAccessProvider>
   );
 }

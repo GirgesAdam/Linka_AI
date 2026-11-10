@@ -9,9 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
+from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.models.doctor import Doctor
@@ -56,7 +54,7 @@ class DoctorAdminListItem(BaseModel):
 
 @router.get("/doctor-admin", response_model=list[DoctorAdminListItem])
 def list_doctors_for_admin(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("doctors", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[DoctorAdminListItem]:
     workspace_id = access.workspace.id

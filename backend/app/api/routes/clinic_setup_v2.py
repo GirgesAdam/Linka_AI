@@ -9,9 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
+from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import SessionLocal, get_db
 from app.models.clinic_inventory import ClinicLaserDevice
@@ -132,7 +130,7 @@ def _activity(
 
 @router.get("/setup-v2", response_model=ClinicSetupV2Snapshot)
 def read_setup_v2(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
     return build_setup_v2_snapshot(db, workspace=access.workspace)
@@ -140,7 +138,7 @@ def read_setup_v2(
 
 @router.get("/setup-v2/template")
 def download_setup_v2_template(
-    _access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    _access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
 ) -> Response:
     return Response(
         content=build_clinic_setup_template(),
@@ -152,7 +150,7 @@ def download_setup_v2_template(
 @router.post("/setup-v2/preview", response_model=ClinicSetupPreviewResponse)
 def preview_setup_v2(
     payload: ClinicSetupImportDocument,
-    _access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    _access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
 ) -> ClinicSetupPreviewResponse:
     try:
         return preview_clinic_setup_workbook(filename=payload.name, content_base64=payload.content_base64)
@@ -163,7 +161,7 @@ def preview_setup_v2(
 @router.post("/setup-v2/apply-draft", response_model=ClinicSetupImportResponse)
 def apply_setup_draft_v2(
     payload: ClinicSetupApplyDraftRequest,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupImportResponse:
     try:
@@ -202,7 +200,7 @@ def apply_setup_draft_v2(
 @router.post("/setup-v2/import", response_model=ClinicSetupImportResponse)
 def import_setup_v2(
     payload: ClinicSetupImportDocument,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupImportResponse:
     try:
@@ -241,7 +239,7 @@ def import_setup_v2(
 @router.put("/setup-v2/profile", response_model=ClinicSetupV2Snapshot)
 def save_profile_v2(
     payload: ClinicProfileUpsert,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
     try:
@@ -258,7 +256,7 @@ def save_profile_v2(
 @router.post("/setup-v2/services", response_model=ClinicServiceReadV2, status_code=status.HTTP_201_CREATED)
 def add_service_v2(
     payload: ClinicServiceCreateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicServiceReadV2:
     try:
@@ -277,7 +275,7 @@ def add_service_v2(
 def edit_service_v2(
     service_id: UUID,
     payload: ClinicServiceUpdateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicServiceReadV2:
     try:
@@ -295,7 +293,7 @@ def edit_service_v2(
 @router.post("/setup-v2/doctors", response_model=ClinicDoctorReadV2, status_code=status.HTTP_201_CREATED)
 def add_doctor_v2(
     payload: ClinicDoctorCreateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicDoctorReadV2:
     try:
@@ -313,7 +311,7 @@ def add_doctor_v2(
 def edit_doctor_v2(
     doctor_id: UUID,
     payload: ClinicDoctorUpdateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicDoctorReadV2:
     try:
@@ -330,7 +328,7 @@ def edit_doctor_v2(
 @router.put("/setup-v2/hours", response_model=ClinicSetupV2Snapshot)
 def save_clinic_hours_v2(
     payload: WorkingHoursUpdateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
     try:
@@ -347,7 +345,7 @@ def save_clinic_hours_v2(
 def save_regular_doctor_hours_v2(
     doctor_id: UUID,
     payload: WorkingHoursUpdateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
     try:
@@ -364,7 +362,7 @@ def save_regular_doctor_hours_v2(
 def save_visiting_doctor_windows_v2(
     doctor_id: UUID,
     payload: VisitingWindowsUpdateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
     try:
@@ -380,7 +378,7 @@ def save_visiting_doctor_windows_v2(
 @router.put("/setup-v2/booking-policy", response_model=ClinicSetupV2Snapshot)
 def save_booking_policy_v2(
     payload: BookingPolicyUpdateV2,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
     update_booking_policy_v2(db, workspace=access.workspace, payload=payload)
@@ -391,7 +389,7 @@ def save_booking_policy_v2(
 
 @router.get("/history/template")
 def download_history_template(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     services = list(
@@ -432,7 +430,7 @@ def download_history_template(
 @router.post("/history/preview", response_model=HistoricalImportPreviewResponse)
 def preview_history(
     payload: HistoricalImportPreviewRequest,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HistoricalImportPreviewResponse:
     try:
@@ -450,7 +448,7 @@ def preview_history(
 
 @router.get("/history/batches", response_model=HistoricalImportListResponse)
 def read_history_batches(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HistoricalImportListResponse:
     rows = list_historical_import_batches(db, workspace_id=access.workspace.id)
@@ -460,7 +458,7 @@ def read_history_batches(
 @router.get("/history/batches/{batch_id}/rejected-report")
 def download_historical_import_error_report(
     batch_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     batch = get_historical_import_batch(db, workspace_id=access.workspace.id, batch_id=batch_id)
@@ -483,7 +481,7 @@ def download_historical_import_error_report(
 @router.get("/history/batches/{batch_id}", response_model=HistoricalImportApplyResponse)
 def read_history_batch(
     batch_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HistoricalImportApplyResponse:
     batch = get_historical_import_batch(db, workspace_id=access.workspace.id, batch_id=batch_id)
@@ -520,7 +518,7 @@ def _run_history_import_job(*, workspace_id: UUID, batch_id: UUID) -> None:
 def apply_history(
     batch_id: UUID,
     background_tasks: BackgroundTasks,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> HistoricalImportApplyResponse:
     batch = get_historical_import_batch(db, workspace_id=access.workspace.id, batch_id=batch_id)

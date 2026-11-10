@@ -6,9 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
+from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import (
     WorkspaceAccess,
     get_workspace_access,
@@ -25,7 +23,6 @@ from app.services.appointment_checkout import (
     AppointmentCheckoutError,
     checkout_appointment,
 )
-from app.services.page_permissions import page_permission_allows
 from app.services.payments import (
     PaymentOperationError,
     PaymentOperationNotFound,
@@ -34,17 +31,17 @@ from app.services.payments import (
     record_refund,
     set_appointment_discount,
 )
+from app.services.section_access import section_access_allows
 
 router = APIRouter()
 
 
 def _can_refund_appointment(access: WorkspaceAccess) -> bool:
-    return page_permission_allows(
+    return section_access_allows(
         access.membership,
         workspace_id=access.workspace.id,
         user_id=access.user.id,
-        page_key="appointments.detail",
-        legacy_access="admin",
+        section="administration",
     )
 
 
@@ -59,7 +56,7 @@ def _conflict(detail: str) -> HTTPException:
 @router.get("/appointments/{appointment_id}", response_model=AppointmentPaymentSummaryRead)
 def appointment_payment_summary(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.detail", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentPaymentSummaryRead:
     try:
@@ -81,7 +78,7 @@ def appointment_payment_summary(
 def create_payment(
     appointment_id: UUID,
     payload: PaymentCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.detail", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -123,7 +120,7 @@ def create_payment(
 def checkout_appointment_payment(
     appointment_id: UUID,
     payload: AppointmentCheckoutCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.detail", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -167,7 +164,7 @@ def checkout_appointment_payment(
 def update_appointment_discount(
     appointment_id: UUID,
     payload: AppointmentDiscountUpdate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("appointments.detail", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentPaymentSummaryRead:
     try:
@@ -197,7 +194,7 @@ def update_appointment_discount(
     "/appointments/{appointment_id}/refunds",
     response_model=AppointmentPaymentSummaryRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_page_permission("appointments.detail", legacy_access="admin"))],
+    dependencies=[Depends(require_section_access("administration"))],
 )
 def create_refund(
     appointment_id: UUID,

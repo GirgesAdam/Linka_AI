@@ -56,9 +56,10 @@ class WorkspaceMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=text("true"),
     )
 
-    # NULL preserves the pre-permission rollout's current workspace-role behavior.
-    # Use JSONB in PostgreSQL, while retaining compatibility with SQLite test metadata.
-    page_permissions: Mapped[dict[str, str] | None] = mapped_column(
+    # Keep the historical DB column name for migration compatibility. New rows
+    # store only the two section flags; old 25-page matrices are read conservatively.
+    section_access: Mapped[dict[str, bool | str] | None] = mapped_column(
+        "page_permissions",
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=True,
         default=None,

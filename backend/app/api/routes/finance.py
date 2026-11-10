@@ -8,9 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
+from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.schemas.finance import (
@@ -57,7 +55,7 @@ def _workspace_today(timezone_name: str, *, now: datetime | None = None) -> date
 
 @router.get("/expenses", response_model=list[ExpenseRead])
 def expense_list(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     start_date: date | None = None,
     end_date: date | None = None,
@@ -79,7 +77,7 @@ def expense_list(
 @router.post("/expenses", response_model=ExpenseRead, status_code=status.HTTP_201_CREATED)
 def expense_create(
     payload: ExpenseCreate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ExpenseRead:
     expense = create_expense(
@@ -97,7 +95,7 @@ def expense_create(
 def expense_update(
     expense_id: UUID,
     payload: ExpenseUpdate,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ExpenseRead:
     try:
@@ -119,7 +117,7 @@ def expense_update(
 @router.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
 def expense_delete(
     expense_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     try:
@@ -138,7 +136,7 @@ def expense_delete(
 
 @router.get("/profitability", response_model=ProfitabilityRead)
 def profitability(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     end_date: date | None = None,
     start_date: date | None = None,
@@ -159,7 +157,7 @@ def profitability(
 
 @router.get("/dashboard-trend", response_model=FinanceTrendRead)
 def dashboard_trend(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     start_date: date,
     end_date: date,
@@ -181,7 +179,7 @@ def dashboard_trend(
 
 @router.get("/payment-method-breakdown", response_model=PaymentMethodBreakdownRead)
 def payment_breakdown(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("finance", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     start_date: date | None = None,
     end_date: date | None = None,
@@ -202,7 +200,7 @@ def payment_breakdown(
 
 @router.get("/outstanding-balances", response_model=OutstandingBalancesRead)
 def outstanding_balance_report(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("analytics.outstanding_balances", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     limit: int = Query(default=200, ge=1, le=500),
 ) -> OutstandingBalancesRead:

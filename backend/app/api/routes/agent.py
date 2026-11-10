@@ -10,10 +10,7 @@ from sqlalchemy.orm import Session
 from app.agents.llm_runtime import LLMProviderError, provider_error_http_status
 from app.agents.model_provider import LLMConfigurationError
 from app.agents.structured_output import StructuredOutputError
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
-from app.api.dependencies.security import WorkspaceAccess
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -52,7 +49,7 @@ def _enforce_demo_agent_budget(db: Session, *, workspace) -> None:
 @router.post("/chat", response_model=AgentChatResponse)
 def chat_with_tia_agent(
     payload: AgentChatRequest,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("demo.agent", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AgentChatResponse:
     _enforce_demo_agent_budget(db, workspace=access.workspace)

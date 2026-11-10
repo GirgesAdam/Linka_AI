@@ -5,7 +5,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import require_any_page_permission
 from app.api.dependencies.security import (
     WorkspaceAccess,
     get_current_user,
@@ -24,11 +23,17 @@ from app.schemas.auth import (
     WorkspaceMemberRead,
     WorkspaceMemberRoleUpdate,
 )
-from app.schemas.page_permissions import MemberPagePermissionsRead, MemberPagePermissionsUpdate
+from app.schemas.section_access import (
+    MemberSectionAccess,
+    MemberSectionAccessRead,
+    MemberSectionAccessUpdate,
+)
 from app.services.activity import record_activity_event
-from app.services.page_permissions import (
-    build_page_permissions_compare_and_swap,
-    empty_member_page_permissions,
+from app.services.section_access import (
+    build_section_access_compare_and_swap,
+    empty_member_section_access,
+    member_section_access_for_role,
+    normalize_member_section_access,
     require_successful_permission_update,
 )
 from app.services.supabase_auth import SupabaseAuthError, invite_user_by_email
@@ -100,7 +105,7 @@ def me(
             workspace_slug=membership.workspace.slug,
             role=membership.role,
             is_demo=bool(membership.workspace.is_demo),
-            page_permissions=membership.page_permissions,
+            section_access=MemberSectionAccess(**member_section_access_for_role(membership)),
             permissions_version=membership.permissions_version,
         )
         for membership in memberships
@@ -134,7 +139,7 @@ def current_workspace(
         workspace_slug=access.workspace.slug,
         role=access.membership.role,
         is_demo=bool(access.workspace.is_demo),
-        page_permissions=access.membership.page_permissions,
+        section_access=MemberSectionAccess(**member_section_access_for_role(access.membership)),
         permissions_version=access.membership.permissions_version,
     )
 
@@ -156,12 +161,7 @@ def list_workspace_members(
 
 @router.get("/workspace/assignees", response_model=list[WorkspaceMemberRead])
 def list_workspace_assignees(
-    access: WorkspaceAccess = Depends(
-        require_any_page_permission(
-            ("tasks", "admin"),
-            ("inbox.detail", "admin"),
-        )
-    ),
+    access: WorkspaceAccess = Depends(get_workspace_access),
     db: Session = Depends(get_db),
 ) -> list[WorkspaceMemberRead]:
     """List active assignees for task and inbox operations, not team administration."""
@@ -206,8 +206,8 @@ def invite_workspace_member(
                 workspace_id=access.workspace.id,
                 user_id=existing_user.id,
                 role=payload.role,
-                page_permissions=(
-                    empty_member_page_permissions()
+                section_access=(
+                    empty_member_section_access()
                     if payload.role == WORKSPACE_ROLE_MEMBER
                     else None
                 ),
@@ -261,8 +261,8 @@ def invite_workspace_member(
         workspace_id=access.workspace.id,
         user_id=existing_user.id,
         role=payload.role,
-        page_permissions=(
-            empty_member_page_permissions()
+        section_access=(
+            empty_member_section_access()
             if payload.role == WORKSPACE_ROLE_MEMBER
             else None
         ),
@@ -322,13 +322,13 @@ def update_workspace_member_role(
 
     previous_role = membership.role
     membership.role = payload.role
-    if (
-        previous_role != WORKSPACE_ROLE_MEMBER
-        and membership.role == WORKSPACE_ROLE_MEMBER
-        and membership.page_permissions is None
-    ):
-        membership.page_permissions = empty_member_page_permissions()
     if membership.role != previous_role:
+        membership.section_access = (
+            empty_member_section_access()
+            if membership.role == WORKSPACE_ROLE_MEMBER
+            else None
+        )
+        membership.permissions_version += 1
         record_activity_event(
             db,
             workspace_id=access.workspace.id,
@@ -351,14 +351,14 @@ def update_workspace_member_role(
 
 
 @router.get(
-    "/workspace/members/{membership_id}/page-permissions",
-    response_model=MemberPagePermissionsRead,
+    "/workspace/members/{membership_id}/section-access",
+    response_model=MemberSectionAccessRead,
 )
-def get_member_page_permissions(
+def get_member_section_access(
     membership_id: UUID,
     access: WorkspaceAccess = Depends(get_workspace_admin),
     db: Session = Depends(get_db),
-) -> MemberPagePermissionsRead:
+) -> MemberSectionAccessRead:
     membership = db.scalar(
         select(WorkspaceMember).where(
             WorkspaceMember.id == membership_id,
@@ -372,24 +372,25 @@ def get_member_page_permissions(
         or membership.user_id == access.user.id
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found.")
-    return MemberPagePermissionsRead(
+    normalized, is_legacy = normalize_member_section_access(membership.section_access)
+    return MemberSectionAccessRead(
         membership_id=membership.id,
-        page_permissions=membership.page_permissions,
+        section_access=MemberSectionAccess(**normalized),
         permissions_version=membership.permissions_version,
-        is_legacy=membership.page_permissions is None,
+        is_legacy=is_legacy,
     )
 
 
 @router.put(
-    "/workspace/members/{membership_id}/page-permissions",
-    response_model=MemberPagePermissionsRead,
+    "/workspace/members/{membership_id}/section-access",
+    response_model=MemberSectionAccessRead,
 )
-def update_member_page_permissions(
+def update_member_section_access(
     membership_id: UUID,
-    payload: MemberPagePermissionsUpdate,
+    payload: MemberSectionAccessUpdate,
     access: WorkspaceAccess = Depends(get_workspace_admin),
     db: Session = Depends(get_db),
-) -> MemberPagePermissionsRead:
+) -> MemberSectionAccessRead:
     membership = db.scalar(
         select(WorkspaceMember).where(
             WorkspaceMember.id == membership_id,
@@ -404,12 +405,12 @@ def update_member_page_permissions(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found.")
 
-    statement = build_page_permissions_compare_and_swap(
+    statement = build_section_access_compare_and_swap(
         workspace_id=access.workspace.id,
         membership_id=membership.id,
         actor_user_id=access.user.id,
         expected_version=payload.expected_version,
-        page_permissions=payload.page_permissions,
+        section_access=payload.section_access.model_dump(),
     )
     updated_version = db.execute(statement).scalar_one_or_none()
     require_successful_permission_update(
@@ -417,9 +418,10 @@ def update_member_page_permissions(
     )
     db.commit()
     db.refresh(membership)
-    return MemberPagePermissionsRead(
+    normalized, _is_legacy = normalize_member_section_access(membership.section_access)
+    return MemberSectionAccessRead(
         membership_id=membership.id,
-        page_permissions=membership.page_permissions,
+        section_access=MemberSectionAccess(**normalized),
         permissions_version=membership.permissions_version,
         is_legacy=False,
     )

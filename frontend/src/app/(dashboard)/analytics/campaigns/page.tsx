@@ -1,4 +1,3 @@
-import { requirePageAccess } from "@/lib/tia/require-page-access";
 import { PermissionLink as Link } from "@/components/permission-link";
 import { ArrowLeft, BarChart3, CheckCheck, Eye, Megaphone, Send, WalletCards } from "lucide-react";
 
@@ -34,7 +33,6 @@ function metricsCards(metrics: CampaignAnalyticsMetrics) {
 }
 
 export default async function CampaignAnalyticsPage({ searchParams }: { searchParams: Promise<{ period?:string }> }) {
-  await requirePageAccess("analytics.campaigns");
   const params = await searchParams;
   const period = periods.some((item) => item.key === params.period) ? params.period! : "90";
   const endpoint = period === "all" ? "/analytics/campaigns?all_history=true" : `/analytics/campaigns?days=${period}`;

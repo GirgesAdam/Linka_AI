@@ -20,7 +20,7 @@ def test_operations_endpoint_is_admin_only() -> None:
     backend = Path(__file__).resolve().parent.parent
     source = (backend / "app/api/routes/operations.py").read_text(encoding="utf-8")
 
-    assert 'require_page_permission("activity", legacy_access="admin")' in source
+    assert 'require_section_access("administration")' in source
     assert 'router.get("/readiness"' in source
 
 

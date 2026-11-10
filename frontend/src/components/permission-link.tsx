@@ -3,14 +3,13 @@
 import Link from "next/link";
 import { createContext, useContext, type ComponentProps, type ReactNode } from "react";
 import {
-  canAccessPage,
-  resolvePagePermissionForHref,
-} from "@/lib/page-permissions";
+  canAccessRoute,
+} from "@/lib/section-access";
 import type { WorkspaceAccess } from "@/lib/types";
 
-const PagePermissionsContext = createContext<WorkspaceAccess | null>(null);
+const SectionAccessContext = createContext<WorkspaceAccess | null>(null);
 
-export function PagePermissionsProvider({
+export function SectionAccessProvider({
   workspace,
   children,
 }: {
@@ -18,16 +17,16 @@ export function PagePermissionsProvider({
   children: ReactNode;
 }) {
   return (
-    <PagePermissionsContext.Provider value={workspace}>
+    <SectionAccessContext.Provider value={workspace}>
       {children}
-    </PagePermissionsContext.Provider>
+    </SectionAccessContext.Provider>
   );
 }
 
 type PermissionLinkProps = ComponentProps<typeof Link>;
 
 export function PermissionLink(props: PermissionLinkProps) {
-  const workspace = useContext(PagePermissionsContext);
+  const workspace = useContext(SectionAccessContext);
   const href = props.href;
   const pathname =
     typeof href === "string"
@@ -35,11 +34,7 @@ export function PermissionLink(props: PermissionLinkProps) {
       : typeof href === "object" && href !== null && "pathname" in href
         ? String(href.pathname ?? "")
         : "";
-  const requiredPage = resolvePagePermissionForHref(pathname);
-
-  if (requiredPage && (!workspace || !canAccessPage(workspace, requiredPage))) {
-    return null;
-  }
+  if (pathname && !canAccessRoute(workspace, pathname)) return null;
 
   return <Link {...props} />;
 }

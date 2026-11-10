@@ -18,12 +18,7 @@ from app.api.dependencies.security import (
 from app.database.session import AnalyticsSessionLocal, SessionLocal
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WORKSPACE_ROLE_MEMBER
 from app.services.analytics_capacity import is_statement_timeout
-from app.services.page_permissions import (
-    LegacyPageAccess,
-    page_permission_allows,
-    validate_legacy_access,
-    validate_page_key,
-)
+from app.services.section_access import SectionAccessKey, section_access_allows
 from app.services.supabase_auth import VerifiedAuthIdentity
 
 
@@ -74,14 +69,12 @@ def get_analytics_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def get_analytics_page_reader(
-    page_key: str,
-    *,
-    legacy_access: LegacyPageAccess,
+def get_analytics_section_reader(
+    section: SectionAccessKey,
 ) -> Callable[..., WorkspaceAccess]:
-    """Resolve analytics access without holding the main DB pool and enforce its page."""
-    validate_page_key(page_key)
-    validate_legacy_access(legacy_access)
+    """Enforce section access while releasing the primary DB session before analytics queries."""
+    if section not in {"clinic_operations", "administration"}:
+        raise ValueError(f"Unknown member access section: {section!r}")
 
     def dependency(
         x_workspace_id: Annotated[UUID, Header(alias="X-Workspace-ID")],
@@ -90,16 +83,15 @@ def get_analytics_page_reader(
         with SessionLocal() as auth_db:
             user = get_current_user(identity, auth_db)
             access = get_workspace_access(x_workspace_id, user, auth_db)
-            if not page_permission_allows(
+            if not section_access_allows(
                 access.membership,
                 workspace_id=access.workspace.id,
                 user_id=access.user.id,
-                page_key=page_key,
-                legacy_access=legacy_access,
+                section=section,
             ):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You do not have permission to access this page.",
+                    detail="You do not have permission to access this section.",
                 )
             return access
 

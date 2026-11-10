@@ -1,4 +1,3 @@
-import { requirePageAccess } from "@/lib/tia/require-page-access";
 import { PermissionLink as Link } from "@/components/permission-link";
 import { Ban, CalendarDays, ChevronLeft, ChevronRight, Plus, Search } from "lucide-react";
 
@@ -642,7 +641,6 @@ export default async function AppointmentsPage({
 }: {
   searchParams: Promise<SearchParams>;
 }) {
-  await requirePageAccess("appointments.calendar");
   const raw = await searchParams;
   const patientId = raw.patient_id;
   const manualPhone = (raw.manual_phone || "").trim();

@@ -1,4 +1,3 @@
-import { requirePageAccess } from "@/lib/tia/require-page-access";
 import { PermissionLink as Link } from "@/components/permission-link";
 import { Bookmark, CalendarRange, Megaphone } from "lucide-react";
 
@@ -73,7 +72,6 @@ function resolvePeriod(raw: SearchParams) {
 }
 
 export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  await requirePageAccess("analytics.overview");
   const raw = await searchParams;
   const period = resolvePeriod(raw);
   const [cohorts, catalog, savedViews] = await Promise.all([

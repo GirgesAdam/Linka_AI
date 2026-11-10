@@ -67,8 +67,8 @@ def test_retry_and_cancel_routes_require_workspace_admin() -> None:
 
     retry = route.split('@router.post("/jobs/{job_id}/retry"', 1)[1].split('@router.post("/jobs/{job_id}/cancel"', 1)[0]
     cancel = route.split('@router.post("/jobs/{job_id}/cancel"', 1)[1].split('@router.post("/workers"', 1)[0]
-    assert 'require_page_permission("automations", legacy_access="admin")' in retry
-    assert 'require_page_permission("automations", legacy_access="admin")' in cancel
+    assert 'require_section_access("administration")' in retry
+    assert 'require_section_access("administration")' in cancel
 
 
 def test_automation_dashboard_has_health_attention_safe_actions_and_product_whitelist() -> None:

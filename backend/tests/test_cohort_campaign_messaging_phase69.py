@@ -257,7 +257,7 @@ def test_campaign_write_routes_require_admin_and_have_explicit_prepare_confirm_s
     assert '"/cohorts/{cohort_id}/campaigns"' in route
     assert '"/campaigns/{campaign_id}/confirm"' in route
     campaign_sections = route[route.index("def prepare_campaign_for_cohort"):]
-    assert 'require_page_permission("analytics.cohort_detail", legacy_access="admin")' in campaign_sections
+    assert 'require_section_access("administration")' in campaign_sections
 
 
 def test_customer_opt_out_is_semantic_tool_not_keyword_router() -> None:

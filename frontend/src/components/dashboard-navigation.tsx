@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { canAccessPage, type PagePermissionKey } from "@/lib/page-permissions";
+import { canAccessRoute } from "@/lib/section-access";
 import type { WorkspaceAccess } from "@/lib/types";
 
 const inboxPollIntervalMs = 15_000;
@@ -63,23 +63,7 @@ const managementAdminItems = [
 const coreItems = [...dailyItems, ...patientItems, ...clinicItems, ...managementItems];
 const mobilePrimaryHrefs = new Set(["/dashboard", "/inbox", "/appointments", "/patients"]);
 
-// Navigation is presentation only. Every protected backend route enforces its own page key.
-const pageForNavigation: Record<string, PagePermissionKey> = {
-  "/dashboard": "dashboard",
-  "/inbox": "inbox.list",
-  "/appointments": "appointments.calendar",
-  "/patients": "patients.list",
-  "/tasks": "tasks",
-  "/doctors": "doctors",
-  "/services": "services",
-  "/inventory": "inventory",
-  "/analytics": "analytics.overview",
-  "/finance": "finance",
-  "/automations": "automations",
-  "/team": "team",
-  "/setup": "setup",
-  "/activity": "activity",
-};
+// Navigation visibility mirrors the same two-section route guard used by pages.
 
 type InboxSummary = {
   unread_conversations: number;
@@ -187,7 +171,7 @@ function DesktopNavItem({
 
 export function DesktopNavigation({ workspace }: { workspace: WorkspaceAccess }) {
   const pathname = usePathname();
-  const canShow = (href: string) => canAccessPage(workspace, pageForNavigation[href]);
+  const canShow = (href: string) => canAccessRoute(workspace, href);
   const unreadCount = useInboxUnreadCount("(min-width: 1024px)", canShow("/inbox"));
   const groups = [
     { label: "اليوم", items: dailyItems.filter((item) => canShow(item.href)) },
@@ -265,7 +249,7 @@ function MobileSection({
 export function MobileNavigation({ workspace }: { workspace: WorkspaceAccess }) {
   const pathname = usePathname();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const canShow = (href: string) => canAccessPage(workspace, pageForNavigation[href]);
+  const canShow = (href: string) => canAccessRoute(workspace, href);
   const unreadCount = useInboxUnreadCount("(max-width: 1023px)", canShow("/inbox"));
   const mobilePrimary = coreItems.filter((item) => mobilePrimaryHrefs.has(item.href) && canShow(item.href));
   const morePatient = patientItems.filter((item) => !mobilePrimaryHrefs.has(item.href) && canShow(item.href));

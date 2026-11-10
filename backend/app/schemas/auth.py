@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from app.schemas.section_access import MemberSectionAccess
+
 WorkspaceRole = Literal["admin", "member"]
 InvitableWorkspaceRole = Literal["admin", "member"]
 
@@ -32,8 +34,8 @@ class WorkspaceAccessRead(BaseModel):
     workspace_slug: str
     role: WorkspaceRole
     is_demo: bool = False
-    # The authenticated member's current DB-backed permission matrix, not JWT claims.
-    page_permissions: dict[str, str] | None = None
+    # Normalized DB-backed section access, never trusted from JWT claims.
+    section_access: MemberSectionAccess
     permissions_version: int = 0
 
 

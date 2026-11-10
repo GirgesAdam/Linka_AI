@@ -1,4 +1,3 @@
-import { requirePageAccess } from "@/lib/tia/require-page-access";
 import { PermissionLink as Link } from "@/components/permission-link";
 import { AlertTriangle, Bot, MessageSquareMore, Search, UserRound } from "lucide-react";
 
@@ -127,7 +126,6 @@ function deliveryHealthNotice(connections: ChannelConnection[]): DeliveryHealthN
 }
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<InboxSearchParams> }) {
-  await requirePageAccess("inbox.list");
   const raw = await searchParams;
   const filters: InboxFilters = {
     owner: raw.owner === "ai" || raw.owner === "human" ? raw.owner : "",

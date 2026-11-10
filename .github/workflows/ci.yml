@@ -164,7 +164,11 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: Verify financial UI idempotency contract
         run: npx playwright test e2e/idempotent-financial-submit.spec.ts
-      - name: Verify historical preview timeout contract
+      - name: Install Chromium for member section browser verification
+        run: npx playwright install --with-deps chromium
+      - name: Verify member section route policy in Chromium
+        run: npx playwright test e2e/member-section-access-browser.spec.ts
+      - name: Verify historical preview timeout and section access contracts
         run: npm run test:unit
       - run: npm run lint
       - run: npx next typegen

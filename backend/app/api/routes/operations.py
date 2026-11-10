@@ -3,9 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
+from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.schemas.activity import ActivityActorType, ActivityEventRead
@@ -18,7 +16,7 @@ router = APIRouter()
 
 @router.get("/readiness", response_model=WorkspaceOperationalReadiness)
 def operational_readiness(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("setup", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> WorkspaceOperationalReadiness:
     return build_workspace_operational_readiness(
@@ -29,7 +27,7 @@ def operational_readiness(
 
 @router.get("/activity", response_model=list[ActivityEventRead])
 def activity_log(
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("activity", legacy_access="admin"))],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     days: int = 7,
     actor_type: Annotated[ActivityActorType | None, Query()] = None,

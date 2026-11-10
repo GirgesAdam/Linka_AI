@@ -9,10 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.page_permissions import (
-    require_page_permission,
-)
-from app.api.dependencies.security import WorkspaceAccess
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
 from app.models.channel_identity import ChannelIdentity
@@ -63,7 +60,7 @@ def _unavailable(conversation_id: UUID, detail: str) -> StaffWhatsAppFollowupRes
 )
 def send_staff_whatsapp_followup(
     conversation_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(require_page_permission("inbox.detail", legacy_access="reader"))],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StaffWhatsAppFollowupResponse:
     conversation = db.scalar(
