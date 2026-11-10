@@ -26,28 +26,80 @@ Configure the backend with the production/staging values documented in the repos
 
 Do not commit secret values.
 
-## Database migrations — Release Governance
+## Database migrations - Current Release Governance (2026-11-10)
 
-**Observed production configuration (read-only Railway inspection, 2026-11-10):**
+### Canonical GitHub Actions runner
 
-Both Railway application services currently have the following live `preDeployCommand`:
+PR #313 was merged successfully into main.
 
-```bash
-python -m alembic upgrade head
-```
+- PR #313: **MERGED**
+- Merge commit / Main baseline: c780d1715a139b8fa39232ec41c494ede5dced1d
+- Canonical workflow: .github/workflows/database-migrate.yml
+- The canonical workflow is present on Main and is the approved GitHub Actions migration entry point.
 
-- Project: `remarkable-kindness`
-- Environment: `production`
-- Service: `tia-api`
-- Service: `tia-whatsapp`
+The canonical workflow retains its release controls: manual workflow_dispatch, Production restricted to refs/heads/main, exact 40-character Main SHA verification, checkout pinned to github.sha with persist-credentials: false, Migration 0097 SHA-256 verification, expected pre-migration revision validation, rejection of zero or multiple current Alembic heads, final exact revision attestation, explicit Production target alembic upgrade 0097_member_page_permissions, shared PostgreSQL session advisory locking, secret isolation, least-privilege contents: read, cancel-in-progress: false, and the existing Staging alembic upgrade head behavior.
 
-These settings are controlled by the live Railway service configuration, not by a `railway.toml` or `railway.json` file in the current Main checkout. No live Railway settings were changed during this audit.
+The previous description of PR #313 as open/draft and the canonical workflow as a proposal is historical and superseded by the merge above. The merge does not itself authorize a Production migration; the Single-Owner technical Production approval gate remains a separate future task and is not implemented by PR #313.
 
-**Required owner action:** before claiming operational single-writer status, the Project Owner must separately approve and remove the `preDeployCommand` from each service's Railway production Deploy settings. Do not change the start command, build configuration, healthcheck, variables, networking, or other deploy settings. Until both live settings are re-read and confirmed empty, Railway remains a potential automatic production migration runner.
+### Live Railway Production migration configuration - read-only observation
 
-**Canonical runner proposal:** `.github/workflows/database-migrate.yml` is the intended GitHub Actions migration entry point, subject to approval and merge of PR #313 and the migration/release prerequisites documented in that PR. PR #313 is currently open and draft; it is not yet the approved operational path. Do not retire the legacy workflow or declare Single Writer PASS before the canonical runner is approved and active.
+**Last verified by read-only Railway configuration inspection on 2026-11-10:**
 
-**Legacy workflow:** `.github/workflows/apply-0068-production.yml` is a separate production migration workflow triggered by a push to `main` when that workflow file's path changes. It runs `python -m alembic upgrade head`. Its retirement is proposed separately and must only be merged after the canonical GitHub runner is approved and available. The required merge order and dependencies must be reviewed by the Project Owner.
+- Project: remarkable-kindness
+- Environment: production
+
+Both application services still have this live preDeployCommand:
+
+    python -m alembic upgrade head
+
+| Railway service | Live preDeployCommand |
+|---|---|
+| tia-api | python -m alembic upgrade head |
+| tia-whatsapp | python -m alembic upgrade head |
+
+These values were read from the live Railway service configuration. No Railway configuration, secrets, environment variables, deployments, or service settings were changed as part of this PR.
+
+**Required separate Project Owner action:** removing the two Railway preDeployCommand values is outside PR #314. It requires a separate explicit owner decision and a separate controlled task. Until both live commands have been removed and re-read as empty, Railway remains an additional automatic Production migration execution path. Do not claim operational Single Writer.
+
+### Historical Production Migration 0097 execution evidence
+
+A historical Railway deployment of tia-whatsapp ran Migration 0097 after PR #306 was merged:
+
+- Service: tia-whatsapp
+- Deployment: b25ab80c-a67e-4acb-85ff-16e7e904cbc7
+- Deployment created: 2026-11-10T17:41:06Z
+- Historical deployment state at the later read: REMOVED
+
+The retained Railway deploy log records:
+
+    Running upgrade 0096_patient_customer_id -> 0097_member_page_permissions
+
+The same deployment log subsequently records:
+
+    Application startup complete.
+    GET /api/v1/health/ready
+    HTTP 200
+
+This is evidence that the migration command ran and that the application passed its readiness check in that deployment. It is **not** an independent database revision attestation and must not be described as one. Migration 0097 must not be re-run or rolled back as part of this PR.
+
+### Correct Single Writer status
+
+    CANONICAL GITHUB ACTIONS RUNNER:
+    MERGED - PR #313
+
+    LEGACY GITHUB MIGRATION WORKFLOW:
+    PENDING RETIREMENT - THIS PR #314
+
+    RAILWAY tia-api preDeployCommand:
+    ACTIVE
+
+    RAILWAY tia-whatsapp preDeployCommand:
+    ACTIVE
+
+    OPERATIONAL SINGLE WRITER:
+    NOT ACHIEVED
+
+PR #314 retires only the legacy GitHub Actions workflow .github/workflows/apply-0068-production.yml. It does not remove either Railway preDeployCommand. Therefore, even after PR #314 is merged, the Railway commands will remain additional migration paths until the Project Owner separately authorizes and completes their removal.
 
 ## Migration serialization
 
