@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
@@ -46,7 +46,7 @@ def _require_local_appointment_write(db: Session, workspace_id: UUID) -> None:
 def update_appointment_service(
     appointment_id: UUID,
     payload: AppointmentServiceUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ):
     """Reception/staff-only dashboard write; this operation is not an Agent tool."""

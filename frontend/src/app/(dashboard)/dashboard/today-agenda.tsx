@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { useEffect, useMemo, useState } from "react";
 
 import { StatusBadge } from "@/components/ui/status-badge";

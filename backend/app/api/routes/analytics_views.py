@@ -6,7 +6,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.schemas.analytics_saved_view import AnalyticsSavedViewCreate, AnalyticsSavedViewRead
 from app.services.analytics_saved_views import (
@@ -22,7 +23,7 @@ router = APIRouter()
 
 @router.get("/views", response_model=list[AnalyticsSavedViewRead])
 def get_saved_analytics_views(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     limit: int = 20,
 ) -> list[AnalyticsSavedViewRead]:
@@ -32,7 +33,7 @@ def get_saved_analytics_views(
 @router.post("/views", response_model=AnalyticsSavedViewRead, status_code=status.HTTP_201_CREATED)
 def save_analytics_view(
     payload: AnalyticsSavedViewCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AnalyticsSavedViewRead:
     try:
@@ -51,7 +52,7 @@ def save_analytics_view(
 @router.delete("/views/{view_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_analytics_view(
     view_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     deleted = delete_analytics_saved_view(

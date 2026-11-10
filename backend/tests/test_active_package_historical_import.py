@@ -2679,7 +2679,7 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient
 
-    from app.api.dependencies.security import get_workspace_admin
+    from app.api.dependencies.security import get_workspace_access
     from app.api.routes.clinic_setup_v2 import router
     from app.database.session import get_db
     from app.models.historical_import import ClinicHistoricalImportBatch, ClinicHistoricalImportRow
@@ -2764,7 +2764,12 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
         app = FastAPI()
         app.include_router(router, prefix="/clinic")
         app.dependency_overrides[get_db] = lambda: db
-        app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(workspace=workspace)
+        app.dependency_overrides[get_workspace_access] = lambda: SimpleNamespace(
+            workspace=workspace, user=user, membership=SimpleNamespace(
+                role="admin", is_active=True, workspace_id=workspace.id, user_id=user.id,
+                page_permissions=None, permissions_version=0
+            )
+        )
         url = f"/clinic/history/batches/{batch.id}/rejected-report"
         with TestClient(app) as client:
             response = client.get(url)
@@ -2841,17 +2846,27 @@ def test_historical_rejected_report_exports_all_rows_safely_and_enforces_workspa
             ) == issue_overrides[6][1]
             assert not db.dirty and not db.deleted
 
-            app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(
-                workspace=SimpleNamespace(id=uuid4())
+            app.dependency_overrides[get_workspace_access] = lambda: SimpleNamespace(
+                workspace=SimpleNamespace(id=uuid4()),
+                user=user,
+                membership=SimpleNamespace(
+                    role="admin", is_active=True, workspace_id=uuid4(), user_id=user.id,
+                    page_permissions=None, permissions_version=0
+                ),
             )
-            assert client.get(url).status_code == 404
-            app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(workspace=workspace)
+            assert client.get(url).status_code == 403
+            app.dependency_overrides[get_workspace_access] = lambda: SimpleNamespace(
+            workspace=workspace, user=user, membership=SimpleNamespace(
+                role="admin", is_active=True, workspace_id=workspace.id, user_id=user.id,
+                page_permissions=None, permissions_version=0
+            )
+        )
             assert client.get(f"/clinic/history/batches/{uuid4()}/rejected-report").status_code == 404
 
             def deny_member():
                 raise HTTPException(status_code=403, detail="Admin only")
 
-            app.dependency_overrides[get_workspace_admin] = deny_member
+            app.dependency_overrides[get_workspace_access] = deny_member
             assert client.get(url).status_code == 403
 
 
@@ -2861,7 +2876,7 @@ def test_historical_rejected_report_allows_empty_batch_without_mutation() -> Non
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from app.api.dependencies.security import get_workspace_admin
+    from app.api.dependencies.security import get_workspace_access
     from app.api.routes.clinic_setup_v2 import router
     from app.database.session import get_db
     from app.models.historical_import import ClinicHistoricalImportBatch
@@ -2883,7 +2898,12 @@ def test_historical_rejected_report_allows_empty_batch_without_mutation() -> Non
         app = FastAPI()
         app.include_router(router, prefix="/clinic")
         app.dependency_overrides[get_db] = lambda: db
-        app.dependency_overrides[get_workspace_admin] = lambda: SimpleNamespace(workspace=workspace)
+        app.dependency_overrides[get_workspace_access] = lambda: SimpleNamespace(
+            workspace=workspace, user=user, membership=SimpleNamespace(
+                role="admin", is_active=True, workspace_id=workspace.id, user_id=user.id,
+                page_permissions=None, permissions_version=0
+            )
+        )
         with TestClient(app) as client:
             response = client.get(f"/clinic/history/batches/{batch.id}/rejected-report")
         assert response.status_code == 200

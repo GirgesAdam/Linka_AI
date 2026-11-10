@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
@@ -129,7 +129,7 @@ def _appointment_detail_stmt(workspace_id):
 
 @router.get("/today", response_model=DashboardTodayRead)
 def dashboard_today(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DashboardTodayRead:
     workspace_id = access.workspace.id
@@ -170,7 +170,7 @@ def dashboard_today(
 
 @router.get("/today-revenue", response_model=DashboardTodayRevenueRead)
 def dashboard_today_revenue(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DashboardTodayRevenueRead:
     workspace_id = access.workspace.id
@@ -206,7 +206,7 @@ def dashboard_today_revenue(
 
 @router.get("/summary", response_model=DashboardSummaryRead)
 def dashboard_summary(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DashboardSummaryRead:
     workspace_id = access.workspace.id

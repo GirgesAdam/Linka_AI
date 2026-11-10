@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, BarChart3, BookmarkPlus, Download, Filter, HandCoins, Info, LoaderCircle, Play, Search, SlidersHorizontal } from "lucide-react";
 

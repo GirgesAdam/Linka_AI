@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { notFound } from "next/navigation";
 import { BarChart3, BotMessageSquare, CalendarDays, CheckCircle2, ContactRound, Inbox, Sparkles } from "lucide-react";
 

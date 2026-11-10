@@ -5,7 +5,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.schemas.clinic_knowledge_base import ClinicKnowledgeText
 from app.services.activity import record_activity_event
@@ -16,7 +17,7 @@ router = APIRouter()
 
 @router.get("/knowledge-text", response_model=ClinicKnowledgeText)
 def read_single_knowledge_text(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicKnowledgeText:
     """Return the clinic's one editable explanatory knowledge source."""
@@ -26,7 +27,7 @@ def read_single_knowledge_text(
 @router.put("/knowledge-text", response_model=ClinicKnowledgeText)
 def replace_single_knowledge_text(
     payload: ClinicKnowledgeText,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicKnowledgeText:
     """Replace all user-managed explanatory knowledge with the single clinic text."""

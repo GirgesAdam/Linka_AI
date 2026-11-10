@@ -9,7 +9,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess
 from app.core.meta_whatsapp_config import meta_whatsapp_settings
 from app.database.session import get_db
 from app.models.channel_connection import ChannelConnection
@@ -193,7 +194,7 @@ def whatsapp_transport_tick(
 
 @router.get("/setup", response_model=WhatsAppSetupState)
 def whatsapp_setup_state(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> WhatsAppSetupState:
     return build_whatsapp_setup_state(db, workspace_id=access.workspace.id)
@@ -203,7 +204,7 @@ def whatsapp_setup_state(
 def whatsapp_direct_connect(
     payload: WhatsAppDirectConnect,
     request: Request,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> WhatsAppDirectConnectResult:
     try:
@@ -232,7 +233,7 @@ def whatsapp_direct_connect(
 
 @router.post("/setup/direct/finish", response_model=WhatsAppDirectConnectResult)
 def whatsapp_direct_finish(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> WhatsAppDirectConnectResult:
     try:

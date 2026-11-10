@@ -131,10 +131,10 @@ def test_phase75_uses_isolated_pool_timeout_cache_export_guards_and_payment_inde
     assert "SET LOCAL application_name = 'tia-analytics'" in session
     assert "AnalyticsSessionLocal" in dependency
     assert "with SessionLocal() as auth_db" in dependency
-    assert "get_analytics_workspace_reader" in dependency
+    assert "get_analytics_section_reader" in dependency
     assert "HTTP_503_SERVICE_UNAVAILABLE" in dependency
     assert "get_analytics_db" in route
-    assert "get_analytics_workspace_reader" in route
+    assert 'get_analytics_section_reader("administration")' in route
     assert "get_workspace_reader" not in route
     assert "Depends(get_db)" not in route
     assert "use_cache=False" in route

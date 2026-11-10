@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Stethoscope, UserRound } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { appointmentLabels, toneForStatus } from "@/lib/status";
+import { canAccessSection } from "@/lib/section-access";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import { cn } from "@/lib/utils";
@@ -139,7 +140,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
   const selectedDate = parseDateKey(selectedDateKey)!;
   const doctorId = raw.doctor_id || "";
   const ctx = await getAppContext();
-  const isAdmin = ctx.workspace.role === "admin";
+  const canManageClinic = canAccessSection(ctx.workspace, "clinic_operations");
 
   const rangeStart = view === "month" ? startOfMonth(selectedDate) : selectedDate;
   const rangeEnd = view === "month" ? endOfMonth(selectedDate) : selectedDate;
@@ -148,7 +149,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
 
   const [calendar, adminDoctors] = await Promise.all([
     tiaRequest<DoctorCalendar>(`/booking/doctor-calendar?${query.toString()}`),
-    isAdmin ? tiaRequest<DoctorAdminItem[]>("/clinic/doctor-admin") : Promise.resolve([]),
+    canManageClinic ? tiaRequest<DoctorAdminItem[]>("/clinic/doctor-admin") : Promise.resolve([]),
   ]);
 
   const selectedDoctor = calendar.doctors.find((doctor) => doctor.id === doctorId) || null;
@@ -179,7 +180,7 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
         description="تابع مواعيد كل دكتور يوميًا أو على مستوى الشهر، وافتح أي موعد مباشرة من الجدول."
       />
 
-      {isAdmin && <DoctorManagementPanel doctors={adminDoctors} />}
+      {canManageClinic && <DoctorManagementPanel doctors={adminDoctors} />}
 
       <Card className="mb-5">
         <CardContent className="flex flex-col gap-4 p-4 sm:p-4">

@@ -6,11 +6,19 @@ export interface CurrentUser {
   email: string;
   full_name: string | null;
 }
+export interface MemberSectionAccess {
+  clinic_operations: boolean;
+  administration: boolean;
+}
+
 export interface WorkspaceAccess {
   workspace_id: string;
   workspace_name: string;
   workspace_slug: string;
   role: WorkspaceRole;
+  is_demo?: boolean;
+  section_access: MemberSectionAccess;
+  permissions_version?: number;
 }
 export interface MeResponse { user: CurrentUser; workspaces: WorkspaceAccess[]; }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { useActionState, useMemo, useState } from "react";
 import { CheckCircle2, LoaderCircle, Megaphone, ShieldCheck } from "lucide-react";
 
@@ -40,13 +40,11 @@ export function SavedCohortCampaignForm({
   cohortName,
   memberCount,
   whatsappConnections,
-  isAdmin,
 }: {
   cohortId: string;
   cohortName: string;
   memberCount: number;
   whatsappConnections: ChannelConnection[];
-  isAdmin: boolean;
 }) {
   const [requestId] = useState(() => createClientRequestId());
   const [confirmationId] = useState(() => createClientRequestId());
@@ -56,10 +54,6 @@ export function SavedCohortCampaignForm({
   const campaign = prepareState.campaign;
   const result = confirmState.result;
   const skippedCount = useMemo(() => campaign?.recipients.filter((row) => row.status !== "eligible").length || 0, [campaign]);
-
-  if (!isAdmin) {
-    return <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">إرسال الحملات متاح لمدير العيادة فقط. ما زال بإمكانك مراجعة القائمة وإنشاء مهام متابعة للفريق.</div>;
-  }
 
   if (!whatsappConnections.length) {
     return <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">واتساب غير متصل حاليًا. <Link href="/channels" className="font-bold underline">افتح قنوات التواصل</Link> لإكمال الربط أولًا.</div>;

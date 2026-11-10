@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { ArrowLeft, BarChart3, CheckCheck, Eye, Megaphone, Send, WalletCards } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";

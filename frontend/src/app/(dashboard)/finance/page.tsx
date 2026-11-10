@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { formatMoney } from "@/lib/format";
+import { canAccessSection } from "@/lib/section-access";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
@@ -177,7 +178,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const noticeIsError = raw.notice === "delete_failed";
   const notice = raw.notice === "expense_deleted" ? "تم حذف المصروف بنجاح، وتم تحديث حسابات الربحية." : noticeIsError ? "تعذر حذف المصروف. حدّث الصفحة وحاول مرة أخرى." : null;
   const { workspace } = await getAppContext();
-  const isAdmin = workspace.role === "admin";
+  const canManageAdministration = canAccessSection(workspace, "administration");
 
   const profitQuery = new URLSearchParams();
   if (startDate) profitQuery.set("start_date", startDate);
@@ -252,7 +253,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         </CardContent>
       </Card>
 
-      {isAdmin && (
+      {canManageAdministration && (
         <Card className="mb-5">
           <CardHeader className="flex-row items-center justify-between gap-3">
             <div><CardTitle>إضافة مصروف</CardTitle><p className="mt-1 text-xs text-[var(--muted)]">اختر هل المصروف ثابت أو متغير وسجله وقت حدوثه.</p></div>
@@ -281,7 +282,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                     <div><div className="font-black text-slate-950">{expense.title}</div><div className="mt-1 text-xs font-semibold text-[var(--muted)]">{expenseTypeLabels[expense.expense_type]} · {categoryLabels[expense.category]} · {expense.incurred_on}</div>{expense.note && <div className="mt-2 text-sm text-slate-600">{expense.note}</div>}</div>
                     <div className="text-left text-lg font-black text-slate-950">{formatMoney(expense.amount_minor, expense.currency)}</div>
                   </div>
-                  {isAdmin && (
+                  {canManageAdministration && (
                     <div className="mt-3 border-t border-slate-100 pt-3">
                       <details>
                         <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-800"><Pencil size={14} /> تعديل المصروف</summary>

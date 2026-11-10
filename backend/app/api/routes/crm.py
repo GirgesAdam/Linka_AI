@@ -10,7 +10,8 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin, get_workspace_reader
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
@@ -28,7 +29,7 @@ from app.models.patient_note import PatientNote
 from app.models.patient_tag import PatientTag, PatientTagAssignment
 from app.models.service import Service
 from app.models.user import User
-from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
+from app.models.workspace_member import WorkspaceMember
 from app.schemas.analytics_bi import AnalyticsBIPlan
 from app.schemas.analytics_composable import AnalyticsAudiencePlan
 from app.schemas.crm import (
@@ -128,8 +129,22 @@ from app.services.pulse_billing import (
     PulseBillingNotFound,
     create_patient_pulse_opening_balance,
 )
+from app.services.section_access import section_access_allows
 
 router = APIRouter()
+
+
+def _is_workspace_admin(access: WorkspaceAccess) -> bool:
+    return access.membership.role == "admin"
+
+
+def _has_administration_access(access: WorkspaceAccess) -> bool:
+    return section_access_allows(
+        access.membership,
+        workspace_id=access.workspace.id,
+        user_id=access.user.id,
+        section="administration",
+    )
 
 
 def not_found(entity: str) -> HTTPException:
@@ -292,7 +307,7 @@ def duplicate_patient_detail(patient: Patient) -> dict[str, str]:
 @router.post("/patients", response_model=PatientRead, status_code=status.HTTP_201_CREATED)
 def create_patient(
     payload: PatientCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Patient:
     ensure_branch(db, access.workspace.id, payload.preferred_branch_id)
@@ -322,7 +337,7 @@ def create_patient(
 )
 def register_patient(
     payload: PatientRegistrationCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Patient:
     """Create a reception patient and any declared opening balances atomically."""
@@ -419,7 +434,7 @@ def register_patient(
 
 @router.get("/patients", response_model=list[PatientRead])
 def list_patients(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     q: Annotated[str | None, Query(max_length=200)] = None,
     patient_status: Annotated[PatientStatus | None, Query(alias="status")] = None,
@@ -449,7 +464,7 @@ def list_patients(
 @router.get("/patients/{patient_id}", response_model=PatientRead)
 def get_patient(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Patient:
     return get_patient_or_404(db, access.workspace.id, patient_id)
@@ -458,7 +473,7 @@ def get_patient(
 @router.get("/patients/{patient_id}/profile", response_model=PatientProfileRead)
 def get_patient_profile(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     timeline_limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> PatientProfileRead:
@@ -474,7 +489,7 @@ def get_patient_profile(
 @router.get("/patients/{patient_id}/history-context", response_model=PatientHistoryContextRead)
 def get_patient_history_context(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     recent_limit: Annotated[int, Query(ge=1, le=50)] = 20,
 ) -> PatientHistoryContextRead:
@@ -490,7 +505,7 @@ def get_patient_history_context(
 @router.get("/patients/{patient_id}/opening-data", response_model=PatientOpeningDataRead)
 def get_patient_opening_data_route(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PatientOpeningDataRead:
     try:
@@ -509,7 +524,7 @@ def get_patient_opening_data_route(
 def put_patient_opening_data(
     patient_id: UUID,
     payload: PatientOpeningDataUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PatientOpeningDataRead:
     try:
@@ -543,7 +558,7 @@ def put_patient_opening_data(
 def update_patient(
     patient_id: UUID,
     payload: PatientUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Patient:
     patient = get_patient_or_404(db, access.workspace.id, patient_id)
@@ -601,7 +616,7 @@ def update_patient(
 def create_patient_note(
     patient_id: UUID,
     payload: PatientNoteCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PatientNote:
     get_patient_or_404(db, access.workspace.id, patient_id)
@@ -620,7 +635,7 @@ def create_patient_note(
 @router.get("/patients/{patient_id}/notes", response_model=list[PatientNoteRead])
 def list_patient_notes(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PatientNote]:
     get_patient_or_404(db, access.workspace.id, patient_id)
@@ -639,7 +654,7 @@ def list_patient_notes(
 @router.post("/tags", response_model=PatientTagRead, status_code=status.HTTP_201_CREATED)
 def create_tag(
     payload: PatientTagCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PatientTag:
     tag = PatientTag(
@@ -656,7 +671,7 @@ def create_tag(
 
 @router.get("/tags", response_model=list[PatientTagRead])
 def list_tags(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PatientTag]:
     return list(
@@ -678,7 +693,7 @@ def list_tags(
 def assign_tag_to_patient(
     patient_id: UUID,
     tag_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PatientTag:
     get_patient_or_404(db, access.workspace.id, patient_id)
@@ -715,7 +730,7 @@ def assign_tag_to_patient(
 @router.get("/patients/{patient_id}/tags", response_model=list[PatientTagRead])
 def list_patient_tags(
     patient_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PatientTag]:
     get_patient_or_404(db, access.workspace.id, patient_id)
@@ -742,7 +757,7 @@ def list_patient_tags(
 def remove_tag_from_patient(
     patient_id: UUID,
     tag_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     assignment = db.scalar(
@@ -769,7 +784,7 @@ def _workspace_local_datetime(value: datetime | None, timezone_name: str) -> dat
 @router.post("/leads", response_model=LeadRead, status_code=status.HTTP_201_CREATED)
 def create_lead(
     payload: LeadCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Lead:
     patient = get_patient_or_404(db, access.workspace.id, payload.patient_id)
@@ -805,7 +820,7 @@ def create_lead(
 
 @router.get("/leads", response_model=list[LeadRead])
 def list_leads(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     lead_status: Annotated[LeadStatus | None, Query(alias="status")] = None,
     patient_id: UUID | None = None,
@@ -828,7 +843,7 @@ def list_leads(
 def update_lead(
     lead_id: UUID,
     payload: LeadUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Lead:
     lead = db.scalar(
@@ -956,17 +971,17 @@ def _load_task_read(
 @router.post("/tasks", response_model=CRMTaskRead, status_code=status.HTTP_201_CREATED)
 def create_task(
     payload: CRMTaskCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMTaskRead:
     if (
         payload.assigned_user_id is not None
         and payload.assigned_user_id != access.user.id
-        and access.membership.role != WORKSPACE_ROLE_ADMIN
+        and not _is_workspace_admin(access)
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can assign a task to another team member.",
+            detail="You do not have permission to assign tasks to another team member.",
         )
     try:
         task = create_crm_task(
@@ -1009,7 +1024,7 @@ def create_task(
 
 @router.get("/tasks", response_model=list[CRMTaskRead])
 def list_tasks(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     scope: Literal["all", "overdue", "today", "upcoming", "due"] = "all",
     task_status: Annotated[CRMTaskStatus | None, Query(alias="status")] = None,
@@ -1082,7 +1097,7 @@ def list_tasks(
 def update_task(
     task_id: UUID,
     payload: CRMTaskUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMTaskRead:
     row = _load_task_read(
@@ -1106,7 +1121,7 @@ def update_task(
             db,
             task=task,
             actor_user_id=access.user.id,
-            actor_is_admin=access.membership.role == WORKSPACE_ROLE_ADMIN,
+            actor_is_admin=_is_workspace_admin(access),
             updates=updates,
         )
     except (CRMTaskError, CRMTaskPermissionError) as exc:
@@ -1130,7 +1145,7 @@ def update_task(
 @router.post("/tasks/{task_id}/claim", response_model=CRMTaskRead)
 def claim_task(
     task_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMTaskRead:
     row = _load_task_read(
@@ -1169,7 +1184,7 @@ def claim_task(
 )
 def create_conversation(
     payload: ConversationCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Conversation:
     patient = get_patient_or_404(db, access.workspace.id, payload.patient_id)
@@ -1208,7 +1223,7 @@ def create_conversation(
 
 @router.get("/conversations", response_model=list[ConversationRead])
 def list_conversations(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     conversation_status: Annotated[ConversationStatus | None, Query(alias="status")] = None,
     patient_id: UUID | None = None,
@@ -1238,7 +1253,7 @@ def list_conversations(
 def update_conversation(
     conversation_id: UUID,
     payload: ConversationUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Conversation:
     conversation = db.scalar(
@@ -1298,7 +1313,7 @@ def update_conversation(
 def create_message(
     conversation_id: UUID,
     payload: MessageCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Message:
     conversation = db.scalar(
@@ -1376,7 +1391,7 @@ def create_message(
 )
 def list_messages(
     conversation_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     before: datetime | None = None,
@@ -1466,7 +1481,7 @@ def _cohort_read(
 )
 def create_cohort_from_analytics(
     payload: AnalyticsCohortCreateRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMCohortRead:
     try:
@@ -1490,7 +1505,7 @@ def create_cohort_from_analytics(
 
 @router.get("/cohorts", response_model=list[CRMCohortRead])
 def list_crm_cohorts(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
 ) -> list[CRMCohortRead]:
@@ -1508,7 +1523,7 @@ def list_crm_cohorts(
 @router.get("/cohorts/{cohort_id}", response_model=CRMCohortRead)
 def get_crm_cohort(
     cohort_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMCohortRead:
     cohort = db.scalar(
@@ -1529,17 +1544,17 @@ def get_crm_cohort(
 def create_follow_up_tasks_for_cohort(
     cohort_id: UUID,
     payload: CohortFollowUpCreateRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> CohortFollowUpResult:
     if (
         payload.assigned_user_id is not None
         and payload.assigned_user_id != access.user.id
-        and access.membership.role != WORKSPACE_ROLE_ADMIN
+        and not _has_administration_access(access)
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can assign cohort tasks to another team member.",
+            detail="You do not have permission to assign cohort tasks to another team member.",
         )
     due_at = (
         payload.due_at.replace(tzinfo=_workspace_timezone(access.workspace.timezone))
@@ -1576,7 +1591,7 @@ def create_follow_up_tasks_for_cohort(
 )
 def confirm_analytics_audience_action(
     payload: AnalyticsAudienceActionConfirmRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> AnalyticsAudienceActionResult:
     """Materialize a typed patient audience, then run only the confirmed action.
@@ -1587,11 +1602,11 @@ def confirm_analytics_audience_action(
     if (
         payload.assigned_user_id is not None
         and payload.assigned_user_id != access.user.id
-        and access.membership.role != WORKSPACE_ROLE_ADMIN
+        and not _has_administration_access(access)
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can assign audience tasks to another team member.",
+            detail="You do not have permission to assign audience tasks to another team member.",
         )
 
     due_at = payload.due_at
@@ -1697,7 +1712,7 @@ def _campaign_read(
 def prepare_campaign_for_cohort(
     cohort_id: UUID,
     payload: CohortCampaignPrepareRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMCampaignRead:
     try:
@@ -1725,7 +1740,7 @@ def prepare_campaign_for_cohort(
 @router.get("/cohorts/{cohort_id}/campaigns", response_model=list[CRMCampaignRead])
 def list_campaigns_for_cohort(
     cohort_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[CRMCampaignRead]:
     rows = list(
@@ -1744,7 +1759,7 @@ def list_campaigns_for_cohort(
 @router.get("/campaigns/{campaign_id}", response_model=CRMCampaignRead)
 def get_crm_campaign(
     campaign_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> CRMCampaignRead:
     campaign = db.scalar(
@@ -1765,7 +1780,7 @@ def get_crm_campaign(
 def confirm_crm_campaign(
     campaign_id: UUID,
     payload: CohortCampaignConfirmRequest,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> CohortCampaignConfirmResult:
     try:

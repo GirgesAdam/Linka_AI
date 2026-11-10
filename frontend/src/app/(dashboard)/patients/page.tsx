@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { ChevronLeft, Phone, Search, UsersRound } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";

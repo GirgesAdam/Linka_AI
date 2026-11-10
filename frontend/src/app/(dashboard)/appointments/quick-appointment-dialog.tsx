@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";

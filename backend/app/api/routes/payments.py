@@ -6,10 +6,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import (
     WorkspaceAccess,
-    get_workspace_admin,
-    get_workspace_reader,
+    get_workspace_access,
 )
 from app.database.session import get_db
 from app.schemas.payments import (
@@ -31,8 +31,18 @@ from app.services.payments import (
     record_refund,
     set_appointment_discount,
 )
+from app.services.section_access import section_access_allows
 
 router = APIRouter()
+
+
+def _can_refund_appointment(access: WorkspaceAccess) -> bool:
+    return section_access_allows(
+        access.membership,
+        workspace_id=access.workspace.id,
+        user_id=access.user.id,
+        section="administration",
+    )
 
 
 def _not_found(detail: str) -> HTTPException:
@@ -46,7 +56,7 @@ def _conflict(detail: str) -> HTTPException:
 @router.get("/appointments/{appointment_id}", response_model=AppointmentPaymentSummaryRead)
 def appointment_payment_summary(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentPaymentSummaryRead:
     try:
@@ -54,7 +64,7 @@ def appointment_payment_summary(
             db,
             workspace_id=access.workspace.id,
             appointment_id=appointment_id,
-            can_refund=access.membership.role == "admin",
+            can_refund=_can_refund_appointment(access),
         )
     except PaymentOperationNotFound as exc:
         raise _not_found(str(exc)) from exc
@@ -68,7 +78,7 @@ def appointment_payment_summary(
 def create_payment(
     appointment_id: UUID,
     payload: PaymentCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -99,7 +109,7 @@ def create_payment(
         db,
         workspace_id=access.workspace.id,
         appointment_id=appointment_id,
-        can_refund=access.membership.role == "admin",
+        can_refund=_can_refund_appointment(access),
     )
 
 
@@ -110,7 +120,7 @@ def create_payment(
 def checkout_appointment_payment(
     appointment_id: UUID,
     payload: AppointmentCheckoutCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -143,7 +153,7 @@ def checkout_appointment_payment(
         db,
         workspace_id=access.workspace.id,
         appointment_id=appointment_id,
-        can_refund=access.membership.role == "admin",
+        can_refund=_can_refund_appointment(access),
     )
 
 
@@ -154,7 +164,7 @@ def checkout_appointment_payment(
 def update_appointment_discount(
     appointment_id: UUID,
     payload: AppointmentDiscountUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppointmentPaymentSummaryRead:
     try:
@@ -176,7 +186,7 @@ def update_appointment_discount(
         db,
         workspace_id=access.workspace.id,
         appointment_id=appointment_id,
-        can_refund=access.membership.role == "admin",
+        can_refund=_can_refund_appointment(access),
     )
 
 
@@ -184,11 +194,12 @@ def update_appointment_discount(
     "/appointments/{appointment_id}/refunds",
     response_model=AppointmentPaymentSummaryRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_section_access("administration"))],
 )
 def create_refund(
     appointment_id: UUID,
     payload: RefundCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -218,5 +229,5 @@ def create_refund(
         db,
         workspace_id=access.workspace.id,
         appointment_id=appointment_id,
-        can_refund=True,
+        can_refund=_can_refund_appointment(access),
     )
