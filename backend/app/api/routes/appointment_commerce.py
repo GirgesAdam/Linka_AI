@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_reader
+from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.database.session import get_db
 from app.integrations.clinic.authority import (
     ClinicIntegrationAuthorityError,
@@ -101,7 +101,7 @@ def _raise(exc: Exception) -> None:
 )
 def get_additional_services(
     appointment_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AppointmentAdditionalService]:
     try:
@@ -120,7 +120,7 @@ def get_additional_services(
 def create_additional_service(
     appointment_id: UUID,
     payload: AdditionalServiceCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None, Header(alias="Idempotency-Key", max_length=128)
@@ -155,7 +155,7 @@ def create_additional_service(
 def delete_additional_service(
     appointment_id: UUID,
     line_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     _require_local_write(db, access.workspace.id)
@@ -182,7 +182,7 @@ def delete_additional_service(
 def buy_package_from_appointment(
     appointment_id: UUID,
     payload: AppointmentPackagePurchase,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None, Header(alias="Idempotency-Key", max_length=128)
@@ -215,7 +215,7 @@ def buy_package_for_additional_service(
     appointment_id: UUID,
     line_id: UUID,
     payload: AppointmentPackagePurchase,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_reader)],
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None, Header(alias="Idempotency-Key", max_length=128)

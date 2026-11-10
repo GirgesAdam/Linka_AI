@@ -8,6 +8,10 @@ from alembic import context
 from app import models  # noqa: F401
 from app.database.base import Base
 from app.database.migration_lock import migration_session_lock
+from app.database.migration_timeouts import (
+    apply_transaction_local_timeouts,
+    migration_timeout_guard,
+)
 
 
 class MigrationSettings(BaseSettings):
@@ -60,15 +64,17 @@ def run_migrations_online() -> None:
         # PostgreSQL AUTOCOMMIT blocks (e.g. CREATE INDEX CONCURRENTLY).
         # It serializes independent Railway services sharing this database.
         with migration_session_lock(connection):
-            context.configure(
-                connection=connection,
-                target_metadata=target_metadata,
-                compare_type=True,
-                compare_server_default=True,
-            )
+            with migration_timeout_guard(connection):
+                context.configure(
+                    connection=connection,
+                    target_metadata=target_metadata,
+                    compare_type=True,
+                    compare_server_default=True,
+                )
 
-            with context.begin_transaction():
-                context.run_migrations()
+                with context.begin_transaction():
+                    apply_transaction_local_timeouts(connection)
+                    context.run_migrations()
 
 
 if context.is_offline_mode():

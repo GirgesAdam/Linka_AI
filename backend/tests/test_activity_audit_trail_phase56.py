@@ -36,7 +36,7 @@ def test_activity_period_contract_is_bounded_and_uses_integer_query_coercion() -
     assert "days: int = 7" in route
     assert "days not in ACTIVITY_ALLOWED_DAYS" in route
     assert "Literal[7, 30, 90]" not in route
-    assert "get_workspace_admin" in route
+    assert 'require_section_access("administration")' in route
 
 
 def test_activity_table_is_append_only_at_api_layer_and_workspace_indexed() -> None:
@@ -144,13 +144,14 @@ def test_ai_appointment_mutations_are_attributed_to_tia_not_staff() -> None:
         assert 'actor_type="ai"' in section
 
 
-def test_activity_ui_is_admin_only_filterable_and_available_on_mobile_navigation() -> None:
+def test_activity_ui_uses_administration_section_access_and_is_filterable_on_mobile() -> None:
     root = _root()
     page = (root / "frontend/src/app/(dashboard)/activity/page.tsx").read_text(encoding="utf-8")
+    layout = (root / "frontend/src/app/(dashboard)/activity/layout.tsx").read_text(encoding="utf-8")
     nav = (root / "frontend/src/components/dashboard-navigation.tsx").read_text(encoding="utf-8")
     types = (root / "frontend/src/lib/types.ts").read_text(encoding="utf-8")
 
-    assert 'ctx.workspace.role !== "admin"' in page
+    assert 'requireSectionAccess("administration")' in layout
     assert '/operations/activity?${query.toString()}' in page
     assert '[["7", "7 أيام"], ["30", "30 يوم"], ["90", "90 يوم"]]' in page
     assert 'actor_type' in page

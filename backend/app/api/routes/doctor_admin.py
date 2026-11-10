@@ -10,7 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies.security import WorkspaceAccess, get_workspace_admin
+from app.api.dependencies.section_access import require_section_access
+from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.branch import Branch
@@ -213,7 +214,7 @@ def _commit_or_conflict(db: Session, detail: str) -> None:
 @router.post("/doctor-admin", response_model=DoctorRead, status_code=status.HTTP_201_CREATED)
 def create_doctor_from_admin(
     payload: DoctorAdminCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Doctor:
     workspace = access.workspace
@@ -290,7 +291,7 @@ def create_doctor_from_admin(
 def update_doctor_from_admin(
     doctor_id: UUID,
     payload: DoctorAdminUpdate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Doctor:
     workspace_id = access.workspace.id
@@ -368,7 +369,7 @@ def update_doctor_from_admin(
 def update_doctor_hours_from_admin(
     doctor_id: UUID,
     payload: WorkingHoursReplace,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[DoctorWorkingHour]:
     doctor = db.scalar(
@@ -405,7 +406,7 @@ def update_doctor_hours_from_admin(
 @router.delete("/doctor-admin/{doctor_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_doctor_from_admin(
     doctor_id: UUID,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     workspace_id = access.workspace.id

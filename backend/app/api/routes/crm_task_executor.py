@@ -83,7 +83,7 @@ def _queue_ai_job(db: Session, *, task: CRMTask, job: AutomationJob | None) -> N
     )
 
 
-@router.patch("/tasks/{task_id}/executor", response_model=CRMTaskExecutorRead)
+@router.patch("/tasks/{task_id}/executor", response_model=CRMTaskExecutorRead, dependencies=[Depends(get_workspace_admin)])
 def update_task_executor(
     task_id: UUID,
     payload: CRMTaskExecutorUpdate,

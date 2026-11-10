@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { ArrowRight, Bot, CheckCircle2, UserRound } from "lucide-react";
 import { ConversationReadMarker } from "@/components/conversation-read-marker";
 import { LiveRouteRefresh } from "@/components/live-route-refresh";

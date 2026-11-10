@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { Building2, ChevronDown, LogOut, Plus, Waypoints } from "lucide-react";
 
 import { logoutAction, switchWorkspace } from "@/app/(dashboard)/actions";
@@ -35,7 +35,7 @@ export function DashboardShell({
           </div>
         </div>
 
-        <DesktopNavigation isAdmin={workspace.role === "admin"} />
+        <DesktopNavigation workspace={workspace} />
 
         <div className="border-t app-shell-sidebar-border p-3">
           <form action={logoutAction}>
@@ -159,7 +159,7 @@ export function DashboardShell({
           </div>
         )}
         <main className="mx-auto w-full max-w-[1480px] p-4 pb-28 md:p-6 md:pb-28 lg:p-8 lg:pb-20">{children}</main>
-        <MobileNavigation isAdmin={workspace.role === "admin"} />
+        <MobileNavigation workspace={workspace} />
       </div>
     </div>
   );

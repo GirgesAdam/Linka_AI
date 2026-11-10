@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { CheckCircle2, Clock3, MessageCircleMore } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -9,6 +9,7 @@ import type { ClinicKnowledgeText } from "@/lib/clinic-knowledge-base-types";
 import type { ClinicSetupV2Snapshot, HistoricalBatch } from "@/lib/clinic-setup-v2-types";
 import type { ClinicLaserDevice } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { canAccessSection } from "@/lib/section-access";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
@@ -24,7 +25,7 @@ export default async function SetupPage() {
     tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices"),
     getAppContext(),
   ]);
-  const admin = ctx.workspace.role === "admin";
+  const canManageAdministration = canAccessSection(ctx.workspace, "administration");
   const activeBatch = batchLookup.batches.find((batch) => ["importing", "preview_ready", "failed"].includes(batch.status)) || null;
 
   return (
@@ -45,7 +46,7 @@ export default async function SetupPage() {
         </CardContent>
       </Card>
 
-      {admin && (
+      {canManageAdministration && (
         <Card className="mb-5 border-sky-200 bg-sky-50/50">
           <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
@@ -64,7 +65,7 @@ export default async function SetupPage() {
         </Card>
       )}
 
-      {admin ? (
+      {canManageAdministration ? (
         <ClinicSettingsPanel
           setup={setup}
           knowledgeText={knowledge.content}

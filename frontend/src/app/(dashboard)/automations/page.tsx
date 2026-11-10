@@ -1,14 +1,14 @@
-import Link from "next/link";
-import { CircleAlert, Clock3, MessageCircleMore, UserRound, Workflow } from "lucide-react";
+import { PermissionLink as Link } from "@/components/permission-link";
+import { CircleAlert, MessageCircleMore, UserRound, Workflow } from "lucide-react";
 
 import { AutomationTimingForm } from "@/components/automation-timing-form";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
 import { SubmitButton } from "@/components/submit-button";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
+import { canAccessSection } from "@/lib/section-access";
 import { labelForStatus, toneForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
@@ -115,12 +115,13 @@ function providerHealth(connection: ChannelConnection) {
 
 export default async function AutomationsPage() {
   const ctx = await getAppContext();
+  const canManageAdministration = canAccessSection(ctx.workspace, "administration");
   const results = await Promise.allSettled([
     tiaRequest<AutomationRule[]>("/automations/rules"),
     tiaRequest<AutomationJob[]>("/automations/jobs?limit=50"),
     tiaRequest<AutomationOperationsOverview>("/automations/overview"),
     tiaRequest<ChannelConnection[]>("/channels/connections"),
-    ctx.workspace.role === "admin"
+    canManageAdministration
       ? tiaRequest<WhatsAppSetupState>("/channels/whatsapp/setup")
       : Promise.resolve(null),
   ]);
@@ -134,7 +135,7 @@ export default async function AutomationsPage() {
   const connections = connectionsResult.status === "fulfilled" ? connectionsResult.value : [];
   const whatsappSetup = setupResult.status === "fulfilled" ? setupResult.value : null;
   const operationsUnavailable = jobsResult.status === "rejected" || overviewResult.status === "rejected";
-  const whatsappStateUnavailable = ctx.workspace.role === "admin" && setupResult.status === "rejected";
+  const whatsappStateUnavailable = canManageAdministration && setupResult.status === "rejected";
 
   const attentionJobs = jobs.filter((job) => Boolean(attentionLabel(job)));
   const recentJobs = jobs.slice(0, 12);
@@ -159,7 +160,7 @@ export default async function AutomationsPage() {
         description="اختار المتابعات التي تحتاجها العيادة، وحدد متى تُرسل ولمن، وتابع حالتها من مكان واحد."
       />
 
-      {ctx.workspace.role === "admin" && (
+      {canManageAdministration && (
         <Card id="whatsapp-templates" className={`mb-6 scroll-mt-24 ${whatsappSetup?.ready_for_automations ? "border-emerald-200 bg-emerald-50/40" : "border-amber-200 bg-amber-50/40"}`}>
           <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
@@ -261,7 +262,7 @@ export default async function AutomationsPage() {
           const hasTiming = timingRuleKeys.has(rule.key);
           const templateStatus = templateStatusByName.get(rule.template_name);
           const confirmedRunning = Boolean(rule.enabled && whatsappSetup?.ready_for_automations && templateStatus === "approved");
-          const waitingForSetup = Boolean(rule.enabled && ctx.workspace.role === "admin" && whatsappSetup && !confirmedRunning);
+          const waitingForSetup = Boolean(rule.enabled && canManageAdministration && whatsappSetup && !confirmedRunning);
           const statusLabel = !rule.enabled ? "متوقفة" : confirmedRunning ? "شغالة" : waitingForSetup ? "في انتظار التجهيز" : "مفعّلة";
           const statusTone = !rule.enabled ? "gray" : confirmedRunning ? "green" : waitingForSetup ? "yellow" : "blue";
 
@@ -276,7 +277,7 @@ export default async function AutomationsPage() {
                     </div>
                     <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{descriptions[rule.key] || "تنفذ متابعة تلقائيًا عند تحقق شروطها."}</p>
                   </div>
-                  {ctx.workspace.role === "admin" && (
+                  {canManageAdministration && (
                     <form action={toggleAutomation}>
                       <input type="hidden" name="rule_id" value={rule.id} />
                       <input type="hidden" name="enabled" value={String(!rule.enabled)} />
@@ -294,7 +295,7 @@ export default async function AutomationsPage() {
                   <div><div className="text-[11px] font-bold text-slate-400">الرسالة</div><div className="mt-1 font-bold text-slate-800">قالب Linka المعتمد في Meta</div></div>
                 </div>
 
-                {ctx.workspace.role === "admin" && hasTiming && (
+                {canManageAdministration && hasTiming && (
                   <AutomationTimingForm
                     key={`${rule.id}:${rule.offset_minutes}`}
                     ruleId={rule.id}
@@ -321,7 +322,7 @@ export default async function AutomationsPage() {
               return (
                 <div key={job.id} className="flex flex-col gap-3 rounded-xl bg-amber-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div><div className="flex flex-wrap items-center gap-2"><b className="text-sm text-slate-950">{jobKindLabel(job)}</b><Badge tone={toneForStatus(job.status)}>{labelForStatus(job.status)}</Badge></div><p className="mt-1 text-xs font-semibold text-amber-800">{attention}</p><div className="mt-1 text-xs text-[var(--muted)]">{formatDateTime(job.scheduled_for)}</div></div>
-                  {ctx.workspace.role === "admin" && (canRetry || canCancel) && (
+                  {canManageAdministration && (canRetry || canCancel) && (
                     <div className="flex gap-2">
                       {canRetry && <form action={retryAutomationJob}><input type="hidden" name="job_id" value={job.id} /><SubmitButton size="sm" variant="outline" pendingLabel="جارٍ الإعادة...">إعادة المحاولة</SubmitButton></form>}
                       {canCancel && <form action={cancelAutomationJob}><input type="hidden" name="job_id" value={job.id} /><SubmitButton size="sm" variant="ghost" pendingLabel="جارٍ الإلغاء...">إلغاء</SubmitButton></form>}

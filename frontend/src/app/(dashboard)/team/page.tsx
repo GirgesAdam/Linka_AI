@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-
 import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +8,7 @@ import { getAppContext } from "@/lib/tia/workspace";
 import type { WorkspaceMember } from "@/lib/types";
 import { changeRole } from "./actions";
 import { InviteMemberForm } from "./invite-member-form";
+import { MemberSectionAccessPanel } from "./member-section-access-panel";
 
 const roleLabels = { admin: "مدير", member: "عضو فريق" } as const;
 
@@ -21,7 +21,7 @@ export default async function TeamPage() {
     <>
       <PageHeader
         title="الفريق"
-        description="إدارة أعضاء فريق العيادة وتحديد من يملك صلاحيات الإدارة."
+        description="إدارة أعضاء الفريق والتحكم في الوصول إلى قسمي تشغيل العيادة والإدارة."
       />
 
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
@@ -64,6 +64,7 @@ export default async function TeamPage() {
           </CardContent>
         </Card>
       </div>
+      <MemberSectionAccessPanel members={members} />
     </>
   );
 }

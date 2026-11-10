@@ -60,8 +60,8 @@ def test_payment_ledger_model_is_append_only_for_financial_facts_and_workspace_s
     assert '@router.get("/appointments/{appointment_id}"' in route
     assert '"/appointments/{appointment_id}/payments"' in route
     assert '"/appointments/{appointment_id}/refunds"' in route
-    assert "get_workspace_reader" in route
-    assert "get_workspace_admin" in route
+    assert "Depends(get_workspace_access)" in route
+    assert 'dependencies=[Depends(require_section_access("administration"))]' in route
     assert 'prefix="/payments"' in router
     assert "@router.patch" not in route
     assert "@router.delete" not in route

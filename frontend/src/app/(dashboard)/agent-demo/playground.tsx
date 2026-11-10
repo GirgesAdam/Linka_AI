@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Bot, CalendarCheck2, LoaderCircle, RotateCcw, Send, UserRound } from "lucide-react";
 

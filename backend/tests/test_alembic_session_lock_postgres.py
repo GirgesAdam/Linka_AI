@@ -19,11 +19,16 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
 from alembic import command
+from app.database import migration_timeouts
 from app.database.migration_lock import (
     ALEMBIC_MIGRATION_LOCK_KEY,
     MigrationAdvisoryLockTimeout,
     acquire_migration_lock,
     migration_session_lock,
+)
+from app.database.migration_timeouts import (
+    apply_transaction_local_timeouts,
+    migration_timeout_guard,
 )
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -351,21 +356,47 @@ def test_t5_sequential_alembic_upgrades_read_current_head_without_reapplying(
     expected_head = ScriptDirectory.from_config(config).get_current_head()
     engine = _engine(migration_lock_database)
     try:
-        command.upgrade(config, "head")
+        # The first upgrade exercises the historical 0043 AUTOCOMMIT block.
+        command.upgrade(config, "0096_patient_customer_id")
         with engine.connect() as connection:
             first_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
+        assert first_revision == "0096_patient_customer_id"
+        assert _try_acquire_lock(engine) is True
 
-        command.upgrade(config, "head")
+        # Rehearse the exact production target as a separate Alembic run.
+        command.upgrade(config, "0097_member_page_permissions")
         with engine.connect() as connection:
             second_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
+            columns = {
+                row[0]: (row[1], row[2], row[3])
+                for row in connection.execute(
+                    text(
+                        "SELECT column_name, data_type, is_nullable, column_default "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name = 'workspace_members' "
+                        "AND column_name IN ('page_permissions', 'permissions_version')"
+                    )
+                ).all()
+            }
 
-        assert first_revision == expected_head
-        assert second_revision == expected_head
-        assert second_revision == first_revision
+        assert second_revision == expected_head == "0097_member_page_permissions"
+        assert columns == {
+            "page_permissions": ("jsonb", "YES", None),
+            "permissions_version": ("integer", "NO", "0"),
+        }
+        assert _try_acquire_lock(engine) is True
+
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            third_revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+        assert third_revision == second_revision
 
         with engine.connect() as connection:
             concurrent_index_exists = connection.execute(
@@ -401,3 +432,230 @@ def test_t6_closing_lock_owner_connection_releases_postgres_session_lock(
         assert _try_acquire_lock(engine) is True
     finally:
         engine.dispose()
+
+
+def _timeout_settings(connection) -> tuple[str, str]:
+    values = connection.exec_driver_sql(
+        "SELECT current_setting('lock_timeout'), current_setting('statement_timeout')"
+    ).one()
+    return str(values[0]), str(values[1])
+
+
+def test_t7_transaction_local_timeouts_are_scoped_and_reset_after_commit_and_rollback(
+    migration_lock_database: str,
+) -> None:
+    assert migration_timeouts.MIGRATION_LOCK_TIMEOUT == "5s"
+    assert migration_timeouts.MIGRATION_STATEMENT_TIMEOUT == "60s"
+
+    engine = _engine(migration_lock_database)
+    try:
+        with engine.connect() as connection:
+            baseline = _timeout_settings(connection)
+            connection.rollback()
+
+            with migration_timeout_guard(connection):
+                with connection.begin():
+                    apply_transaction_local_timeouts(connection)
+                    assert _timeout_settings(connection) == ("5s", "1min")
+
+                    # A different PostgreSQL session cannot see transaction-local settings.
+                    with engine.connect() as observer:
+                        assert _timeout_settings(observer) == baseline
+
+                # Commit resets both settings on the same physical connection.
+                assert _timeout_settings(connection) == baseline
+                connection.rollback()
+
+                with pytest.raises(RuntimeError, match="rollback sentinel"):
+                    with connection.begin():
+                        apply_transaction_local_timeouts(connection)
+                        assert _timeout_settings(connection) == ("5s", "1min")
+                        raise RuntimeError("rollback sentinel")
+
+                # Rollback also resets both settings on the same connection.
+                assert _timeout_settings(connection) == baseline
+                connection.rollback()
+    finally:
+        engine.dispose()
+
+
+def test_t8_timeout_guard_covers_alembic_autocommit_block_and_restores_prior_settings(
+    migration_lock_database: str,
+) -> None:
+    engine = _engine(migration_lock_database)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SET lock_timeout = '2s'")
+            connection.exec_driver_sql("SET statement_timeout = '3s'")
+            connection.commit()
+            prior_settings = ("2s", "3s")
+
+            with migration_timeout_guard(connection):
+                migration_context = MigrationContext.configure(connection=connection)
+                with migration_context.begin_transaction():
+                    apply_transaction_local_timeouts(connection)
+                    assert _timeout_settings(connection) == ("5s", "1min")
+
+                    with migration_context.autocommit_block():
+                        assert (
+                            connection.get_execution_options().get("isolation_level")
+                            == "AUTOCOMMIT"
+                        )
+                        # AUTOCOMMIT has no transaction for SET LOCAL, so the
+                        # guard temporarily protects this same session and restores it.
+                        assert _timeout_settings(connection) == ("5s", "1min")
+                        with engine.connect() as observer:
+                            assert _timeout_settings(observer) == ("0", "0")
+
+                    # Alembic's post-AUTOCOMMIT transaction receives SET LOCAL again.
+                    assert _timeout_settings(connection) == ("5s", "1min")
+
+            # The outer transaction commit restores the original session values.
+            assert _timeout_settings(connection) == prior_settings
+            connection.rollback()
+    finally:
+        engine.dispose()
+
+
+def _alembic_config_for_database(
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Config:
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", database_url)
+    config = Config(str(BACKEND / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND / "alembic"))
+    return config
+
+
+def _assert_0096_without_permission_columns(engine) -> None:
+    with engine.connect() as connection:
+        revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        permission_column_count = connection.execute(
+            text(
+                "SELECT count(*) FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'workspace_members' "
+                "AND column_name IN ('page_permissions', 'permissions_version')"
+            )
+        ).scalar_one()
+
+    assert revision == "0096_patient_customer_id"
+    assert permission_column_count == 0
+
+
+def test_t9_alembic_lock_timeout_aborts_0097_and_releases_advisory_lock(
+    migration_lock_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _alembic_config_for_database(migration_lock_database, monkeypatch)
+    command.upgrade(config, "0096_patient_customer_id")
+
+    monkeypatch.setattr(migration_timeouts, "MIGRATION_LOCK_TIMEOUT", "150ms")
+    engine = _engine(migration_lock_database)
+    blocker = engine.connect()
+    blocker_transaction = blocker.begin()
+    try:
+        blocker.exec_driver_sql(
+            "LOCK TABLE workspace_members IN ACCESS EXCLUSIVE MODE"
+        )
+
+        started = time.monotonic()
+        with pytest.raises(OperationalError) as failure:
+            command.upgrade(config, "0097_member_page_permissions")
+
+        assert getattr(failure.value.orig, "sqlstate", None) == "55P03"
+        assert time.monotonic() - started < 2.0
+        _assert_0096_without_permission_columns(engine)
+        assert _try_acquire_lock(engine) is True
+
+        # Once the independent blocker is gone, the same migration can run cleanly.
+        blocker_transaction.rollback()
+        blocker.close()
+        monkeypatch.setattr(migration_timeouts, "MIGRATION_LOCK_TIMEOUT", "5s")
+        command.upgrade(config, "0097_member_page_permissions")
+        with engine.connect() as connection:
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+        assert revision == "0097_member_page_permissions"
+        assert _try_acquire_lock(engine) is True
+    finally:
+        if blocker.in_transaction():
+            blocker_transaction.rollback()
+        blocker.close()
+        engine.dispose()
+
+
+def test_t10_alembic_statement_timeout_aborts_0097_and_releases_advisory_lock(
+    migration_lock_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _alembic_config_for_database(migration_lock_database, monkeypatch)
+    command.upgrade(config, "0096_patient_customer_id")
+    engine = _engine(migration_lock_database)
+    trigger_created = False
+
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE FUNCTION public.test_migration_statement_timeout_sleep()
+                RETURNS event_trigger
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    PERFORM pg_sleep(1);
+                END;
+                $$
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE EVENT TRIGGER test_migration_statement_timeout_sleep
+                ON ddl_command_start
+                WHEN TAG IN ('ALTER TABLE')
+                EXECUTE FUNCTION public.test_migration_statement_timeout_sleep()
+                """
+            )
+        trigger_created = True
+
+        monkeypatch.setattr(
+            migration_timeouts,
+            "MIGRATION_STATEMENT_TIMEOUT",
+            "150ms",
+        )
+        with pytest.raises(OperationalError) as failure:
+            command.upgrade(config, "0097_member_page_permissions")
+
+        assert getattr(failure.value.orig, "sqlstate", None) == "57014"
+        _assert_0096_without_permission_columns(engine)
+        assert _try_acquire_lock(engine) is True
+    finally:
+        if trigger_created:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "DROP EVENT TRIGGER IF EXISTS "
+                    "test_migration_statement_timeout_sleep"
+                )
+                connection.exec_driver_sql(
+                    "DROP FUNCTION IF EXISTS "
+                    "public.test_migration_statement_timeout_sleep()"
+                )
+
+    # Remove the injected DDL delay and prove a subsequent migration succeeds.
+    monkeypatch.setattr(
+        migration_timeouts,
+        "MIGRATION_STATEMENT_TIMEOUT",
+        "60s",
+    )
+    command.upgrade(config, "0097_member_page_permissions")
+    with engine.connect() as connection:
+        revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+    assert revision == "0097_member_page_permissions"
+    assert _try_acquire_lock(engine) is True
+    engine.dispose()

@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/format";
+import { canAccessSection } from "@/lib/section-access";
 import type { ClinicLaserDevice, PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
@@ -60,14 +61,14 @@ function PackageOffersEditor({
   serviceId,
   deviceKey,
   offers,
-  isAdmin,
+  canManageClinic,
   enabled = true,
   disabledMessage,
 }: {
   serviceId: string;
   deviceKey: string | null;
   offers: PackageOffer[];
-  isAdmin: boolean;
+  canManageClinic: boolean;
   enabled?: boolean;
   disabledMessage?: string;
 }) {
@@ -82,7 +83,7 @@ function PackageOffersEditor({
   const sortedOffers = [...offers].sort((left, right) => left.sessions_count - right.sessions_count);
   const activeOffers = sortedOffers.filter((offer) => offer.is_active);
 
-  if (!isAdmin) {
+  if (!canManageClinic) {
     return activeOffers.length ? (
       <div className="space-y-2">
         {activeOffers.map((offer) => (
@@ -173,7 +174,7 @@ export default async function ServicesPage() {
     tiaRequest<PulseBillingSettings[]>("/booking/pulse-device-prices"),
     tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers"),
   ]);
-  const isAdmin = workspace.role === "admin";
+  const canManageClinic = canAccessSection(workspace, "clinic_operations");
   const byService = new Map<string, DevicePrice[]>();
   for (const price of devicePrices) byService.set(price.service_id, [...(byService.get(price.service_id) || []), price]);
   return (
@@ -182,7 +183,7 @@ export default async function ServicesPage() {
         title="الخدمات والأسعار"
         description="أضف الخدمات وعدّل أسعارها ومددها وباقاتها. خدمات الليزر لها إعداد مستقل لكل جهاز، ومن هنا تقدر كمان تسعّر الـPulses وباقاتها."
       />
-      {isAdmin && (
+      {canManageClinic && (
         <Card className="mb-5">
           <CardHeader><CardTitle className="flex items-center gap-2"><PackagePlus size={18} /> إضافة خدمة</CardTitle></CardHeader>
           <CardContent>
@@ -192,7 +193,7 @@ export default async function ServicesPage() {
         </Card>
       )}
 
-      {isAdmin && (
+      {canManageClinic && (
         <div className="mb-5">
           <PulsePricingPanel settings={pulseSettings} offers={pulseOffers} />
         </div>
@@ -246,7 +247,7 @@ export default async function ServicesPage() {
               </summary>
 
               <div className="space-y-3 border-t border-slate-100 bg-slate-50/40 p-3 sm:p-4">
-                {isAdmin ? (
+                {canManageClinic ? (
                   <details className="group/section rounded-xl border border-slate-200 bg-white">
                     <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
                       <span className="flex items-center gap-2 text-sm font-black text-slate-900">
@@ -308,7 +309,7 @@ export default async function ServicesPage() {
                               serviceId={service.id}
                               deviceKey={device.device_key}
                               offers={deviceOffers}
-                              isAdmin={isAdmin}
+                              canManageClinic={canManageClinic}
                               enabled={configured}
                               disabledMessage="فعّل الجهاز وحدد سعر الجلسة والمدة أولًا قبل تفعيل باكيدجاته."
                             />
@@ -334,7 +335,7 @@ export default async function ServicesPage() {
                         serviceId={service.id}
                         deviceKey={null}
                         offers={serviceOffers}
-                        isAdmin={isAdmin}
+                        canManageClinic={canManageClinic}
                       />
                     </div>
                   </details>

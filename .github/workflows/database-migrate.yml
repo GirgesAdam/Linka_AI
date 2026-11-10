@@ -10,6 +10,18 @@ on:
         options:
           - staging
           - production
+      expected_main_sha:
+        description: Required for production; exact approved main commit SHA
+        required: false
+        type: string
+      expected_migration_sha256:
+        description: Required for production; SHA-256 of 0097_member_page_permissions.py
+        required: false
+        type: string
+      expected_current_revision:
+        description: Required for production; expected current Alembic revision
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -32,16 +44,59 @@ jobs:
       ENVIRONMENT: ${{ inputs.environment }}
       DEBUG: "false"
       DOCS_ENABLED: "false"
-      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       CORS_ORIGINS: ""
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify production release inputs
+        if: inputs.environment == 'production'
+        shell: bash
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}
+          EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+        run: |
+          set -euo pipefail
+
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "::error::Production migrations may only run from main."
+            exit 1
+          }
+
+          [[ "${EXPECTED_MAIN_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::A valid approved main SHA is required."
+            exit 1
+          }
+          ACTUAL_MAIN_SHA="$(git rev-parse HEAD)"
+          test "${ACTUAL_MAIN_SHA}" = "${EXPECTED_MAIN_SHA}" || {
+            echo "::error::Checked-out main SHA does not match the approved SHA."
+            exit 1
+          }
+
+          [[ "${EXPECTED_MIGRATION_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]] || {
+            echo "::error::A valid migration SHA-256 is required."
+            exit 1
+          }
+          MIGRATION_FILE="alembic/versions/0097_member_page_permissions.py"
+          test -f "${MIGRATION_FILE}" || {
+            echo "::error::Migration 0097 is absent from this commit."
+            exit 1
+          }
+          ACTUAL_MIGRATION_SHA256="$(sha256sum "${MIGRATION_FILE}" | awk '{print $1}')"
+          test "${ACTUAL_MIGRATION_SHA256,,}" = "${EXPECTED_MIGRATION_SHA256,,}" || {
+            echo "::error::Migration 0097 SHA-256 does not match the approved value."
+            exit 1
+          }
+
+          test "${EXPECTED_CURRENT_REVISION}" = "0096_patient_customer_id" || {
+            echo "::error::Expected current revision must be 0096_patient_customer_id."
+            exit 1
+          }
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,10 +111,151 @@ jobs:
           pip install -r requirements.txt
 
       - name: Show current revision
+        if: inputs.environment == 'staging'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic current
 
-      - name: Apply migrations
+      - name: Verify production database revision
+        if: inputs.environment == 'production'
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          from alembic.runtime.migration import MigrationContext
+          from sqlalchemy import create_engine
+          from sqlalchemy.pool import NullPool
+
+          from app.database.migration_lock import migration_session_lock
+
+          engine = None
+          try:
+              engine = create_engine(
+                  os.environ["MIGRATION_DATABASE_URL"],
+                  poolclass=NullPool,
+              )
+              with engine.connect() as connection:
+                  with migration_session_lock(connection):
+                      current_revisions = MigrationContext.configure(
+                          connection
+                      ).get_current_heads()
+          except Exception:
+              print(
+                  "::error::Unable to read current Alembic revisions; "
+                  "production migration is blocked.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          finally:
+              if engine is not None:
+                  engine.dispose()
+
+          expected_revision = os.environ["EXPECTED_CURRENT_REVISION"]
+          if len(current_revisions) != 1:
+              print(
+                  "::error::Expected exactly one current Alembic revision "
+                  f"({expected_revision}); found {len(current_revisions)}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          actual_revision = current_revisions[0]
+          if actual_revision != expected_revision:
+              print(
+                  "::error::Current Alembic revision mismatch; "
+                  f"expected {expected_revision}, found {actual_revision}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          print(f"Verified single current Alembic revision: {actual_revision}")
+          PY
+
+      - name: Apply staging migrations
+        if: inputs.environment == 'staging'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic upgrade head
 
+      - name: Apply approved production migration
+        if: inputs.environment == 'production'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: alembic upgrade 0097_member_page_permissions
+
+      - name: Verify final production database revision
+        if: inputs.environment == 'production'
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          EXPECTED_FINAL_REVISION: 0097_member_page_permissions
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          from alembic.runtime.migration import MigrationContext
+          from sqlalchemy import create_engine
+          from sqlalchemy.pool import NullPool
+
+          from app.database.migration_lock import migration_session_lock
+
+          engine = None
+          try:
+              engine = create_engine(
+                  os.environ["MIGRATION_DATABASE_URL"],
+                  poolclass=NullPool,
+              )
+              with engine.connect() as connection:
+                  with migration_session_lock(connection):
+                      current_revisions = MigrationContext.configure(
+                          connection
+                      ).get_current_heads()
+          except Exception:
+              print(
+                  "::error::Unable to read final Alembic revisions; "
+                  "production migration is not attested.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          finally:
+              if engine is not None:
+                  engine.dispose()
+
+          expected_revision = os.environ["EXPECTED_FINAL_REVISION"]
+          if len(current_revisions) != 1:
+              print(
+                  "::error::Expected exactly one final Alembic revision "
+                  f"({expected_revision}); found {len(current_revisions)}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          actual_revision = current_revisions[0]
+          if actual_revision != expected_revision:
+              print(
+                  "::error::Final Alembic revision mismatch; "
+                  f"expected {expected_revision}, found {actual_revision}.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          print(f"Verified final Alembic revision: {actual_revision}")
+          PY
+
       - name: Show final revision
+        if: inputs.environment == 'staging'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic current

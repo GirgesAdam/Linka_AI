@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PermissionLink as Link } from "@/components/permission-link";
 import { useActionState, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, Download, FileSpreadsheet, LoaderCircle, Plus, RotateCcw, Save, TriangleAlert } from "lucide-react";

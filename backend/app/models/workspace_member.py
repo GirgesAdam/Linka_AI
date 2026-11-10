@@ -3,7 +3,17 @@ from __future__ import annotations
 from typing import Final
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, String, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -44,6 +54,21 @@ class WorkspaceMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=True,
         server_default=text("true"),
+    )
+
+    # Keep the historical DB column name for migration compatibility. New rows
+    # store only the two section flags; old 25-page matrices are read conservatively.
+    section_access: Mapped[dict[str, bool | str] | None] = mapped_column(
+        "page_permissions",
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+        default=None,
+    )
+    permissions_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
     )
 
     workspace = relationship("Workspace", back_populates="members")
