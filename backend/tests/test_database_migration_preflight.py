@@ -377,3 +377,127 @@ def test_preflight_main_exports_exact_approval_outputs(
     assert f"migration_sha256={migration_sha}" in output
     assert "migration_target=alembic upgrade 0097_member_page_permissions" in output
     assert "passed for production" in capsys.readouterr().out
+
+
+EXPECTED_MIGRATION_SHA256 = "cc0b6c30bda89ecaae1cf73455c6a65f80129812e7194d809d0f0da139f2beda"
+
+
+def _all_workflow_job_blocks(workflow: str) -> list[tuple[str, str]]:
+    jobs_match = re.search(r"(?m)^jobs:\s*$", workflow)
+    assert jobs_match is not None
+    jobs_start = jobs_match.end()
+    remaining = workflow[jobs_start:]
+    headers = list(re.finditer(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", remaining))
+    blocks: list[tuple[str, str]] = []
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(remaining)
+        blocks.append((header.group(1), remaining[header.start() : end]))
+    return blocks
+
+
+def test_staging_and_production_share_one_global_workflow_concurrency_group() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    concurrency_matches = list(re.finditer(r"(?m)^concurrency:\s*$", workflow))
+
+    assert len(concurrency_matches) == 1
+    start = concurrency_matches[0].start()
+    next_top_level = re.search(
+        r"(?m)^[A-Za-z_][A-Za-z0-9_-]*:\s*$",
+        workflow[concurrency_matches[0].end() :],
+    )
+    end = concurrency_matches[0].end() + next_top_level.start() if next_top_level else len(workflow)
+    concurrency = workflow[start:end]
+
+    assert re.search(r"(?m)^  group: database-migration-global$", concurrency)
+    assert re.search(r"(?m)^  queue: max$", concurrency)
+    assert re.search(r"(?m)^  cancel-in-progress: false$", concurrency)
+    assert "inputs.environment" not in concurrency
+    assert "$" + "{{" not in concurrency
+
+    for job_name in ("migrate-staging", "migrate-production"):
+        job = _job_block(workflow, job_name)
+        assert not re.search(r"(?m)^    concurrency:\s*$", job)
+        assert "alembic upgrade" in job
+
+
+def test_every_non_release_alembic_upgrade_targets_an_isolated_local_postgres() -> None:
+    external_migration_jobs: list[tuple[str, str]] = []
+    isolated_test_migration_jobs: list[tuple[str, str]] = []
+
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        workflow = path.read_text(encoding="utf-8")
+        for job_name, job in _all_workflow_job_blocks(workflow):
+            if not re.search(r"\balembic\s+upgrade\b", job):
+                continue
+
+            if path == WORKFLOW:
+                external_migration_jobs.append((path.name, job_name))
+                continue
+
+            isolated_test_migration_jobs.append((path.name, job_name))
+            assert not re.search(
+                r"(?m)^\s*(?:DATABASE_URL|MIGRATION_DATABASE_URL):\s*\$\{\{\s*secrets\.",
+                job,
+            ), (path, job_name)
+            assert re.search(r"(?m)^    services:\s*$", job), (path, job_name)
+            assert re.search(r"(?m)^      postgres:\s*$", job), (path, job_name)
+            for variable in ("DATABASE_URL", "MIGRATION_DATABASE_URL"):
+                assert re.search(
+                    rf"(?m)^\s*{variable}:\s*postgresql[^\n]*@(localhost|127\.0\.0\.1):",
+                    job,
+                ), (path, job_name, variable)
+
+    assert set(external_migration_jobs) == {
+        ("database-migrate.yml", "migrate-staging"),
+        ("database-migrate.yml", "migrate-production"),
+    }
+    assert isolated_test_migration_jobs
+
+
+def test_no_non_test_runtime_script_exposes_an_alternative_alembic_upgrade_entrypoint() -> None:
+    runtime_roots = (
+        ROOT / "backend" / "app",
+        ROOT / "backend" / "scripts",
+        ROOT / ".github" / "scripts",
+    )
+    upgrade_entrypoint = re.compile(r"(?:alembic\.)?command\.(?:upgrade|downgrade|stamp)\s*\(")
+
+    for runtime_root in runtime_roots:
+        for path in runtime_root.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            assert not upgrade_entrypoint.search(source), path
+
+
+def test_migration_0097_approved_sha256_matches_raw_git_blob_and_preflight_path() -> None:
+    preflight_source = (SCRIPTS / "production_migration_preflight.py").read_text(encoding="utf-8")
+    path_match = re.search(
+        r'(?m)^MIGRATION_RELATIVE_PATH = "([^"]+)"$',
+        preflight_source,
+    )
+
+    assert path_match is not None
+    assert path_match.group(1) == MIGRATION_PATH
+
+    result = subprocess.run(
+        ["git", "show", f"HEAD:{MIGRATION_PATH}"],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+    )
+    actual_sha256 = hashlib.sha256(result.stdout).hexdigest()
+    assert actual_sha256 == EXPECTED_MIGRATION_SHA256
+
+
+def test_postgresql_advisory_lock_still_wraps_the_actual_alembic_migration() -> None:
+    alembic_env = (ROOT / "backend" / "alembic" / "env.py").read_text(encoding="utf-8")
+    lock_source = (ROOT / "backend" / "app" / "database" / "migration_lock.py").read_text(
+        encoding="utf-8"
+    )
+    online_migrations = alembic_env.split("def run_migrations_online", 1)[1]
+
+    lock_position = online_migrations.index("with migration_session_lock(connection):")
+    migration_position = online_migrations.index("context.run_migrations()")
+
+    assert lock_position < migration_position
+    assert "pg_try_advisory_lock" in lock_source
+    assert "pg_advisory_unlock" in lock_source

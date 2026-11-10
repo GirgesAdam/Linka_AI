@@ -27,7 +27,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: database-migration-${{ inputs.environment }}
+  group: database-migration-global
+  queue: max
   cancel-in-progress: false
 
 jobs:
