@@ -182,7 +182,7 @@ export function DesktopNavigation({ workspace }: { workspace: WorkspaceAccess })
 
   return (
     <nav className="flex-1 overflow-y-auto px-3 py-4 scrollbar-thin" aria-label="التنقل الرئيسي">
-      {groups.map((group, index) => (
+      {groups.filter((group) => group.items.length > 0).map((group, index) => (
         <div key={group.label} className={cn(index > 0 && "mt-4 border-t border-white/[0.07] pt-4")}>
           <div className="px-3 pb-2 text-[10px] font-bold tracking-[0.04em] text-[var(--sidebar-muted)]">
             {group.label}

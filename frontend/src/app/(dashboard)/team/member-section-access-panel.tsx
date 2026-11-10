@@ -89,7 +89,8 @@ export function MemberSectionAccessPanel({ members }: { members: WorkspaceMember
             id="member-for-section-access"
             value={selectedId}
             onChange={(event) => setSelectedId(event.target.value)}
-            className="mt-2 w-full max-w-lg rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm"
+            disabled={pending || loading}
+            className="mt-2 w-full max-w-lg rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             {editable.map((member) => (
               <option key={member.membership_id} value={member.membership_id}>
