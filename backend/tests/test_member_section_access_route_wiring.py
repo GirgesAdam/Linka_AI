@@ -100,3 +100,9 @@ def test_team_management_and_section_settings_remain_admin_only() -> None:
     ]:
         route = _route(path, method)
         assert get_workspace_admin in _dependency_calls(route.dependant), (method, path)
+
+
+
+def test_crm_task_executor_remains_admin_only() -> None:
+    route = _route("/crm/tasks/{task_id}/executor", "PATCH")
+    assert get_workspace_admin in _dependency_calls(route.dependant)

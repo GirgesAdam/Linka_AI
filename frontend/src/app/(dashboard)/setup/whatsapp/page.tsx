@@ -1,13 +1,11 @@
 import { PermissionLink as Link } from "@/components/permission-link";
 import { CheckCircle2, ExternalLink, Link2, MessageCircleMore } from "lucide-react";
-import { redirect } from "next/navigation";
 
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { tiaRequest } from "@/lib/tia/api";
-import { getAppContext } from "@/lib/tia/workspace";
 import {
   WhatsAppDirectOnboarding,
   type WhatsAppSetupState,
@@ -32,9 +30,6 @@ const setupSteps = [
 ];
 
 export default async function WhatsAppSetupPage() {
-  const ctx = await getAppContext();
-  if (ctx.workspace.role !== "admin") redirect("/setup");
-
   const state = await tiaRequest<WhatsAppSetupState>("/channels/whatsapp/setup");
 
   return (

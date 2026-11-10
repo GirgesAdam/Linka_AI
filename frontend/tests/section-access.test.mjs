@@ -71,13 +71,24 @@ test("Clinic Operations and Administration flags are independent", () => {
   assert.equal(canAccessRoute(administrationOnly, "/analytics"), true);
 });
 
-test("Team Management remains Admin-only even when Administration is open", () => {
+test("Team Management remains Admin-only regardless of member section flags", () => {
   const member = {
     role: "member",
     section_access: { clinic_operations: true, administration: true },
   };
-  assert.equal(canAccessRoute(member, "/team"), false);
-  assert.equal(canAccessRoute({ role: "admin", section_access: emptyMemberSectionAccess() }, "/team"), true);
+  assert.equal(resolveSectionForHref("/team/members/123"), "admin_only");
+  for (const memberState of [
+    closedMember,
+    { role: "member", section_access: { clinic_operations: true, administration: false } },
+    { role: "member", section_access: { clinic_operations: false, administration: true } },
+    member,
+  ]) {
+    assert.equal(canAccessRoute(memberState, "/team"), false);
+    assert.equal(canAccessRoute(memberState, "/team/members/123"), false);
+  }
+  const admin = { role: "admin", section_access: emptyMemberSectionAccess() };
+  assert.equal(canAccessRoute(admin, "/team"), true);
+  assert.equal(canAccessRoute(admin, "/team/members/123"), true);
 });
 
 test("Admin bypasses both section flags but does not change default route classification", () => {

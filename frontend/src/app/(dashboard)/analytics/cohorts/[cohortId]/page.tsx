@@ -8,7 +8,6 @@ import { tiaRequest } from "@/lib/tia/api";
 import type { CRMCampaign, CRMCohort, ChannelConnection } from "@/lib/types";
 import { SavedCohortFollowUpForm } from "./followup-form";
 import { SavedCohortCampaignForm } from "./campaign-form";
-import { getAppContext } from "@/lib/tia/workspace";
 
 function metricText(metric: Record<string, unknown>) {
   const value = metric.value;
@@ -26,11 +25,10 @@ function campaignStatus(status: string) {
 
 export default async function CohortPage({ params }: { params: Promise<{ cohortId: string }> }) {
   const { cohortId } = await params;
-  const [cohort, channels, campaigns, ctx] = await Promise.all([
+  const [cohort, channels, campaigns] = await Promise.all([
     tiaRequest<CRMCohort>(`/crm/cohorts/${cohortId}`),
     tiaRequest<ChannelConnection[]>("/channels/connections"),
     tiaRequest<CRMCampaign[]>(`/crm/cohorts/${cohortId}/campaigns`),
-    getAppContext(),
   ]);
   const whatsappConnections = channels.filter((channel) => channel.channel === "whatsapp" && channel.status === "active");
 
@@ -93,7 +91,7 @@ export default async function CohortPage({ params }: { params: Promise<{ cohortI
         <div><CardTitle>حملة واتساب</CardTitle><p className="mt-1 text-xs text-[var(--muted)]">راجع المستلمين والرسالة قبل أي إرسال.</p></div>
         <span className="grid size-9 place-items-center rounded-xl bg-slate-100 text-slate-600"><Megaphone size={17}/></span>
       </CardHeader>
-      <CardContent><SavedCohortCampaignForm cohortId={cohort.id} cohortName={cohort.name} memberCount={cohort.member_count} whatsappConnections={whatsappConnections} isAdmin={ctx.workspace.role === "admin"}/></CardContent>
+      <CardContent><SavedCohortCampaignForm cohortId={cohort.id} cohortName={cohort.name} memberCount={cohort.member_count} whatsappConnections={whatsappConnections}/></CardContent>
     </Card>
 
     {campaigns.length > 0 && <Card className="mb-5">

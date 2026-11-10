@@ -1,5 +1,4 @@
 import { PermissionLink as Link } from "@/components/permission-link";
-import { redirect } from "next/navigation";
 import { Bot, History, Settings2, UserRound } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -9,7 +8,6 @@ import { FilterChip } from "@/components/ui/filter-chip";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { labelForPriority, labelForStatus } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
-import { getAppContext } from "@/lib/tia/workspace";
 import type { ActivityEvent } from "@/lib/types";
 
 type SearchParams = {
@@ -125,9 +123,6 @@ function eventHref(event: ActivityEvent) {
 }
 
 export default async function ActivityPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  const ctx = await getAppContext();
-  if (ctx.workspace.role !== "admin") redirect("/dashboard");
-
   const raw = await searchParams;
   const days = periods.some(([value]) => value === raw.days) ? raw.days! : "7";
   const actor = actors.some(([value]) => value === raw.actor) ? raw.actor || "" : "";
