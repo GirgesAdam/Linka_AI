@@ -11,11 +11,11 @@ on:
           - staging
           - production
       expected_main_sha:
-        description: Required for production; exact approved main commit SHA
+        description: Required for production; exact approved Main commit SHA
         required: false
         type: string
       expected_migration_sha256:
-        description: Required for production; SHA-256 of 0097_member_page_permissions.py
+        description: Required for production; SHA-256 of Migration 0097
         required: false
         type: string
       expected_current_revision:
@@ -31,72 +31,82 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  migrate:
-    name: Migrate ${{ inputs.environment }}
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-
-    defaults:
-      run:
-        working-directory: backend
-
-    env:
-      ENVIRONMENT: ${{ inputs.environment }}
-      DEBUG: "false"
-      DOCS_ENABLED: "false"
-      CORS_ORIGINS: ""
-
+  preflight:
+    name: Validate dispatch before environment authorization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      selected_environment: ${{ steps.guard.outputs.selected_environment }}
+      source_sha: ${{ steps.guard.outputs.source_sha }}
+      approved_main_sha: ${{ steps.guard.outputs.approved_main_sha }}
+      migration_sha256: ${{ steps.guard.outputs.migration_sha256 }}
+      expected_previous_revision: ${{ steps.guard.outputs.expected_previous_revision }}
+      migration_target: ${{ steps.guard.outputs.migration_target }}
     steps:
-      - name: Checkout
+      - name: Checkout exact dispatch commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Verify production release inputs
-        if: inputs.environment == 'production'
+      - name: Enforce production preflight
+        id: guard
         shell: bash
         env:
+          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
           EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}
           EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+        run: python .github/scripts/production_migration_preflight.py
+
+      - name: Record preflight audit evidence
+        if: always()
+        shell: bash
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.guard.outcome }}
+          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          APPROVED_MAIN_SHA: ${{ steps.guard.outputs.approved_main_sha }}
+          MIGRATION_SHA256: ${{ steps.guard.outputs.migration_sha256 }}
+          MIGRATION_TARGET: ${{ steps.guard.outputs.migration_target }}
         run: |
-          set -euo pipefail
+          {
+            echo "## Migration preflight audit"
+            echo
+            printf '%s\n' "- Actor: ${GITHUB_ACTOR}"
+            printf '%s\n' "- Workflow Run ID: ${GITHUB_RUN_ID}"
+            printf '%s\n' "- Workflow Run Attempt: ${GITHUB_RUN_ATTEMPT}"
+            printf '%s\n' "- Workflow SHA: ${WORKFLOW_SHA}"
+            printf '%s\n' "- Source Branch: ${GITHUB_REF_NAME}"
+            printf '%s\n' "- Source SHA: ${GITHUB_SHA}"
+            printf '%s\n' "- Selected Environment: ${SELECTED_ENVIRONMENT}"
+            printf '%s\n' "- Preflight Result: ${PREFLIGHT_OUTCOME}"
+            printf '%s\n' "- Approved Main SHA: ${APPROVED_MAIN_SHA:-NOT_APPROVED}"
+            printf '%s\n' "- Migration File SHA-256: ${MIGRATION_SHA256:-NOT_VERIFIED}"
+            printf '%s\n' "- Migration Target: ${MIGRATION_TARGET:-NOT_AUTHORIZED}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          test "${GITHUB_REF}" = "refs/heads/main" || {
-            echo "::error::Production migrations may only run from main."
-            exit 1
-          }
-
-          [[ "${EXPECTED_MAIN_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::A valid approved main SHA is required."
-            exit 1
-          }
-          ACTUAL_MAIN_SHA="$(git rev-parse HEAD)"
-          test "${ACTUAL_MAIN_SHA}" = "${EXPECTED_MAIN_SHA}" || {
-            echo "::error::Checked-out main SHA does not match the approved SHA."
-            exit 1
-          }
-
-          [[ "${EXPECTED_MIGRATION_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]] || {
-            echo "::error::A valid migration SHA-256 is required."
-            exit 1
-          }
-          MIGRATION_FILE="alembic/versions/0097_member_page_permissions.py"
-          test -f "${MIGRATION_FILE}" || {
-            echo "::error::Migration 0097 is absent from this commit."
-            exit 1
-          }
-          ACTUAL_MIGRATION_SHA256="$(sha256sum "${MIGRATION_FILE}" | awk '{print $1}')"
-          test "${ACTUAL_MIGRATION_SHA256,,}" = "${EXPECTED_MIGRATION_SHA256,,}" || {
-            echo "::error::Migration 0097 SHA-256 does not match the approved value."
-            exit 1
-          }
-
-          test "${EXPECTED_CURRENT_REVISION}" = "0096_patient_customer_id" || {
-            echo "::error::Expected current revision must be 0096_patient_customer_id."
-            exit 1
-          }
+  migrate-staging:
+    name: Migrate staging
+    needs: preflight
+    if: ${{ inputs.environment == 'staging' && needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: staging
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout exact dispatch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -110,19 +120,72 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Show current revision
-        if: inputs.environment == 'staging'
+      - name: Show current staging revision
         env:
           DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
           MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic current
 
-      - name: Verify production database revision
-        if: inputs.environment == 'production'
-        shell: bash
+      - name: Apply staging migrations
         env:
           DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
           MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: alembic upgrade head
+
+      - name: Show final staging revision
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: alembic current
+
+  migrate-production:
+    name: Migrate approved production revision
+    needs: preflight
+    if: ${{ inputs.environment == 'production' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && needs.preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DOCS_ENABLED: "false"
+      CORS_ORIGINS: ""
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify production credential is configured
+        id: verify_production_credential
+        shell: bash
+        env:
+          PRODUCTION_MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+        run: python ../.github/scripts/production_migration_credential_guard.py
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify production database revision
+        id: verify_production_database_revision
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
           EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
         run: |
           python - <<'PY'
@@ -175,29 +238,27 @@ jobs:
               )
               raise SystemExit(1)
 
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if output_path:
+              with open(output_path, "a", encoding="utf-8") as output:
+                  print(f"actual_revision={actual_revision}", file=output)
+
           print(f"Verified single current Alembic revision: {actual_revision}")
           PY
 
-      - name: Apply staging migrations
-        if: inputs.environment == 'staging'
-        env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-        run: alembic upgrade head
-
       - name: Apply approved production migration
-        if: inputs.environment == 'production'
+        id: apply_approved_production_migration
         env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
         run: alembic upgrade 0097_member_page_permissions
 
       - name: Verify final production database revision
-        if: inputs.environment == 'production'
+        id: verify_final_production_database_revision
         shell: bash
         env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
           EXPECTED_FINAL_REVISION: 0097_member_page_permissions
         run: |
           python - <<'PY'
@@ -250,12 +311,50 @@ jobs:
               )
               raise SystemExit(1)
 
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if output_path:
+              with open(output_path, "a", encoding="utf-8") as output:
+                  print(f"actual_revision={actual_revision}", file=output)
+
           print(f"Verified final Alembic revision: {actual_revision}")
           PY
 
-      - name: Show final revision
-        if: inputs.environment == 'staging'
+      - name: Publish production migration audit evidence
+        if: always()
+        shell: bash
         env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-        run: alembic current
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          APPROVED_MAIN_SHA: ${{ needs.preflight.outputs.approved_main_sha }}
+          MIGRATION_SHA256: ${{ needs.preflight.outputs.migration_sha256 }}
+          MIGRATION_TARGET: ${{ needs.preflight.outputs.migration_target }}
+          EXPECTED_PREVIOUS_REVISION: ${{ needs.preflight.outputs.expected_previous_revision }}
+          DATABASE_PREVIOUS_REVISION: ${{ steps.verify_production_database_revision.outputs.actual_revision }}
+          DATABASE_FINAL_REVISION: ${{ steps.verify_final_production_database_revision.outputs.actual_revision }}
+          CREDENTIAL_CHECK_OUTCOME: ${{ steps.verify_production_credential.outcome }}
+          PREVIOUS_ATTESTATION_OUTCOME: ${{ steps.verify_production_database_revision.outcome }}
+          MIGRATION_OUTCOME: ${{ steps.apply_approved_production_migration.outcome }}
+          FINAL_ATTESTATION_OUTCOME: ${{ steps.verify_final_production_database_revision.outcome }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## Production migration audit evidence"
+            echo
+            printf '%s\n' "- GitHub Actor: ${GITHUB_ACTOR}"
+            printf '%s\n' "- Workflow Run ID: ${GITHUB_RUN_ID}"
+            printf '%s\n' "- Workflow Run Attempt: ${GITHUB_RUN_ATTEMPT}"
+            printf '%s\n' "- Workflow SHA: ${WORKFLOW_SHA}"
+            printf '%s\n' "- Source Branch: ${GITHUB_REF_NAME}"
+            printf '%s\n' "- Source SHA: ${GITHUB_SHA}"
+            printf '%s\n' "- Approved Main SHA: ${APPROVED_MAIN_SHA}"
+            printf '%s\n' "- Migration File SHA-256: ${MIGRATION_SHA256}"
+            printf '%s\n' "- Selected Environment: production"
+            printf '%s\n' "- Expected Previous Revision: ${EXPECTED_PREVIOUS_REVISION}"
+            printf '%s\n' "- Database Previous Revision: ${DATABASE_PREVIOUS_REVISION:-NOT_ATTESTED}"
+            printf '%s\n' "- Migration Target: ${MIGRATION_TARGET}"
+            printf '%s\n' "- Database Final Revision: ${DATABASE_FINAL_REVISION:-NOT_ATTESTED}"
+            printf '%s\n' "- Credential Check: ${CREDENTIAL_CHECK_OUTCOME}"
+            printf '%s\n' "- Previous Revision Attestation: ${PREVIOUS_ATTESTATION_OUTCOME}"
+            printf '%s\n' "- Migration Step: ${MIGRATION_OUTCOME}"
+            printf '%s\n' "- Final Revision Attestation: ${FINAL_ATTESTATION_OUTCOME}"
+            printf '%s\n' "- Execution Result: ${JOB_RESULT}"
+          } >> "$GITHUB_STEP_SUMMARY"
