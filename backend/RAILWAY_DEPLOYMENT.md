@@ -7,7 +7,7 @@ The backend is a long-running FastAPI service. Deploy the `backend/` directory a
 Use this repository and set:
 
 - Root Directory: `/backend`
-- Config as Code: `/backend/railway.json`
+- Config as Code: `/backend/railway.json` (the file is not present in the current Main checkout; verify the live service configuration rather than assuming this path is active)
 - Public Networking: enabled
 
 `backend/Dockerfile` starts Uvicorn on Railway's injected `PORT`. The Railway healthcheck is `/api/v1/health/ready`, which verifies the API process and PostgreSQL connection before a deployment becomes active.
@@ -26,17 +26,36 @@ Configure the backend with the production/staging values documented in the repos
 
 Do not commit secret values.
 
-## Database migrations
+## Database migrations — Release Governance
 
-Railway currently runs `python -m alembic upgrade head` in the `preDeployCommand` of both production application services, `tia-api` and `tia-whatsapp`. Either service can be deployed independently, so each keeps this command. No dedicated migration service is required.
+**Observed production configuration (read-only Railway inspection, 2026-11-10):**
 
-Every online Alembic run acquires the same PostgreSQL **session-level advisory lock** in `alembic/env.py` before Alembic reads the current revision or applies migrations. The lock is shared by the API, WhatsApp, and online GitHub migration workflows because it is enforced by PostgreSQL, not by a service-specific or workflow-specific mutex.
+Both Railway application services currently have the following live `preDeployCommand`:
 
-The lock is held on the same PostgreSQL connection for the complete migration run. Session-level locking survives transaction commits and Alembic `autocommit_block()` boundaries, including the `CREATE INDEX CONCURRENTLY` operation in migration `0043_analytics_scale_guards`. SQLAlchemy's autobegun transaction is committed immediately after each try-lock statement so Alembic starts with an idle connection. The lock is explicitly released in a `finally` path; the `NullPool` connection is closed at the end of the run, which also releases the PostgreSQL session lock if the process or connection fails.
+```bash
+python -m alembic upgrade head
+```
 
-A process waits up to **300 seconds** for the shared lock, polling once per second. If the lock is not acquired within that bound, Alembic exits with a clear timeout error and the pre-deploy operation fails; the application deployment must not proceed on a failed migration command. The timeout is a code default and requires no Railway variable.
+- Project: `remarkable-kindness`
+- Environment: `production`
+- Service: `tia-api`
+- Service: `tia-whatsapp`
 
-This database-level lock also serializes online Alembic commands started by GitHub Actions. GitHub Actions concurrency groups remain useful for ordering runs within a workflow, but they are not the cross-service protection mechanism.
+These settings are controlled by the live Railway service configuration, not by a `railway.toml` or `railway.json` file in the current Main checkout. No live Railway settings were changed during this audit.
+
+**Required owner action:** before claiming operational single-writer status, the Project Owner must separately approve and remove the `preDeployCommand` from each service's Railway production Deploy settings. Do not change the start command, build configuration, healthcheck, variables, networking, or other deploy settings. Until both live settings are re-read and confirmed empty, Railway remains a potential automatic production migration runner.
+
+**Canonical runner proposal:** `.github/workflows/database-migrate.yml` is the intended GitHub Actions migration entry point, subject to approval and merge of PR #313 and the migration/release prerequisites documented in that PR. PR #313 is currently open and draft; it is not yet the approved operational path. Do not retire the legacy workflow or declare Single Writer PASS before the canonical runner is approved and active.
+
+**Legacy workflow:** `.github/workflows/apply-0068-production.yml` is a separate production migration workflow triggered by a push to `main` when that workflow file's path changes. It runs `python -m alembic upgrade head`. Its retirement is proposed separately and must only be merged after the canonical GitHub runner is approved and available. The required merge order and dependencies must be reviewed by the Project Owner.
+
+## Migration serialization
+
+Every online Alembic run acquires the same PostgreSQL **session-level advisory lock** in `alembic/env.py` before Alembic reads the current revision or applies migrations.
+
+The lock is held on the same PostgreSQL connection for the complete migration run. Session-level locking survives transaction commits and Alembic `autocommit_block()` boundaries, including the `CREATE INDEX CONCURRENTLY` operation in migration `0043_analytics_scale_guards`.
+
+A process waits up to **300 seconds** for the shared lock, polling once per second. If the lock is not acquired within that bound, Alembic exits with a clear timeout error. The lock serializes online Alembic commands but does not replace the release-governance requirement to have only one approved production migration runner.
 
 ## Wire the public API to Tia runtimes
 
