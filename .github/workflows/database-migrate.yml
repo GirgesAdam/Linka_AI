@@ -10,6 +10,18 @@ on:
         options:
           - staging
           - production
+      expected_main_sha:
+        description: Required for production; exact approved main commit SHA
+        required: false
+        type: string
+      expected_migration_sha256:
+        description: Required for production; SHA-256 of 0097_member_page_permissions.py
+        required: false
+        type: string
+      expected_current_revision:
+        description: Required for production; expected current Alembic revision
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -32,16 +44,59 @@ jobs:
       ENVIRONMENT: ${{ inputs.environment }}
       DEBUG: "false"
       DOCS_ENABLED: "false"
-      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       CORS_ORIGINS: ""
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify production release inputs
+        if: inputs.environment == 'production'
+        shell: bash
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}
+          EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+        run: |
+          set -euo pipefail
+
+          test "${GITHUB_REF}" = "refs/heads/main" || {
+            echo "::error::Production migrations may only run from main."
+            exit 1
+          }
+
+          [[ "${EXPECTED_MAIN_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::A valid approved main SHA is required."
+            exit 1
+          }
+          ACTUAL_MAIN_SHA="$(git rev-parse HEAD)"
+          test "${ACTUAL_MAIN_SHA}" = "${EXPECTED_MAIN_SHA}" || {
+            echo "::error::Checked-out main SHA does not match the approved SHA."
+            exit 1
+          }
+
+          [[ "${EXPECTED_MIGRATION_SHA256}" =~ ^[0-9a-fA-F]{64}$ ]] || {
+            echo "::error::A valid migration SHA-256 is required."
+            exit 1
+          }
+          MIGRATION_FILE="alembic/versions/0097_member_page_permissions.py"
+          test -f "${MIGRATION_FILE}" || {
+            echo "::error::Migration 0097 is absent from this commit."
+            exit 1
+          }
+          ACTUAL_MIGRATION_SHA256="$(sha256sum "${MIGRATION_FILE}" | awk '{print $1}')"
+          test "${ACTUAL_MIGRATION_SHA256,,}" = "${EXPECTED_MIGRATION_SHA256,,}" || {
+            echo "::error::Migration 0097 SHA-256 does not match the approved value."
+            exit 1
+          }
+
+          test "${EXPECTED_CURRENT_REVISION}" = "0096_patient_customer_id" || {
+            echo "::error::Expected current revision must be 0096_patient_customer_id."
+            exit 1
+          }
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,10 +111,43 @@ jobs:
           pip install -r requirements.txt
 
       - name: Show current revision
+        if: inputs.environment == 'staging'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic current
 
-      - name: Apply migrations
+      - name: Verify production database revision
+        if: inputs.environment == 'production'
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+        run: |
+          set -euo pipefail
+          CURRENT_REVISION="$(alembic current --verbose | awk '/^Rev: / {print $2}' | tail -n 1)"
+          test "${CURRENT_REVISION}" = "${EXPECTED_CURRENT_REVISION}" || {
+            echo "::error::Database revision mismatch; expected ${EXPECTED_CURRENT_REVISION}, found ${CURRENT_REVISION:-unknown}."
+            exit 1
+          }
+
+      - name: Apply staging migrations
+        if: inputs.environment == 'staging'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic upgrade head
 
+      - name: Apply approved production migration
+        if: inputs.environment == 'production'
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: alembic upgrade 0097_member_page_permissions
+
       - name: Show final revision
+        env:
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: alembic current
