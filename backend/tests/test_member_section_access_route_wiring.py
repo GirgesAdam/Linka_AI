@@ -52,6 +52,7 @@ def test_clinic_operations_and_administration_routes_use_only_section_guards() -
         ("POST", "/inventory/items", "clinic_operations"),
         ("PUT", "/inventory/laser-prices", "clinic_operations"),
         ("GET", "/finance/expenses", "administration"),
+        ("POST", "/finance/expenses", "administration"),
         ("GET", "/automations/overview", "administration"),
         ("GET", "/clinic/setup-v2", "administration"),
         ("GET", "/operations/activity", "administration"),
