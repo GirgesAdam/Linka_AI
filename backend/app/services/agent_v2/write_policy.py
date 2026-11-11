@@ -25,6 +25,27 @@ def _appointment_has_financial_effect(row: dict[str, object]) -> bool:
     return payment_status not in _NON_FINANCIAL_PAYMENT_STATUSES
 
 
+def ambiguous_appointment_cancellation_requires_human(
+    step: PlanStep,
+    reads: ReadExecutionBundle,
+) -> bool:
+    """Hand cancellation ambiguity to reception after canonical appointment filtering.
+
+    ``appointment_match_count`` is produced by the verified appointment read after patient/workspace,
+    lifecycle-status, visit-group, and structured request constraints have been applied.  Using that
+    canonical count here keeps ordinary 0/1-match behavior unchanged while preventing an autonomous
+    appointment-choice snapshot from being created for destructive cancellation when 2+ logical
+    appointment targets remain.
+    """
+
+    return (
+        step.write_intent is not None
+        and step.write_intent.kind == "cancel_appointment"
+        and reads.verification.appointment_match_count is not None
+        and reads.verification.appointment_match_count > 1
+    )
+
+
 def paid_appointment_cancellation_requires_human(
     step: PlanStep,
     reads: ReadExecutionBundle,
@@ -51,6 +72,20 @@ def advance_step_with_write_policies(
     reads: ReadExecutionBundle,
 ) -> PlanStep:
     """Apply deterministic verification, then central pre-write safety policies."""
+
+    if ambiguous_appointment_cancellation_requires_human(step, reads):
+        return step.model_copy(
+            update={
+                "disposition": "handoff",
+                "response_goal": "handoff",
+                "facts": {
+                    **step.facts,
+                    "category": "customer_request",
+                    "priority": "normal",
+                    "reason": "multiple_eligible_cancellation_targets_require_staff",
+                },
+            }
+        )
 
     advanced = (
         advance_step_after_verification(step, reads.verification)
