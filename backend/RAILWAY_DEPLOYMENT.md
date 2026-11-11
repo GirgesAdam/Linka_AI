@@ -1,10 +1,10 @@
 # Tia FastAPI on Railway
 
-## Main baseline and previously recorded Railway configuration ? 2026-11-11
+## Main baseline and previously recorded Railway configuration — 2026-11-11
 
 > **Baseline accuracy.** The committed Main state recorded here is 548cce86276601b8cf1a5fb765c6a6270cf0b2c1. This section distinguishes that current Main baseline from the proposed changes in the open Draft PR described below. This task did not access a remote database, execute a migration, or change Railway or Supabase configuration. Railway configuration observations are carried forward from the prior read-only read-back recorded on 2026-11-11; they were not re-read during this PR.
 
-### 1. Canonical GitHub Actions migration workflow ? current Main baseline
+### 1. Canonical GitHub Actions migration workflow — current Main baseline
 
 - The canonical external migration workflow on Main is .github/workflows/database-migrate.yml.
 - On this Main baseline, the workflow is manually invoked through workflow_dispatch and exposes a choice between staging and production.
@@ -19,7 +19,7 @@
 - The former apply-0068-production.yml legacy workflow is absent. database-migrate.yml is the only canonical external migration workflow on this baseline.
 - GitHub CI and selected review workflows also run migrations against disposable local PostgreSQL service containers. These local test migrations are not external Staging or Production migration runners.
 
-### 2. Proposed migration governance in this Draft PR ? not yet on Main
+### 2. Proposed migration governance in this Draft PR — not yet on Main
 
 The proposed change in this PR removes only the external Staging migration path:
 
@@ -37,7 +37,7 @@ The proposed change in this PR removes only the external Staging migration path:
 
 **Important:** These are proposed PR semantics, not the current Main state. Until the Draft PR is reviewed and merged, Main still contains the Staging migration job described in section 1.
 
-### 3. Railway migration-runner retirement ? previously recorded live Production read-back
+### 3. Railway migration-runner retirement — previously recorded live Production read-back
 
 > Prior read-only read-back recorded on 2026-11-11 for Project remarkable-kindness, Environment production. These values were not re-read or changed during this PR. No variable values or secrets were read.
 
@@ -51,7 +51,7 @@ The proposed change in this PR removes only the external Staging migration path:
 
 The prior read-back recorded no active Alembic pre-deploy command on these five services. This PR does not modify or newly attest Railway configuration. The proposed Production-only GitHub workflow change is a repository governance change; it does not itself change Railway service settings.
 
-### 4. Railway watch configuration ? previously recorded read-back
+### 4. Railway watch configuration — previously recorded read-back
 
 > Prior read-only read-back recorded on 2026-11-11. Watch Patterns were not re-read or changed during this PR.
 
