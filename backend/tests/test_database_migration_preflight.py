@@ -262,12 +262,36 @@ def test_production_secret_name_is_not_referenced_by_other_workflows() -> None:
 
 
 def test_staging_database_secret_users_remain_staging_scoped() -> None:
-    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
-        if path == WORKFLOW:
-            continue
-        workflow = path.read_text(encoding="utf-8")
-        if "secrets.MIGRATION_DATABASE_URL" in workflow:
-            assert re.search(r"(?m)^\s+environment:\s*staging\s*$", workflow), path
+    workflow_files = [
+        (path, path.read_text(encoding="utf-8"))
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    ]
+
+    _assert_staging_secret_jobs_are_staging_scoped(workflow_files)
+
+
+def test_staging_database_secret_rejects_unscoped_job_even_if_sibling_is_staging() -> None:
+    workflow = """name: staging-scope-regression
+jobs:
+  staging-evaluation:
+    environment: staging
+    steps:
+      - run: echo safe
+  unscoped-job:
+    steps:
+      - env:
+          DATABASE_URL: SECRET_REFERENCE
+        run: echo should-not-be-allowed
+"""
+    workflow = workflow.replace(
+        "SECRET_REFERENCE",
+        "$" + "{{ secrets.MIGRATION_DATABASE_URL }}",
+    )
+
+    with pytest.raises(AssertionError, match="unscoped-job"):
+        _assert_staging_secret_jobs_are_staging_scoped(
+            [(Path(".github/workflows/negative-fixture.yml"), workflow)]
+        )
 
 
 def test_workflow_has_only_manual_trigger_and_non_cancelling_concurrency() -> None:
@@ -407,6 +431,42 @@ def _all_workflow_job_blocks(workflow: str) -> list[tuple[str, str]]:
         end = headers[index + 1].start() if index + 1 < len(headers) else len(remaining)
         blocks.append((header.group(1), remaining[header.start() : end]))
     return blocks
+
+
+def _assert_staging_secret_jobs_are_staging_scoped(
+    workflow_files: list[tuple[Path, str]],
+) -> None:
+    secret_reference = re.compile(
+        r"\$\{\{\s*secrets\.MIGRATION_DATABASE_URL\s*\}\}"
+    )
+    matched_jobs: list[tuple[Path, str]] = []
+
+    for path, workflow in workflow_files:
+        total_references = len(secret_reference.findall(workflow))
+        if not total_references:
+            continue
+
+        job_references = 0
+        for job_name, job in _all_workflow_job_blocks(workflow):
+            references_in_job = len(secret_reference.findall(job))
+            job_references += references_in_job
+            if not references_in_job:
+                continue
+
+            matched_jobs.append((path, job_name))
+            assert re.search(
+                r"(?m)^    environment:\s*staging\s*$",
+                job,
+            ), (
+                f"{path}: Job {job_name} references MIGRATION_DATABASE_URL "
+                "without its own staging Environment"
+            )
+
+        assert job_references == total_references, (
+            f"{path}: MIGRATION_DATABASE_URL reference exists outside a workflow Job"
+        )
+
+    assert matched_jobs, "No workflow Job references secrets.MIGRATION_DATABASE_URL"
 
 
 def test_production_only_workflow_retains_global_concurrency_group() -> None:
