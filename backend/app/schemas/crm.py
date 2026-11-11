@@ -221,6 +221,20 @@ class PatientUpdate(BaseModel):
         return value
 
 
+class PatientLookupRead(BaseModel):
+    """Minimal patient identity fields used by appointment workflows."""
+
+    id: UUID
+    first_name: str
+    last_name: str | None
+    phone: str | None
+
+
+class PatientLookupBatchRequest(BaseModel):
+    patient_ids: list[UUID] = Field(min_length=1, max_length=200)
+    include_phone: bool = False
+
+
 class PatientRead(BaseModel):
     id: UUID
     workspace_id: UUID

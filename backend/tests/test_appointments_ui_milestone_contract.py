@@ -77,6 +77,42 @@ def test_appointment_detail_uses_single_edit_surface_and_preserves_current_defau
     assert "setDoctorId(currentDoctorId)" in editor
 
 
+def test_appointment_pages_use_operational_lookups_not_the_knowledge_snapshot() -> None:
+    root = _root()
+    appointments = (root / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
+    reschedule = (root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/reschedule/page.tsx").read_text(encoding="utf-8")
+
+    for page in (appointments, reschedule):
+        assert "/clinic/knowledge" not in page
+        assert "/booking/branch-schedules" in page
+        assert "/crm/patients/lookup" in page
+
+
+def test_appointment_pages_use_branch_then_workspace_timezone_fallback() -> None:
+    root = _root()
+    appointments = (root / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(
+        encoding="utf-8"
+    )
+    reschedule = (
+        root / "frontend/src/app/(dashboard)/appointments/[appointmentId]/reschedule/page.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "BookingBranchSchedulesResponse" in appointments
+    assert "const branchSchedules = branchScheduleResponse.branches;" in appointments
+    assert (
+        'selectedBranch?.timezone || branchScheduleResponse.workspace_timezone || "Africa/Cairo"'
+        in appointments
+    )
+    assert "BookingBranchSchedulesResponse" in reschedule
+    assert "const branchSchedules = branchScheduleResponse.branches;" in reschedule
+    assert (
+        'branch?.timezone || detail.timezone || branchScheduleResponse.workspace_timezone || "Africa/Cairo"'
+        in reschedule
+    )
+    assert "minuteInTimezone(slot.start_at, scheduleTimezone)" in reschedule
+    assert "timeLabel(slot.start_at, scheduleTimezone)" in reschedule
+
+
 def test_appointment_schedule_has_no_other_column_or_working_hours_banner() -> None:
     page = (_root() / "frontend/src/app/(dashboard)/appointments/page.tsx").read_text(encoding="utf-8")
 

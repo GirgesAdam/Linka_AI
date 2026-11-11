@@ -6,16 +6,31 @@ import { PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { tiaRequest } from "@/lib/tia/api";
-import type { Appointment, AppointmentOperationsDetail, AvailabilityResponse, ClinicLaserDevice, Service } from "@/lib/types";
+import type {
+  Appointment,
+  AppointmentOperationsDetail,
+  AppointmentPatientLookup,
+  AvailabilityResponse,
+  BookingBranchSchedule,
+  BookingBranchSchedulesResponse,
+  ClinicLaserDevice,
+  Service,
+} from "@/lib/types";
 
 import { rescheduleAppointment } from "../actions";
 
-type KnowledgeHour = { weekday: number; start_time: string; end_time: string };
-type BookingKnowledge = {
-  branches: Array<{ id: string; working_hours: KnowledgeHour[] }>;
-  patients: Array<{ id: string; name: string }>;
-};
+function lookupPatientsByIds(patientIds: string[]) {
+  return tiaRequest<AppointmentPatientLookup[]>("/crm/patients/lookup/batch", {
+    method: "POST",
+    body: JSON.stringify({ patient_ids: [...new Set(patientIds)] }),
+  });
+}
 
+function patientDisplayName(patient: AppointmentPatientLookup) {
+  return `${patient.first_name} ${patient.last_name || ""}`.trim();
+}
+
+type BookingBranchHour = BookingBranchSchedule["working_hours"][number];
 type Period = { start: number; end: number; appointments: Appointment[] };
 type ScheduleColumnId = string;
 type ScheduleColumn = { id: ScheduleColumnId; label: string };
@@ -101,7 +116,7 @@ function timeLabel(value: string, timezone: string) {
   }).format(new Date(value));
 }
 
-function buildPeriods(appointments: Appointment[], interval: KnowledgeHour, timezone: string) {
+function buildPeriods(appointments: Appointment[], interval: BookingBranchHour, timezone: string) {
   const start = toMinutes(interval.start_time);
   const end = toMinutes(interval.end_time);
   const busy = appointments
@@ -175,29 +190,37 @@ export default async function RescheduleAppointmentPage({
     limit: "200",
   });
 
-  const [availability, dayAppointments, knowledge, services, laserDevices] = await Promise.all([
+  const [availability, dayAppointments, branchScheduleResponse, services, laserDevices] = await Promise.all([
     detail.allowed_actions.includes("reschedule")
       ? tiaRequest<AvailabilityResponse>(`/booking/availability?${availabilityQuery.toString()}`)
       : Promise.resolve({ date: selectedDate, timezone: detail.timezone, slots: [] }),
     tiaRequest<Appointment[]>(`/booking/appointments?${appointmentsQuery.toString()}`),
-    tiaRequest<BookingKnowledge>("/clinic/knowledge"),
+    tiaRequest<BookingBranchSchedulesResponse>("/booking/branch-schedules"),
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => []),
   ]);
+  const branchSchedules = branchScheduleResponse.branches;
   const scheduleColumns = buildScheduleColumns(laserDevices);
-
-  const branch = knowledge.branches.find((item) => item.id === detail.appointment.branch_id);
-  const hours = (branch?.working_hours || [])
-    .filter((hour) => hour.weekday === weekdayFor(selectedDate))
-    .sort((a, b) => a.start_time.localeCompare(b.start_time));
-  const patientNames = new Map(knowledge.patients.map((patient) => [patient.id, patient.name]));
-  const serviceById = new Map(services.map((service) => [service.id, service]));
-  const targetColumn = appointmentColumn(detail.appointment, serviceById);
   const scheduleAppointments = dayAppointments.filter(
     (appointment) =>
       appointment.id !== appointmentId &&
       scheduleStatuses.has(appointment.status),
   );
+  const patientIds = scheduleAppointments.map((appointment) => appointment.patient_id);
+  const patientLookups = patientIds.length
+    ? await lookupPatientsByIds(patientIds).catch(() => [])
+    : [];
+
+  const branch = branchSchedules.find((item) => item.id === detail.appointment.branch_id);
+  const scheduleTimezone = branch?.timezone || detail.timezone || branchScheduleResponse.workspace_timezone || "Africa/Cairo";
+  const hours = (branch?.working_hours || [])
+    .filter((hour) => hour.weekday === weekdayFor(selectedDate))
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const patientNames = new Map(
+    patientLookups.map((patient) => [patient.id, patientDisplayName(patient)]),
+  );
+  const serviceById = new Map(services.map((service) => [service.id, service]));
+  const targetColumn = appointmentColumn(detail.appointment, serviceById);
   const busyAppointments = dayAppointments.filter(
     (appointment) =>
       appointment.id !== appointmentId &&
@@ -264,7 +287,7 @@ export default async function RescheduleAppointmentPage({
                         const periods = buildPeriods(
                           isTarget ? busyAppointments : columnAppointments,
                           interval,
-                          availability.timezone,
+                          scheduleTimezone,
                         );
 
                         return (
@@ -280,7 +303,7 @@ export default async function RescheduleAppointmentPage({
                               {periods.map((period, periodIndex) => {
                                 const availableSlots = isTarget
                                   ? availability.slots.filter((slot) => {
-                                      const minute = minuteInTimezone(slot.start_at, availability.timezone);
+                                      const minute = minuteInTimezone(slot.start_at, scheduleTimezone);
                                       return minute >= period.start && minute < period.end;
                                     })
                                   : [];
@@ -308,7 +331,7 @@ export default async function RescheduleAppointmentPage({
                                               {patientNames.get(appointment.patient_id) || "موعد محجوز"}
                                             </div>
                                             <div className="mt-1 text-slate-500">
-                                              {serviceById.get(appointment.service_id)?.name || "خدمة"} · {timeLabel(appointment.start_at, availability.timezone)} – {timeLabel(appointment.end_at, availability.timezone)}
+                                              {serviceById.get(appointment.service_id)?.name || "خدمة"} · {timeLabel(appointment.start_at, scheduleTimezone)} – {timeLabel(appointment.end_at, scheduleTimezone)}
                                             </div>
                                           </div>
                                         ))}
@@ -320,7 +343,7 @@ export default async function RescheduleAppointmentPage({
                                             <input type="hidden" name="appointment_id" value={appointmentId} />
                                             <input type="hidden" name="start_at" value={slot.start_at} />
                                             <PendingSubmitButton type="submit" size="sm" variant="outline" className="w-full justify-between bg-white" pendingLabel="جارٍ نقل الموعد...">
-                                              <span>{timeLabel(slot.start_at, availability.timezone)} – {timeLabel(slot.end_at, availability.timezone)}</span>
+                                              <span>{timeLabel(slot.start_at, scheduleTimezone)} – {timeLabel(slot.end_at, scheduleTimezone)}</span>
                                               <CalendarClock size={14} />
                                             </PendingSubmitButton>
                                           </form>

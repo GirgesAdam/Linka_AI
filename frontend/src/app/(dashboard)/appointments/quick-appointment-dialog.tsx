@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatDateTime } from "@/lib/format";
 import { appointmentLabels } from "@/lib/status";
-import type { Appointment, Doctor, Patient, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
+import type { Appointment, AppointmentPatientLookup, Doctor, PatientPackage, PulseBalance, Service, Staff } from "@/lib/types";
 import { ManualAppointmentForm } from "./manual-appointment-form";
 
 type ScheduleColumnId = string;
@@ -58,7 +58,7 @@ export function QuickAppointmentDialog({
   windowStartMinutes: number;
   windowEndMinutes: number;
   phone: string;
-  patient: Patient | null;
+  patient: AppointmentPatientLookup | null;
   history: Appointment[];
   packages: PatientPackage[];
   pulseBalances: PulseBalance[];

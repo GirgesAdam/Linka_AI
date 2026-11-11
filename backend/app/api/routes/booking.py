@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
@@ -51,6 +51,9 @@ from app.schemas.booking import (
     AvailabilityBlockRead,
     AvailabilityResponse,
     AvailabilitySlot,
+    BookingBranchHourRead,
+    BookingBranchScheduleRead,
+    BookingBranchSchedulesRead,
     QuickAppointmentCreate,
 )
 from app.schemas.patient_packages import (
@@ -159,11 +162,18 @@ def require_local_appointment_write(db: Session, workspace_id: UUID) -> None:
 
 
 def workspace_timezone(access: WorkspaceAccess, branch: Branch | None = None) -> ZoneInfo:
-    name = (branch.timezone if branch and branch.timezone else access.workspace.timezone) or "Africa/Cairo"
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo("Africa/Cairo")
+    candidates = (
+        branch.timezone if branch is not None else None,
+        access.workspace.timezone,
+    )
+    for name in candidates:
+        if not name:
+            continue
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return ZoneInfo("Africa/Cairo")
 
 
 def get_appointment_or_404(db: Session, workspace_id: UUID, appointment_id: UUID) -> Appointment:
@@ -607,6 +617,68 @@ def delete_availability_block(
     db.delete(block)
     db.commit()
     return None
+
+
+@router.get("/branch-schedules", response_model=BookingBranchSchedulesRead)
+def list_booking_branch_schedules(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BookingBranchSchedulesRead:
+    workspace_id = access.workspace.id
+    branches = list(
+        db.scalars(
+            select(Branch)
+            .options(load_only(Branch.id, Branch.name, Branch.timezone, Branch.is_active))
+            .where(
+                Branch.workspace_id == workspace_id,
+                Branch.is_active.is_(True),
+            )
+            .order_by(Branch.name)
+        )
+    )
+    branch_ids = [branch.id for branch in branches]
+    working_hours = list(
+        db.execute(
+            select(
+                BranchWorkingHour.branch_id,
+                BranchWorkingHour.weekday,
+                BranchWorkingHour.start_time,
+                BranchWorkingHour.end_time,
+            )
+            .where(
+                BranchWorkingHour.workspace_id == workspace_id,
+                BranchWorkingHour.branch_id.in_(branch_ids),
+            )
+            .order_by(
+                BranchWorkingHour.branch_id,
+                BranchWorkingHour.weekday,
+                BranchWorkingHour.start_time,
+            )
+        )
+    )
+    hours_by_branch: dict[UUID, list[BookingBranchHourRead]] = {}
+    for row in working_hours:
+        hours_by_branch.setdefault(row.branch_id, []).append(
+            BookingBranchHourRead(
+                weekday=row.weekday,
+                start_time=row.start_time,
+                end_time=row.end_time,
+            )
+        )
+
+    return BookingBranchSchedulesRead(
+        workspace_timezone=workspace_timezone(access).key,
+        branches=[
+            BookingBranchScheduleRead(
+                id=branch.id,
+                name=branch.name,
+                timezone=workspace_timezone(access, branch).key,
+                is_active=branch.is_active,
+                working_hours=hours_by_branch.get(branch.id, []),
+            )
+            for branch in branches
+        ],
+    )
 
 
 @router.get("/availability", response_model=AvailabilityResponse)

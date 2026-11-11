@@ -107,6 +107,17 @@ export interface Patient {
   marketing_consent: boolean; marketing_consent_at: string | null; whatsapp_opt_in: boolean; whatsapp_opt_in_at: string | null; whatsapp_opt_in_source: string | null; last_contact_at: string | null;
   created_at: string; updated_at: string;
 }
+export interface AppointmentPatientLookup {
+  id: string; first_name: string; last_name: string | null; phone: string | null;
+}
+export interface BookingBranchSchedule {
+  id: string; name: string; timezone: string; is_active: boolean;
+  working_hours: Array<{ weekday: number; start_time: string; end_time: string }>;
+}
+export interface BookingBranchSchedulesResponse {
+  workspace_timezone: string;
+  branches: BookingBranchSchedule[];
+}
 export interface PatientTag {
   id: string; workspace_id: string; name: string; color: string | null; is_active: boolean;
 }
