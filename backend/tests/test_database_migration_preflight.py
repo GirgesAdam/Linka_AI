@@ -172,35 +172,21 @@ def test_production_preflight_rejects_wrong_previous_revision(tmp_path: Path) ->
         )
 
 
-def test_production_preflight_rejects_unknown_environment(tmp_path: Path) -> None:
+@pytest.mark.parametrize("environment", ["staging", "production-like", ""])
+def test_production_preflight_rejects_non_production_environment(
+    tmp_path: Path,
+    environment: str,
+) -> None:
     workspace, source_sha, migration_sha = _git_repo(tmp_path)
 
-    with pytest.raises(PreflightError, match="environment is not allowed"):
+    with pytest.raises(PreflightError, match="Only Production migrations are allowed"):
         _validate(
             workspace,
             source_sha,
             migration_sha,
-            selected_environment="production-like",
+            selected_environment=environment,
         )
 
-
-def test_staging_preflight_remains_compatible_with_branch_and_rerun(tmp_path: Path) -> None:
-    workspace, source_sha, _ = _git_repo(tmp_path)
-
-    result = validate_preflight(
-        selected_environment="staging",
-        github_ref="refs/heads/feature/staging-test",
-        run_attempt="3",
-        github_sha=source_sha,
-        expected_main_sha="",
-        expected_migration_sha256="",
-        expected_current_revision="",
-        workspace=workspace,
-    )
-
-    assert result["selected_environment"] == "staging"
-    assert result["migration_target"] == "alembic upgrade head"
-    assert result["migration_sha256"] == ""
 
 
 def test_production_credential_guard_rejects_missing_and_whitespace(
@@ -255,17 +241,17 @@ def test_preflight_is_before_and_outside_production_environment() -> None:
     assert "github.run_attempt == '1'" in production
 
 
-def test_production_secret_is_environment_job_scoped_and_staging_is_unchanged() -> None:
+def test_production_secret_is_environment_job_scoped_and_staging_job_is_absent() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     production = _job_block(workflow, "migrate-production")
-    staging = _job_block(workflow, "migrate-staging")
+    jobs = dict(_all_workflow_job_blocks(workflow))
 
     assert "name: production" in production
     assert "secrets.PRODUCTION_MIGRATION_DATABASE_URL" in production
     assert "secrets.MIGRATION_DATABASE_URL" not in production
-    assert "name: staging" in staging
-    assert "secrets.MIGRATION_DATABASE_URL" in staging
-    assert "PRODUCTION_MIGRATION_DATABASE_URL" not in staging
+    assert "migrate-staging" not in jobs
+    assert "secrets.MIGRATION_DATABASE_URL" not in workflow
+    assert "PRODUCTION_MIGRATION_DATABASE_URL" not in jobs["preflight"]
 
 
 def test_production_secret_name_is_not_referenced_by_other_workflows() -> None:
@@ -276,12 +262,36 @@ def test_production_secret_name_is_not_referenced_by_other_workflows() -> None:
 
 
 def test_staging_database_secret_users_remain_staging_scoped() -> None:
-    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
-        if path == WORKFLOW:
-            continue
-        workflow = path.read_text(encoding="utf-8")
-        if "secrets.MIGRATION_DATABASE_URL" in workflow:
-            assert re.search(r"(?m)^\s+environment:\s*staging\s*$", workflow), path
+    workflow_files = [
+        (path, path.read_text(encoding="utf-8"))
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    ]
+
+    _assert_staging_secret_jobs_are_staging_scoped(workflow_files)
+
+
+def test_staging_database_secret_rejects_unscoped_job_even_if_sibling_is_staging() -> None:
+    workflow = """name: staging-scope-regression
+jobs:
+  staging-evaluation:
+    environment: staging
+    steps:
+      - run: echo safe
+  unscoped-job:
+    steps:
+      - env:
+          DATABASE_URL: SECRET_REFERENCE
+        run: echo should-not-be-allowed
+"""
+    workflow = workflow.replace(
+        "SECRET_REFERENCE",
+        "$" + "{{ secrets.MIGRATION_DATABASE_URL }}",
+    )
+
+    with pytest.raises(AssertionError, match="unscoped-job"):
+        _assert_staging_secret_jobs_are_staging_scoped(
+            [(Path(".github/workflows/negative-fixture.yml"), workflow)]
+        )
 
 
 def test_workflow_has_only_manual_trigger_and_non_cancelling_concurrency() -> None:
@@ -296,16 +306,44 @@ def test_workflow_has_only_manual_trigger_and_non_cancelling_concurrency() -> No
     assert "contents: read" in workflow
 
 
-def test_exact_production_target_and_staging_upgrade_are_preserved() -> None:
+def test_exact_production_target_is_preserved_and_staging_upgrade_is_absent() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     production = _job_block(workflow, "migrate-production")
-    staging = _job_block(workflow, "migrate-staging")
 
     assert "run: alembic upgrade 0097_member_page_permissions" in production
     assert "alembic upgrade head" not in production
-    assert "run: alembic upgrade head" in staging
+    assert "alembic upgrade head" not in workflow
     assert "name: production" in production
-    assert "name: staging" in staging
+    assert "migrate-staging:" not in workflow
+
+
+def test_dispatch_inputs_are_production_preflight_requirements_only() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    trigger = workflow.split("permissions:", 1)[0]
+    assert "workflow_dispatch:" in trigger
+    assert "inputs.environment" not in workflow
+    assert not re.search(r"(?m)^      environment:\s*$", trigger)
+
+    input_block = trigger.split("inputs:", 1)[1]
+    input_names = re.findall(r"(?m)^      ([a-z0-9_]+):\s*$", input_block)
+    assert input_names == [
+        "expected_main_sha",
+        "expected_migration_sha256",
+        "expected_current_revision",
+    ]
+    assert len(re.findall(r"(?m)^        required: true$", input_block)) == 3
+
+
+def test_canonical_workflow_has_exactly_one_external_production_job() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    jobs = dict(_all_workflow_job_blocks(workflow))
+
+    assert set(jobs) == {"preflight", "migrate-production"}
+    assert "migrate-staging" not in jobs
+    assert "secrets.MIGRATION_DATABASE_URL" not in workflow
+    assert "secrets.PRODUCTION_MIGRATION_DATABASE_URL" in jobs["migrate-production"]
+    assert "alembic upgrade head" not in workflow
+    assert workflow.count("alembic upgrade 0097_member_page_permissions") == 1
 
 
 def test_production_audit_evidence_covers_run_source_revisions_and_result() -> None:
@@ -361,7 +399,6 @@ def test_preflight_main_exports_exact_approval_outputs(
 ) -> None:
     workspace, source_sha, migration_sha = _git_repo(tmp_path)
     output_path = tmp_path / "github_output"
-    monkeypatch.setenv("SELECTED_ENVIRONMENT", "production")
     monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("GITHUB_SHA", source_sha)
@@ -373,6 +410,7 @@ def test_preflight_main_exports_exact_approval_outputs(
 
     assert preflight_main() == 0
     output = output_path.read_text(encoding="utf-8")
+    assert "selected_environment=production" in output
     assert f"approved_main_sha={source_sha}" in output
     assert f"migration_sha256={migration_sha}" in output
     assert "migration_target=alembic upgrade 0097_member_page_permissions" in output
@@ -395,7 +433,43 @@ def _all_workflow_job_blocks(workflow: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def test_staging_and_production_share_one_global_workflow_concurrency_group() -> None:
+def _assert_staging_secret_jobs_are_staging_scoped(
+    workflow_files: list[tuple[Path, str]],
+) -> None:
+    secret_reference = re.compile(
+        r"\$\{\{\s*secrets\.MIGRATION_DATABASE_URL\s*\}\}"
+    )
+    matched_jobs: list[tuple[Path, str]] = []
+
+    for path, workflow in workflow_files:
+        total_references = len(secret_reference.findall(workflow))
+        if not total_references:
+            continue
+
+        job_references = 0
+        for job_name, job in _all_workflow_job_blocks(workflow):
+            references_in_job = len(secret_reference.findall(job))
+            job_references += references_in_job
+            if not references_in_job:
+                continue
+
+            matched_jobs.append((path, job_name))
+            assert re.search(
+                r"(?m)^    environment:\s*staging\s*$",
+                job,
+            ), (
+                f"{path}: Job {job_name} references MIGRATION_DATABASE_URL "
+                "without its own staging Environment"
+            )
+
+        assert job_references == total_references, (
+            f"{path}: MIGRATION_DATABASE_URL reference exists outside a workflow Job"
+        )
+
+    assert matched_jobs, "No workflow Job references secrets.MIGRATION_DATABASE_URL"
+
+
+def test_production_only_workflow_retains_global_concurrency_group() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     concurrency_matches = list(re.finditer(r"(?m)^concurrency:\s*$", workflow))
 
@@ -414,20 +488,23 @@ def test_staging_and_production_share_one_global_workflow_concurrency_group() ->
     assert "inputs.environment" not in concurrency
     assert "$" + "{{" not in concurrency
 
-    for job_name in ("migrate-staging", "migrate-production"):
-        job = _job_block(workflow, job_name)
-        assert not re.search(r"(?m)^    concurrency:\s*$", job)
-        assert "alembic upgrade" in job
+    jobs = dict(_all_workflow_job_blocks(workflow))
+    assert set(jobs) == {"preflight", "migrate-production"}
+    production = jobs["migrate-production"]
+    assert not re.search(r"(?m)^    concurrency:\s*$", production)
+    assert production.count("alembic upgrade 0097_member_page_permissions") == 1
+    assert "alembic upgrade head" not in workflow
 
 
-def test_every_non_release_alembic_upgrade_targets_an_isolated_local_postgres() -> None:
+def test_every_non_release_alembic_mutation_targets_an_isolated_local_postgres() -> None:
     external_migration_jobs: list[tuple[str, str]] = []
     isolated_test_migration_jobs: list[tuple[str, str]] = []
+    migration_command = re.compile(r"\balembic\s+(?:upgrade|downgrade|stamp)\b")
 
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
         workflow = path.read_text(encoding="utf-8")
         for job_name, job in _all_workflow_job_blocks(workflow):
-            if not re.search(r"\balembic\s+upgrade\b", job):
+            if not migration_command.search(job):
                 continue
 
             if path == WORKFLOW:
@@ -448,7 +525,6 @@ def test_every_non_release_alembic_upgrade_targets_an_isolated_local_postgres() 
                 ), (path, job_name, variable)
 
     assert set(external_migration_jobs) == {
-        ("database-migrate.yml", "migrate-staging"),
         ("database-migrate.yml", "migrate-production"),
     }
     assert isolated_test_migration_jobs

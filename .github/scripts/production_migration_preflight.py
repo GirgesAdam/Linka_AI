@@ -10,7 +10,6 @@ from pathlib import Path
 MIGRATION_RELATIVE_PATH = "backend/alembic/versions/0097_member_page_permissions.py"
 EXPECTED_PREVIOUS_REVISION = "0096_patient_customer_id"
 EXPECTED_FINAL_REVISION = "0097_member_page_permissions"
-ALLOWED_ENVIRONMENTS = frozenset({"staging", "production"})
 
 
 class PreflightError(ValueError):
@@ -40,18 +39,8 @@ def validate_preflight(
     expected_current_revision: str,
     workspace: Path,
 ) -> dict[str, str]:
-    if selected_environment not in ALLOWED_ENVIRONMENTS:
-        raise PreflightError("The selected migration environment is not allowed.")
-
-    if selected_environment == "staging":
-        return {
-            "selected_environment": "staging",
-            "source_sha": github_sha,
-            "approved_main_sha": "",
-            "migration_sha256": "",
-            "expected_previous_revision": "",
-            "migration_target": "alembic upgrade head",
-        }
+    if selected_environment != "production":
+        raise PreflightError("Only Production migrations are allowed.")
 
     if github_ref != "refs/heads/main":
         raise PreflightError("Production migrations may only be dispatched from main.")
@@ -127,7 +116,7 @@ def _write_outputs(values: dict[str, str]) -> None:
 def main() -> int:
     try:
         values = validate_preflight(
-            selected_environment=os.environ.get("SELECTED_ENVIRONMENT", ""),
+            selected_environment="production",
             github_ref=os.environ.get("GITHUB_REF", ""),
             run_attempt=os.environ.get("GITHUB_RUN_ATTEMPT", ""),
             github_sha=os.environ.get("GITHUB_SHA", ""),
