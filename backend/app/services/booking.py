@@ -82,12 +82,20 @@ def get_effective_booking_settings(db: Session, workspace_id: UUID) -> Effective
     )
 
 
-def resolve_timezone(workspace: Workspace, branch: Branch) -> ZoneInfo:
-    timezone_name = branch.timezone or workspace.timezone
-    try:
-        return ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError as exc:
-        raise BookingRuleError(f"Invalid clinic timezone: {timezone_name}") from exc
+def resolve_timezone(workspace: Workspace, branch: Branch | None = None) -> ZoneInfo:
+    """Resolve clinic-local time using branch, workspace, then Cairo fallback."""
+    candidates = (
+        branch.timezone if branch is not None else None,
+        workspace.timezone,
+    )
+    for timezone_name in candidates:
+        if not timezone_name:
+            continue
+        try:
+            return ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return ZoneInfo("Africa/Cairo")
 
 
 def ceil_to_interval(value: datetime, interval_minutes: int) -> datetime:

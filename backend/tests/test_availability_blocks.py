@@ -197,7 +197,7 @@ def test_standard_create_and_reschedule_keep_exact_slot_reverification() -> None
 
 def test_timezone_local_day_and_branch_scope_are_server_side_contracts() -> None:
     source = Path("app/api/routes/booking.py").read_text(encoding="utf-8")
-    assert "tz = workspace_timezone(access, branch)" in source
+    assert "tz = resolve_timezone(access.workspace, branch)" in source
     assert "datetime.combine(date_value, time.min, tzinfo=tz).astimezone(UTC)" in source
     assert "AvailabilityBlock.branch_id == branch.id" in source
     assert "Branch.workspace_id == access.workspace.id" in source
