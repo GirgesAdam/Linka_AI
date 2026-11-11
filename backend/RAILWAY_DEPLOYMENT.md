@@ -1,73 +1,87 @@
 # Tia FastAPI on Railway
 
-## Current Verified Railway and Migration Configuration — 2026-11-11
+## Main baseline and previously recorded Railway configuration ? 2026-11-11
 
-> **Authoritative current snapshot.** This section records live Railway configuration and the canonical GitHub workflow verified on 2026-11-11 against Main commit `81224bdb0d6233c0709447d2c87f2582fc774754`. It supersedes conflicting operational claims in the historical sections below. No migration was run as part of this verification.
+> **Baseline accuracy.** The committed Main state recorded here is 548cce86276601b8cf1a5fb765c6a6270cf0b2c1. This section distinguishes that current Main baseline from the proposed changes in the open Draft PR described below. This task did not access a remote database, execute a migration, or change Railway or Supabase configuration. Railway configuration observations are carried forward from the prior read-only read-back recorded on 2026-11-11; they were not re-read during this PR.
 
-### 1. Canonical external migration workflow
+### 1. Canonical GitHub Actions migration workflow ? current Main baseline
 
-- The only approved external Staging/Production migration runner is `.github/workflows/database-migrate.yml`.
-- The workflow is manually invoked through `workflow_dispatch` and selects either `staging` or `production`.
-- The Production job declares the GitHub Environment `production`; it is restricted to `refs/heads/main` and first workflow attempt (`run_attempt == 1`). The preflight fails closed unless the supplied expected Main SHA equals `github.sha`, the checked-out `HEAD` equals that same SHA, and the SHA is a valid exact commit.
-- Production preflight verifies the raw Git-blob SHA-256 of `backend/alembic/versions/0097_member_page_permissions.py` at that exact commit. It also requires the expected previous revision `0096_patient_customer_id`.
-- Before Production migration, the workflow attests exactly one current Alembic head and verifies it equals the supplied expected previous revision. After migration, it attests exactly one final head and verifies `0097_member_page_permissions`.
-- The Production job uses the explicit target `alembic upgrade 0097_member_page_permissions`. The Staging job uses `alembic upgrade head`.
-- Staging and Production share workflow-level global serialization: `group: database-migration-global`, `queue: max`, and `cancel-in-progress: false`. A Production approval wait therefore remains inside the same global queue and blocks a concurrent Staging migration.
-- PostgreSQL advisory locking is an additional database-level safeguard. `backend/alembic/env.py` wraps the complete online Alembic migration in `migration_session_lock`; `backend/app/database/migration_lock.py` implements a PostgreSQL session-level advisory lock with a 300-second wait timeout.
-- No legacy GitHub migration workflow remains in `.github/workflows/`; the former `apply-0068-production.yml` is absent. `database-migrate.yml` is the canonical external workflow.
-- GitHub CI still runs migrations against its own disposable PostgreSQL service container for tests. That CI-local database activity is not an external Staging or Production migration runner.
+- The canonical external migration workflow on Main is .github/workflows/database-migrate.yml.
+- On this Main baseline, the workflow is manually invoked through workflow_dispatch and exposes a choice between staging and production.
+- The migrate-staging job uses the GitHub staging Environment and secrets.MIGRATION_DATABASE_URL; it runs alembic current, alembic upgrade head, and alembic current against the external Staging database.
+- The migrate-production job uses the GitHub production Environment; it is restricted to refs/heads/main and the first workflow attempt (run_attempt == 1).
+- Production preflight fails closed unless the supplied expected Main SHA equals github.sha, the checked-out HEAD equals that same SHA, and the SHA is a valid exact commit.
+- Production preflight verifies the raw Git-blob SHA-256 of backend/alembic/versions/0097_member_page_permissions.py at that exact commit. It also requires the expected previous revision 0096_patient_customer_id.
+- Before Production migration, the workflow attests exactly one current Alembic head and verifies it equals the supplied expected previous revision. After migration, it attests exactly one final head and verifies 0097_member_page_permissions.
+- The Production job uses the explicit target alembic upgrade 0097_member_page_permissions; it does not use alembic upgrade head.
+- Staging and Production share workflow-level global serialization: group: database-migration-global, queue: max, and cancel-in-progress: false.
+- PostgreSQL advisory locking is an additional database-level safeguard. backend/alembic/env.py wraps the complete online Alembic migration in migration_session_lock; backend/app/database/migration_lock.py implements a PostgreSQL session-level advisory lock with a 300-second wait timeout.
+- The former apply-0068-production.yml legacy workflow is absent. database-migrate.yml is the only canonical external migration workflow on this baseline.
+- GitHub CI and selected review workflows also run migrations against disposable local PostgreSQL service containers. These local test migrations are not external Staging or Production migration runners.
 
-### 2. Railway migration-runner retirement — live Production read-back
+### 2. Proposed migration governance in this Draft PR ? not yet on Main
 
-> Verified directly from the five live Railway service configurations in Project `remarkable-kindness`, Environment `production`, on 2026-11-11. No variable values or secrets were read.
+The proposed change in this PR removes only the external Staging migration path:
 
-| Railway service | Live pre-deploy migration configuration |
+- Remove the migrate-staging job from .github/workflows/database-migrate.yml.
+- Remove the workflow_dispatch Environment selector. The remaining required inputs are the approved Main SHA, Migration 0097 SHA-256, and expected current revision.
+- Make the preflight Production-only and reject staging or any other non-Production target.
+- Retain one external migration job: migrate-production.
+- Preserve the Production GitHub Environment, Project Owner approval boundary, Main restriction, first-attempt restriction, Production credential guard and PRODUCTION_MIGRATION_DATABASE_URL isolation, exact Main SHA and migration hash checks, expected previous revision, pre/post revision attestations, advisory lock, exact Migration 0097 target, audit evidence, and global concurrency (cancel-in-progress: false).
+- Preserve all other Staging Environment uses for Agent evaluation, conversation and booking reviews, semantic checks, and database-backed functional tests. The dependency audit identified 17 Jobs across 16 workflows that bind secrets.MIGRATION_DATABASE_URL (including the V2 Full Evidence Audit alias). Fourteen invoke Staging database-backed review code; three fixture-only harness Jobs (human-conversation-quality, v2-conversation-suite, and v2-stateful-conversation-suite) do not open a database connection even though the credential is currently bound. None of these Jobs is an Alembic migration runner, and none is changed by this PR.
+- Preserve automation-staging-rollback-gate.yml, including its database-backed write/rollback tests and its explicit HTTP blocking.
+- Preserve the V2 Full Evidence Audit split: disposable local PostgreSQL for Alembic setup, and the Staging database for real-Agent evidence with per-scenario transaction rollback.
+- Preserve the grouped multi-service review jobs that use disposable local PostgreSQL and run alembic upgrade head; their staging Environment label does not make the local database an external Staging migration target.
+- Preserve the GitHub CI disposable PostgreSQL migration tests and all migration revision/security tests.
+- Do not delete, rename, move, or change values for MIGRATION_DATABASE_URL or PRODUCTION_MIGRATION_DATABASE_URL. The former remains needed by other Staging-backed review jobs; the latter remains scoped to the protected Production job.
+
+**Important:** These are proposed PR semantics, not the current Main state. Until the Draft PR is reviewed and merged, Main still contains the Staging migration job described in section 1.
+
+### 3. Railway migration-runner retirement ? previously recorded live Production read-back
+
+> Prior read-only read-back recorded on 2026-11-11 for Project remarkable-kindness, Environment production. These values were not re-read or changed during this PR. No variable values or secrets were read.
+
+| Railway service | Previously recorded pre-deploy migration configuration |
 |---|---|
-| `tia-api` | Empty (`[]`) |
-| `tia-whatsapp` | Empty (`[]`) |
-| `tia-agent-eval` | Empty (`[]`) |
-| `tia-automation-waker` | Not configured |
-| `tia-whatsapp-transport-waker` | Not configured |
+| tia-api | Empty ([]) |
+| tia-whatsapp | Empty ([]) |
+| tia-agent-eval | Empty ([]) |
+| tia-automation-waker | Not configured |
+| tia-whatsapp-transport-waker | Not configured |
 
-No Railway service has an active Alembic pre-deploy command. Railway no longer runs Alembic automatically as part of these five services. The canonical GitHub Actions workflow above is the only approved external Staging/Production migration path; its existence does not authorize a dispatch.
+The prior read-back recorded no active Alembic pre-deploy command on these five services. This PR does not modify or newly attest Railway configuration. The proposed Production-only GitHub workflow change is a repository governance change; it does not itself change Railway service settings.
 
-### 3. Railway watch configuration — live read-back
+### 4. Railway watch configuration ? previously recorded read-back
 
-> Both target services were read before and after the narrow Watch Patterns update. Only the `watchPatterns` field was written.
+> Prior read-only read-back recorded on 2026-11-11. Watch Patterns were not re-read or changed during this PR.
 
-| Setting | `tia-api` | `tia-whatsapp` |
+| Setting | tia-api | tia-whatsapp |
 |---|---|---|
-| Root Directory | `/backend` (API value: `backend`) | `/backend` (API value: `backend`) |
+| Root Directory | /backend (API value: backend) | /backend (API value: backend) |
 | Check Suites | ON | OFF |
 
-Both services have exactly these seven Watch Patterns:
+The previously recorded Watch Patterns were:
 
-```text
-/backend/**
-!/backend/tests/**
-!/backend/app/services/agent_v2/test_harness.py
-!/backend/scripts/test_ai_onboarding_gemini_schema.py
-!/backend/scripts/test_gemini_provider.py
-!/backend/scripts/test_n8n_runtime_contract.py
-!/backend/RAILWAY_DEPLOYMENT.md
-```
+    /backend/**
+    !/backend/tests/**
+    !/backend/app/services/agent_v2/test_harness.py
+    !/backend/scripts/test_ai_onboarding_gemini_schema.py
+    !/backend/scripts/test_gemini_provider.py
+    !/backend/scripts/test_n8n_runtime_contract.py
+    !/backend/RAILWAY_DEPLOYMENT.md
 
-The exclusions cover `backend/tests/**`, the four approved Test-only files, and this deployment document. These are Railway deployment-trigger exclusions only: they do **not** remove the files from Git, disable GitHub Actions, or prevent GitHub CI from testing them.
+These are Railway deployment-trigger exclusions only: they do not remove the files from Git, disable GitHub Actions, or prevent GitHub CI from testing them.
 
-### 4. Migration authorization boundary
+### 5. Migration authorization boundary
 
-```text
-Production Migration: NOT AUTHORIZED
-Staging Migration:    NOT AUTHORIZED
-```
+    Production Migration: NOT AUTHORIZED
+    Staging Migration:    NOT AUTHORIZED
 
-- The previous Project Owner review recorded the Production Environment approval gate as enabled with `GirgesAdam` as the sole reviewer, Administrator Bypass disabled, Prevent Self-review disabled, and the deployment branch restricted to `main`. Those Environment protection settings were not re-read during this documentation task; this is a prior verification record, not a new attestation.
-- The Project Owner deferred Production migration credential verification and Staging credential target verification. The presence or correctness of `PRODUCTION_MIGRATION_DATABASE_URL` and the Staging credential target must not be assumed from workflow references or Railway runtime variable names. No secret values were accessed or displayed.
-- The Production workflow credential guard fails closed if `PRODUCTION_MIGRATION_DATABASE_URL` is unavailable to the protected Production job. This documentation does not claim that the credential is configured or that Production is ready to migrate.
-- The `Required runtime variables` list above describes application runtime variable names; it is not evidence that GitHub Environment migration credentials are configured or that either migration is authorized.
-- Any future Staging or Production migration requires a separate explicit Project Owner authorization and the applicable credential/target verification. Do not dispatch the workflow based on this documentation update.
-
-The backend is a long-running FastAPI service. Deploy the `backend/` directory as its own Railway service; do not deploy the API as a Vercel function.
+- The previous Project Owner review recorded the Production Environment approval gate as enabled with GirgesAdam as the sole reviewer, Administrator Bypass disabled, Prevent Self-review disabled, and the deployment branch restricted to main. Those Environment protection settings were not re-read during this task; this is a prior verification record, not a new attestation.
+- The Project Owner previously deferred Production migration credential verification and Staging credential target verification. The presence or correctness of PRODUCTION_MIGRATION_DATABASE_URL and the Staging credential target must not be assumed from workflow references or Railway runtime variable names. No secret values were accessed or displayed during this task.
+- The Production workflow credential guard fails closed if PRODUCTION_MIGRATION_DATABASE_URL is unavailable to the protected Production job. This documentation does not claim that the credential is configured or that Production is ready to migrate.
+- The Required runtime variables list below describes application runtime variable names; it is not evidence that GitHub Environment migration credentials exist, have the correct target, or are authorized for use.
+- Any future Production migration requires separate explicit Project Owner authorization and applicable credential/target verification. Do not dispatch the workflow based on this documentation or the Draft PR.
 
 ## Service source
 

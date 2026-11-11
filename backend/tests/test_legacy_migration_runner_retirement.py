@@ -11,3 +11,12 @@ def test_legacy_production_migration_workflow_is_retired() -> None:
 
 def test_canonical_migration_workflow_remains_present() -> None:
     assert CANONICAL_WORKFLOW.is_file()
+
+
+def test_canonical_external_migration_runner_is_production_only() -> None:
+    workflow = CANONICAL_WORKFLOW.read_text(encoding="utf-8")
+    assert "migrate-production:" in workflow
+    assert "migrate-staging:" not in workflow
+    assert "inputs.environment" not in workflow
+    assert "alembic upgrade 0097_member_page_permissions" in workflow
+    assert "alembic upgrade head" not in workflow

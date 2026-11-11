@@ -1,26 +1,19 @@
-name: Database Migration
+name: Production Database Migration
 
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: Target database environment
-        required: true
-        type: choice
-        options:
-          - staging
-          - production
       expected_main_sha:
-        description: Required for production; exact approved Main commit SHA
-        required: false
+        description: Exact approved Main commit SHA
+        required: true
         type: string
       expected_migration_sha256:
-        description: Required for production; SHA-256 of Migration 0097
-        required: false
+        description: SHA-256 of approved Migration 0097
+        required: true
         type: string
       expected_current_revision:
-        description: Required for production; expected current Alembic revision
-        required: false
+        description: Expected current Alembic revision (0096_patient_customer_id)
+        required: true
         type: string
 
 permissions:
@@ -54,7 +47,6 @@ jobs:
         id: guard
         shell: bash
         env:
-          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
           EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
           EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}
           EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
@@ -65,7 +57,7 @@ jobs:
         shell: bash
         env:
           PREFLIGHT_OUTCOME: ${{ steps.guard.outcome }}
-          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
+          SELECTED_ENVIRONMENT: production
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           APPROVED_MAIN_SHA: ${{ steps.guard.outputs.approved_main_sha }}
           MIGRATION_SHA256: ${{ steps.guard.outputs.migration_sha256 }}
@@ -87,62 +79,10 @@ jobs:
             printf '%s\n' "- Migration Target: ${MIGRATION_TARGET:-NOT_AUTHORIZED}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  migrate-staging:
-    name: Migrate staging
-    needs: preflight
-    if: ${{ inputs.environment == 'staging' && needs.preflight.result == 'success' }}
-    runs-on: ubuntu-latest
-    environment:
-      name: staging
-    defaults:
-      run:
-        working-directory: backend
-    env:
-      ENVIRONMENT: staging
-      DEBUG: "false"
-      DOCS_ENABLED: "false"
-      CORS_ORIGINS: ""
-    steps:
-      - name: Checkout exact dispatch commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Show current staging revision
-        env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-        run: alembic current
-
-      - name: Apply staging migrations
-        env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-        run: alembic upgrade head
-
-      - name: Show final staging revision
-        env:
-          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
-        run: alembic current
-
   migrate-production:
     name: Migrate approved production revision
     needs: preflight
-    if: ${{ inputs.environment == 'production' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && needs.preflight.result == 'success' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
