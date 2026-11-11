@@ -24,7 +24,7 @@ REFERENCE = {
     "database_name": "postgres",
     "schema": "public",
     "postgres_version": "17.6",
-    "alembic_revision": ["0096_patient_customer_id"],
+    "alembic_revision": ["0097_member_page_permissions"],
 }
 
 ALLOWED_DRIVERS = {"postgresql", "postgresql+psycopg"}
@@ -92,11 +92,19 @@ def _failure(
     exc: BaseException | None = None,
     mode: str = "UNVERIFIED",
 ) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "status": "UNVERIFIED",
-        "failure_category": category,
-        "connection_mode": mode,
-    }
+    if category == "production_db_readonly_url_missing":
+        result: dict[str, Any] = {
+            "status": "PRODUCTION_ATTESTATION_BLOCKED",
+            "reason": "PRODUCTION_DB_READONLY_URL_MISSING",
+            "failure_category": category,
+            "connection_mode": mode,
+        }
+    else:
+        result = {
+            "status": "UNVERIFIED",
+            "failure_category": category,
+            "connection_mode": mode,
+        }
     if exc is not None:
         result["error_type"] = type(exc).__name__
         result["sqlstate"] = _sqlstate(exc)
@@ -272,6 +280,72 @@ def verify_runtime_identity(
         raise AttestationFailure("unexpected_security_definer_surface")
 
 
+def _normalized_default_expression(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"\s+", "", str(value))
+    while normalized.startswith("(") and normalized.endswith(")"):
+        normalized = normalized[1:-1]
+    return normalized
+
+
+def verify_member_permissions_schema(
+    conn: psycopg.Connection[Any],
+) -> tuple[bool, dict[str, dict[str, object]]]:
+    """Verify only the two approved Member Permissions columns using catalogs.
+
+    This query reads PostgreSQL metadata only. It never selects membership rows
+    or patient/appointment data.
+    """
+    rows = conn.execute(
+        """
+        SELECT
+            attribute.attname,
+            pg_catalog.format_type(attribute.atttypid, attribute.atttypmod),
+            attribute.attnotnull,
+            pg_catalog.pg_get_expr(defaults.adbin, defaults.adrelid)
+        FROM pg_catalog.pg_attribute AS attribute
+        JOIN pg_catalog.pg_class AS relation
+          ON relation.oid = attribute.attrelid
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        LEFT JOIN pg_catalog.pg_attrdef AS defaults
+          ON defaults.adrelid = relation.oid
+         AND defaults.adnum = attribute.attnum
+        WHERE namespace.nspname = 'public'
+          AND relation.relname = 'workspace_members'
+          AND relation.relkind IN ('r', 'p')
+          AND attribute.attnum > 0
+          AND NOT attribute.attisdropped
+          AND attribute.attname IN ('page_permissions', 'permissions_version')
+        ORDER BY attribute.attname
+        """
+    ).fetchall()
+
+    observed: dict[str, dict[str, object]] = {}
+    for column_name, data_type, not_null, default_expression in rows:
+        observed[str(column_name)] = {
+            "data_type": str(data_type),
+            "not_null": bool(not_null),
+            "default": _normalized_default_expression(default_expression),
+        }
+
+    expected = {
+        "page_permissions": {
+            "data_type": "jsonb",
+            "not_null": False,
+            "default": None,
+        },
+        "permissions_version": {
+            "data_type": "integer",
+            "not_null": True,
+            "default": "0",
+        },
+    }
+    verified = len(rows) == len(expected) and observed == expected
+    return verified, observed
+
+
 def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
     """Run all probes on one verified TLS connection in one READ ONLY transaction."""
     if raw_url is None:
@@ -360,9 +434,11 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
         revision_rows = conn.execute(
             "SELECT version_num FROM public.alembic_version ORDER BY version_num"
         ).fetchall()
-        if not revision_rows:
-            raise AttestationFailure("alembic_revision_unavailable")
         revisions = [str(row[0]) for row in revision_rows]
+        actual_alembic_revision = revisions[0] if len(revisions) == 1 else None
+        alembic_revision_verified = revisions == REFERENCE["alembic_revision"]
+
+        schema_verified, member_permissions_schema = verify_member_permissions_schema(conn)
 
         tls_row = conn.execute(
             """
@@ -406,13 +482,21 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
         metadata_match = (
             str(schema) == REFERENCE["schema"]
             and str(server_version) == REFERENCE["postgres_version"]
-            and revisions == REFERENCE["alembic_revision"]
+            and alembic_revision_verified
+            and schema_verified
         )
 
         result = {
             "status": "VERIFIED",
             "verdict": "SAME_DATABASE" if identity_match else "DIFFERENT_DATABASE",
+            "database_identity_verified": identity_match,
             "baseline_metadata_match": metadata_match,
+            "expected_alembic_revision": REFERENCE["alembic_revision"][0],
+            "actual_alembic_revision": actual_alembic_revision,
+            "actual_alembic_revisions": revisions,
+            "alembic_revision_verified": alembic_revision_verified,
+            "schema_verified": schema_verified,
+            "member_permissions_schema": member_permissions_schema,
             "cluster_system_id": system_identifier,
             "database_oid": str(database_oid),
             "database_name": str(database_name),
@@ -426,6 +510,7 @@ def run_attestation(raw_url: str | None = None) -> dict[str, Any]:
             "backend_pid": int(backend_pid),
             "single_transaction": True,
             "transaction_read_only": True,
+            "read_only_transaction_verified": True,
             "runtime_identity_verified": True,
             "security_definer_surface_verified": True,
             "tls": {
@@ -474,7 +559,12 @@ def main() -> int:
     if (
         result.get("status") == "VERIFIED"
         and result.get("verdict") == "SAME_DATABASE"
+        and result.get("database_identity_verified") is True
+        and result.get("alembic_revision_verified") is True
+        and result.get("actual_alembic_revision") == REFERENCE["alembic_revision"][0]
+        and result.get("schema_verified") is True
         and result.get("baseline_metadata_match") is True
+        and result.get("read_only_transaction_verified") is True
         and result.get("rollback_completed") is True
     ):
         return 0

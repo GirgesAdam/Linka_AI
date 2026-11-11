@@ -44,7 +44,17 @@ Production database as:
 | Database OID | 5 | REFERENCE["database_oid"] in the same attestation contract |
 | Schema | public | REFERENCE["schema"] |
 | PostgreSQL version | 17.6 | REFERENCE["postgres_version"] |
-| Alembic revision | 0096_patient_customer_id | REFERENCE["alembic_revision"] |
+| Pre-migration Alembic revision | 0096_patient_customer_id | EXPECTED_PREVIOUS_REVISION in production_migration_preflight.py |
+| Post-migration expected Alembic revision | 0097_member_page_permissions | REFERENCE["alembic_revision"] in production_db_readonly_attestation.py |
+
+The revision sequence is explicit: Production Migration Preflight accepts
+0096_patient_customer_id as the pre-migration starting revision, and the
+migration workflow targets 0097_member_page_permissions. The read-only
+Production Attestation checks only the expected post-migration final revision
+0097_member_page_permissions; it does not accept 0096 as an attested final
+state. This sequence is a repository contract, not evidence of the live
+Production revision. Production migration status remains NOT VERIFIED until a
+separately authorized attestation is completed.
 
 .env.example also uses /postgres as the database path for the migration
 connection. The disposable PostgreSQL 17.6 CI database is named

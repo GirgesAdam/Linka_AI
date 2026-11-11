@@ -61,7 +61,22 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             )
             admin.execute(
                 "INSERT INTO public.alembic_version(version_num) VALUES (%s)",
-                ("0096_patient_customer_id",),
+                ("0097_member_page_permissions",),
+            )
+            admin.execute(
+                """
+                CREATE TABLE public.workspace_members (
+                    id uuid PRIMARY KEY,
+                    workspace_id uuid NOT NULL,
+                    user_id uuid NOT NULL,
+                    role varchar(50) NOT NULL,
+                    is_active boolean NOT NULL DEFAULT true,
+                    page_permissions jsonb NULL,
+                    permissions_version integer NOT NULL DEFAULT 0,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now()
+                )
+                """
             )
             admin.execute("CREATE SEQUENCE public.attestor_guard_sequence")
             admin.execute(
@@ -317,6 +332,7 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             admin.execute("REVOKE SELECT ON public.alembic_version FROM tia_attestor_ci")
             admin.execute("DROP ROLE IF EXISTS tia_attestor_ci")
             admin.execute("DROP SEQUENCE IF EXISTS public.attestor_guard_sequence")
+            admin.execute("DROP TABLE IF EXISTS public.workspace_members")
             admin.execute("DROP TABLE IF EXISTS public.alembic_version")
             # Restore effective PUBLIC access before the disposable CI service
             # is destroyed. The stored ACL becomes explicit; each run requires a
@@ -401,6 +417,54 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(privileges, (False, True, False))
 
+    def test_attestor_verifies_migration_0097_and_permission_schema_from_catalog(self):
+        with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
+            conn.execute("BEGIN READ ONLY")
+            self.assertEqual(
+                conn.execute("SHOW transaction_read_only").fetchone()[0],
+                "on",
+            )
+            revisions = conn.execute(
+                "SELECT version_num FROM public.alembic_version ORDER BY version_num"
+            ).fetchall()
+            schema_verified, observed = runtime_probe.verify_member_permissions_schema(conn)
+
+            self.assertEqual(revisions, [("0097_member_page_permissions",)])
+            self.assertTrue(schema_verified)
+            self.assertEqual(
+                observed,
+                {
+                    "page_permissions": {
+                        "data_type": "jsonb",
+                        "not_null": False,
+                        "default": None,
+                    },
+                    "permissions_version": {
+                        "data_type": "integer",
+                        "not_null": True,
+                        "default": "0",
+                    },
+                },
+            )
+            self.assertFalse(
+                conn.execute(
+                    "SELECT has_table_privilege(current_user, 'public.workspace_members', 'SELECT')"
+                ).fetchone()[0]
+            )
+            conn.execute("ROLLBACK")
+
+    def test_attestor_schema_probe_detects_real_postgres_schema_drift(self):
+        with psycopg.connect(self.admin_conninfo) as admin:
+            admin.execute(
+                "ALTER TABLE public.workspace_members "
+                "ALTER COLUMN permissions_version TYPE bigint"
+            )
+            schema_verified, observed = runtime_probe.verify_member_permissions_schema(admin)
+            admin.rollback()
+
+        self.assertFalse(schema_verified)
+        self.assertEqual(observed["permissions_version"]["data_type"], "bigint")
+
     def test_role_reads_only_the_wrapper_surface_and_cannot_escalate(self):
         with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
             self.assertEqual(
@@ -419,7 +483,7 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             self.assertRegex(cluster_identifier, r"^[0-9]{10,30}$")
             self.assertEqual(
                 conn.execute("SELECT version_num FROM public.alembic_version").fetchone()[0],
-                "0096_patient_customer_id",
+                "0097_member_page_permissions",
             )
             self.assertIsNotNone(
                 conn.execute(
