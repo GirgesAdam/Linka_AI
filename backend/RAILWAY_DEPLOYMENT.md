@@ -1,5 +1,72 @@
 # Tia FastAPI on Railway
 
+## Current Verified Railway and Migration Configuration — 2026-11-11
+
+> **Authoritative current snapshot.** This section records live Railway configuration and the canonical GitHub workflow verified on 2026-11-11 against Main commit `81224bdb0d6233c0709447d2c87f2582fc774754`. It supersedes conflicting operational claims in the historical sections below. No migration was run as part of this verification.
+
+### 1. Canonical external migration workflow
+
+- The only approved external Staging/Production migration runner is `.github/workflows/database-migrate.yml`.
+- The workflow is manually invoked through `workflow_dispatch` and selects either `staging` or `production`.
+- The Production job declares the GitHub Environment `production`; it is restricted to `refs/heads/main` and first workflow attempt (`run_attempt == 1`). The preflight fails closed unless the supplied expected Main SHA equals `github.sha`, the checked-out `HEAD` equals that same SHA, and the SHA is a valid exact commit.
+- Production preflight verifies the raw Git-blob SHA-256 of `backend/alembic/versions/0097_member_page_permissions.py` at that exact commit. It also requires the expected previous revision `0096_patient_customer_id`.
+- Before Production migration, the workflow attests exactly one current Alembic head and verifies it equals the supplied expected previous revision. After migration, it attests exactly one final head and verifies `0097_member_page_permissions`.
+- The Production job uses the explicit target `alembic upgrade 0097_member_page_permissions`. The Staging job uses `alembic upgrade head`.
+- Staging and Production share workflow-level global serialization: `group: database-migration-global`, `queue: max`, and `cancel-in-progress: false`. A Production approval wait therefore remains inside the same global queue and blocks a concurrent Staging migration.
+- PostgreSQL advisory locking is an additional database-level safeguard. `backend/alembic/env.py` wraps the complete online Alembic migration in `migration_session_lock`; `backend/app/database/migration_lock.py` implements a PostgreSQL session-level advisory lock with a 300-second wait timeout.
+- No legacy GitHub migration workflow remains in `.github/workflows/`; the former `apply-0068-production.yml` is absent. `database-migrate.yml` is the canonical external workflow.
+- GitHub CI still runs migrations against its own disposable PostgreSQL service container for tests. That CI-local database activity is not an external Staging or Production migration runner.
+
+### 2. Railway migration-runner retirement — live Production read-back
+
+> Verified directly from the five live Railway service configurations in Project `remarkable-kindness`, Environment `production`, on 2026-11-11. No variable values or secrets were read.
+
+| Railway service | Live pre-deploy migration configuration |
+|---|---|
+| `tia-api` | Empty (`[]`) |
+| `tia-whatsapp` | Empty (`[]`) |
+| `tia-agent-eval` | Empty (`[]`) |
+| `tia-automation-waker` | Not configured |
+| `tia-whatsapp-transport-waker` | Not configured |
+
+No Railway service has an active Alembic pre-deploy command. Railway no longer runs Alembic automatically as part of these five services. The canonical GitHub Actions workflow above is the only approved external Staging/Production migration path; its existence does not authorize a dispatch.
+
+### 3. Railway watch configuration — live read-back
+
+> Both target services were read before and after the narrow Watch Patterns update. Only the `watchPatterns` field was written.
+
+| Setting | `tia-api` | `tia-whatsapp` |
+|---|---|---|
+| Root Directory | `/backend` (API value: `backend`) | `/backend` (API value: `backend`) |
+| Check Suites | ON | OFF |
+
+Both services have exactly these seven Watch Patterns:
+
+```text
+/backend/**
+!/backend/tests/**
+!/backend/app/services/agent_v2/test_harness.py
+!/backend/scripts/test_ai_onboarding_gemini_schema.py
+!/backend/scripts/test_gemini_provider.py
+!/backend/scripts/test_n8n_runtime_contract.py
+!/backend/RAILWAY_DEPLOYMENT.md
+```
+
+The exclusions cover `backend/tests/**`, the four approved Test-only files, and this deployment document. These are Railway deployment-trigger exclusions only: they do **not** remove the files from Git, disable GitHub Actions, or prevent GitHub CI from testing them.
+
+### 4. Migration authorization boundary
+
+```text
+Production Migration: NOT AUTHORIZED
+Staging Migration:    NOT AUTHORIZED
+```
+
+- The previous Project Owner review recorded the Production Environment approval gate as enabled with `GirgesAdam` as the sole reviewer, Administrator Bypass disabled, Prevent Self-review disabled, and the deployment branch restricted to `main`. Those Environment protection settings were not re-read during this documentation task; this is a prior verification record, not a new attestation.
+- The Project Owner deferred Production migration credential verification and Staging credential target verification. The presence or correctness of `PRODUCTION_MIGRATION_DATABASE_URL` and the Staging credential target must not be assumed from workflow references or Railway runtime variable names. No secret values were accessed or displayed.
+- The Production workflow credential guard fails closed if `PRODUCTION_MIGRATION_DATABASE_URL` is unavailable to the protected Production job. This documentation does not claim that the credential is configured or that Production is ready to migrate.
+- The `Required runtime variables` list above describes application runtime variable names; it is not evidence that GitHub Environment migration credentials are configured or that either migration is authorized.
+- Any future Staging or Production migration requires a separate explicit Project Owner authorization and the applicable credential/target verification. Do not dispatch the workflow based on this documentation update.
+
 The backend is a long-running FastAPI service. Deploy the `backend/` directory as its own Railway service; do not deploy the API as a Vercel function.
 
 ## Service source
@@ -26,9 +93,13 @@ Configure the backend with the production/staging values documented in the repos
 
 Do not commit secret values.
 
-## Database migrations - Current Release Governance (2026-11-10)
+The variable names above describe application runtime configuration only. They do not attest that GitHub Environment migration credentials exist, have the correct target, or are authorized for use. See the current Migration authorization boundary above.
 
-### Canonical GitHub Actions runner
+## Historical Migration Release Governance Snapshot — 2026-11-10
+
+### Historical canonical GitHub Actions runner — PR #313 snapshot
+
+> Historical record: this subsection describes the state after PR #313 and before the later PR #315 hardening. The authoritative current workflow and controls are documented in the Current Verified section above.
 
 PR #313 was merged successfully into main.
 
@@ -41,7 +112,9 @@ The canonical workflow retains its release controls: manual workflow_dispatch, P
 
 The previous description of PR #313 as open/draft and the canonical workflow as a proposal is historical and superseded by the merge above. The merge does not itself authorize a Production migration; the Single-Owner technical Production approval gate remains a separate future task and is not implemented by PR #313.
 
-### Live Railway Production migration configuration - read-only observation
+### Historical Railway Production migration configuration — superseded by PR #314
+
+> Historical record: the two active Railway pre-deploy commands described below were subsequently retired. The live 2026-11-11 read-back above confirms empty/not-configured pre-deploy migration settings across all five Railway services.
 
 **Last verified by read-only Railway configuration inspection on 2026-11-10:**
 
@@ -82,7 +155,9 @@ The same deployment log subsequently records:
 
 This is evidence that the migration command ran and that the application passed its readiness check in that deployment. It is **not** an independent database revision attestation and must not be described as one. Migration 0097 must not be re-run or rolled back as part of this PR.
 
-### Correct Single Writer status
+### Historical Single Writer status — superseded by the current verified state
+
+> Historical record: the status below predates PR #314 retirement and PR #315 governance hardening. It must not be read as the current Railway or GitHub migration-runner state.
 
     CANONICAL GITHUB ACTIONS RUNNER:
     MERGED - PR #313
@@ -101,7 +176,9 @@ This is evidence that the migration command ran and that the application passed 
 
 PR #314 retires only the legacy GitHub Actions workflow .github/workflows/apply-0068-production.yml. It does not remove either Railway preDeployCommand. Therefore, even after PR #314 is merged, the Railway commands will remain additional migration paths until the Project Owner separately authorizes and completes their removal.
 
-## Migration serialization
+## Migration serialization — PostgreSQL advisory lock
+
+The GitHub Actions workflow adds a separate global serialization layer across Staging and Production using `database-migration-global`, `queue: max`, and `cancel-in-progress: false`. The PostgreSQL session-level advisory lock described below remains an additional database-level safeguard.
 
 Every online Alembic run acquires the same PostgreSQL **session-level advisory lock** in `alembic/env.py` before Alembic reads the current revision or applies migrations.
 
