@@ -126,7 +126,7 @@ def commit_or_conflict(db: Session, detail: str) -> None:
 
 @router.get("/knowledge", response_model=AgentKnowledgeSnapshot)
 def get_agent_knowledge(
-    workspace: Workspace = Depends(get_current_workspace),
+    workspace: Workspace = Depends(require_section_access_workspace("administration")),
     db: Session = Depends(get_db),
 ) -> AgentKnowledgeSnapshot:
     return build_agent_knowledge_snapshot(db, workspace)
