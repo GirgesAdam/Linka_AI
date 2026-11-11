@@ -1,0 +1,87 @@
+{
+  "runtime_sha": "e8923a9c01213b15f115869267c34760d16f8fbe",
+  "scenario_version": "batch7-v1",
+  "fixture_version": "batch7-demo-fixtures-v2",
+  "full_run_generated_at": "2026-09-27T22:07:28.831954Z",
+  "scenarios": 16,
+  "customer_turns": 93,
+  "infrastructure_failures": 0,
+  "automated_before_manual_adjudication": {
+    "P0": 0,
+    "P1": 0,
+    "P2": 1,
+    "scenario": "S13"
+  },
+  "manual_adjudication": {
+    "S13": {
+      "result": "evaluator_false_positive",
+      "evidence": {
+        "canonical_target_non_actionable": true,
+        "active_task_invalidated": true,
+        "active_task_cancelled": true,
+        "active_reschedule_task_after_invalidation": null,
+        "replacements": 0,
+        "stale_lifecycle_writes": 0,
+        "wrong_appointment_writes": 0
+      }
+    }
+  },
+  "fixed_findings": {
+    "115": "green",
+    "116": "green",
+    "117": "green",
+    "119": "closed_green"
+  },
+  "outstanding_findings": {
+    "122": {
+      "severity": "P2 material",
+      "status": "open",
+      "stability": "intermittent",
+      "stabilized_fixture_reproduction": 1,
+      "subsequent_targeted_passes": 3,
+      "full_fixture_v2_run": "pass"
+    }
+  },
+  "release_gate": {
+    "P0": 0,
+    "P1": 0,
+    "material_P2": 1,
+    "batch7": "NOT_CLOSED",
+    "batch8_allowed": false
+  },
+  "counters_after_manual_adjudication": {
+    "stale_service_carryovers": 0,
+    "stale_doctor_carryovers": 0,
+    "stale_device_carryovers": 0,
+    "stale_date_time_carryovers": 0,
+    "stale_package_carryovers": 0,
+    "wrong_active_task_target": 0,
+    "unexpected_task_restart": 0,
+    "unexpected_task_loss": 0,
+    "duplicate_writes": 0,
+    "stale_lifecycle_writes": 0,
+    "wrong_appointment_writes": 0,
+    "side_read_business_writes": 0,
+    "financial_boundary_violations": 0,
+    "human_ownership_writes": 0,
+    "invented_entity_writes": 0
+  },
+  "metrics": {
+    "input_tokens": 821761,
+    "cached_read_tokens": 504990,
+    "cache_write_tokens": 136415,
+    "uncached_input_tokens": 180356,
+    "output_tokens": 31930,
+    "total_tokens": 853691,
+    "total_llm_calls": 167,
+    "interpreter_calls": 93,
+    "responder_calls": 74,
+    "provider_latency_ms": 437988,
+    "e2e_latency_ms": 744171,
+    "retries": 0,
+    "fallbacks": 0,
+    "actual_cost_usd": 0.11859075,
+    "no_cache_cost_usd": 0.2026682,
+    "cache_saving_percent": 41.49
+  }
+}

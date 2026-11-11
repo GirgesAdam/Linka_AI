@@ -13,6 +13,7 @@ _BATCH_MODULES = {
     "batch_03": "tools.agent_eval.run_batch_03",
     "batch_04": "tools.agent_eval.run_batch_04",
     "batch_05": "tools.agent_eval.run_batch_05",
+    "batch_07": "tools.agent_eval.run_batch_07",
 }
 
 _BATCH1 = (
@@ -82,6 +83,25 @@ _BATCH4_NAMES = (
     "case_17_repeat_package_booking_confirmation",
 )
 
+_BATCH7_NAMES = (
+    "case_01_booking_doctor_info_price_resume",
+    "case_02_booking_multiple_corrections",
+    "case_03_laser_device_correction_after_side_reads",
+    "case_04_service_replacement_invalidates_old_device",
+    "case_05_standard_to_laser_requires_device",
+    "case_06_package_side_read_financial_boundary_resume",
+    "case_07_buy_package_then_continue_booking",
+    "case_08_package_changes_externally_before_booking",
+    "case_09_booking_detour_then_reschedule",
+    "case_10_two_appointments_persisted_reschedule_target",
+    "case_11_cancel_one_then_modify_other",
+    "case_12_reception_edits_appointment_during_conversation",
+    "case_13_external_cancel_before_followup_action",
+    "case_14_abandon_old_booking_start_new",
+    "case_15_ambiguous_new_intent_preserves_active_task",
+    "case_16_completed_booking_long_detour_repeat_confirmation",
+)
+
 _BATCH5_NAMES = (
     "case_01_same_name_different_patients",
     "case_02_phone_beats_ambiguous_name",
@@ -146,8 +166,10 @@ def _rows_for(batch: BatchName) -> list[tuple[str, str]]:
         names, prefix = _BATCH3_NAMES, "b3"
     elif batch == "batch_04":
         names, prefix = _BATCH4_NAMES, "b4"
-    else:
+    elif batch == "batch_05":
         names, prefix = _BATCH5_NAMES, "b5"
+    else:
+        names, prefix = _BATCH7_NAMES, "b7"
     return [
         (name, f"{prefix}_{name.removeprefix('case_')}")
         for name in names
