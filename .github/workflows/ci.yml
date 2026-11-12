@@ -39,6 +39,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      package_service_postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: package_ci_user
+          POSTGRES_PASSWORD: ci_package_disposable_password
+          POSTGRES_DB: package_service_ci
+        ports:
+          - 127.0.0.1:55432:5432
+        options: >-
+          --health-cmd "pg_isready -U package_ci_user -d package_service_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -46,6 +59,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       BILLING_TEST_DATABASE_URL: postgresql+psycopg://billing_ci_user:ci_billing_disposable_password@127.0.0.1:55431/billing_ci
+      EXISTING_PACKAGE_TEST_DATABASE_URL: postgresql+psycopg://package_ci_user:ci_package_disposable_password@127.0.0.1:55432/package_service_ci
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
       SUPABASE_SECRET_KEY: sb_secret_ci_dummy
@@ -118,6 +132,43 @@ jobs:
           if totals != {"tests": 16, "failures": 0, "errors": 0, "skipped": 0}:
               raise SystemExit(f"Billing regression suite did not run all 16 cases: {totals}")
           print("BILLING_POSTGRES_17_6: 16 passed, 0 skipped")
+          PY
+      - name: Verify 31 existing package additional service regressions on PostgreSQL 17.6
+        run: |
+          set -euo pipefail
+          if [ -z "${EXISTING_PACKAGE_TEST_DATABASE_URL:-}" ]; then
+            echo "::error::EXISTING_PACKAGE_TEST_DATABASE_URL must be set; skipping package regressions is forbidden"
+            exit 1
+          fi
+          python - <<'PY'
+          import os
+          from sqlalchemy.engine import make_url
+
+          url = make_url(os.environ["EXISTING_PACKAGE_TEST_DATABASE_URL"])
+          expected = ("127.0.0.1", 55432, "package_service_ci", "package_ci_user")
+          actual = (url.host, url.port, url.database, url.username)
+          if actual != expected:
+              raise SystemExit(f"Non-disposable existing-package test database refused: {actual}")
+          print("EXISTING_PACKAGE_DB_ISOLATION: localhost PostgreSQL 17.6 / package_service_ci")
+          PY
+          # Test-only GiST exclusion dependency; never connect to a shared database.
+          PGPASSWORD=ci_package_disposable_password psql -h 127.0.0.1 -p 55432 -U package_ci_user -d package_service_ci -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS btree_gist;'
+          python -m pytest -q tests/test_existing_package_additional_service_pg17.py --junitxml="$RUNNER_TEMP/existing-package-regression.xml"
+          python - <<'PY'
+          import os
+          from xml.etree import ElementTree
+
+          path = os.path.join(os.environ["RUNNER_TEMP"], "existing-package-regression.xml")
+          root = ElementTree.parse(path).getroot()
+          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+          totals = {
+              key: sum(int(suite.get(key, "0")) for suite in suites)
+              for key in ("tests", "failures", "errors", "skipped")
+          }
+          expected = {"tests": 31, "failures": 0, "errors": 0, "skipped": 0}
+          if totals != expected:
+              raise SystemExit(f"Existing-package regression did not execute all 31 cases: {totals}")
+          print("EXISTING_PACKAGE_POSTGRES_17_6: 31 passed, 0 skipped")
           PY
       - name: Run backend tests
         run: python -m pytest -q
@@ -198,6 +249,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Verify existing package additional service UI
+        run: node --test tests/existing-package-additional-service.test.mjs
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Install Chromium for Playwright browser verification

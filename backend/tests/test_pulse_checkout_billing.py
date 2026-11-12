@@ -506,7 +506,14 @@ def test_appointment_ui_keeps_standard_payment_optional_and_shows_balances() -> 
     assert "primaryPackage.sessions_remaining" in page
     assert "pulseBalances={pulseBalances}" in page
     assert "pulsePackOffers={pulsePackOffers}" in page
-    assert 'useState<"standard" | "pulse">("standard")' in additional_form
+    assert 'useState<"standard" | "package" | "pulse">("standard")' in additional_form
+    assert 'checked={billingMethod === "standard"}' in additional_form
+    assert 'onChange={() => setBillingMethod("standard")}' in additional_form
+    assert 'checked={billingMethod === "package"}' in additional_form
+    assert 'onChange={() => setBillingMethod("package")}' in additional_form
+    assert 'checked={billingMethod === "pulse"}' in additional_form
+    assert 'onChange={() => setBillingMethod("pulse")}' in additional_form
+    assert 'name="patient_package_id"' in additional_form
     assert 'name="pulses_used"' in additional_form
     assert '"use_balance"' in additional_form
 

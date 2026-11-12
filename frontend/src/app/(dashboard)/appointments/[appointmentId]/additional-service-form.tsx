@@ -6,7 +6,7 @@ import { Plus, Zap } from "lucide-react";
 
 import { IdempotentMutationForm, PendingSubmitButton } from "@/components/idempotent-mutation-form";
 import { formatMoney } from "@/lib/format";
-import type { PulseBalance, PulseBillingSettings, PulsePackOffer } from "@/lib/types";
+import type { PatientPackage, PulseBalance, PulseBillingSettings, PulsePackOffer } from "@/lib/types";
 
 import { addAppointmentAdditionalService } from "./actions";
 import type { AppointmentDevicePrice, AppointmentServiceOption } from "./service-editor";
@@ -17,6 +17,9 @@ export function AdditionalServiceForm({
   appointmentId,
   patientId,
   primaryServiceId,
+  appointmentStartAt,
+  patientPackages,
+  packageLoadFailed,
   services,
   devicePrices,
   pulseBalances,
@@ -26,6 +29,9 @@ export function AdditionalServiceForm({
   appointmentId: string;
   patientId: string;
   primaryServiceId: string;
+  appointmentStartAt: string;
+  patientPackages: PatientPackage[];
+  packageLoadFailed: boolean;
   services: AppointmentServiceOption[];
   devicePrices: AppointmentDevicePrice[];
   pulseBalances: PulseBalance[];
@@ -34,10 +40,11 @@ export function AdditionalServiceForm({
 }) {
   const [serviceId, setServiceId] = useState("");
   const [deviceKey, setDeviceKey] = useState("");
-  const [billingMethod, setBillingMethod] = useState<"standard" | "pulse">("standard");
+  const [billingMethod, setBillingMethod] = useState<"standard" | "package" | "pulse">("standard");
   const [pulsesUsed, setPulsesUsed] = useState("");
   const [resolution, setResolution] = useState<PulseResolution>("purchase_pack");
   const [offerId, setOfferId] = useState("");
+  const [patientPackageId, setPatientPackageId] = useState("");
 
   const availableServices = services.filter(
     (service) => service.is_active && service.id !== primaryServiceId,
@@ -66,6 +73,19 @@ export function AdditionalServiceForm({
     [pulsePackOffers, deviceKey, deficit],
   );
 
+  const appointmentInstant = new Date(appointmentStartAt);
+  const appointmentDate = appointmentStartAt.slice(0, 10);
+  const eligiblePackages = patientPackages.filter(
+    (pkg) =>
+      pkg.service_id === serviceId &&
+      pkg.status === "active" &&
+      pkg.sessions_remaining > 0 &&
+      (!pkg.laser_device_key || pkg.laser_device_key === (deviceKey || null)) &&
+      new Date(pkg.purchased_at) <= appointmentInstant &&
+      (!pkg.expires_at || pkg.expires_at >= appointmentDate),
+  );
+  const selectedPackage = eligiblePackages.find((pkg) => pkg.id === patientPackageId) ?? null;
+  const usePackage = billingMethod === "package";
   const usePulse = billingMethod === "pulse";
   const pulseMode =
     !usePulse
@@ -82,17 +102,22 @@ export function AdditionalServiceForm({
       (!needsPack || Boolean(offerId)) &&
       (deficit === 0 || resolution !== "overage" || Boolean(setting?.overage_price_minor)));
   const deviceReady = !service?.requires_laser_device || Boolean(selectedDevice);
+  const validPackage = !usePackage || Boolean(selectedPackage);
 
   return (
     <IdempotentMutationForm
       action={addAppointmentAdditionalService}
       storageKey={`linka:operation:appointment-extra-service:${appointmentId}`}
-      successHref={`/appointments/${appointmentId}?visit_saved=service`}
+      successHref={"/appointments/" + appointmentId + "?visit_saved=" + (usePackage ? "existing_package_service" : "service")}
+      successMessage={usePackage && selectedPackage && service
+        ? "تمت إضافة جلسة " + service.name + " من باكيدج " + selectedPackage.name + " وخصم جلسة واحدة من الرصيد."
+        : "تمت إضافة الخدمة الإضافية بنجاح."}
       className="space-y-3 rounded-xl border border-slate-200 bg-white p-3"
     >
       <input type="hidden" name="appointment_id" value={appointmentId} />
       <input type="hidden" name="patient_id" value={patientId} />
       <input type="hidden" name="pulse_mode" value={pulseMode} />
+      <input type="hidden" name="patient_package_id" value={usePackage ? patientPackageId : ""} />
       <input
         type="hidden"
         name="pulse_pack_offer_id"
@@ -112,6 +137,7 @@ export function AdditionalServiceForm({
               setBillingMethod("standard");
               setPulsesUsed("");
               setOfferId("");
+              setPatientPackageId("");
             }}
             className="form-control mt-1.5 h-10 min-h-10"
           >
@@ -131,6 +157,7 @@ export function AdditionalServiceForm({
             onChange={(event) => {
               setDeviceKey(event.target.value);
               setOfferId("");
+              setPatientPackageId("");
             }}
             className="form-control mt-1.5 h-10 min-h-10"
             required={Boolean(service?.requires_laser_device)}
@@ -147,10 +174,10 @@ export function AdditionalServiceForm({
         </label>
       </div>
 
-      {service?.requires_laser_device && selectedDevice && (
+      {service && deviceReady && (
         <div className="rounded-xl bg-slate-50 p-3">
           <div className="text-xs font-black text-slate-800">طريقة حساب الخدمة الإضافية</div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
             <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-3 text-sm">
               <input
                 type="radio"
@@ -160,11 +187,24 @@ export function AdditionalServiceForm({
               <span>
                 <b className="block">سعر الخدمة العادي</b>
                 <span className="text-xs text-[var(--muted)]">
-                  {formatMoney(selectedDevice.price_minor ?? 0, selectedDevice.currency)}
+                  {service.requires_laser_device && selectedDevice
+                    ? formatMoney(selectedDevice.price_minor ?? 0, selectedDevice.currency)
+                    : "السعر النهائي يُحدَّد عند الحفظ حسب تسعير الطبيب."}
                 </span>
               </span>
             </label>
             <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-3 text-sm">
+              <input
+                type="radio"
+                checked={billingMethod === "package"}
+                onChange={() => setBillingMethod("package")}
+              />
+              <span>
+                <b className="block">استخدام باكيدج موجودة</b>
+                <span className="text-xs text-[var(--muted)]">جلسة من رصيد العميل · 0 EGP إضافية</span>
+              </span>
+            </label>
+            {service.requires_laser_device && <label className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-3 text-sm">
               <input
                 type="radio"
                 checked={billingMethod === "pulse"}
@@ -176,8 +216,46 @@ export function AdditionalServiceForm({
                   المتاح: {balance.toLocaleString("ar-EG")} Pulse
                 </span>
               </span>
-            </label>
+            </label>}
           </div>
+        </div>
+      )}
+
+      {usePackage && service && deviceReady && (
+        <div className="space-y-2 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3">
+          {packageLoadFailed ? (
+            <div role="alert" className="text-sm font-bold text-red-700">
+              تعذر تحميل باكيدجات العميل. حاول إعادة فتح الصفحة.
+              <a className="ms-2 underline" href={"/appointments/" + appointmentId}>إعادة المحاولة</a>
+            </div>
+          ) : eligiblePackages.length === 0 ? (
+            <div role="status" className="text-sm font-semibold text-amber-800">
+              لا توجد باكيدج صالحة لهذه الخدمة والجهاز في تاريخ الموعد، أو أن الجلسات المتاحة غير كافية.
+            </div>
+          ) : (
+            <label className="block text-xs font-bold">
+              باكيدجات العميل المتوافقة مع الخدمة والجهاز
+              <select
+                value={patientPackageId}
+                onChange={(event) => setPatientPackageId(event.target.value)}
+                required
+                className="form-control mt-1.5 h-10 min-h-10"
+              >
+                <option value="">اختار الباكيدج الموجودة</option>
+                {eligiblePackages.map((pkg) => (
+                  <option key={pkg.id} value={pkg.id}>
+                    {pkg.name} · {pkg.sessions_remaining.toLocaleString("ar-EG")} جلسة · {pkg.laser_device_name ?? pkg.laser_device_key ?? "بدون جهاز"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {selectedPackage && (
+            <p className="text-sm font-semibold text-slate-900">
+              سيتم خصم جلسة واحدة من {selectedPackage.name}، والمتبقي بعدها {selectedPackage.sessions_remaining - 1} جلسة.
+              سعر الخدمة الإضافية = 0 EGP.
+            </p>
+          )}
         </div>
       )}
 
@@ -282,7 +360,7 @@ export function AdditionalServiceForm({
         </div>
       )}
 
-      <PendingSubmitButton disabled={!serviceId || !deviceReady || !validPulse} pendingLabel="???? ???????...">
+      <PendingSubmitButton disabled={!serviceId || !deviceReady || !validPulse || !validPackage} pendingLabel="???? ???????...">
         <Plus size={14} /> إضافة للخدمة والحساب
       </PendingSubmitButton>
       <div className="text-xs leading-5 text-[var(--muted)]">
