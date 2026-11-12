@@ -26,12 +26,26 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      billing_postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: billing_ci_user
+          POSTGRES_PASSWORD: ci_billing_disposable_password
+          POSTGRES_DB: billing_ci
+        ports:
+          - 127.0.0.1:55431:5432
+        options: >-
+          --health-cmd "pg_isready -U billing_ci_user -d billing_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
     env:
       DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
+      BILLING_TEST_DATABASE_URL: postgresql+psycopg://billing_ci_user:ci_billing_disposable_password@127.0.0.1:55431/billing_ci
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
       SUPABASE_SECRET_KEY: sb_secret_ci_dummy
@@ -82,6 +96,29 @@ jobs:
           SQL
       - name: Apply migrations on clean PostgreSQL
         run: python -m alembic upgrade head
+      - name: Verify 16 appointment product billing regressions on PostgreSQL 17.6
+        run: |
+          if [ -z "${BILLING_TEST_DATABASE_URL:-}" ]; then
+            echo "::error::BILLING_TEST_DATABASE_URL is required for billing regression tests"
+            exit 1
+          fi
+          # Local disposable billing_ci only: required by appointment GiST exclusions.
+          PGPASSWORD=ci_billing_disposable_password psql -h 127.0.0.1 -p 55431 -U billing_ci_user -d billing_ci -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS btree_gist;'
+          python -m pytest -q tests/test_appointment_product_double_charge_regression.py --junitxml="$RUNNER_TEMP/billing-regression.xml"
+          python - <<'PY'
+          import os
+          from xml.etree import ElementTree
+
+          root = ElementTree.parse(os.path.join(os.environ["RUNNER_TEMP"], "billing-regression.xml")).getroot()
+          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+          totals = {
+              key: sum(int(suite.get(key, "0")) for suite in suites)
+              for key in ("tests", "failures", "errors", "skipped")
+          }
+          if totals != {"tests": 16, "failures": 0, "errors": 0, "skipped": 0}:
+              raise SystemExit(f"Billing regression suite did not run all 16 cases: {totals}")
+          print("BILLING_POSTGRES_17_6: 16 passed, 0 skipped")
+          PY
       - name: Run backend tests
         run: python -m pytest -q
   attestation-role-postgres-17-6:
