@@ -24,6 +24,10 @@ import type {
 import { ManualAppointmentForm } from "./manual-appointment-form";
 import { QuickAppointmentDialog } from "./quick-appointment-dialog";
 import {
+  PatientAppointmentIdentity,
+  type AppointmentPatientDisplay,
+} from "./patient-appointment-identity";
+import {
   AvailabilityBlockControls,
   ReopenAvailabilityBlockButton,
 } from "./availability-block-controls";
@@ -312,12 +316,12 @@ function blocksForColumn(blocks: AvailabilityBlock[], column: ScheduleColumnId) 
   });
 }
 
-function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable, minimumInlineStartMinutes }: {
+function MobileAgenda({ appointments, blocks, hours, timezone, patientDetails, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable, minimumInlineStartMinutes }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
   hours: BookingBranchHour[];
   timezone: string;
-  patientNames: Map<string, string>;
+  patientDetails: Map<string, AppointmentPatientDisplay>;
   serviceById: Map<string, Service>;
   scheduleColumns: ScheduleColumn[];
   visibleColumns: ScheduleColumnId[];
@@ -420,7 +424,7 @@ function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, ser
             <div className="min-w-0">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div>
+                  <PatientAppointmentIdentity patient={patientDetails.get(appointment.patient_id)} />
                   <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div>
                 </div>
                 <StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" />
@@ -439,7 +443,7 @@ function DailySchedule({
   blocks,
   hours,
   timezone,
-  patientNames,
+  patientDetails,
   serviceById,
   scheduleColumns,
   visibleColumns,
@@ -454,7 +458,7 @@ function DailySchedule({
   blocks: AvailabilityBlock[];
   hours: BookingBranchHour[];
   timezone: string;
-  patientNames: Map<string, string>;
+  patientDetails: Map<string, AppointmentPatientDisplay>;
   serviceById: Map<string, Service>;
   scheduleColumns: ScheduleColumn[];
   visibleColumns: ScheduleColumnId[];
@@ -480,7 +484,7 @@ function DailySchedule({
 
   return (
     <>
-      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientNames={patientNames} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} availabilityTruthAvailable={availabilityTruthAvailable} minimumInlineStartMinutes={minimumInlineStartMinutes} />
+      <MobileAgenda appointments={appointments} blocks={blocks} hours={hours} timezone={timezone} patientDetails={patientDetails} serviceById={serviceById} scheduleColumns={scheduleColumns} visibleColumns={visibleColumns} selectedDate={selectedDate} branchId={branchId} currentParams={currentParams} allowQuickBooking={allowQuickBooking} availabilityTruthAvailable={availabilityTruthAvailable} minimumInlineStartMinutes={minimumInlineStartMinutes} />
       <div className="hidden space-y-4 lg:block">
       {hours
         .slice()
@@ -547,7 +551,7 @@ function DailySchedule({
                                     {period.block && <div className="flex items-center justify-between gap-2"><div className="text-[11px] font-black text-rose-700">{availabilityBlockScopeLabel(period.block, serviceById, scheduleColumns)}</div><ReopenAvailabilityBlockButton blockId={period.block.id} compact /></div>}
                                     {period.appointments.map((appointment) => {
                                       const service = serviceById.get(appointment.service_id);
-                                      return <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="interactive-surface block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div><div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div></div><StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" /></div><div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">{appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}</div></Link>;
+                                      return <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="interactive-surface block rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><PatientAppointmentIdentity patient={patientDetails.get(appointment.patient_id)} /><div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div></div><StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" /></div><div className="mt-2 text-xs font-bold text-[var(--accent-strong)]">{appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}</div></Link>;
                                     })}
                                   </div>
                                 ) : isAvailable ? (
@@ -585,7 +589,7 @@ function DailySchedule({
                                         >
                                           <div className="flex items-start justify-between gap-2">
                                             <div className="min-w-0">
-                                              <div className="truncate text-sm font-black text-slate-950">{patientNames.get(appointment.patient_id) || "عميل"}</div>
+                                              <PatientAppointmentIdentity patient={patientDetails.get(appointment.patient_id)} />
                                               <div className="mt-0.5 truncate text-xs font-semibold text-slate-600">{service?.name || "خدمة"}</div>
                                             </div>
                                             <StatusBadge domain="appointment" status={appointment.status} showIcon={false} className="shrink-0" />
@@ -619,7 +623,7 @@ function DailySchedule({
               .filter((appointment) => !rendered.has(appointment.id) && visibleColumns.includes(appointmentColumn(appointment, serviceById)))
               .map((appointment) => (
                 <Link key={appointment.id} href={`/appointments/${appointment.id}`} className="interactive-surface rounded-xl border border-transparent bg-white p-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
-                  <div className="font-black">{patientNames.get(appointment.patient_id) || "عميل"}</div>
+                  <PatientAppointmentIdentity patient={patientDetails.get(appointment.patient_id)} />
                   <div className="mt-1 text-xs text-slate-600">
                     {serviceById.get(appointment.service_id)?.name || "خدمة"} · {appointmentTime(appointment.start_at, timezone)} – {appointmentTime(appointment.end_at, timezone)}
                   </div>
@@ -736,7 +740,7 @@ export default async function AppointmentsPage({
 
   const [appointmentPatients, manualPatient, quickPatient] = await Promise.all([
     appointmentPatientIds.length
-      ? lookupPatientsByIds(appointmentPatientIds).catch(() => [])
+      ? lookupPatientsByIds(appointmentPatientIds, true).catch(() => [])
       : Promise.resolve([] as AppointmentPatientLookup[]),
     findPatientByPhone(manualPhone),
     quickWindow ? findPatientByPhone(quickPhone) : Promise.resolve(null),
@@ -767,11 +771,17 @@ export default async function AppointmentsPage({
 
   const defaultBranchId = selectedBranch?.id;
 
-  const patientNames = new Map(
-    appointmentPatients.map((patient) => [patient.id, patientDisplayName(patient)]),
+  const patientDetails = new Map<string, AppointmentPatientDisplay>(
+    appointmentPatients.map((patient) => [
+      patient.id,
+      { name: patientDisplayName(patient), phone: patient.phone },
+    ]),
   );
   if (selectedPatient) {
-    patientNames.set(selectedPatient.id, patientDisplayName(selectedPatient));
+    patientDetails.set(selectedPatient.id, {
+      name: patientDisplayName(selectedPatient),
+      phone: selectedPatient.phone,
+    });
   }
   const serviceNames = new Map(services.map((service) => [service.id, service.name]));
   const serviceById = new Map(services.map((service) => [service.id, service]));
@@ -788,7 +798,7 @@ export default async function AppointmentsPage({
         title="المواعيد"
         description={
           selectedPatient
-            ? `جدول مواعيد ${patientNames.get(selectedPatient.id) || "العميل"} حسب اليوم.`
+            ? `جدول مواعيد ${patientDetails.get(selectedPatient.id)?.name || "العميل"} حسب اليوم.`
             : "جدول يومي واضح مبني على ساعات عمل العيادة."
         }
         action={
@@ -995,7 +1005,7 @@ export default async function AppointmentsPage({
               blocks={availabilityBlocks}
               hours={workingHours}
               timezone={timezone}
-              patientNames={patientNames}
+              patientDetails={patientDetails}
               serviceById={serviceById}
               scheduleColumns={scheduleColumns}
               visibleColumns={visibleColumns}
