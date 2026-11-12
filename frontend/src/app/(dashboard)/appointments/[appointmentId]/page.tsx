@@ -2,7 +2,6 @@ import { PermissionLink as Link } from "@/components/permission-link";
 import {
   ArrowRight,
   CalendarClock,
-  CheckCircle2,
   CircleDollarSign,
   CircleX,
   History,
@@ -39,7 +38,6 @@ import type {
 import {
   addAppointmentProduct,
   cancelAppointment,
-  confirmAppointment,
   purchasePackageForAdditionalService,
   purchasePackageFromAppointment,
   refundAppointmentPayment,
@@ -50,6 +48,7 @@ import {
 } from "./actions";
 import { AdditionalServiceForm } from "./additional-service-form";
 import { AppointmentPaymentForm } from "./appointment-payment-form";
+import { PatientPackageBalances } from "./patient-package-balances";
 import {
   AppointmentServiceEditor,
   type AppointmentDevicePrice,
@@ -191,11 +190,6 @@ export default async function AppointmentOperationsPage({
     appointment.patient_package_id || appointment.billing_context === "package_prepaid" || appointment.package_external_id,
   );
   const patientPackageMap = new Map(patientPackages.map((item) => [item.id, item]));
-  const primaryPackage = appointment.patient_package_id
-    ? patientPackageMap.get(appointment.patient_package_id) ?? null
-    : appointment.package_external_id
-      ? patientPackages.find((item) => item.external_id === appointment.package_external_id) ?? null
-      : null;
   const pulseBacked = appointment.billing_context === "pulse_prepaid";
   const prepaidBacked = packageBacked || pulseBacked;
   const pulseSettlementPending =
@@ -232,6 +226,13 @@ export default async function AppointmentOperationsPage({
   );
   const overpaidMinor = Math.max(payments.net_paid_minor - payments.price_minor, 0);
   const canEditVisitCharges = ["pending", "confirmed", "checked_in", "in_progress", "completed"].includes(appointment.status);
+  const canCompleteCheckout = allowed.has("complete");
+  const canAcceptFuturePrepayment =
+    ["pending", "confirmed"].includes(appointment.status) &&
+    !canCompleteCheckout &&
+    payments.balance_minor > 0;
+  const canAcceptCompletedPayment =
+    appointment.status === "completed" && payments.balance_minor > 0;
   const compatiblePackageOffers = packageOffers.filter(
     (offer) =>
       offer.service_id === appointment.service_id &&
@@ -273,8 +274,10 @@ export default async function AppointmentOperationsPage({
                   ? "تمت إضافة تكلفة الـPulses الزائدة إلى حساب الموعد."
                   : feedback.visit_saved === "pulse_pack"
                     ? "تمت إضافة باقة Pulses جديدة وتغطية العجز منها."
+                    : feedback.visit_saved === "checkout_complete"
+                      ? "تم تسجيل الحساب وإنهاء الموعد بنجاح. حالة الموعد الآن: تم."
                     : feedback.visit_saved === "payment"
-                      ? "تم تسجيل الحساب والدفعة بنجاح."
+                      ? "تم تسجيل الدفعة بنجاح."
                       : "تم تحديث خدمات الزيارة والحساب."}
         </div>
       )}
@@ -383,30 +386,6 @@ export default async function AppointmentOperationsPage({
               )}
 
               <div className="mt-5 flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
-                {allowed.has("confirm") && (
-                  <form action={confirmAppointment}>
-                    <input type="hidden" name="appointment_id" value={appointment.id} />
-                    <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                    <Button><CheckCircle2 size={15} /> تأكيد الموعد</Button>
-                  </form>
-                )}
-                {allowed.has("complete") && (
-                  pulseSettlementPending ? (
-                    <div className="flex flex-col gap-1">
-                      <Button disabled><CheckCircle2 size={15} /> تسجيل اكتمال الجلسة</Button>
-                      <span className="text-[11px] font-semibold text-amber-700">
-                        سجّل استهلاك الـPulses وسوّي أي عجز أولًا.
-                      </span>
-                    </div>
-                  ) : (
-                    <form action={updateAppointmentStatus}>
-                      <input type="hidden" name="appointment_id" value={appointment.id} />
-                      <input type="hidden" name="patient_id" value={appointment.patient_id} />
-                      <input type="hidden" name="status" value="completed" />
-                      <Button><CheckCircle2 size={15} /> تسجيل اكتمال الجلسة</Button>
-                    </form>
-                  )
-                )}
                 {allowed.has("no_show") && (
                   <form action={updateAppointmentStatus}>
                     <input type="hidden" name="appointment_id" value={appointment.id} />
@@ -463,8 +442,7 @@ export default async function AppointmentOperationsPage({
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(visiblePulseBalances.length > 0 || primaryPackage) && (
-                <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+              <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
                   <div className="text-sm font-black text-slate-900">رصيد العميل وقت الحساب</div>
                   <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {visiblePulseBalances.map((balance) => (
@@ -480,20 +458,9 @@ export default async function AppointmentOperationsPage({
                         )}
                       </div>
                     ))}
-                    {primaryPackage && (
-                      <div className="rounded-lg bg-white p-3">
-                        <div className="text-xs text-[var(--muted)]">{primaryPackage.name}</div>
-                        <b className="mt-1 block text-slate-900">
-                          {primaryPackage.sessions_remaining.toLocaleString("ar-EG")} جلسة متبقية
-                        </b>
-                        <div className="mt-1 text-[11px] text-[var(--muted)]">
-                          بعد احتساب الحجوزات الحالية من أصل {primaryPackage.sessions_purchased.toLocaleString("ar-EG")} جلسة
-                        </div>
-                      </div>
-                    )}
+                    <PatientPackageBalances packages={patientPackages} loadFailed={packageLoadFailed} />
                   </div>
                 </div>
-              )}
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 <div className="rounded-xl bg-[var(--surface-2)] p-3">
@@ -679,8 +646,10 @@ export default async function AppointmentOperationsPage({
 
               {payments.refunded_minor > 0 && <div className="text-xs text-[var(--muted)]">تم استرداد {formatMoney(payments.refunded_minor, payments.currency)} من المدفوعات المسجلة.</div>}
 
-              {(payments.balance_minor > 0 || pulseSettlementPending) && ["pending", "confirmed", "completed"].includes(appointment.status) && (
+              {(canCompleteCheckout || canAcceptFuturePrepayment || canAcceptCompletedPayment) && (
                 <AppointmentPaymentForm
+                  completesVisit={canCompleteCheckout}
+                  alreadyCompleted={appointment.status === "completed"}
                   appointmentId={appointment.id}
                   patientId={appointment.patient_id}
                   currency={payments.currency}

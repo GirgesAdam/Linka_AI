@@ -170,6 +170,41 @@ jobs:
               raise SystemExit(f"Existing-package regression did not execute all 31 cases: {totals}")
           print("EXISTING_PACKAGE_POSTGRES_17_6: 31 passed, 0 skipped")
           PY
+      - name: Verify 26 appointment unified checkout and package balance regressions on PostgreSQL 17.6
+        run: |
+          set -euo pipefail
+          if [ -z "${EXISTING_PACKAGE_TEST_DATABASE_URL:-}" ]; then
+            echo "::error::EXISTING_PACKAGE_TEST_DATABASE_URL must be set; checkout regressions may not be skipped"
+            exit 1
+          fi
+          python - <<'PY'
+          import os
+          from sqlalchemy.engine import make_url
+
+          url = make_url(os.environ["EXISTING_PACKAGE_TEST_DATABASE_URL"])
+          expected = ("127.0.0.1", 55432, "package_service_ci", "package_ci_user")
+          actual = (url.host, url.port, url.database, url.username)
+          if actual != expected:
+              raise SystemExit(f"Non-disposable checkout test database refused: {actual}")
+          print("CHECKOUT_DB_ISOLATION: localhost PostgreSQL 17.6 / package_service_ci")
+          PY
+          python -m pytest -q tests/test_appointment_checkout_completion_pg17.py --junitxml="$RUNNER_TEMP/checkout-completion.xml"
+          python - <<'PY'
+          import os
+          from xml.etree import ElementTree
+
+          path = os.path.join(os.environ["RUNNER_TEMP"], "checkout-completion.xml")
+          root = ElementTree.parse(path).getroot()
+          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+          totals = {
+              key: sum(int(suite.get(key, "0")) for suite in suites)
+              for key in ("tests", "failures", "errors", "skipped")
+          }
+          expected = {"tests": 26, "failures": 0, "errors": 0, "skipped": 0}
+          if totals != expected:
+              raise SystemExit(f"Checkout PostgreSQL regression did not execute all 26 cases: {totals}")
+          print("UNIFIED_CHECKOUT_POSTGRES_17_6: 26 passed, 0 skipped")
+          PY
       - name: Run backend tests
         run: python -m pytest -q
   attestation-role-postgres-17-6:
@@ -251,6 +286,23 @@ jobs:
       - run: npm ci
       - name: Verify existing package additional service UI
         run: node --test tests/existing-package-additional-service.test.mjs
+      - name: Verify appointment unified checkout and all package balance UI
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/appointment-checkout-package-balances.test.mjs | tee "$RUNNER_TEMP/checkout-ui.tap"
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          output = Path(os.environ["RUNNER_TEMP"], "checkout-ui.tap").read_text()
+          matches = re.findall(r"^# (tests|pass|fail|cancelled|skipped) (\d+)\s*$", output, re.M)
+          totals = {key: int(value) for key, value in matches}
+          expected = {"tests": 12, "pass": 12, "fail": 0, "cancelled": 0, "skipped": 0}
+          if len(matches) != len(expected) or totals != expected:
+              raise SystemExit(f"Checkout UI regression did not run all 12 cases: {totals}")
+          print("UNIFIED_CHECKOUT_UI: 12 passed, 0 skipped")
+          PY
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Install Chromium for Playwright browser verification

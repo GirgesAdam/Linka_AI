@@ -209,7 +209,9 @@ export async function recordAppointmentPayment(formData: FormData) {
   const externalReference = String(formData.get("external_reference") || "").trim();
   const pulseMode = String(formData.get("pulse_mode") || "none");
   const pulsePackOfferId = String(formData.get("pulse_pack_offer_id") || "").trim();
-  if (!appointmentId || !paymentMethod) return;
+  if (!appointmentId || !paymentMethod) {
+    throw new Error("لا يمكن تسجيل الحساب دون موعد وطريقة حساب صالحة.");
+  }
 
   try {
     await tiaRequest(`/payments/appointments/${appointmentId}/checkout`, {
@@ -228,8 +230,8 @@ export async function recordAppointmentPayment(formData: FormData) {
     const message =
       error instanceof TiaApiError
         ? error.message
-        : "ØªØ¹Ø°Ø± ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø­Ø³Ø§Ø¨. Ø±Ø§Ø¬Ø¹ Ø·Ø±ÙŠÙ‚Ø© Ø§Ù„Ø­Ø³Ø§Ø¨ ÙˆØ§Ù„Ù…Ø¨Ù„Øº ÙˆØ­Ø§ÙˆÙ„ Ù…Ø±Ø© Ø£Ø®Ø±Ù‰.";
-    redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(message)}`);
+        : "تعذر تسجيل الحساب وإنهاء الموعد. لم تكتمل العملية؛ حاول مرة أخرى.";
+    throw new Error(message);
   }
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }

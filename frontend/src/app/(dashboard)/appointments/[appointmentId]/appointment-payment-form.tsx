@@ -45,6 +45,8 @@ export function AppointmentPaymentForm({
   netPaidMinor,
   balanceMinor,
   pulseCheckout,
+  completesVisit,
+  alreadyCompleted,
 }: {
   appointmentId: string;
   patientId: string;
@@ -55,6 +57,8 @@ export function AppointmentPaymentForm({
   netPaidMinor: number;
   balanceMinor: number;
   pulseCheckout?: PulseCheckout | null;
+  completesVisit: boolean;
+  alreadyCompleted: boolean;
 }) {
   const [discount, setDiscount] = useState(major(discountMinor));
   const [amount, setAmount] = useState(major(balanceMinor));
@@ -124,7 +128,12 @@ export function AppointmentPaymentForm({
     <IdempotentMutationForm
       action={recordAppointmentPayment}
       storageKey={`linka:operation:appointment-payment:${appointmentId}`}
-      successHref={`/appointments/${appointmentId}?visit_saved=payment`}
+      successHref={"/appointments/" + appointmentId + "?visit_saved=" + (completesVisit ? "checkout_complete" : "payment")}
+      successMessage={completesVisit
+        ? "تم تسجيل الحساب وإنهاء الموعد بنجاح."
+        : alreadyCompleted
+          ? "تم تسجيل الدفعة الإضافية بنجاح."
+          : "تم تسجيل الدفعة المقدمة، وسيظل الموعد مفتوحاً حتى موعده."}
       className="space-y-4 rounded-xl border border-[var(--border)] p-4"
     >
       <input type="hidden" name="appointment_id" value={appointmentId} />
@@ -281,23 +290,33 @@ export function AppointmentPaymentForm({
             className="form-control mt-2 h-10 min-h-10"
           />
         </label>
-        <label className="text-sm font-bold">
-          طريقة الدفع
-          <select name="payment_method" defaultValue="cash" className="form-control mt-2 h-10 min-h-10">
-            <option value="cash">Cash</option>
-            <option value="visa">Visa</option>
-            <option value="instapay">InstaPay</option>
-          </select>
-        </label>
-        <label className="text-sm font-bold">
-          رقم الإيصال أو المرجع - اختياري
-          <input name="external_reference" maxLength={128} placeholder="مثال: رقم الإيصال" className="form-control mt-2 h-10 min-h-10" />
-        </label>
+        {parseMinor(amount) > 0 ? (
+          <>
+            <label className="text-sm font-bold">
+              طريقة الدفع
+              <select name="payment_method" defaultValue="cash" className="form-control mt-2 h-10 min-h-10">
+                <option value="cash">Cash</option>
+                <option value="visa">Visa</option>
+                <option value="instapay">InstaPay</option>
+              </select>
+            </label>
+            <label className="text-sm font-bold">
+              رقم الإيصال أو المرجع - اختياري
+              <input name="external_reference" maxLength={128} placeholder="مثال: رقم الإيصال" className="form-control mt-2 h-10 min-h-10" />
+            </label>
+          </>
+        ) : (
+          <input type="hidden" name="payment_method" value="cash" />
+        )}
       </div>
 
       <PendingSubmitButton pendingLabel="???? ?????..." disabled={pulseSelectionRequired || packSelectionRequired}>
         <CircleDollarSign size={15} />
-        {parseMinor(amount) > 0 ? "تسجيل الحساب والدفعة" : "تأكيد الحساب"}
+        {completesVisit
+          ? "تسجيل الحساب وإنهاء الموعد"
+          : alreadyCompleted
+            ? "تسجيل دفعة إضافية"
+            : "تسجيل دفعة مقدمة دون إتمام الموعد"}
       </PendingSubmitButton>
     </IdempotentMutationForm>
   );
