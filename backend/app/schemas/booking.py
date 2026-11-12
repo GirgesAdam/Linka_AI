@@ -129,6 +129,25 @@ class AvailabilityResponse(BaseModel):
     slots: list[AvailabilitySlot]
 
 
+class BookingBranchHourRead(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    start_time: time
+    end_time: time
+
+
+class BookingBranchScheduleRead(BaseModel):
+    id: UUID
+    name: str
+    timezone: str
+    is_active: bool
+    working_hours: list[BookingBranchHourRead] = Field(default_factory=list)
+
+
+class BookingBranchSchedulesRead(BaseModel):
+    workspace_timezone: str
+    branches: list[BookingBranchScheduleRead] = Field(default_factory=list)
+
+
 class QuickAppointmentCreate(BaseModel):
     patient_id: UUID
     branch_id: UUID

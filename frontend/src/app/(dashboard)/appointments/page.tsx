@@ -11,9 +11,11 @@ import { appointmentLabels } from "@/lib/status";
 import { tiaRequest } from "@/lib/tia/api";
 import type {
   Appointment,
+  AppointmentPatientLookup,
+  BookingBranchSchedule,
+  BookingBranchSchedulesResponse,
   ClinicLaserDevice,
   Doctor,
-  Patient,
   PatientPackage,
   PulseBalance,
   Service,
@@ -56,28 +58,7 @@ type AvailabilityBlock = {
   reason: string | null;
 };
 
-type KnowledgeHour = {
-  weekday: number;
-  start_time: string;
-  end_time: string;
-};
-
-type BookingKnowledge = {
-  workspace_timezone: string;
-  booking_settings: { slot_interval_minutes?: number } | null;
-  branches: Array<{
-    id: string;
-    name: string;
-    timezone: string | null;
-    is_active: boolean;
-    working_hours: KnowledgeHour[];
-  }>;
-  doctors: Array<{
-    id: string;
-    branches: Array<{ id: string; is_primary: boolean }>;
-  }>;
-  patients: Array<{ id: string; name: string; phone: string | null }>;
-};
+type BookingBranchHour = BookingBranchSchedule["working_hours"][number];
 
 const scheduleStatuses = new Set([
   "pending",
@@ -111,12 +92,28 @@ async function findPatientByPhone(value: string) {
   if (!value.trim()) return null;
   const resultSets = await Promise.all(
     phoneSearchVariants(value).map((variant) =>
-      tiaRequest<Patient[]>(`/crm/patients?q=${encodeURIComponent(variant)}&limit=20`).catch(() => []),
+      tiaRequest<AppointmentPatientLookup[]>(
+        `/crm/patients/lookup?q=${encodeURIComponent(variant)}&limit=20&include_phone=true`,
+      ).catch(() => []),
     ),
   );
   const identity = normalizePhoneIdentity(value);
   const candidates = [...new Map(resultSets.flat().map((patient) => [patient.id, patient])).values()];
   return candidates.find((patient) => normalizePhoneIdentity(patient.phone) === identity) || null;
+}
+
+function lookupPatientsByIds(patientIds: string[], includePhone = false) {
+  return tiaRequest<AppointmentPatientLookup[]>("/crm/patients/lookup/batch", {
+    method: "POST",
+    body: JSON.stringify({
+      patient_ids: [...new Set(patientIds)],
+      include_phone: includePhone,
+    }),
+  });
+}
+
+function patientDisplayName(patient: AppointmentPatientLookup) {
+  return `${patient.first_name} ${patient.last_name || ""}`.trim();
 }
 
 function dateInTimezone(timezone: string) {
@@ -318,7 +315,7 @@ function blocksForColumn(blocks: AvailabilityBlock[], column: ScheduleColumnId) 
 function MobileAgenda({ appointments, blocks, hours, timezone, patientNames, serviceById, scheduleColumns, visibleColumns, selectedDate, branchId, currentParams, allowQuickBooking, availabilityTruthAvailable, minimumInlineStartMinutes }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
-  hours: KnowledgeHour[];
+  hours: BookingBranchHour[];
   timezone: string;
   patientNames: Map<string, string>;
   serviceById: Map<string, Service>;
@@ -455,7 +452,7 @@ function DailySchedule({
 }: {
   appointments: Appointment[];
   blocks: AvailabilityBlock[];
-  hours: KnowledgeHour[];
+  hours: BookingBranchHour[];
   timezone: string;
   patientNames: Map<string, string>;
   serviceById: Map<string, Service>;
@@ -646,14 +643,15 @@ export default async function AppointmentsPage({
   const manualPhone = (raw.manual_phone || "").trim();
   const quickPhone = (raw.quick_phone || "").trim();
 
-  const [knowledge, services, doctors, staff, laserDevices, devicePrices] = await Promise.all([
-    tiaRequest<BookingKnowledge>("/clinic/knowledge"),
+  const [branchScheduleResponse, services, doctors, staff, laserDevices, devicePrices] = await Promise.all([
+    tiaRequest<BookingBranchSchedulesResponse>("/booking/branch-schedules"),
     tiaRequest<Service[]>("/clinic/services"),
     tiaRequest<Doctor[]>("/clinic/doctors"),
     tiaRequest<Staff[]>("/clinic/staff"),
     tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => []),
     tiaRequest<AppointmentDevicePrice[]>("/inventory/laser-prices").catch(() => []),
   ]);
+  const branchSchedules = branchScheduleResponse.branches;
   const scheduleColumns = buildScheduleColumns(laserDevices);
   const visibleColumns = requestedColumns(raw.column, scheduleColumns);
   const quickColumn = scheduleColumns.find((item) => item.id === raw.quick_column) || null;
@@ -670,12 +668,12 @@ export default async function AppointmentsPage({
       ? { column: quickColumn.id, start: quickStart, end: quickEnd }
       : null;
 
-  const activeBranches = knowledge.branches.filter((branch) => branch.is_active);
+  const activeBranches = branchSchedules.filter((branch) => branch.is_active);
   const selectedBranch =
     activeBranches.find((branch) => branch.id === raw.branch_id) ||
     activeBranches[0] ||
     null;
-  const timezone = selectedBranch?.timezone || knowledge.workspace_timezone || "Africa/Cairo";
+  const timezone = selectedBranch?.timezone || branchScheduleResponse.workspace_timezone || "Africa/Cairo";
   const today = dateInTimezone(timezone);
   const currentMinute = minuteInTimezone(new Date().toISOString(), timezone);
   const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(raw.date || "") ? raw.date! : today;
@@ -720,7 +718,11 @@ export default async function AppointmentsPage({
 
   const [allAppointments, selectedPatient, availabilityBlockState] = await Promise.all([
     tiaRequest<Appointment[]>(`/booking/appointments?${query.toString()}`),
-    patientId ? tiaRequest<Patient>(`/crm/patients/${patientId}`).catch(() => null) : Promise.resolve(null),
+    patientId
+      ? lookupPatientsByIds([patientId], true)
+          .then((patients) => patients[0] ?? null)
+          .catch(() => null)
+      : Promise.resolve(null),
     selectedBranch
       ? tiaRequest<AvailabilityBlock[]>(`/booking/availability-blocks?branch_id=${selectedBranch.id}&date=${selectedDate}`)
           .then((blocks) => ({ blocks, failed: false }))
@@ -730,8 +732,12 @@ export default async function AppointmentsPage({
   const availabilityBlocks = availabilityBlockState.blocks;
   const availabilityTruthAvailable = !availabilityBlockState.failed;
   const appointments = allAppointments.filter((appointment) => scheduleStatuses.has(appointment.status));
+  const appointmentPatientIds = appointments.map((appointment) => appointment.patient_id);
 
-  const [manualPatient, quickPatient] = await Promise.all([
+  const [appointmentPatients, manualPatient, quickPatient] = await Promise.all([
+    appointmentPatientIds.length
+      ? lookupPatientsByIds(appointmentPatientIds).catch(() => [])
+      : Promise.resolve([] as AppointmentPatientLookup[]),
     findPatientByPhone(manualPhone),
     quickWindow ? findPatientByPhone(quickPhone) : Promise.resolve(null),
   ]);
@@ -761,12 +767,11 @@ export default async function AppointmentsPage({
 
   const defaultBranchId = selectedBranch?.id;
 
-  const patientNames = new Map(knowledge.patients.map((patient) => [patient.id, patient.name]));
+  const patientNames = new Map(
+    appointmentPatients.map((patient) => [patient.id, patientDisplayName(patient)]),
+  );
   if (selectedPatient) {
-    patientNames.set(
-      selectedPatient.id,
-      `${selectedPatient.first_name} ${selectedPatient.last_name || ""}`.trim(),
-    );
+    patientNames.set(selectedPatient.id, patientDisplayName(selectedPatient));
   }
   const serviceNames = new Map(services.map((service) => [service.id, service.name]));
   const serviceById = new Map(services.map((service) => [service.id, service]));

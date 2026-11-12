@@ -60,6 +60,24 @@ def test_booking_validation_checks_balance_on_appointment_date(monkeypatch) -> N
     assert captured["on_date"] == date(2026, 10, 5)
 
 
+def test_pulse_pack_expiry_is_inclusive_on_expiry_date() -> None:
+    pack = SimpleNamespace(status="active", expires_at=date(2026, 11, 13))
+
+    assert pulse_service._effective_pack_status(pack, on_date=date(2026, 11, 13)) == "active"
+
+
+def test_pulse_pack_expired_one_day_before_appointment_is_rejected() -> None:
+    pack = SimpleNamespace(status="active", expires_at=date(2026, 11, 12))
+
+    assert pulse_service._effective_pack_status(pack, on_date=date(2026, 11, 13)) == "expired"
+
+
+def test_pulse_pack_with_later_expiry_remains_valid_on_appointment_date() -> None:
+    pack = SimpleNamespace(status="active", expires_at=date(2026, 11, 14))
+
+    assert pulse_service._effective_pack_status(pack, on_date=date(2026, 11, 13)) == "active"
+
+
 def test_booking_validation_rejects_zero_balance(monkeypatch) -> None:
     monkeypatch.setattr(pulse_service, "available_pulse_balance", lambda *args, **kwargs: 0)
     with pytest.raises(PulseBillingError, match="no available pulse balance"):
@@ -237,9 +255,7 @@ def test_migration_and_payment_contract_include_pulse_billing() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    migration = (root / "alembic/versions/0082_pulse_wallet_billing.py").read_text(
-        encoding="utf-8"
-    )
+    migration = (root / "alembic/versions/0082_pulse_wallet_billing.py").read_text(encoding="utf-8")
     payments = (root / "app/services/payments.py").read_text(encoding="utf-8")
     finance = (root / "app/services/finance.py").read_text(encoding="utf-8")
     assert "pulse_pack_offers" in migration

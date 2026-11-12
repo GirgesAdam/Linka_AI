@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.dependencies.security import get_workspace_admin
+from app.api.dependencies.security import get_workspace_access, get_workspace_admin
 from app.api.router import api_router
 
 
@@ -67,13 +67,17 @@ def test_default_access_routes_have_no_section_permission_dependency() -> None:
     expected = [
         ("GET", "/booking/appointments"),
         ("POST", "/booking/appointments"),
+        ("POST", "/booking/appointments/{appointment_id}/reschedule"),
         ("GET", "/crm/patients"),
+        ("GET", "/crm/patients/lookup"),
+        ("POST", "/crm/patients/lookup/batch"),
         ("POST", "/crm/patients"),
         ("GET", "/crm/tasks"),
         ("GET", "/inbox/conversations"),
         ("GET", "/clinic/services"),
         ("GET", "/clinic/doctors"),
         ("GET", "/clinic/branches"),
+        ("GET", "/booking/branch-schedules"),
         ("GET", "/clinic/staff"),
         ("GET", "/clinic/knowledge"),
         ("GET", "/clinic/booking-settings"),
@@ -86,6 +90,19 @@ def test_default_access_routes_have_no_section_permission_dependency() -> None:
     ]
     for method, path in expected:
         route = _route(path, method)
+        assert _section_guards(route.dependant) == set(), (method, path)
+
+
+def test_appointment_lookup_routes_require_workspace_membership_without_section_grants() -> None:
+    for method, path in [
+        ("POST", "/booking/appointments"),
+        ("POST", "/booking/appointments/{appointment_id}/reschedule"),
+        ("GET", "/booking/branch-schedules"),
+        ("GET", "/crm/patients/lookup"),
+        ("POST", "/crm/patients/lookup/batch"),
+    ]:
+        route = _route(path, method)
+        assert get_workspace_access in _dependency_calls(route.dependant), (method, path)
         assert _section_guards(route.dependant) == set(), (method, path)
 
 

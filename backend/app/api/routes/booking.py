@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated
 from uuid import UUID
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
@@ -51,6 +51,9 @@ from app.schemas.booking import (
     AvailabilityBlockRead,
     AvailabilityResponse,
     AvailabilitySlot,
+    BookingBranchHourRead,
+    BookingBranchScheduleRead,
+    BookingBranchSchedulesRead,
     QuickAppointmentCreate,
 )
 from app.schemas.patient_packages import (
@@ -84,6 +87,7 @@ from app.services.booking import (
     calculate_availability,
     find_exact_slot,
     get_effective_booking_settings,
+    resolve_timezone,
 )
 from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.patient_packages import (
@@ -159,11 +163,8 @@ def require_local_appointment_write(db: Session, workspace_id: UUID) -> None:
 
 
 def workspace_timezone(access: WorkspaceAccess, branch: Branch | None = None) -> ZoneInfo:
-    name = (branch.timezone if branch and branch.timezone else access.workspace.timezone) or "Africa/Cairo"
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo("Africa/Cairo")
+    """Backward-compatible adapter; timezone policy lives in the booking service."""
+    return resolve_timezone(access.workspace, branch)
 
 
 def get_appointment_or_404(db: Session, workspace_id: UUID, appointment_id: UUID) -> Appointment:
@@ -397,7 +398,7 @@ def list_availability_blocks(
         AvailabilityBlock.branch_id == branch.id,
     )
     if date_value is not None:
-        tz = workspace_timezone(access, branch)
+        tz = resolve_timezone(access.workspace, branch)
         local_start = datetime.combine(date_value, time.min, tzinfo=tz).astimezone(UTC)
         local_end = (datetime.combine(date_value, time.min, tzinfo=tz) + timedelta(days=1)).astimezone(UTC)
         stmt = stmt.where(
@@ -430,7 +431,7 @@ def create_availability_block(
     )
     if branch is None:
         raise not_found("Branch")
-    tz = workspace_timezone(access, branch)
+    tz = resolve_timezone(access.workspace, branch)
     start_at = datetime.combine(payload.date, payload.start_time, tzinfo=tz).astimezone(UTC)
     end_at = datetime.combine(payload.date, payload.end_time, tzinfo=tz).astimezone(UTC)
     if end_at <= start_at:
@@ -609,6 +610,68 @@ def delete_availability_block(
     return None
 
 
+@router.get("/branch-schedules", response_model=BookingBranchSchedulesRead)
+def list_booking_branch_schedules(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BookingBranchSchedulesRead:
+    workspace_id = access.workspace.id
+    branches = list(
+        db.scalars(
+            select(Branch)
+            .options(load_only(Branch.id, Branch.name, Branch.timezone, Branch.is_active))
+            .where(
+                Branch.workspace_id == workspace_id,
+                Branch.is_active.is_(True),
+            )
+            .order_by(Branch.name)
+        )
+    )
+    branch_ids = [branch.id for branch in branches]
+    working_hours = list(
+        db.execute(
+            select(
+                BranchWorkingHour.branch_id,
+                BranchWorkingHour.weekday,
+                BranchWorkingHour.start_time,
+                BranchWorkingHour.end_time,
+            )
+            .where(
+                BranchWorkingHour.workspace_id == workspace_id,
+                BranchWorkingHour.branch_id.in_(branch_ids),
+            )
+            .order_by(
+                BranchWorkingHour.branch_id,
+                BranchWorkingHour.weekday,
+                BranchWorkingHour.start_time,
+            )
+        )
+    )
+    hours_by_branch: dict[UUID, list[BookingBranchHourRead]] = {}
+    for row in working_hours:
+        hours_by_branch.setdefault(row.branch_id, []).append(
+            BookingBranchHourRead(
+                weekday=row.weekday,
+                start_time=row.start_time,
+                end_time=row.end_time,
+            )
+        )
+
+    return BookingBranchSchedulesRead(
+        workspace_timezone=resolve_timezone(access.workspace).key,
+        branches=[
+            BookingBranchScheduleRead(
+                id=branch.id,
+                name=branch.name,
+                timezone=resolve_timezone(access.workspace, branch).key,
+                is_active=branch.is_active,
+                working_hours=hours_by_branch.get(branch.id, []),
+            )
+            for branch in branches
+        ],
+    )
+
+
 @router.get("/availability", response_model=AvailabilityResponse)
 def get_availability(
     branch_id: UUID,
@@ -735,6 +798,14 @@ def create_appointment(
             raise booking_conflict(str(exc)) from exc
 
     if payload.use_pulse_balance:
+        branch = db.scalar(
+            select(Branch).where(
+                Branch.workspace_id == access.workspace.id,
+                Branch.id == payload.branch_id,
+            )
+        )
+        if branch is None:
+            raise not_found("Branch")
         try:
             validate_pulse_booking(
                 db,
@@ -742,7 +813,7 @@ def create_appointment(
                 patient_id=payload.patient_id,
                 device_key=slot.laser_device_key,
                 appointment_date=slot.start_at.astimezone(
-                    ZoneInfo(access.workspace.timezone or "UTC")
+                    resolve_timezone(access.workspace, branch)
                 ).date(),
             )
         except PulseBillingError as exc:
@@ -910,7 +981,7 @@ def create_quick_appointment(
                 patient_id=payload.patient_id,
                 device_key=laser_device_key,
                 appointment_date=start_at.astimezone(
-                    ZoneInfo(access.workspace.timezone or "UTC")
+                    resolve_timezone(access.workspace, branch)
                 ).date(),
             )
         except PulseBillingError as exc:
@@ -1155,7 +1226,7 @@ def list_appointments(
                     Branch.id == branch_id,
                 )
             )
-        tz = workspace_timezone(access, branch)
+        tz = resolve_timezone(access.workspace, branch)
         local_start = datetime.combine(appointment_date, time.min, tzinfo=tz)
         local_end = local_start + timedelta(days=1)
         stmt = stmt.where(
@@ -1163,7 +1234,7 @@ def list_appointments(
             Appointment.start_at < local_end.astimezone(UTC),
         )
     elif scope == "today":
-        tz = workspace_timezone(access)
+        tz = resolve_timezone(access.workspace)
         local_now = now.astimezone(tz)
         local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
         local_end = local_start + timedelta(days=1)
@@ -1333,7 +1404,7 @@ def get_appointment_operations(
         branch=AppointmentEntitySummary(id=branch.id, name=branch.name),
         service=AppointmentEntitySummary(id=service.id, name=service.name),
         doctor=AppointmentEntitySummary(id=doctor.id, name=doctor_name),
-        timezone=workspace_timezone(access, branch).key,
+        timezone=resolve_timezone(access.workspace, branch).key,
         history=[AppointmentStatusHistoryRead.model_validate(item) for item in history],
         automations=[
             AppointmentAutomationRead(

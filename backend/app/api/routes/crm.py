@@ -50,6 +50,8 @@ from app.schemas.crm import (
     MessageCreate,
     MessageRead,
     PatientCreate,
+    PatientLookupBatchRequest,
+    PatientLookupRead,
     PatientNoteCreate,
     PatientNoteRead,
     PatientProfileRead,
@@ -459,6 +461,82 @@ def list_patients(
         )
     stmt = stmt.order_by(Patient.created_at.desc()).limit(limit).offset(offset)
     return list(db.scalars(stmt))
+
+
+@router.get("/patients/lookup", response_model=list[PatientLookupRead])
+def search_patients_for_appointments(
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
+    db: Annotated[Session, Depends(get_db)],
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    include_phone: bool = False,
+) -> list[PatientLookupRead]:
+    normalized_query = q.strip()
+    if not normalized_query:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Search query cannot be empty.",
+        )
+
+    selected_columns = [Patient.id, Patient.first_name, Patient.last_name]
+    if include_phone:
+        selected_columns.append(Patient.phone)
+    term = f"%{normalized_query}%"
+    stmt = (
+        select(*selected_columns)
+        .where(
+            Patient.workspace_id == access.workspace.id,
+            or_(
+                Patient.first_name.ilike(term),
+                Patient.last_name.ilike(term),
+                (Patient.first_name + " " + func.coalesce(Patient.last_name, "")).ilike(term),
+                Patient.phone.ilike(term),
+            ),
+        )
+        .order_by(Patient.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    patients = list(db.execute(stmt))
+    return [
+        PatientLookupRead(
+            id=patient[0],
+            first_name=patient[1],
+            last_name=patient[2],
+            phone=patient[3] if include_phone else None,
+        )
+        for patient in patients
+    ]
+
+
+@router.post("/patients/lookup/batch", response_model=list[PatientLookupRead])
+def lookup_patients_by_ids_for_appointments(
+    payload: PatientLookupBatchRequest,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PatientLookupRead]:
+    selected_columns = [Patient.id, Patient.first_name, Patient.last_name]
+    if payload.include_phone:
+        selected_columns.append(Patient.phone)
+    stmt = (
+        select(*selected_columns)
+        .where(
+            Patient.workspace_id == access.workspace.id,
+            Patient.id.in_(list(dict.fromkeys(payload.patient_ids))),
+        )
+        .order_by(Patient.created_at.desc())
+    )
+    patients = list(db.execute(stmt))
+    return [
+        PatientLookupRead(
+            id=patient[0],
+            first_name=patient[1],
+            last_name=patient[2],
+            phone=patient[3] if payload.include_phone else None,
+        )
+        for patient in patients
+    ]
 
 
 @router.get("/patients/{patient_id}", response_model=PatientRead)
