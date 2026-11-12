@@ -169,14 +169,16 @@ export default async function AppointmentOperationsPage({
     tiaRequest<PulseBillingSettings[]>("/booking/pulse-device-prices").catch(() => []),
   ]);
   const { appointment } = detail;
-  const [pulseBalances, patientPackages] = await Promise.all([
+  const [pulseBalances, loadedPatientPackages] = await Promise.all([
     tiaRequest<PulseBalance[]>(
       `/booking/patients/${appointment.patient_id}/pulse-balance`,
     ).catch(() => []),
     tiaRequest<PatientPackage[]>(
       `/booking/patients/${appointment.patient_id}/packages`,
-    ).catch(() => []),
+    ).catch(() => null),
   ]);
+  const patientPackages = loadedPatientPackages ?? [];
+  const packageLoadFailed = loadedPatientPackages === null;
   const allowed = new Set(detail.allowed_actions);
   const laserAppointment = appointment as typeof appointment & {
     laser_device_key?: string | null;
@@ -261,6 +263,8 @@ export default async function AppointmentOperationsPage({
         <div className="mb-4 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-3 text-sm font-bold text-[var(--accent-strong)]">
           {feedback.visit_saved === "package"
             ? "تمت إضافة الباكيدج للحساب واحتساب الجلسة الحالية منها."
+            : feedback.visit_saved === "existing_package_service"
+              ? "تمت إضافة الخدمة باستخدام باكيدج موجودة وخصم جلسة واحدة من رصيدها، دون رسوم إضافية."
             : feedback.visit_saved === "extra_package"
               ? "تمت إضافة الباكيدج للخدمة الإضافية واحتسابها كجلسة منها."
               : feedback.visit_saved === "pulse_usage"
@@ -586,6 +590,9 @@ export default async function AppointmentOperationsPage({
                       appointmentId={appointment.id}
                       patientId={appointment.patient_id}
                       primaryServiceId={appointment.service_id}
+                      appointmentStartAt={appointment.start_at}
+                      patientPackages={patientPackages}
+                      packageLoadFailed={packageLoadFailed}
                       services={services}
                       devicePrices={devicePrices}
                       pulseBalances={pulseBalances}

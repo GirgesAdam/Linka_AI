@@ -282,6 +282,7 @@ export async function addAppointmentAdditionalService(formData: FormData) {
   const pulseMode = String(formData.get("pulse_mode") || "none");
   const pulsesUsedRaw = String(formData.get("pulses_used") || "").trim();
   const pulsePackOfferId = String(formData.get("pulse_pack_offer_id") || "").trim();
+  const patientPackageId = String(formData.get("patient_package_id") || "").trim();
   if (!appointmentId || !serviceId) return;
   const pulsesUsed = pulsesUsedRaw ? Number(pulsesUsedRaw) : null;
   if (pulsesUsed !== null && (!Number.isInteger(pulsesUsed) || pulsesUsed <= 0)) {
@@ -298,12 +299,13 @@ export async function addAppointmentAdditionalService(formData: FormData) {
         pulse_mode: pulseMode,
         pulses_used: pulsesUsed,
         pulse_pack_offer_id: pulsePackOfferId || null,
+        patient_package_id: patientPackageId || null,
       }),
     });
   } catch (error) {
     errorMessage = appointmentCommerceError(error);
   }
-  if (errorMessage) redirect(`/appointments/${appointmentId}?visit_error=${encodeURIComponent(errorMessage)}`);
+  if (errorMessage) throw new Error(errorMessage);
   refreshAppointmentViews(appointmentId, patientId || undefined);
 }
 

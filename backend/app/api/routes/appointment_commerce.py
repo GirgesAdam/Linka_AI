@@ -35,9 +35,17 @@ class AdditionalServiceCreate(BaseModel):
     pulse_mode: Literal["none", "use_balance", "purchase_pack", "overage"] = "none"
     pulses_used: int | None = Field(default=None, gt=0, le=10_000_000)
     pulse_pack_offer_id: UUID | None = None
+    patient_package_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_pulse_billing(self) -> AdditionalServiceCreate:
+        if self.patient_package_id is not None:
+            if (
+                self.pulse_mode != "none"
+                or self.pulses_used is not None
+                or self.pulse_pack_offer_id is not None
+            ):
+                raise ValueError("An existing package cannot be combined with pulse billing.")
         if self.pulse_mode == "none":
             if self.pulse_pack_offer_id is not None:
                 raise ValueError("pulse_pack_offer_id requires pulse billing.")
@@ -138,6 +146,7 @@ def create_additional_service(
             pulse_mode=payload.pulse_mode,
             pulses_used=payload.pulses_used,
             pulse_pack_offer_id=payload.pulse_pack_offer_id,
+            patient_package_id=payload.patient_package_id,
             idempotency_key=idempotency_key,
         )
         db.commit()

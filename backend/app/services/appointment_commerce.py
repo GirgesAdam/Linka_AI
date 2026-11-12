@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.activity_event import ActivityEvent
 from app.models.appointment import Appointment
 from app.models.appointment_additional_service import AppointmentAdditionalService
 from app.models.doctor_service import DoctorService
@@ -26,6 +27,7 @@ from app.services.patient_packages import (
     consume_visit_package_usages,
     reserve_additional_service_package_usage,
     reserve_package_usage,
+    validate_package_for_booking,
 )
 from app.services.payments import (
     get_appointment_payment_summary,
@@ -306,12 +308,75 @@ def add_additional_service(
     pulse_mode: str = "none",
     pulses_used: int | None = None,
     pulse_pack_offer_id: UUID | None = None,
+    patient_package_id: UUID | None = None,
     idempotency_key: str | None = None,
 ) -> AppointmentAdditionalService:
     appointment = _locked_appointment(
         db, workspace_id=workspace_id, appointment_id=appointment_id
     )
     _require_editable_visit(appointment)
+
+    # The appointment lock serializes all intents using this operation key.
+    # The existing activity event is the transactional receipt for every billing
+    # mode (standard, pulse, existing package), not only package requests.
+    billing_intent = (
+        "package" if patient_package_id is not None
+        else "standard" if pulse_mode == "none"
+        else "pulse"
+    )
+    request_identity = {
+        "service_id": str(service_id),
+        "patient_package_id": str(patient_package_id) if patient_package_id else None,
+        "laser_device_key": (laser_device_key or "").strip() or None,
+        "billing_intent": billing_intent,
+        "pulse_mode": pulse_mode,
+        "pulses_used": pulses_used,
+        "pulse_pack_offer_id": str(pulse_pack_offer_id) if pulse_pack_offer_id else None,
+    }
+    if idempotency_key:
+        previous = db.scalar(
+            select(ActivityEvent).where(
+                ActivityEvent.workspace_id == workspace_id,
+                ActivityEvent.action == "appointment.additional_service_added",
+                ActivityEvent.entity_type == "appointment",
+                ActivityEvent.entity_id == appointment.id,
+                ActivityEvent.metadata_json["idempotency_key"].astext == idempotency_key,
+            )
+        )
+        if previous is not None:
+            info = previous.metadata_json or {}
+            if any(info.get(key) != value for key, value in request_identity.items()):
+                raise AppointmentCommerceError(
+                    "Idempotency key was already used for a different additional service."
+                )
+            line_id = info.get("line_id")
+            replay_line = db.scalar(
+                select(AppointmentAdditionalService).where(
+                    AppointmentAdditionalService.workspace_id == workspace_id,
+                    AppointmentAdditionalService.appointment_id == appointment.id,
+                    AppointmentAdditionalService.id == UUID(str(line_id)),
+                    AppointmentAdditionalService.service_id == service_id,
+                    AppointmentAdditionalService.patient_package_id == patient_package_id
+                    if patient_package_id is not None
+                    else AppointmentAdditionalService.patient_package_id.is_(None),
+                    AppointmentAdditionalService.billing_context == (
+                        "package_prepaid" if billing_intent == "package"
+                        else "pulse_prepaid" if billing_intent == "pulse"
+                        else "standard"
+                    ),
+                )
+            ) if line_id else None
+            if replay_line is None:
+                raise AppointmentCommerceError(
+                    "Additional service operation cannot be safely replayed."
+                )
+            return replay_line
+    if patient_package_id is not None and (
+        pulse_mode != "none" or pulses_used is not None or pulse_pack_offer_id is not None
+    ):
+        raise AppointmentCommerceError(
+            "An existing package cannot be combined with pulse billing."
+        )
     if appointment.service_id == service_id:
         raise AppointmentCommerceError(
             "The primary appointment service is already included in this visit."
@@ -408,6 +473,25 @@ def add_additional_service(
             duration_device_key=duration_device_key,
         )
 
+    package = None
+    if patient_package_id is not None:
+        try:
+            package = validate_package_for_booking(
+                db,
+                workspace_id=workspace_id,
+                package_id=patient_package_id,
+                patient_id=appointment.patient_id,
+                service_id=service.id,
+                appointment_start_at=appointment.start_at,
+                laser_device_key=device_key,
+            )
+        except PackageOperationError as exc:
+            raise AppointmentCommerceError(str(exc)) from exc
+        if package.currency != currency:
+            raise AppointmentCommerceError(
+                "Selected package currency does not match the additional service."
+            )
+
     line = AppointmentAdditionalService(
         workspace_id=workspace_id,
         appointment_id=appointment.id,
@@ -424,7 +508,38 @@ def add_additional_service(
         _apply_visit_duration(appointment, new_duration)
     db.flush()
 
-    if pulse_mode != "none":
+    if package is not None:
+        try:
+            usage = reserve_additional_service_package_usage(
+                db,
+                appointment=appointment,
+                line=line,
+                package=package,
+                actor_type=actor_type,
+                actor_user_id=created_by_user_id,
+            )
+        except PackageOperationError as exc:
+            raise AppointmentCommerceError(str(exc)) from exc
+        if appointment.status == "completed":
+            # Consume *only* the new line, not old or unrelated visit usages.
+            usage.status = "consumed"
+            usage.used_at = datetime.now(UTC)
+            record_activity_event(
+                db,
+                workspace_id=workspace_id,
+                actor_type=actor_type,
+                actor_user_id=created_by_user_id,
+                action="package.session_consumed",
+                entity_type="patient_package",
+                entity_id=package.id,
+                summary="Additional package session consumed for completed appointment",
+                metadata={
+                    "appointment_id": appointment.id,
+                    "appointment_additional_service_id": line.id,
+                    "sessions": 1,
+                },
+            )
+    elif pulse_mode != "none":
         try:
             apply_additional_service_pulse_billing(
                 db,
@@ -452,7 +567,9 @@ def add_additional_service(
         entity_id=appointment.id,
         summary="Additional visit service added",
         metadata={
-            "service_id": service.id,
+            **request_identity,
+            "idempotency_key": idempotency_key,
+            "line_id": line.id,
             "price_minor": price_minor,
             "device_key": device_key,
         },
