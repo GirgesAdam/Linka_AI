@@ -108,10 +108,13 @@ def test_high_impact_mutations_write_activity_in_the_same_transaction() -> None:
         "clinic.doctor_updated",
         "clinic.hours_updated",
         "clinic.doctor_hours_updated",
-        "clinic.doctor_visiting_windows_updated",
         "clinic.booking_policy_updated",
     ):
         assert action in setup_v2
+    laser_weekdays = (root / "backend/app/api/routes/doctor_laser_weekdays.py").read_text(encoding="utf-8")
+    assert "clinic.doctor_laser_weekday_updated" in laser_weekdays
+    laser_write = laser_weekdays.split("def replace_doctor_laser_weekday(", 1)[1]
+    assert laser_write.index("record_activity_event(") < laser_write.index("db.commit()")
     for action in (
         "clinic.history_import_started",
         "clinic.history_imported",

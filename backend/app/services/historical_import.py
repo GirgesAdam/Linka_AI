@@ -2311,7 +2311,7 @@ def _doctor_catalog(db: Session, workspace_id: UUID) -> tuple[dict[UUID, Doctor]
     }
 
 
-def _create_visiting_doctor(db: Session, *, workspace: Workspace, full_name: str) -> Doctor:
+def _create_archival_doctor(db: Session, *, workspace: Workspace, full_name: str) -> Doctor:
     if workspace.primary_branch_id is None:
         raise HistoricalImportError("Clinic profile is incomplete.")
     first, last = _name_parts(full_name)
@@ -2330,7 +2330,7 @@ def _create_visiting_doctor(db: Session, *, workspace: Workspace, full_name: str
     doctor = Doctor(
         workspace_id=workspace.id,
         staff_id=staff.id,
-        doctor_type="visiting",
+        doctor_type="regular",
         specialization=None,
         license_number=None,
         bio=None,
@@ -2356,7 +2356,7 @@ def _unassigned_historical_doctor(db: Session, *, workspace: Workspace, by_name:
     key = "غير محدد (تاريخي)".casefold()
     if key in by_name:
         return by_name[key]
-    doctor = _create_visiting_doctor(db, workspace=workspace, full_name="غير محدد (تاريخي)")
+    doctor = _create_archival_doctor(db, workspace=workspace, full_name="غير محدد (تاريخي)")
     by_name[key] = doctor
     return doctor
 
@@ -2377,7 +2377,7 @@ def _resolve_or_create_doctor(
         key = name.casefold()
         if key in by_name:
             return by_name[key], True
-        doctor = _create_visiting_doctor(db, workspace=workspace, full_name=name)
+        doctor = _create_archival_doctor(db, workspace=workspace, full_name=name)
         by_id[doctor.id] = doctor
         by_name[key] = doctor
         return doctor, True

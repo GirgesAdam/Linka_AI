@@ -11,6 +11,7 @@ import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 
 import { updatePackageOffer } from "./actions";
+import { DoctorLaserWeekdayPanel, type DoctorLaserWeekday } from "./doctor-laser-weekdays";
 import { PulsePricingPanel } from "./pulse-pricing-panel";
 import { ServiceCreateForm } from "./service-create-form";
 import { ServicePricingForm } from "./service-pricing-form";
@@ -175,6 +176,9 @@ export default async function ServicesPage() {
     tiaRequest<PulsePackOffer[]>("/booking/pulse-pack-offers"),
   ]);
   const canManageClinic = canAccessSection(workspace, "clinic_operations");
+  const doctorLaserDays = canManageClinic
+    ? await tiaRequest<DoctorLaserWeekday[]>("/clinic/doctor-laser-weekdays").catch(() => null)
+    : [];
   const byService = new Map<string, DevicePrice[]>();
   for (const price of devicePrices) byService.set(price.service_id, [...(byService.get(price.service_id) || []), price]);
   return (
@@ -197,6 +201,23 @@ export default async function ServicesPage() {
         <div className="mb-5">
           <PulsePricingPanel settings={pulseSettings} offers={pulseOffers} />
         </div>
+      )}
+
+      {canManageClinic && (
+        <Card className="mb-5">
+          <CardHeader>
+            <CardTitle>أجهزة الليزر المتاحة لكل دكتور حسب اليوم</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {doctorLaserDays === null ? (
+              <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                تعذر تحميل صلاحيات أجهزة الدكتور. حدّث الصفحة للمحاولة مجدداً.
+              </div>
+            ) : (
+              <DoctorLaserWeekdayPanel rows={doctorLaserDays} devices={devices} />
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <div className="space-y-4">

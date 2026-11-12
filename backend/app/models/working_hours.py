@@ -80,7 +80,7 @@ class DoctorWorkingHour(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class DoctorAvailabilityWindow(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """One-off bookable window, primarily for visiting doctors."""
+    """Deprecated dated-window history; never used for current scheduling."""
 
     __tablename__ = "doctor_availability_windows"
     __table_args__ = (

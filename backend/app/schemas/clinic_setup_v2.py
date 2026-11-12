@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-DoctorType = Literal["regular", "visiting"]
+DoctorType = Literal["regular"]
 
 
 class ClinicProfileUpsert(BaseModel):
@@ -69,7 +69,7 @@ class ClinicDoctorCreateV2(BaseModel):
 
 class ClinicDoctorUpdateV2(BaseModel):
     full_name: str = Field(min_length=1, max_length=240)
-    doctor_type: DoctorType
+    doctor_type: DoctorType | None = None
     specialization: str | None = Field(default=None, max_length=200)
     service_ids: list[UUID] = Field(default_factory=list, max_length=100)
 
@@ -130,7 +130,6 @@ class ClinicDoctorReadV2(BaseModel):
     specialization: str | None
     service_ids: list[UUID]
     weekly_hours: list[WorkingHourInputV2]
-    visiting_windows: list[dict]
 
 
 class ClinicProfileReadV2(BaseModel):

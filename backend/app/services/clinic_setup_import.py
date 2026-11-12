@@ -4,11 +4,10 @@ import base64
 import io
 import re
 from collections import Counter, defaultdict
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
 from pydantic import ValidationError
@@ -31,8 +30,6 @@ from app.schemas.clinic_setup_v2 import (
     ClinicSetupImportIssue,
     ClinicSetupImportResponse,
     ClinicSetupPreviewResponse,
-    VisitingWindowInputV2,
-    VisitingWindowsUpdateV2,
     WorkingHourInputV2,
     WorkingHoursUpdateV2,
 )
@@ -44,7 +41,6 @@ from app.services.clinic_setup_v2 import (
     replace_clinic_hours_v2,
     replace_doctor_services_v2,
     replace_regular_doctor_hours_v2,
-    replace_visiting_windows_v2,
     update_booking_policy_v2,
     update_doctor_v2,
     update_service_v2,
@@ -59,7 +55,6 @@ SETUP_SHEETS = (
     "doctor_services",
     "clinic_hours",
     "doctor_hours",
-    "visiting_windows",
     "booking_policy",
 )
 
@@ -297,6 +292,13 @@ def preview_clinic_setup_workbook(
 
     try:
         sheets = {_key(sheet.title): sheet for sheet in workbook.worksheets}
+        if "visiting_windows" in sheets:
+            raise ClinicSetupImportError("Visiting Doctor windows are retired; remove visiting_windows sheet.")
+        if "doctors" in sheets and any(
+            (_clean(row.get("doctor_type")) or "").casefold() == "visiting"
+            for _number, row in _rows(sheets["doctors"])
+        ):
+            raise ClinicSetupImportError("Visiting Doctor type is retired; use weekly hours.")
         recognized = [name for name in SETUP_SHEETS if name in sheets]
         if not recognized:
             raise ClinicSetupImportError("الملف لا يحتوي على أي sheet من Linka Clinic Setup Template.")
@@ -337,6 +339,11 @@ def preview_clinic_setup_workbook(
 
 def clinic_setup_draft_to_workbook_base64(draft: ClinicSetupDraft) -> str:
     """Serialize the edited UI draft back to the fixed setup workbook contract."""
+    if draft.visiting_windows or any(
+        (_clean(row.get("doctor_type")) or "").casefold() == "visiting"
+        for row in draft.doctors
+    ):
+        raise ClinicSetupImportError("Visiting Doctor and dated windows are retired; configure weekly hours.")
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -349,11 +356,10 @@ def clinic_setup_draft_to_workbook_base64(draft: ClinicSetupDraft) -> str:
 
     table_sheets: dict[str, tuple[list[str], list[dict[str, Any]]]] = {
         "services": (["name", "category", "duration_minutes", "price"], draft.services),
-        "doctors": (["full_name", "doctor_type", "specialization"], draft.doctors),
+        "doctors": (["full_name", "specialization"], draft.doctors),
         "doctor_services": (["doctor_name", "service_name"], draft.doctor_services),
         "clinic_hours": (["day", "weekday", "start_time", "end_time"], draft.clinic_hours),
         "doctor_hours": (["doctor_name", "day", "weekday", "start_time", "end_time"], draft.doctor_hours),
-        "visiting_windows": (["doctor_name", "date", "start_time", "end_time"], draft.visiting_windows),
     }
     for sheet_name, (headers, rows) in table_sheets.items():
         ws = wb.create_sheet(sheet_name)
@@ -393,6 +399,15 @@ def import_clinic_setup_workbook(
     imported = Counter({name: 0 for name in SETUP_SHEETS})
     skipped = Counter({name: 0 for name in SETUP_SHEETS})
     sheets = {_key(sheet.title): sheet for sheet in workbook.worksheets}
+    if "visiting_windows" in sheets:
+        workbook.close()
+        raise ClinicSetupImportError("Visiting Doctor windows are retired; remove visiting_windows sheet.")
+    if "doctors" in sheets and any(
+        (_clean(row.get("doctor_type")) or "").casefold() == "visiting"
+        for _number, row in _rows(sheets["doctors"])
+    ):
+        workbook.close()
+        raise ClinicSetupImportError("Visiting Doctor type is retired; configure weekly hours.")
     recognized = set(sheets).intersection(SETUP_SHEETS)
     if not recognized:
         workbook.close()
@@ -497,7 +512,7 @@ def import_clinic_setup_workbook(
                     skipped["services"] += 1
                     _issue(issues, sheet="services", row=row_number, message=str(exc))
 
-        # 3) Doctors: name identifies the row. doctor_type is optional and defaults safely.
+        # 3) Doctors: a single weekly-hours model. Legacy explicit visiting is rejected above.
         doctor_sheet = sheets.get("doctors")
         if doctor_sheet is not None:
             seen: set[str] = set()
@@ -515,15 +530,11 @@ def import_clinic_setup_workbook(
                 seen.add(name_key)
                 existing = _doctor_rows(db, workspace.id).get(name_key)
                 raw_type = (_clean(row.get("doctor_type")) or "").casefold()
-                if raw_type and raw_type not in {"regular", "visiting"}:
+                if raw_type and raw_type != "regular":
                     skipped["doctors"] += 1
-                    _issue(issues, sheet="doctors", row=row_number, message="doctor_type لو موجود لازم يكون regular أو visiting؛ ويمكن تركه فارغًا.")
+                    _issue(issues, sheet="doctors", row=row_number, message="نوع الدكتور القديم غير مدعوم؛ كل الأطباء يستخدمون ساعات أسبوعية.")
                     continue
-                if not raw_type and existing is None:
-                    skipped["doctors"] += 1
-                    _issue(issues, sheet="doctors", row=row_number, message="الدكتور الجديد يحتاج doctor_type؛ سيبها فاضية في الـdraft واختار ثابت أو زائر قبل الحفظ.")
-                    continue
-                doctor_type = raw_type or existing[0].doctor_type
+                doctor_type = "regular"
                 specialization = _clean(row.get("specialization"))
                 if specialization is None and existing is not None:
                     specialization = existing[0].specialization
@@ -542,7 +553,7 @@ def import_clinic_setup_workbook(
                             doctor_id=doctor.id,
                             payload=ClinicDoctorUpdateV2(
                                 full_name=name,
-                                doctor_type=doctor_type,
+                                doctor_type=raw_type or None,  # Preserve legacy metadata unless explicitly edited.
                                 specialization=specialization,
                                 service_ids=_current_doctor_service_ids(db, workspace.id, doctor.id),
                             ),
@@ -617,9 +628,9 @@ def import_clinic_setup_workbook(
                 weekday = _parse_weekday(row)
                 start = _parse_time(row.get("start_time"))
                 end = _parse_time(row.get("end_time"))
-                if entry is None or entry[0].doctor_type != "regular" or weekday is None or start is None or end is None:
+                if entry is None or weekday is None or start is None or end is None:
                     skipped["doctor_hours"] += 1
-                    _issue(issues, sheet="doctor_hours", row=row_number, message="الصف يحتاج دكتور regular موجود وday أو weekday صحيح، مع start_time/end_time صحيحين.")
+                    _issue(issues, sheet="doctor_hours", row=row_number, message="الصف يحتاج دكتور موجود وday أو weekday صحيح، مع start_time/end_time صحيحين.")
                     continue
                 try:
                     grouped_hours[entry[0].id].append(WorkingHourInputV2(weekday=weekday, start_time=start, end_time=end))
@@ -634,39 +645,6 @@ def import_clinic_setup_workbook(
                     imported["doctor_hours"] -= len(intervals)
                     skipped["doctor_hours"] += len(intervals)
                     _issue(issues, sheet="doctor_hours", row=2, message=str(exc))
-
-        # 7) Visiting doctor dated windows.
-        visiting_sheet = sheets.get("visiting_windows")
-        if visiting_sheet is not None:
-            grouped_windows: dict[UUID, list[VisitingWindowInputV2]] = defaultdict(list)
-            now_utc = datetime.now(UTC)
-            cairo = ZoneInfo("Africa/Cairo")
-            for row_number, row in _rows(visiting_sheet):
-                doctor_name = _clean(row.get("doctor_name"))
-                entry = doctor_map.get((doctor_name or "").casefold())
-                visit_date = _parse_date(row.get("date"))
-                start = _parse_time(row.get("start_time"))
-                end = _parse_time(row.get("end_time"))
-                if entry is None or entry[0].doctor_type != "visiting" or visit_date is None or start is None or end is None:
-                    skipped["visiting_windows"] += 1
-                    _issue(issues, sheet="visiting_windows", row=row_number, message="الصف يحتاج دكتور visiting موجود وdate/start_time/end_time صحيحة.")
-                    continue
-                try:
-                    item = VisitingWindowInputV2(date=visit_date, start_time=start, end_time=end)
-                    if datetime.combine(visit_date, end, tzinfo=cairo).astimezone(UTC) <= now_utc:
-                        raise ValueError
-                    grouped_windows[entry[0].id].append(item)
-                    imported["visiting_windows"] += 1
-                except Exception:
-                    skipped["visiting_windows"] += 1
-                    _issue(issues, sheet="visiting_windows", row=row_number, message="زيارة الدكتور لازم تنتهي في وقت مستقبلي وبعد وقت البداية.")
-            for doctor_id, windows in grouped_windows.items():
-                try:
-                    replace_visiting_windows_v2(db, workspace=workspace, doctor_id=doctor_id, payload=VisitingWindowsUpdateV2(windows=windows))
-                except (ClinicSetupV2Error, ValidationError) as exc:
-                    imported["visiting_windows"] -= len(windows)
-                    skipped["visiting_windows"] += len(windows)
-                    _issue(issues, sheet="visiting_windows", row=2, message=str(exc))
 
         # 8) Booking policy. Missing settings preserve current values and can be edited manually.
         policy_sheet = sheets.get("booking_policy")
@@ -724,11 +702,10 @@ def build_clinic_setup_template() -> bytes:
     sheets: dict[str, list[str]] = {
         "clinic_profile": ["field", "value"],
         "services": ["name", "category", "duration_minutes", "price"],
-        "doctors": ["full_name", "doctor_type", "specialization"],
+        "doctors": ["full_name", "specialization"],
         "doctor_services": ["doctor_name", "service_name"],
         "clinic_hours": ["day", "start_time", "end_time"],
         "doctor_hours": ["doctor_name", "day", "start_time", "end_time"],
-        "visiting_windows": ["doctor_name", "date", "start_time", "end_time"],
         "booking_policy": ["setting", "value"],
     }
     for name, headers in sheets.items():

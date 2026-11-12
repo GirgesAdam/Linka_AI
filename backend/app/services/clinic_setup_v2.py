@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -14,10 +12,11 @@ from app.models.branch import Branch
 from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
 from app.models.doctor_service import DoctorService
 from app.models.service import Service
 from app.models.staff import Staff
-from app.models.working_hours import BranchWorkingHour, DoctorAvailabilityWindow, DoctorWorkingHour
+from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from app.models.workspace import Workspace
 from app.schemas.clinic import normalize_service_category
 from app.schemas.clinic_setup_v2 import (
@@ -269,7 +268,8 @@ def create_doctor_v2(
         first_name, last_name = _split_name(payload.full_name)
         staff.first_name = first_name
         staff.last_name = last_name
-        doctor.doctor_type = payload.doctor_type
+        # Re-activating an archival doctor preserves its legacy type metadata.
+        # Weekly scheduling remains the only source of new availability.
         doctor.specialization = payload.specialization
         doctor.booking_enabled = True
         assignment = db.scalar(
@@ -310,7 +310,7 @@ def create_doctor_v2(
     doctor = Doctor(
         workspace_id=workspace.id,
         staff_id=staff.id,
-        doctor_type=payload.doctor_type,
+        doctor_type="regular",
         specialization=payload.specialization,
         license_number=None,
         bio=None,
@@ -378,14 +378,11 @@ def update_doctor_v2(
     staff.first_name = first_name
     staff.last_name = last_name
     doctor.specialization = payload.specialization
-    previous_type = doctor.doctor_type
-    doctor.doctor_type = payload.doctor_type
+    # Legacy type metadata remains until explicitly set to regular; archived
+    # windows and patient appointments are never deleted during profile edits.
+    if payload.doctor_type is not None:
+        doctor.doctor_type = payload.doctor_type
     doctor.booking_enabled = True
-    if previous_type != payload.doctor_type:
-        if payload.doctor_type == "visiting":
-            db.execute(delete(DoctorWorkingHour).where(DoctorWorkingHour.workspace_id == workspace.id, DoctorWorkingHour.doctor_id == doctor.id))
-        else:
-            db.execute(delete(DoctorAvailabilityWindow).where(DoctorAvailabilityWindow.workspace_id == workspace.id, DoctorAvailabilityWindow.doctor_id == doctor.id))
     replace_doctor_services_v2(db, workspace=workspace, doctor_id=doctor.id, service_ids=payload.service_ids)
     db.flush()
     return doctor
@@ -436,15 +433,10 @@ def update_doctor_type_v2(
     )
     if doctor is None:
         raise ClinicSetupV2Error("Doctor not found.")
-    doctor.doctor_type = doctor_type
+    if doctor_type != "regular":
+        raise ClinicSetupV2Error("Visiting Doctor is no longer supported.")
+    doctor.doctor_type = "regular"
     doctor.booking_enabled = True
-    if doctor_type == "visiting":
-        db.execute(
-            delete(DoctorWorkingHour).where(
-                DoctorWorkingHour.workspace_id == workspace.id,
-                DoctorWorkingHour.doctor_id == doctor.id,
-            )
-        )
     db.flush()
     return doctor
 
@@ -490,13 +482,20 @@ def replace_regular_doctor_hours_v2(
     )
     if branch is None or doctor is None:
         raise ClinicSetupV2Error("Doctor or clinic profile not found.")
-    if doctor.doctor_type != "regular":
-        raise ClinicSetupV2Error("Visiting doctors use dated availability windows, not weekly hours.")
     db.execute(
         delete(DoctorWorkingHour).where(
             DoctorWorkingHour.workspace_id == workspace.id,
             DoctorWorkingHour.doctor_id == doctor.id,
             DoctorWorkingHour.branch_id == branch.id,
+        )
+    )
+    active_weekdays = {interval.weekday for interval in payload.intervals}
+    db.execute(
+        delete(DoctorLaserWeekdayExclusion).where(
+            DoctorLaserWeekdayExclusion.workspace_id == workspace.id,
+            DoctorLaserWeekdayExclusion.doctor_id == doctor.id,
+            DoctorLaserWeekdayExclusion.branch_id == branch.id,
+            DoctorLaserWeekdayExclusion.weekday.notin_(active_weekdays),
         )
     )
     for interval in payload.intervals:
@@ -520,38 +519,9 @@ def replace_visiting_windows_v2(
     doctor_id: UUID,
     payload: VisitingWindowsUpdateV2,
 ) -> None:
-    branch = _primary_branch(db, workspace)
-    doctor = db.scalar(
-        select(Doctor).where(Doctor.workspace_id == workspace.id, Doctor.id == doctor_id)
-    )
-    if branch is None or doctor is None:
-        raise ClinicSetupV2Error("Doctor or clinic profile not found.")
-    if doctor.doctor_type != "visiting":
-        raise ClinicSetupV2Error("Regular doctors use weekly working hours.")
-    db.execute(
-        delete(DoctorAvailabilityWindow).where(
-            DoctorAvailabilityWindow.workspace_id == workspace.id,
-            DoctorAvailabilityWindow.doctor_id == doctor.id,
-            DoctorAvailabilityWindow.branch_id == branch.id,
-        )
-    )
-    tz = ZoneInfo(workspace.timezone)
-    now_utc = datetime.now(UTC)
-    for item in payload.windows:
-        start_at = datetime.combine(item.date, item.start_time, tzinfo=tz).astimezone(UTC)
-        end_at = datetime.combine(item.date, item.end_time, tzinfo=tz).astimezone(UTC)
-        if end_at <= now_utc:
-            raise ClinicSetupV2Error("Visiting doctor availability must end in the future.")
-        db.add(
-            DoctorAvailabilityWindow(
-                workspace_id=workspace.id,
-                doctor_id=doctor.id,
-                branch_id=branch.id,
-                start_at=start_at,
-                end_at=end_at,
-            )
-        )
-    db.flush()
+    # Kept temporarily for an explicit failure on legacy API calls.
+    # Never write or erase archived dated windows.
+    raise ClinicSetupV2Error("Visiting Doctor dated windows are retired. Configure weekly working hours.")
 
 
 def update_booking_policy_v2(
@@ -626,19 +596,6 @@ def build_setup_v2_snapshot(db: Session, *, workspace: Workspace) -> ClinicSetup
             )
         )
 
-    windows = list(
-        db.scalars(
-            select(DoctorAvailabilityWindow)
-            .where(DoctorAvailabilityWindow.workspace_id == workspace.id)
-            .order_by(DoctorAvailabilityWindow.start_at)
-        )
-    )
-    windows_by_doctor: dict[UUID, list[dict]] = {}
-    for row in windows:
-        windows_by_doctor.setdefault(row.doctor_id, []).append(
-            {"start_at": row.start_at, "end_at": row.end_at}
-        )
-
     clinic_hours: list[WorkingHourInputV2] = []
     if branch is not None:
         clinic_hours = [
@@ -657,19 +614,10 @@ def build_setup_v2_snapshot(db: Session, *, workspace: Workspace) -> ClinicSetup
             )
         ]
 
-    now_utc = datetime.now(UTC)
-    bookable_doctor_ids: set[UUID] = set()
-    for doctor, _staff in doctor_rows:
-        if not service_ids_by_doctor.get(doctor.id):
-            continue
-        if doctor.doctor_type == "regular" and weekly_by_doctor.get(doctor.id):
-            bookable_doctor_ids.add(doctor.id)
-            continue
-        if doctor.doctor_type == "visiting" and any(
-            item.get("end_at") is not None and item["end_at"] >= now_utc
-            for item in windows_by_doctor.get(doctor.id, [])
-        ):
-            bookable_doctor_ids.add(doctor.id)
+    bookable_doctor_ids = {
+        doctor.id for doctor, _staff in doctor_rows
+        if service_ids_by_doctor.get(doctor.id) and weekly_by_doctor.get(doctor.id)
+    }
 
     checks = {
         "clinic_profile": branch is not None,
@@ -722,11 +670,10 @@ def build_setup_v2_snapshot(db: Session, *, workspace: Workspace) -> ClinicSetup
                 id=doctor.id,
                 staff_id=doctor.staff_id,
                 full_name=_full_name(staff),
-                doctor_type=doctor.doctor_type,
+                doctor_type="regular",  # Compatibility read; current scheduling is type-independent.
                 specialization=doctor.specialization,
                 service_ids=sorted(service_ids_by_doctor.get(doctor.id, []), key=str),
                 weekly_hours=weekly_by_doctor.get(doctor.id, []),
-                visiting_windows=windows_by_doctor.get(doctor.id, []),
             )
             for doctor, staff in doctor_rows
         ],

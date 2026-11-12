@@ -60,6 +60,7 @@ jobs:
       MIGRATION_DATABASE_URL: postgresql+psycopg://ci_user:ci_password@localhost:5432/ci_db
       BILLING_TEST_DATABASE_URL: postgresql+psycopg://billing_ci_user:ci_billing_disposable_password@127.0.0.1:55431/billing_ci
       EXISTING_PACKAGE_TEST_DATABASE_URL: postgresql+psycopg://package_ci_user:ci_package_disposable_password@127.0.0.1:55432/package_service_ci
+      DOCTOR_WEEKDAY_MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://package_ci_user:ci_package_disposable_password@127.0.0.1:55432/doctor_weekday_revision_ci
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
       SUPABASE_SECRET_KEY: sb_secret_ci_dummy
@@ -91,7 +92,7 @@ jobs:
           python -m compileall -q .github/scripts/production_migration_preflight.py .github/scripts/production_migration_credential_guard.py
           python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0097_member_page_permissions (head)"
+        run: test "$(python -m alembic heads)" = "0098_doctor_laser_weekday_exclusions (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
@@ -205,6 +206,42 @@ jobs:
               raise SystemExit(f"Checkout PostgreSQL regression did not execute all 26 cases: {totals}")
           print("UNIFIED_CHECKOUT_POSTGRES_17_6: 26 passed, 0 skipped")
           PY
+      - name: Verify unified weekly doctor scheduling, laser eligibility and revision 0098 on PostgreSQL 17.6
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from sqlalchemy.engine import make_url
+
+          configs = {
+              "EXISTING_PACKAGE_TEST_DATABASE_URL": ("127.0.0.1", 55432, "package_service_ci", "package_ci_user"),
+              "DOCTOR_WEEKDAY_MIGRATION_TEST_DATABASE_URL": ("127.0.0.1", 55432, "doctor_weekday_revision_ci", "package_ci_user"),
+          }
+          for key, expected in configs.items():
+              if not os.environ.get(key):
+                  raise SystemExit(f"Missing mandatory isolated PostgreSQL setting: {key}")
+              url = make_url(os.environ[key])
+              actual = (url.host, url.port, url.database, url.username)
+              if actual != expected:
+                  raise SystemExit(f"Refusing non-disposable doctor-weekday database: {key}: {actual}")
+          PY
+          PGPASSWORD=ci_package_disposable_password psql -h 127.0.0.1 -p 55432 -U package_ci_user -d package_service_ci -v ON_ERROR_STOP=1 -c 'CREATE DATABASE doctor_weekday_revision_ci;'
+          python -m pytest -q tests/test_doctor_laser_weekday_pg17.py tests/test_doctor_laser_weekday_migration_pg17.py tests/test_unified_doctor_weekly_scheduling.py --junitxml="$RUNNER_TEMP/doctor-weekday-eligibility.xml"
+          python - <<'PY'
+          import os
+          from xml.etree import ElementTree
+
+          root = ElementTree.parse(os.path.join(os.environ["RUNNER_TEMP"], "doctor-weekday-eligibility.xml")).getroot()
+          suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+          totals = {
+              key: sum(int(suite.get(key, "0")) for suite in suites)
+              for key in ("tests", "failures", "errors", "skipped")
+          }
+          expected = {"tests": 30, "failures": 0, "errors": 0, "skipped": 0}
+          if totals != expected:
+              raise SystemExit(f"Doctor-weekday PostgreSQL regression gate did not run all 30 cases: {totals}")
+          print("DOCTOR_WEEKLY_LASER_POSTGRES_17_6: 30 passed, 0 skipped")
+          PY
       - name: Run backend tests
         run: python -m pytest -q
   attestation-role-postgres-17-6:
@@ -302,6 +339,23 @@ jobs:
           if len(matches) != len(expected) or totals != expected:
               raise SystemExit(f"Checkout UI regression did not run all 12 cases: {totals}")
           print("UNIFIED_CHECKOUT_UI: 12 passed, 0 skipped")
+          PY
+      - name: Verify weekly doctor setup and laser device UI with no skips
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/doctor-laser-weekdays.test.mjs tests/unified-doctor-weekly-setup.test.mjs | tee "$RUNNER_TEMP/doctor-weekday-ui.tap"
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          output = Path(os.environ["RUNNER_TEMP"], "doctor-weekday-ui.tap").read_text()
+          matches = re.findall(r"^# (tests|pass|fail|cancelled|skipped) (\d+)\s*$", output, re.M)
+          totals = {key: int(value) for key, value in matches}
+          expected = {"tests": 10, "pass": 10, "fail": 0, "cancelled": 0, "skipped": 0}
+          if len(matches) != len(expected) or totals != expected:
+              raise SystemExit(f"Doctor-weekday UI gate did not execute all 10 cases: {totals}")
+          print("DOCTOR_WEEKLY_LASER_UI: 10 passed, 0 skipped")
           PY
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high

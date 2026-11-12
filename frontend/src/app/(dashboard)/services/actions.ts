@@ -264,3 +264,29 @@ export async function savePulsePackOfferFormAction(
     return actionFeedbackFailure(error, "تعذر حفظ باقة الـPulses. حاول مرة أخرى.");
   }
 }
+export async function saveDoctorLaserWeekday(
+  _previous: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const doctorId = String(formData.get("doctor_id") || "");
+    const branchId = String(formData.get("branch_id") || "");
+    const weekday = Number(formData.get("weekday"));
+    if (!doctorId || !branchId || !Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+      throw new Error("بيانات الدكتور أو اليوم غير صحيحة.");
+    }
+    const devices = formData.getAll("device_key").map(String);
+    const allowed = new Set(formData.getAll("allowed_device_key").map(String));
+    if (devices.length !== new Set(devices).size || [...allowed].some((key) => !devices.includes(key))) {
+      throw new Error("اختيارات الأجهزة غير صحيحة.");
+    }
+    await tiaRequest(`/clinic/doctor-laser-weekdays/${doctorId}/${branchId}/${weekday}`, {
+      method: "PUT",
+      body: JSON.stringify({ excluded_device_keys: devices.filter((key) => !allowed.has(key)) }),
+    });
+    revalidatePath("/services");
+    return { notice: "تم حفظ أجهزة الليزر المسموحة لهذا اليوم.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر حفظ أجهزة الدكتور. حاول مرة أخرى.");
+  }
+}
