@@ -142,7 +142,7 @@ def test_t1_independent_processes_serialize_on_the_same_postgres_lock(
 
         from app.database.migration_lock import migration_session_lock
 
-        mode, database_url, started_path, acquired_path, hold_seconds = sys.argv[1:]
+        mode, database_url, started_path, acquired_path, release_or_hold = sys.argv[1:]
         engine = create_engine(database_url, poolclass=NullPool)
         try:
             with engine.connect() as connection:
@@ -154,7 +154,17 @@ def test_t1_independent_processes_serialize_on_the_same_postgres_lock(
                 ):
                     Path(acquired_path).write_text("acquired", encoding="utf-8")
                     print(f"{mode}:ACQUIRED", flush=True)
-                    time.sleep(float(hold_seconds))
+                    if mode == "holder":
+                        # Keep the lock until the parent observes the waiter's
+                        # attempt, rather than relying on child startup timing.
+                        release_file = Path(release_or_hold)
+                        deadline = time.monotonic() + 15
+                        while not release_file.exists():
+                            if time.monotonic() > deadline:
+                                raise TimeoutError("Timed out awaiting lock-holder release marker")
+                            time.sleep(0.01)
+                    else:
+                        time.sleep(float(release_or_hold))
             print(f"{mode}:RELEASED", flush=True)
         finally:
             engine.dispose()
@@ -168,6 +178,7 @@ def test_t1_independent_processes_serialize_on_the_same_postgres_lock(
 
     holder_started = tmp_path / "holder.started"
     holder_acquired = tmp_path / "holder.acquired"
+    holder_release = tmp_path / "holder.release"
     waiter_started = tmp_path / "waiter.started"
     waiter_acquired = tmp_path / "waiter.acquired"
 
@@ -180,7 +191,7 @@ def test_t1_independent_processes_serialize_on_the_same_postgres_lock(
             migration_lock_database,
             str(holder_started),
             str(holder_acquired),
-            "0.8",
+            str(holder_release),
         ],
         cwd=BACKEND,
         env=environment,
@@ -217,6 +228,9 @@ def test_t1_independent_processes_serialize_on_the_same_postgres_lock(
         assert holder.poll() is None
         assert waiter.poll() is None
 
+        # Explicit release makes this a genuine overlap test on slow runners,
+        # including Windows, without weakening the lock exclusion assertion.
+        holder_release.write_text("release", encoding="utf-8")
         holder_stdout, holder_stderr = holder.communicate(timeout=10)
         waiter_stdout, waiter_stderr = waiter.communicate(timeout=10)
         assert holder.returncode == 0, holder_stderr
@@ -227,6 +241,7 @@ def test_t1_independent_processes_serialize_on_the_same_postgres_lock(
         assert "waiter:RELEASED" in waiter_stdout
         assert waiter_acquired.exists()
     finally:
+        holder_release.write_text("release", encoding="utf-8")
         for process in (holder, waiter):
             if process is not None and process.poll() is None:
                 process.terminate()
@@ -384,7 +399,7 @@ def test_t5_sequential_alembic_upgrades_read_current_head_without_reapplying(
                 ).all()
             }
 
-        assert second_revision == expected_head == "0097_member_page_permissions"
+        assert second_revision == "0097_member_page_permissions"
         assert columns == {
             "page_permissions": ("jsonb", "YES", None),
             "permissions_version": ("integer", "NO", "0"),
@@ -396,7 +411,21 @@ def test_t5_sequential_alembic_upgrades_read_current_head_without_reapplying(
             third_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert third_revision == second_revision
+        assert third_revision == expected_head == "0098_doctor_laser_weekday_exclusions"
+        assert third_revision != second_revision
+        # Upgrading an already-current database must not reapply revision 0098.
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            final_revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            new_table_count = connection.execute(
+                text("SELECT count(*) FROM information_schema.tables "
+                     "WHERE table_schema = current_schema() "
+                     "AND table_name = 'doctor_laser_device_weekday_exclusions'")
+            ).scalar_one()
+        assert final_revision == third_revision
+        assert new_table_count == 1
 
         with engine.connect() as connection:
             concurrent_index_exists = connection.execute(

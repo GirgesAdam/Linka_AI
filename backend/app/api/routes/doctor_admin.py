@@ -202,11 +202,11 @@ def _replace_doctor_hours(
     ]
     db.add_all(replacements)
     active_days = {interval.weekday for interval in payload.intervals}
-    for exclusion in db.scalars(select(DoctorLaserWeekdayExclusion).where(
+    for exclusion in list(db.scalars(select(DoctorLaserWeekdayExclusion).where(
         DoctorLaserWeekdayExclusion.workspace_id == workspace.id,
         DoctorLaserWeekdayExclusion.doctor_id == doctor_id,
         DoctorLaserWeekdayExclusion.branch_id == branch.id,
-    )).all():
+    ))):
         if exclusion.weekday not in active_days:
             db.delete(exclusion)
     return replacements

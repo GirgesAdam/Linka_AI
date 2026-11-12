@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
 from app import models  # noqa: F401
@@ -37,6 +37,20 @@ def test_revision_0098_up_and_down_on_disposable_pg17():
     assert target_name not in names
     engine = create_engine(raw)
     try:
+        # Create only disposable-cluster Supabase stand-in roles. Never do this
+        # in revision 0098 or on a non-loopback/unknown PostgreSQL instance.
+        with engine.begin() as connection:
+            connection.exec_driver_sql("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
+                        CREATE ROLE anon NOLOGIN;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
+                        CREATE ROLE authenticated NOLOGIN;
+                    END IF;
+                END $$;
+            """)
         Base.metadata.create_all(engine, tables=[Base.metadata.tables[name] for name in names])
         path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0098_doctor_laser_weekday_exclusions.py"
         spec = importlib.util.spec_from_file_location("doctor_weekday_revision_under_test", path)
@@ -63,6 +77,22 @@ def test_revision_0098_up_and_down_on_disposable_pg17():
         assert len(schema.get_check_constraints(target_name)) == 1
         assert len([index for index in schema.get_indexes(target_name)
                     if not index.get("duplicates_constraint")]) == 3
+
+        with engine.connect() as connection:
+            assert connection.execute(text("""
+                SELECT c.relrowsecurity
+                FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname='public' AND c.relname=:name
+            """), {"name": target_name}).scalar_one() is True
+            for role in ("anon", "authenticated"):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    assert connection.execute(text(
+                        "SELECT has_table_privilege(:role, :table_name, :privilege)"
+                    ), {
+                        "role": role,
+                        "table_name": f"public.{target_name}",
+                        "privilege": privilege,
+                    }).scalar_one() is False, (role, privilege)
 
         with engine.begin() as connection:
             revision.op = Operations(MigrationContext.configure(connection))

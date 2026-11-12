@@ -51,6 +51,15 @@ def upgrade() -> None:
             [column],
         )
 
+    # Workspace-owned scheduling data is backend-only, never exposed through
+    # Supabase Data API/browser roles (consistent with earlier clinic tables).
+    op.execute(sa.text(
+        'ALTER TABLE public."doctor_laser_device_weekday_exclusions" ENABLE ROW LEVEL SECURITY'
+    ))
+    op.execute(sa.text(
+        'REVOKE ALL ON TABLE public."doctor_laser_device_weekday_exclusions" FROM PUBLIC, anon, authenticated'
+    ))
+
 
 def downgrade() -> None:
     op.drop_table("doctor_laser_device_weekday_exclusions")
