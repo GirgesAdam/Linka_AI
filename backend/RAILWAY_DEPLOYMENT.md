@@ -2,37 +2,44 @@
 
 ## Main baseline and previously recorded Railway configuration — 2026-11-11
 
-> **Baseline accuracy.** The committed Main state recorded here is 548cce86276601b8cf1a5fb765c6a6270cf0b2c1. This section distinguishes that current Main baseline from the proposed changes in the open Draft PR described below. This task did not access a remote database, execute a migration, or change Railway or Supabase configuration. Railway configuration observations are carried forward from the prior read-only read-back recorded on 2026-11-11; they were not re-read during this PR.
+> **Baseline accuracy.** The committed Main state recorded here is `101a0ce8f40d4628e6b695f07ef9129d88684e54`, after PR #317 retired the external Staging migration path. The workflow description below reflects that merged Main state, not an open Draft PR. This task did not access a remote database, execute a migration, or change Railway or Supabase configuration. Railway configuration observations are carried forward from the prior read-only read-back recorded on 2026-11-11; they were not re-read during this task.
 
 ### 1. Canonical GitHub Actions migration workflow — current Main baseline
 
 - The canonical external migration workflow on Main is .github/workflows/database-migrate.yml.
-- On this Main baseline, the workflow is manually invoked through workflow_dispatch and exposes a choice between staging and production.
-- The migrate-staging job uses the GitHub staging Environment and secrets.MIGRATION_DATABASE_URL; it runs alembic current, alembic upgrade head, and alembic current using that credential. The credential reference and Environment scope do not verify the secret value or its actual database endpoint; that endpoint was not verified.
+- After PR #317, the workflow is manually invoked through workflow_dispatch with required approved Main SHA, Migration 0097 SHA-256, and expected current revision inputs. It has no Environment selector.
+- The external workflow has no migrate-staging job. Its only external migration job is migrate-production, which uses the protected Production Environment and the dedicated PRODUCTION_MIGRATION_DATABASE_URL credential. This does not establish the live secret value or endpoint.
 - The migrate-production job uses the GitHub production Environment; it is restricted to refs/heads/main and the first workflow attempt (run_attempt == 1).
 - Production preflight fails closed unless the supplied expected Main SHA equals github.sha, the checked-out HEAD equals that same SHA, and the SHA is a valid exact commit.
 - Production preflight verifies the raw Git-blob SHA-256 of backend/alembic/versions/0097_member_page_permissions.py at that exact commit. It also requires the expected previous revision 0096_patient_customer_id.
 - Before Production migration, the workflow attests exactly one current Alembic head and verifies it equals the supplied expected previous revision. After migration, it attests exactly one final head and verifies 0097_member_page_permissions.
 - The Production job uses the explicit target alembic upgrade 0097_member_page_permissions; it does not use alembic upgrade head.
-- Staging and Production share workflow-level global serialization: group: database-migration-global, queue: max, and cancel-in-progress: false.
+- The Production-only external migration workflow retains global serialization: group: database-migration-global, queue: max, and cancel-in-progress: false. Other Staging-scoped review and evaluation Jobs are not external Alembic migration runners.
 - PostgreSQL advisory locking is an additional database-level safeguard. backend/alembic/env.py wraps the complete online Alembic migration in migration_session_lock; backend/app/database/migration_lock.py implements a PostgreSQL session-level advisory lock with a 300-second wait timeout.
 - The former apply-0068-production.yml legacy workflow is absent. database-migrate.yml is the only canonical external migration workflow on this baseline.
 - GitHub CI and selected review workflows also run migrations against disposable local PostgreSQL service containers. These local test migrations are not external Staging or Production migration runners.
 
-### 2. Proposed migration governance in this Draft PR — not yet on Main
+### Production migration revision contract
 
-The proposed change in this PR removes only the external Staging migration path:
+- **Pre-migration state:** `0096_patient_customer_id`, enforced by `EXPECTED_PREVIOUS_REVISION` in `.github/scripts/production_migration_preflight.py` and checked against the single current Production revision before migration.
+- **Post-migration expected final state:** `0097_member_page_permissions`, used as the explicit migration target and final revision attestation.
+- **Read-only Production attestation:** `.github/scripts/production_db_readonly_attestation.py` expects only the post-migration final revision `0097_member_page_permissions`. It does not treat `0096_patient_customer_id` as an acceptable attested final state.
+- This is the repository release contract, not evidence of the live Production revision. Production migration status remains `NOT VERIFIED` in this task; no Production database was accessed.
 
-- Remove the migrate-staging job from .github/workflows/database-migrate.yml.
-- Remove the workflow_dispatch Environment selector. The remaining required inputs are the approved Main SHA, Migration 0097 SHA-256, and expected current revision.
-- Make the preflight Production-only and reject staging or any other non-Production target.
-- Retain one external migration job: migrate-production.
-- Preserve the Production GitHub Environment, Project Owner approval boundary, Main restriction, first-attempt restriction, Production credential guard and PRODUCTION_MIGRATION_DATABASE_URL isolation, exact Main SHA and migration hash checks, expected previous revision, pre/post revision attestations, advisory lock, exact Migration 0097 target, audit evidence, and global concurrency (cancel-in-progress: false).
-- Preserve all other Staging Environment-scoped uses for Agent evaluation, conversation and booking reviews, semantic checks, and database-backed functional tests. The workflow audit identified 17 Jobs across 16 workflows that bind secrets.MIGRATION_DATABASE_URL (including the V2 Full Evidence Audit alias). Fourteen invoke database-backed review code; three fixture-only harness Jobs (human-conversation-quality, v2-conversation-suite, and v2-stateful-conversation-suite) do not open a database connection even though the credential is currently bound. None of these Jobs is an Alembic migration runner, and none is changed by this PR. The actual endpoint configured in the secret is not verified.
-- Preserve automation-staging-rollback-gate.yml, including its database-backed write/rollback tests and its explicit HTTP blocking.
-- Preserve the V2 Full Evidence Audit split: disposable local PostgreSQL for Alembic setup, and real-Agent evidence through the Staging-scoped credential alias with per-scenario transaction rollback; the actual endpoint behind that credential is not verified.
-- Preserve the grouped multi-service review jobs that use disposable local PostgreSQL and run alembic upgrade head; their staging Environment label does not make the local database an external Staging migration target.
-- Preserve the GitHub CI disposable PostgreSQL migration tests and all migration revision/security tests.
+### 2. Merged retirement of the external Staging migration path — PR #317
+
+PR #317 merged the following Production-only migration governance changes into Main:
+
+- Removed the migrate-staging job from .github/workflows/database-migrate.yml.
+- Removed the workflow_dispatch Environment selector. The remaining required inputs are the approved Main SHA, Migration 0097 SHA-256, and expected current revision.
+- Made the preflight Production-only; it rejects staging or any other non-Production target.
+- Retained one external migration job: migrate-production.
+- Preserved the Production GitHub Environment, Project Owner approval boundary, Main restriction, first-attempt restriction, Production credential guard and PRODUCTION_MIGRATION_DATABASE_URL isolation, exact Main SHA and migration hash checks, expected previous revision, pre/post revision attestations, advisory lock, exact Migration 0097 target, audit evidence, and global concurrency (cancel-in-progress: false).
+- Preserved all other Staging Environment-scoped uses for Agent evaluation, conversation and booking reviews, semantic checks, and database-backed functional tests. The workflow audit identified 17 Jobs across 16 workflows that bind secrets.MIGRATION_DATABASE_URL (including the V2 Full Evidence Audit alias). Fourteen invoke database-backed review code; three fixture-only harness Jobs (human-conversation-quality, v2-conversation-suite, and v2-stateful-conversation-suite) do not open a database connection even though the credential is currently bound. None of these Jobs is an Alembic migration runner, and none was changed by PR #317. The actual endpoint configured in the secret is not verified.
+- Preserved automation-staging-rollback-gate.yml, including its database-backed write/rollback tests and its explicit HTTP blocking.
+- Preserved the V2 Full Evidence Audit split: disposable local PostgreSQL for Alembic setup, and real-Agent evidence through the Staging-scoped credential alias with per-scenario transaction rollback; the actual endpoint behind that credential is not verified.
+- Preserved the grouped multi-service review jobs that use disposable local PostgreSQL and run alembic upgrade head; their staging Environment label does not make the local database an external Staging migration target.
+- Preserved the GitHub CI disposable PostgreSQL migration tests and all migration revision/security tests.
 - Do not delete, rename, move, or change values for MIGRATION_DATABASE_URL or PRODUCTION_MIGRATION_DATABASE_URL. The former remains referenced by other Staging-environment review Jobs; its actual endpoint is unverified. The latter remains scoped to the protected Production job; its actual endpoint is also unverified.
 
 #### Credential binding and target verification boundary
@@ -44,7 +51,7 @@ The proposed change in this PR removes only the external Staging migration path:
 
 The workflow audit verifies credential references and GitHub Environment scope only. It does not read secret values or verify the database endpoint selected by either credential. No secret values were read or displayed during this task.
 
-**Important:** These are proposed PR semantics, not the current Main state. Until the Draft PR is reviewed and merged, Main still contains the Staging migration job described in section 1.
+**Important:** PR #317 is merged. The Production-only workflow described in section 1 is the current Main state; the old Draft-PR description of an active Staging migration job is superseded.
 
 ### 3. Railway migration-runner retirement — previously recorded live Production read-back
 
@@ -58,7 +65,7 @@ The workflow audit verifies credential references and GitHub Environment scope o
 | tia-automation-waker | Not configured |
 | tia-whatsapp-transport-waker | Not configured |
 
-The prior read-back recorded no active Alembic pre-deploy command on these five services. This PR does not modify or newly attest Railway configuration. The proposed Production-only GitHub workflow change is a repository governance change; it does not itself change Railway service settings.
+The prior read-back recorded no active Alembic pre-deploy command on these five services. This task does not modify or newly attest Railway configuration. The merged Production-only GitHub workflow is a repository governance change; it does not itself change Railway service settings.
 
 ### 4. Railway watch configuration — previously recorded read-back
 
@@ -90,7 +97,7 @@ These are Railway deployment-trigger exclusions only: they do not remove the fil
 - The Project Owner previously deferred Production migration credential verification and Staging credential target verification. The presence or correctness of PRODUCTION_MIGRATION_DATABASE_URL and the Staging credential target must not be assumed from workflow references or Railway runtime variable names. No secret values were accessed or displayed during this task.
 - The Production workflow credential guard fails closed if PRODUCTION_MIGRATION_DATABASE_URL is unavailable to the protected Production job. This documentation does not claim that the credential is configured or that Production is ready to migrate.
 - The Required runtime variables list below describes application runtime variable names; it is not evidence that GitHub Environment migration credentials exist, have the correct target, or are authorized for use.
-- Any future Production migration requires separate explicit Project Owner authorization and applicable credential/target verification. Do not dispatch the workflow based on this documentation or the Draft PR.
+- Any future Production migration requires separate explicit Project Owner authorization and applicable credential/target verification. Do not dispatch the workflow based on this documentation alone.
 
 ## Service source
 
@@ -131,7 +138,7 @@ PR #313 was merged successfully into main.
 - Canonical workflow: .github/workflows/database-migrate.yml
 - The canonical workflow is present on Main and is the approved GitHub Actions migration entry point.
 
-The canonical workflow retains its release controls: manual workflow_dispatch, Production restricted to refs/heads/main, exact 40-character Main SHA verification, checkout pinned to github.sha with persist-credentials: false, Migration 0097 SHA-256 verification, expected pre-migration revision validation, rejection of zero or multiple current Alembic heads, final exact revision attestation, explicit Production target alembic upgrade 0097_member_page_permissions, shared PostgreSQL session advisory locking, secret isolation, least-privilege contents: read, cancel-in-progress: false, and the existing Staging alembic upgrade head behavior.
+At the time PR #313 merged, the workflow retained manual workflow_dispatch, Main restriction, exact Main SHA verification, Migration 0097 SHA-256 verification, expected pre-migration revision validation, exact pre/post revision checks, explicit Production target `alembic upgrade 0097_member_page_permissions`, PostgreSQL session advisory locking, secret isolation, least-privilege `contents: read`, and non-cancelling global concurrency. The former external Staging `alembic upgrade head` job described in that historical PR #313 state was subsequently retired by PR #317; it is not present on the current Main baseline.
 
 The previous description of PR #313 as open/draft and the canonical workflow as a proposal is historical and superseded by the merge above. The merge does not itself authorize a Production migration; the Single-Owner technical Production approval gate remains a separate future task and is not implemented by PR #313.
 

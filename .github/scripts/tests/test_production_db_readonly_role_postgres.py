@@ -61,7 +61,22 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             )
             admin.execute(
                 "INSERT INTO public.alembic_version(version_num) VALUES (%s)",
-                ("0096_patient_customer_id",),
+                ("0097_member_page_permissions",),
+            )
+            admin.execute(
+                """
+                CREATE TABLE public.workspace_members (
+                    id uuid PRIMARY KEY,
+                    workspace_id uuid NOT NULL,
+                    user_id uuid NOT NULL,
+                    role varchar(50) NOT NULL,
+                    is_active boolean NOT NULL DEFAULT true,
+                    page_permissions jsonb NULL,
+                    permissions_version integer NOT NULL DEFAULT 0,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now()
+                )
+                """
             )
             admin.execute("CREATE SEQUENCE public.attestor_guard_sequence")
             admin.execute(
@@ -317,6 +332,7 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             admin.execute("REVOKE SELECT ON public.alembic_version FROM tia_attestor_ci")
             admin.execute("DROP ROLE IF EXISTS tia_attestor_ci")
             admin.execute("DROP SEQUENCE IF EXISTS public.attestor_guard_sequence")
+            admin.execute("DROP TABLE IF EXISTS public.workspace_members")
             admin.execute("DROP TABLE IF EXISTS public.alembic_version")
             # Restore effective PUBLIC access before the disposable CI service
             # is destroyed. The stored ACL becomes explicit; each run requires a
@@ -401,6 +417,157 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(privileges, (False, True, False))
 
+    def test_attestor_verifies_migration_0097_and_permission_schema_from_catalog(self):
+        with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
+            conn.execute("BEGIN READ ONLY")
+            self.assertEqual(
+                conn.execute("SHOW transaction_read_only").fetchone()[0],
+                "on",
+            )
+            revisions = conn.execute(
+                "SELECT version_num FROM public.alembic_version ORDER BY version_num"
+            ).fetchall()
+            schema_verified, observed = runtime_probe.verify_member_permissions_schema(conn)
+
+            self.assertEqual(revisions, [("0097_member_page_permissions",)])
+            self.assertTrue(schema_verified)
+            self.assertEqual(
+                observed,
+                {
+                    "page_permissions": {
+                        "data_type": "jsonb",
+                        "not_null": False,
+                        "default": None,
+                    },
+                    "permissions_version": {
+                        "data_type": "integer",
+                        "not_null": True,
+                        "default": "0",
+                    },
+                },
+            )
+            self.assertFalse(
+                conn.execute(
+                    "SELECT has_table_privilege(current_user, 'public.workspace_members', 'SELECT')"
+                ).fetchone()[0]
+            )
+            conn.execute("ROLLBACK")
+
+    def test_attestor_schema_probe_detects_real_postgres_schema_drift(self):
+        with psycopg.connect(self.admin_conninfo) as admin:
+            admin.execute(
+                "ALTER TABLE public.workspace_members "
+                "ALTER COLUMN permissions_version TYPE bigint"
+            )
+            schema_verified, observed = runtime_probe.verify_member_permissions_schema(admin)
+            admin.rollback()
+
+        self.assertFalse(schema_verified)
+        self.assertEqual(observed["permissions_version"]["data_type"], "bigint")
+
+    def test_wrapper_body_drift_is_rejected_before_execution_and_restored(self):
+        function_name = "attestation_private.cluster_system_identifier()"
+        catalog_metadata = """
+            SELECT proowner, prosecdef, pronargs, proconfig, proacl,
+                   prolang, prorettype, proretset, prokind, provolatile,
+                   proisstrict, proleakproof, proparallel
+            FROM pg_catalog.pg_proc
+            WHERE oid = %s::regprocedure
+        """
+
+        with psycopg.connect(self.role_conninfo, autocommit=True) as attestor:
+            attestor.execute("BEGIN READ ONLY")
+            runtime_probe.verify_runtime_identity(
+                attestor, expected_role=self.role_name
+            )
+            attestor.execute("ROLLBACK")
+
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            approved_metadata = admin.execute(
+                catalog_metadata, (function_name,)
+            ).fetchone()
+            try:
+                # CREATE OR REPLACE retains owner/ACL, language, return type, and
+                # search_path; changing only SQL body must still fail closed.
+                admin.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION attestation_private.cluster_system_identifier()
+                    RETURNS text
+                    LANGUAGE sql
+                    SECURITY DEFINER
+                    SET search_path = pg_catalog
+                    AS $function$
+                        SELECT system_identifier::text
+                        FROM pg_catalog.pg_control_system()
+                        WHERE true;
+                    $function$
+                    """
+                )
+                self.assertEqual(
+                    admin.execute(
+                        catalog_metadata, (function_name,)
+                    ).fetchone(),
+                    approved_metadata,
+                )
+
+                with psycopg.connect(self.role_conninfo, autocommit=True) as attestor:
+                    issued_queries = []
+
+                    def recorded_execute(statement):
+                        issued_queries.append(statement)
+                        return attestor.execute(statement)
+
+                    attestor.execute("BEGIN READ ONLY")
+                    try:
+                        with self.assertRaises(
+                            runtime_probe.AttestationFailure
+                        ) as failed:
+                            runtime_probe.verify_runtime_identity(
+                                SimpleNamespace(execute=recorded_execute),
+                                expected_role=self.role_name,
+                            )
+                        self.assertEqual(
+                            failed.exception.category,
+                            "runtime_wrapper_definition_unverified",
+                        )
+                        self.assertFalse(
+                            any(
+                                "SELECT attestation_private.cluster_system_identifier()"
+                                in query
+                                for query in issued_queries
+                            )
+                        )
+                    finally:
+                        attestor.execute("ROLLBACK")
+            finally:
+                # Restore original definition even if a regression assertion fails.
+                admin.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION attestation_private.cluster_system_identifier()
+                    RETURNS text
+                    LANGUAGE sql
+                    SECURITY DEFINER
+                    SET search_path = pg_catalog
+                    AS $function$
+                        SELECT system_identifier::text
+                        FROM pg_catalog.pg_control_system();
+                    $function$
+                    """
+                )
+                self.assertEqual(
+                    admin.execute(
+                        catalog_metadata, (function_name,)
+                    ).fetchone(),
+                    approved_metadata,
+                )
+
+        with psycopg.connect(self.role_conninfo, autocommit=True) as attestor:
+            attestor.execute("BEGIN READ ONLY")
+            runtime_probe.verify_runtime_identity(
+                attestor, expected_role=self.role_name
+            )
+            attestor.execute("ROLLBACK")
+
     def test_role_reads_only_the_wrapper_surface_and_cannot_escalate(self):
         with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
             self.assertEqual(
@@ -419,7 +586,7 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
             self.assertRegex(cluster_identifier, r"^[0-9]{10,30}$")
             self.assertEqual(
                 conn.execute("SELECT version_num FROM public.alembic_version").fetchone()[0],
-                "0096_patient_customer_id",
+                "0097_member_page_permissions",
             )
             self.assertIsNotNone(
                 conn.execute(

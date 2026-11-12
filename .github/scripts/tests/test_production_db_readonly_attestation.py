@@ -43,6 +43,8 @@ class FakeConnection:
         tls=True,
         fail_system_id=False,
         database_oid="5",
+        current_schema="public",
+        server_version="17.6",
         is_replica=False,
         session_user="tia_production_attestor",
         current_user=None,
@@ -65,13 +67,44 @@ class FakeConnection:
         wrapper_owner="postgres",
         wrapper_argument_count=0,
         wrapper_config=None,
+        wrapper_language="sql",
+        wrapper_return_type="text",
+        wrapper_returns_set=False,
+        wrapper_kind="f",
+        wrapper_volatility="v",
+        wrapper_strict=False,
+        wrapper_leakproof=False,
+        wrapper_parallel="u",
+        wrapper_all_argtypes=None,
+        wrapper_argmodes=None,
+        wrapper_argdefaults=0,
+        wrapper_variadic=0,
+        wrapper_has_no_sql_body=True,
+        wrapper_source=probe.APPROVED_WRAPPER_SOURCE,
         security_definer_rows=None,
+        alembic_revisions=None,
+        member_permissions_schema_rows=None,
     ):
         self.system_id = system_id or probe.REFERENCE["cluster_system_id"]
         self.tls = tls
         self.fail_system_id = fail_system_id
         self.database_oid = database_oid
+        self.current_schema = current_schema
+        self.server_version = server_version
         self.is_replica = is_replica
+        self.alembic_revisions = (
+            list(alembic_revisions)
+            if alembic_revisions is not None
+            else ["0097_member_page_permissions"]
+        )
+        self.member_permissions_schema_rows = (
+            list(member_permissions_schema_rows)
+            if member_permissions_schema_rows is not None
+            else [
+                ("page_permissions", "jsonb", False, None),
+                ("permissions_version", "integer", True, "0"),
+            ]
+        )
         self.session_user = session_user
         self.current_user = current_user or session_user
         self.role_attributes = (
@@ -94,6 +127,20 @@ class FakeConnection:
             wrapper_owner,
             wrapper_argument_count,
             wrapper_config if wrapper_config is not None else ["search_path=pg_catalog"],
+            wrapper_language,
+            wrapper_return_type,
+            wrapper_returns_set,
+            wrapper_kind,
+            wrapper_volatility,
+            wrapper_strict,
+            wrapper_leakproof,
+            wrapper_parallel,
+            wrapper_all_argtypes,
+            wrapper_argmodes,
+            wrapper_argdefaults,
+            wrapper_variadic,
+            wrapper_has_no_sql_body,
+            wrapper_source,
         )
         self.security_definer_rows = (
             security_definer_rows
@@ -129,9 +176,9 @@ class FakeConnection:
             return FakeCursor(
                 (
                     "postgres",
-                    "public",
+                    self.current_schema,
                     '"$user", public',
-                    "17.6",
+                    self.server_version,
                     self.database_oid,
                     4242,
                     self.is_replica,
@@ -144,7 +191,9 @@ class FakeConnection:
                 raise probe.psycopg.errors.InsufficientPrivilege("do-not-leak")
             return FakeCursor((self.system_id,))
         if normalized.startswith("SELECT version_num"):
-            return FakeCursor(rows=[("0096_patient_customer_id",)])
+            return FakeCursor(rows=[(revision,) for revision in self.alembic_revisions])
+        if normalized.startswith("SELECT attribute.attname"):
+            return FakeCursor(rows=self.member_permissions_schema_rows)
         if normalized.startswith("SELECT ssl, version, cipher, bits"):
             if self.tls:
                 return FakeCursor((True, "TLSv1.3", "TLS_AES_256_GCM_SHA384", 256))
@@ -245,6 +294,20 @@ class RuntimeAttestationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "VERIFIED")
         self.assertEqual(result["verdict"], "SAME_DATABASE")
+        self.assertTrue(result["database_identity_verified"])
+        self.assertEqual(result["expected_alembic_revision"], "0097_member_page_permissions")
+        self.assertEqual(result["actual_alembic_revision"], "0097_member_page_permissions")
+        self.assertEqual(result["actual_alembic_revisions"], ["0097_member_page_permissions"])
+        self.assertTrue(result["alembic_revision_verified"])
+        self.assertTrue(result["schema_verified"])
+        self.assertEqual(
+            result["member_permissions_schema"],
+            {
+                "page_permissions": {"data_type": "jsonb", "not_null": False, "default": None},
+                "permissions_version": {"data_type": "integer", "not_null": True, "default": "0"},
+            },
+        )
+        self.assertTrue(result["read_only_transaction_verified"])
         self.assertTrue(result["baseline_metadata_match"])
         self.assertEqual(result["connection_count"], 1)
         self.assertEqual(result["backend_pid"], 4242)
@@ -293,6 +356,156 @@ class RuntimeAttestationTests(unittest.TestCase):
         self.assertFalse(result["is_replica"])
         self.assertEqual(connection.queries.count("ROLLBACK"), 1)
         self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+
+    def test_revision_0096_is_rejected_as_outdated(self):
+        connection = FakeConnection(alembic_revisions=["0096_patient_customer_id"])
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(result["actual_alembic_revision"], "0096_patient_customer_id")
+        self.assertEqual(result["actual_alembic_revisions"], ["0096_patient_customer_id"])
+        self.assertFalse(result["alembic_revision_verified"])
+        self.assertTrue(result["database_identity_verified"])
+        self.assertTrue(result["schema_verified"])
+        self.assertTrue(result["rollback_completed"])
+        self._assert_no_database_writes(connection)
+
+    def test_multiple_alembic_revisions_are_rejected(self):
+        connection = FakeConnection(
+            alembic_revisions=[
+                "0096_patient_customer_id",
+                "0097_member_page_permissions",
+            ]
+        )
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIsNone(result["actual_alembic_revision"])
+        self.assertEqual(
+            result["actual_alembic_revisions"],
+            ["0096_patient_customer_id", "0097_member_page_permissions"],
+        )
+        self.assertFalse(result["alembic_revision_verified"])
+        self.assertTrue(result["rollback_completed"])
+        self._assert_no_database_writes(connection)
+
+    def test_missing_alembic_revision_is_rejected(self):
+        connection = FakeConnection(alembic_revisions=[])
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIsNone(result["actual_alembic_revision"])
+        self.assertEqual(result["actual_alembic_revisions"], [])
+        self.assertFalse(result["alembic_revision_verified"])
+        self.assertTrue(result["schema_verified"])
+        self.assertTrue(result["rollback_completed"])
+        self._assert_no_database_writes(connection)
+
+    def _assert_schema_mismatch(self, schema_rows):
+        connection = FakeConnection(member_permissions_schema_rows=schema_rows)
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(result["database_identity_verified"])
+        self.assertTrue(result["alembic_revision_verified"])
+        self.assertFalse(result["schema_verified"])
+        self.assertTrue(result["read_only_transaction_verified"])
+        self.assertTrue(result["rollback_completed"])
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self.assertTrue(connection.closed)
+        self._assert_no_database_writes(connection)
+
+    def test_missing_workspace_members_table_is_rejected(self):
+        self._assert_schema_mismatch([])
+
+    def test_missing_page_permissions_column_is_rejected(self):
+        self._assert_schema_mismatch(
+            [("permissions_version", "integer", True, "0")]
+        )
+
+    def test_wrong_page_permissions_type_is_rejected(self):
+        self._assert_schema_mismatch(
+            [
+                ("page_permissions", "json", False, None),
+                ("permissions_version", "integer", True, "0"),
+            ]
+        )
+
+    def test_wrong_page_permissions_nullability_is_rejected(self):
+        self._assert_schema_mismatch(
+            [
+                ("page_permissions", "jsonb", True, None),
+                ("permissions_version", "integer", True, "0"),
+            ]
+        )
+
+    def test_page_permissions_default_is_rejected(self):
+        self._assert_schema_mismatch(
+            [
+                ("page_permissions", "jsonb", False, "'{}'::jsonb"),
+                ("permissions_version", "integer", True, "0"),
+            ]
+        )
+
+    def test_missing_permissions_version_column_is_rejected(self):
+        self._assert_schema_mismatch(
+            [("page_permissions", "jsonb", False, None)]
+        )
+
+    def test_wrong_permissions_version_type_is_rejected(self):
+        self._assert_schema_mismatch(
+            [
+                ("page_permissions", "jsonb", False, None),
+                ("permissions_version", "bigint", True, "0"),
+            ]
+        )
+
+    def test_wrong_permissions_version_nullability_is_rejected(self):
+        self._assert_schema_mismatch(
+            [
+                ("page_permissions", "jsonb", False, None),
+                ("permissions_version", "integer", False, "0"),
+            ]
+        )
+
+    def test_wrong_permissions_version_default_is_rejected(self):
+        self._assert_schema_mismatch(
+            [
+                ("page_permissions", "jsonb", False, None),
+                ("permissions_version", "integer", True, "1"),
+            ]
+        )
+
+    def _assert_baseline_metadata_mismatch(self, connection):
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 1)
+        self.assertTrue(result["database_identity_verified"])
+        self.assertFalse(result["baseline_metadata_match"])
+        self.assertTrue(result["alembic_revision_verified"])
+        self.assertTrue(result["schema_verified"])
+        self.assertTrue(result["read_only_transaction_verified"])
+        self.assertTrue(result["rollback_completed"])
+        self._assert_no_database_writes(connection)
+
+    def test_main_rejects_unexpected_postgres_version(self):
+        self._assert_baseline_metadata_mismatch(FakeConnection(server_version="17.5"))
+
+    def test_main_rejects_unexpected_current_schema(self):
+        self._assert_baseline_metadata_mismatch(FakeConnection(current_schema="attestation_private"))
+
+    def test_main_rejects_different_database_identity_even_when_schema_matches(self):
+        connection = FakeConnection(system_id="1111111111111111111")
+        exit_code, result = self._run_main_with_connection(connection)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(result["verdict"], "DIFFERENT_DATABASE")
+        self.assertFalse(result["database_identity_verified"])
+        self.assertTrue(result["alembic_revision_verified"])
+        self.assertTrue(result["schema_verified"])
+        self.assertTrue(result["read_only_transaction_verified"])
+        self.assertTrue(result["rollback_completed"])
         self._assert_no_database_writes(connection)
 
     def _assert_runtime_guard_rejects_without_wrapper(self, connection, category):
@@ -370,6 +583,57 @@ class RuntimeAttestationTests(unittest.TestCase):
                 self._assert_runtime_guard_rejects_without_wrapper(
                     FakeConnection(**metadata),
                     "runtime_effective_privilege_guard_failed",
+                )
+
+    def test_approved_wrapper_source_passes_with_sql_dollar_quote_indentation(self):
+        connection = FakeConnection(
+            wrapper_source="\n    SELECT system_identifier::text\n"
+            "    FROM pg_catalog.pg_control_system();\n"
+        )
+        result, _ = self._run_with_connection(connection)
+        self.assertEqual(result["status"], "VERIFIED")
+        self.assertEqual(connection.wrapper_invocations, 1)
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self._assert_no_database_writes(connection)
+
+    def test_wrapper_body_drift_fails_closed_before_execution(self):
+        changed_source = (
+            "SELECT system_identifier::text\n"
+            "FROM pg_catalog.pg_control_system() WHERE true;"
+        )
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(wrapper_source=changed_source),
+            "runtime_wrapper_definition_unverified",
+        )
+
+    def test_missing_wrapper_source_fails_closed_before_execution(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(wrapper_source=None),
+            "runtime_wrapper_definition_unverified",
+        )
+
+    def test_unapproved_wrapper_execution_metadata_fails_closed(self):
+        cases = (
+            ("language", {"wrapper_language": "plpgsql"}),
+            ("return_type", {"wrapper_return_type": "integer"}),
+            ("returns_set", {"wrapper_returns_set": True}),
+            ("kind", {"wrapper_kind": "p"}),
+            ("volatility", {"wrapper_volatility": "s"}),
+            ("strict", {"wrapper_strict": True}),
+            ("leakproof", {"wrapper_leakproof": True}),
+            ("parallel", {"wrapper_parallel": "s"}),
+            ("all_argtypes", {"wrapper_all_argtypes": [25]}),
+            ("argmodes", {"wrapper_argmodes": ["o"]}),
+            ("argdefaults", {"wrapper_argdefaults": 1}),
+            ("variadic", {"wrapper_variadic": 25}),
+            ("sql_body", {"wrapper_has_no_sql_body": False}),
+            ("missing_language", {"wrapper_language": None}),
+        )
+        for label, metadata in cases:
+            with self.subTest(metadata=label):
+                self._assert_runtime_guard_rejects_without_wrapper(
+                    FakeConnection(**metadata),
+                    "runtime_wrapper_definition_unverified",
                 )
 
     def test_unexpected_role_membership_is_rejected_before_wrapper(self):
@@ -553,18 +817,26 @@ class RuntimeAttestationTests(unittest.TestCase):
     def test_missing_readonly_secret_is_unverified_without_connecting(self):
         with patch.object(probe.psycopg, "connect") as connect:
             result = probe.run_attestation("")
-        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["status"], "PRODUCTION_ATTESTATION_BLOCKED")
+        self.assertEqual(result["reason"], "PRODUCTION_DB_READONLY_URL_MISSING")
         self.assertEqual(result["failure_category"], "production_db_readonly_url_missing")
         connect.assert_not_called()
 
     def test_migration_secret_is_never_used_as_attestation_fallback(self):
         with (
             patch.object(probe.psycopg, "connect") as connect,
-            patch.dict("os.environ", {"MIGRATION_DATABASE_URL": RAW_URL}),
+            patch.dict(
+                "os.environ",
+                {
+                    "MIGRATION_DATABASE_URL": RAW_URL,
+                    "PRODUCTION_MIGRATION_DATABASE_URL": RAW_URL,
+                },
+            ),
         ):
             os.environ.pop("PRODUCTION_DB_READONLY_URL", None)
             result = probe.run_attestation()
-        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertEqual(result["status"], "PRODUCTION_ATTESTATION_BLOCKED")
+        self.assertEqual(result["reason"], "PRODUCTION_DB_READONLY_URL_MISSING")
         self.assertEqual(result["failure_category"], "production_db_readonly_url_missing")
         connect.assert_not_called()
 
@@ -582,6 +854,7 @@ class RuntimeAttestationTests(unittest.TestCase):
                 {
                     "PRODUCTION_DB_READONLY_URL": RAW_URL,
                     "MIGRATION_DATABASE_URL": migration_url,
+                    "PRODUCTION_MIGRATION_DATABASE_URL": migration_url,
                 },
             ),
         ):

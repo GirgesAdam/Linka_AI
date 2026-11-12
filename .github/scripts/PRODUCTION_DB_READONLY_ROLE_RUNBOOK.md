@@ -44,7 +44,17 @@ Production database as:
 | Database OID | 5 | REFERENCE["database_oid"] in the same attestation contract |
 | Schema | public | REFERENCE["schema"] |
 | PostgreSQL version | 17.6 | REFERENCE["postgres_version"] |
-| Alembic revision | 0096_patient_customer_id | REFERENCE["alembic_revision"] |
+| Pre-migration Alembic revision | 0096_patient_customer_id | EXPECTED_PREVIOUS_REVISION in production_migration_preflight.py |
+| Post-migration expected Alembic revision | 0097_member_page_permissions | REFERENCE["alembic_revision"] in production_db_readonly_attestation.py |
+
+The revision sequence is explicit: Production Migration Preflight accepts
+0096_patient_customer_id as the pre-migration starting revision, and the
+migration workflow targets 0097_member_page_permissions. The read-only
+Production Attestation checks only the expected post-migration final revision
+0097_member_page_permissions; it does not accept 0096 as an attested final
+state. This sequence is a repository contract, not evidence of the live
+Production revision. Production migration status remains NOT VERIFIED until a
+separately authorized attestation is completed.
 
 .env.example also uses /postgres as the database path for the migration
 connection. The disposable PostgreSQL 17.6 CI database is named
@@ -1710,6 +1720,34 @@ GRANT EXECUTE ON FUNCTION attestation_private.cluster_system_identifier()
 
 COMMIT;
 ```
+
+### F-01 — Approved SECURITY DEFINER body integrity contract
+
+The read-only runtime guard examines `pg_proc.prosrc` and `pg_language`
+**before** calling `attestation_private.cluster_system_identifier()`.
+It removes only common dollar-quote indentation and surrounding whitespace
+(`textwrap.dedent(...).strip()`), then requires exact equality to these two
+SQL lines, which match the CREATE FUNCTION statement above and the PostgreSQL
+17.6 test fixture:
+
+```sql
+SELECT system_identifier::text
+FROM pg_catalog.pg_control_system();
+```
+
+A substring match is insufficient. The runtime also verifies `LANGUAGE sql`,
+`RETURNS text`, no set return, ordinary function kind, default VOLATILE,
+not STRICT or LEAKPROOF, PARALLEL UNSAFE, no OUT/variadic/default arguments,
+and no SQL-standard alternate function body. Existing owner,
+`SECURITY DEFINER`, `search_path`, and effective ACL guards remain required.
+
+If the body is missing, its metadata is different, or the catalog cannot be
+read, attestation fails closed as `runtime_wrapper_definition_unverified`
+(or a generic runtime probe failure), rolls back, and never invokes the wrapper.
+The attestation failure output does not include the SQL function body or
+connection credentials. Changing this approved definition requires separate
+security review and a coordinated code/runbook update; do not loosen the guard
+to accept an unreviewed Production definition.
 
 Set the password interactively in psql so it is not embedded in this file or shell
 history. Keep the role NOLOGIN until the password has been set:
