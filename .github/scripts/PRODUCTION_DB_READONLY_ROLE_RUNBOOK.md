@@ -1,5 +1,26 @@
 # Tia Production Read-only Attestation Role Runbook
 
+> [!CAUTION]
+> **NOT APPROVED FOR SUPABASE PRODUCTION EXECUTION**
+>
+> This is a **historical design / isolated PostgreSQL 17.6 test runbook**, not a
+> production execution procedure for the Supabase-managed Tia AI database.
+> Creating or enabling `tia_production_attestor`, changing `PUBLIC CONNECT`
+> or `PUBLIC TEMPORARY` ACLs, creating/altering the `SECURITY DEFINER`
+> `attestation_private.cluster_system_identifier()` wrapper, and running the
+> automated Production attestation are **NOT AUTHORIZED**. In particular, do not
+> apply the CONNECT-isolation or role-provisioning SQL below to Supabase
+> Production; Supabase-managed services may rely on the existing PUBLIC grants.
+>
+> Use the separately approved, human-reviewed procedure in
+> [Supabase Manual Production Attestation Runbook](../../docs/SUPABASE_MANUAL_PRODUCTION_ATTESTATION_RUNBOOK.md).
+> The existing workflow `.github/workflows/production-db-readonly-attestation.yml`
+> remains in the repository but is **NOT AUTHORIZED FOR PRODUCTION DISPATCH**;
+> this notice does not claim that it has been technically disabled. Do not add
+> `PRODUCTION_DB_READONLY_URL` or use migration credentials as a substitute.
+> Preserve the following sections as prior engineering history and test evidence
+> only. Any change to this decision requires fresh Owner/DBA and security review.
+
 Status: REVIEW ONLY - DO NOT EXECUTE WITHOUT EXPLICIT PRODUCTION CHANGE APPROVAL.
 
 This runbook is for the Project Owner / database administrator. It does not create a
