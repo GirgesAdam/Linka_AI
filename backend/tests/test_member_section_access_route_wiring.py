@@ -57,6 +57,9 @@ def test_clinic_operations_and_administration_routes_use_only_section_guards() -
         ("GET", "/clinic/setup-v2", "administration"),
         ("GET", "/operations/activity", "administration"),
         ("GET", "/channels/whatsapp/setup", "administration"),
+        ("GET", "/clinic/knowledge", "administration"),
+        ("POST", "/clinic/knowledge/ai/propose", "administration"),
+        ("POST", "/clinic/knowledge/ai/apply", "administration"),
     ]
     for method, path, section in expected:
         route = _route(path, method)
@@ -79,7 +82,6 @@ def test_default_access_routes_have_no_section_permission_dependency() -> None:
         ("GET", "/clinic/branches"),
         ("GET", "/booking/branch-schedules"),
         ("GET", "/clinic/staff"),
-        ("GET", "/clinic/knowledge"),
         ("GET", "/clinic/booking-settings"),
         ("GET", "/inventory/products"),
         ("GET", "/inventory/laser-devices"),

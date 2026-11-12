@@ -9,12 +9,19 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
 from app.api.routes import auth as auth_routes
+from app.api.routes import clinic as clinic_routes
 from app.api.routes.auth import router as auth_router
+from app.api.routes.clinic import router as clinic_router
 from app.database.base import Base
 from app.database.session import get_db
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
+from app.schemas.agent_knowledge import (
+    AgentKnowledgeSnapshot,
+    KnowledgeEditApplyResponse,
+    KnowledgeEditProposal,
+)
 
 
 def _database():
@@ -271,3 +278,291 @@ def test_new_member_invitation_defaults_closed_and_role_changes_reset_flags(monk
             assert target_membership.permissions_version == 6
     finally:
         engine.dispose()
+
+
+def test_knowledge_snapshot_api_requires_administration_section(monkeypatch):
+    workspace_id = uuid4()
+    actor_user_id = uuid4()
+    snapshot = AgentKnowledgeSnapshot(
+        workspace_id=workspace_id,
+        workspace_name="Knowledge Test Workspace",
+        workspace_timezone="Africa/Cairo",
+        branches=[],
+        services=[],
+        doctors=[],
+        booking_settings=None,
+        patients=[],
+        appointments=[],
+        patient_count=0,
+        appointment_count=0,
+    )
+    builder_calls = []
+
+    def build_snapshot(db, workspace):
+        builder_calls.append(workspace.id)
+        return snapshot
+
+    monkeypatch.setattr(clinic_routes, "build_agent_knowledge_snapshot", build_snapshot)
+
+    def client_for(
+        *,
+        role="member",
+        section_access=None,
+        active=True,
+        membership_workspace_id=None,
+        membership_user_id=None,
+    ):
+        membership = SimpleNamespace(
+            workspace_id=membership_workspace_id or workspace_id,
+            user_id=membership_user_id or actor_user_id,
+            role=role,
+            is_active=active,
+            section_access=section_access,
+        )
+        access = WorkspaceAccess(
+            user=SimpleNamespace(id=actor_user_id),
+            workspace=SimpleNamespace(id=workspace_id),
+            membership=membership,
+        )
+        app = FastAPI()
+        app.include_router(clinic_router, prefix="/clinic")
+        app.dependency_overrides[get_workspace_access] = lambda: access
+        app.dependency_overrides[get_db] = lambda: object()
+        return TestClient(app)
+
+    cases = [
+        ("admin", {"role": "admin", "section_access": None}, 200),
+        (
+            "member_with_administration",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+            },
+            200,
+        ),
+        (
+            "member_with_both_sections_closed",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": False},
+            },
+            403,
+        ),
+        (
+            "member_with_clinic_operations_only",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": True, "administration": False},
+            },
+            403,
+        ),
+        (
+            "inactive_member",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+                "active": False,
+            },
+            403,
+        ),
+        (
+            "cross_workspace_membership",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+                "membership_workspace_id": uuid4(),
+            },
+            403,
+        ),
+        (
+            "cross_user_membership",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+                "membership_user_id": uuid4(),
+            },
+            403,
+        ),
+    ]
+
+    for label, options, expected_status in cases:
+        client = client_for(**options)
+        with client:
+            response = client.get("/clinic/knowledge")
+        assert response.status_code == expected_status, label
+        if expected_status == 200:
+            assert response.json()["workspace_id"] == str(workspace_id)
+        else:
+            assert "patient" not in response.text.lower(), label
+
+    assert builder_calls == [workspace_id, workspace_id]
+
+
+def test_knowledge_ai_propose_and_apply_require_administration_section(monkeypatch):
+    workspace_id = uuid4()
+    actor_user_id = uuid4()
+    propose_calls = []
+    apply_calls = []
+
+    def propose_edit(_db, workspace, message):
+        propose_calls.append((workspace.id, message))
+        return KnowledgeEditProposal(
+            base_fingerprint="a" * 64,
+            assistant_message="Prepared a safe preview.",
+            preview_lines=["Service details would be updated."],
+            actions=[],
+            requires_confirmation=False,
+        )
+
+    def apply_edit(_db, workspace, *, base_fingerprint, actions, actor_user_id):
+        apply_calls.append((workspace.id, base_fingerprint, len(actions), actor_user_id))
+        return KnowledgeEditApplyResponse(
+            assistant_message="The approved change was applied.",
+            applied_actions=1,
+        )
+
+    monkeypatch.setattr(clinic_routes, "propose_agent_knowledge_edit", propose_edit)
+    monkeypatch.setattr(clinic_routes, "apply_agent_knowledge_edit", apply_edit)
+
+    def client_for(
+        *,
+        role="member",
+        section_access=None,
+        active=True,
+        membership_workspace_id=None,
+        membership_user_id=None,
+    ):
+        membership = SimpleNamespace(
+            workspace_id=membership_workspace_id or workspace_id,
+            user_id=membership_user_id or actor_user_id,
+            role=role,
+            is_active=active,
+            section_access=section_access,
+        )
+        access = WorkspaceAccess(
+            user=SimpleNamespace(id=actor_user_id),
+            workspace=SimpleNamespace(id=workspace_id),
+            membership=membership,
+        )
+        app = FastAPI()
+        app.include_router(clinic_router, prefix="/clinic")
+        app.dependency_overrides[get_workspace_access] = lambda: access
+        app.dependency_overrides[get_db] = lambda: object()
+        return TestClient(app)
+
+    propose_payload = {"message": "Update the clinic opening hours."}
+    apply_payload = {
+        "base_fingerprint": "a" * 64,
+        "actions": [{"kind": "update_service"}],
+    }
+    cases = [
+        ("admin", {"role": "admin"}, 200),
+        (
+            "member_with_administration",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+            },
+            200,
+        ),
+        (
+            "member_with_both_sections_closed",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": False},
+            },
+            403,
+        ),
+        (
+            "member_with_clinic_operations_only",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": True, "administration": False},
+            },
+            403,
+        ),
+        (
+            "inactive_member_with_administration",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+                "active": False,
+            },
+            403,
+        ),
+        (
+            "cross_workspace_member_with_administration",
+            {
+                "role": "member",
+                "section_access": {"clinic_operations": False, "administration": True},
+                "membership_workspace_id": uuid4(),
+            },
+            403,
+        ),
+    ]
+
+    for label, options, expected_status in cases:
+        client = client_for(**options)
+        with client:
+            propose_response = client.post(
+                "/clinic/knowledge/ai/propose",
+                json=propose_payload,
+            )
+            apply_response = client.post(
+                "/clinic/knowledge/ai/apply",
+                json=apply_payload,
+            )
+        assert propose_response.status_code == expected_status, label
+        assert apply_response.status_code == expected_status, label
+        if expected_status == 200:
+            assert propose_response.json()["base_fingerprint"] == "a" * 64
+            assert apply_response.json()["applied_actions"] == 1
+
+    assert propose_calls == [
+        (workspace_id, propose_payload["message"]),
+        (workspace_id, propose_payload["message"]),
+    ]
+    assert apply_calls == [
+        (workspace_id, "a" * 64, 1, actor_user_id),
+        (workspace_id, "a" * 64, 1, actor_user_id),
+    ]
+
+
+def test_knowledge_ai_propose_and_apply_require_authentication():
+    app = FastAPI()
+    app.include_router(clinic_router, prefix="/clinic")
+    app.dependency_overrides[get_db] = lambda: None
+    client = TestClient(app)
+    headers = {"X-Workspace-ID": str(uuid4())}
+
+    with client:
+        propose_response = client.post(
+            "/clinic/knowledge/ai/propose",
+            json={"message": "Update the clinic opening hours."},
+            headers=headers,
+        )
+        apply_response = client.post(
+            "/clinic/knowledge/ai/apply",
+            json={
+                "base_fingerprint": "a" * 64,
+                "actions": [{"kind": "update_service"}],
+            },
+            headers=headers,
+        )
+
+    assert propose_response.status_code == 401
+    assert apply_response.status_code == 401
+
+
+def test_knowledge_snapshot_api_requires_authentication():
+    app = FastAPI()
+    app.include_router(clinic_router, prefix="/clinic")
+    app.dependency_overrides[get_db] = lambda: None
+    client = TestClient(app)
+
+    response = client.get(
+        "/clinic/knowledge",
+        headers={"X-Workspace-ID": str(uuid4())},
+    )
+
+    assert response.status_code == 401
