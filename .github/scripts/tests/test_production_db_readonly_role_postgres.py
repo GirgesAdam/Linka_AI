@@ -465,6 +465,109 @@ class ReadOnlyRolePostgres176Tests(unittest.TestCase):
         self.assertFalse(schema_verified)
         self.assertEqual(observed["permissions_version"]["data_type"], "bigint")
 
+    def test_wrapper_body_drift_is_rejected_before_execution_and_restored(self):
+        function_name = "attestation_private.cluster_system_identifier()"
+        catalog_metadata = """
+            SELECT proowner, prosecdef, pronargs, proconfig, proacl,
+                   prolang, prorettype, proretset, prokind, provolatile,
+                   proisstrict, proleakproof, proparallel
+            FROM pg_catalog.pg_proc
+            WHERE oid = %s::regprocedure
+        """
+
+        with psycopg.connect(self.role_conninfo, autocommit=True) as attestor:
+            attestor.execute("BEGIN READ ONLY")
+            runtime_probe.verify_runtime_identity(
+                attestor, expected_role=self.role_name
+            )
+            attestor.execute("ROLLBACK")
+
+        with psycopg.connect(self.admin_conninfo, autocommit=True) as admin:
+            approved_metadata = admin.execute(
+                catalog_metadata, (function_name,)
+            ).fetchone()
+            try:
+                # CREATE OR REPLACE retains owner/ACL, language, return type, and
+                # search_path; changing only SQL body must still fail closed.
+                admin.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION attestation_private.cluster_system_identifier()
+                    RETURNS text
+                    LANGUAGE sql
+                    SECURITY DEFINER
+                    SET search_path = pg_catalog
+                    AS $function$
+                        SELECT system_identifier::text
+                        FROM pg_catalog.pg_control_system()
+                        WHERE true;
+                    $function$
+                    """
+                )
+                self.assertEqual(
+                    admin.execute(
+                        catalog_metadata, (function_name,)
+                    ).fetchone(),
+                    approved_metadata,
+                )
+
+                with psycopg.connect(self.role_conninfo, autocommit=True) as attestor:
+                    issued_queries = []
+
+                    def recorded_execute(statement):
+                        issued_queries.append(statement)
+                        return attestor.execute(statement)
+
+                    attestor.execute("BEGIN READ ONLY")
+                    try:
+                        with self.assertRaises(
+                            runtime_probe.AttestationFailure
+                        ) as failed:
+                            runtime_probe.verify_runtime_identity(
+                                SimpleNamespace(execute=recorded_execute),
+                                expected_role=self.role_name,
+                            )
+                        self.assertEqual(
+                            failed.exception.category,
+                            "runtime_wrapper_definition_unverified",
+                        )
+                        self.assertFalse(
+                            any(
+                                "SELECT attestation_private.cluster_system_identifier()"
+                                in query
+                                for query in issued_queries
+                            )
+                        )
+                    finally:
+                        attestor.execute("ROLLBACK")
+            finally:
+                # Restore original definition even if a regression assertion fails.
+                admin.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION attestation_private.cluster_system_identifier()
+                    RETURNS text
+                    LANGUAGE sql
+                    SECURITY DEFINER
+                    SET search_path = pg_catalog
+                    AS $function$
+                        SELECT system_identifier::text
+                        FROM pg_catalog.pg_control_system();
+                    $function$
+                    """
+                )
+                self.assertEqual(
+                    admin.execute(
+                        catalog_metadata, (function_name,)
+                    ).fetchone(),
+                    approved_metadata,
+                )
+
+        with psycopg.connect(self.role_conninfo, autocommit=True) as attestor:
+            attestor.execute("BEGIN READ ONLY")
+            runtime_probe.verify_runtime_identity(
+                attestor, expected_role=self.role_name
+            )
+            attestor.execute("ROLLBACK")
+
     def test_role_reads_only_the_wrapper_surface_and_cannot_escalate(self):
         with psycopg.connect(self.role_conninfo, autocommit=True) as conn:
             self.assertEqual(

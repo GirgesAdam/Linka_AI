@@ -67,6 +67,20 @@ class FakeConnection:
         wrapper_owner="postgres",
         wrapper_argument_count=0,
         wrapper_config=None,
+        wrapper_language="sql",
+        wrapper_return_type="text",
+        wrapper_returns_set=False,
+        wrapper_kind="f",
+        wrapper_volatility="v",
+        wrapper_strict=False,
+        wrapper_leakproof=False,
+        wrapper_parallel="u",
+        wrapper_all_argtypes=None,
+        wrapper_argmodes=None,
+        wrapper_argdefaults=0,
+        wrapper_variadic=0,
+        wrapper_has_no_sql_body=True,
+        wrapper_source=probe.APPROVED_WRAPPER_SOURCE,
         security_definer_rows=None,
         alembic_revisions=None,
         member_permissions_schema_rows=None,
@@ -113,6 +127,20 @@ class FakeConnection:
             wrapper_owner,
             wrapper_argument_count,
             wrapper_config if wrapper_config is not None else ["search_path=pg_catalog"],
+            wrapper_language,
+            wrapper_return_type,
+            wrapper_returns_set,
+            wrapper_kind,
+            wrapper_volatility,
+            wrapper_strict,
+            wrapper_leakproof,
+            wrapper_parallel,
+            wrapper_all_argtypes,
+            wrapper_argmodes,
+            wrapper_argdefaults,
+            wrapper_variadic,
+            wrapper_has_no_sql_body,
+            wrapper_source,
         )
         self.security_definer_rows = (
             security_definer_rows
@@ -555,6 +583,57 @@ class RuntimeAttestationTests(unittest.TestCase):
                 self._assert_runtime_guard_rejects_without_wrapper(
                     FakeConnection(**metadata),
                     "runtime_effective_privilege_guard_failed",
+                )
+
+    def test_approved_wrapper_source_passes_with_sql_dollar_quote_indentation(self):
+        connection = FakeConnection(
+            wrapper_source="\n    SELECT system_identifier::text\n"
+            "    FROM pg_catalog.pg_control_system();\n"
+        )
+        result, _ = self._run_with_connection(connection)
+        self.assertEqual(result["status"], "VERIFIED")
+        self.assertEqual(connection.wrapper_invocations, 1)
+        self.assertEqual(connection.queries.count("ROLLBACK"), 1)
+        self._assert_no_database_writes(connection)
+
+    def test_wrapper_body_drift_fails_closed_before_execution(self):
+        changed_source = (
+            "SELECT system_identifier::text\n"
+            "FROM pg_catalog.pg_control_system() WHERE true;"
+        )
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(wrapper_source=changed_source),
+            "runtime_wrapper_definition_unverified",
+        )
+
+    def test_missing_wrapper_source_fails_closed_before_execution(self):
+        self._assert_runtime_guard_rejects_without_wrapper(
+            FakeConnection(wrapper_source=None),
+            "runtime_wrapper_definition_unverified",
+        )
+
+    def test_unapproved_wrapper_execution_metadata_fails_closed(self):
+        cases = (
+            ("language", {"wrapper_language": "plpgsql"}),
+            ("return_type", {"wrapper_return_type": "integer"}),
+            ("returns_set", {"wrapper_returns_set": True}),
+            ("kind", {"wrapper_kind": "p"}),
+            ("volatility", {"wrapper_volatility": "s"}),
+            ("strict", {"wrapper_strict": True}),
+            ("leakproof", {"wrapper_leakproof": True}),
+            ("parallel", {"wrapper_parallel": "s"}),
+            ("all_argtypes", {"wrapper_all_argtypes": [25]}),
+            ("argmodes", {"wrapper_argmodes": ["o"]}),
+            ("argdefaults", {"wrapper_argdefaults": 1}),
+            ("variadic", {"wrapper_variadic": 25}),
+            ("sql_body", {"wrapper_has_no_sql_body": False}),
+            ("missing_language", {"wrapper_language": None}),
+        )
+        for label, metadata in cases:
+            with self.subTest(metadata=label):
+                self._assert_runtime_guard_rejects_without_wrapper(
+                    FakeConnection(**metadata),
+                    "runtime_wrapper_definition_unverified",
                 )
 
     def test_unexpected_role_membership_is_rejected_before_wrapper(self):

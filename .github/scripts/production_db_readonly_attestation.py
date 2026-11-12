@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sys
+from textwrap import dedent
 from typing import Any
 
 import psycopg
@@ -32,6 +33,10 @@ SQLSTATE_PATTERN = re.compile(r"^[0-9A-Z]{5}$")
 EXPECTED_ATTESTOR_ROLE = "tia_production_attestor"
 WRAPPER_SCHEMA = "attestation_private"
 WRAPPER_NAME = "cluster_system_identifier"
+APPROVED_WRAPPER_SOURCE = (
+    "SELECT system_identifier::text\n"
+    "FROM pg_catalog.pg_control_system();"
+)
 
 
 class AttestationFailure(Exception):
@@ -178,7 +183,21 @@ def verify_runtime_identity(
             wrapper.prosecdef,
             pg_catalog.pg_get_userbyid(wrapper.proowner),
             wrapper.pronargs,
-            wrapper.proconfig
+            wrapper.proconfig,
+            wrapper_language.lanname,
+            pg_catalog.format_type(wrapper.prorettype, NULL),
+            wrapper.proretset,
+            wrapper.prokind,
+            wrapper.provolatile,
+            wrapper.proisstrict,
+            wrapper.proleakproof,
+            wrapper.proparallel,
+            wrapper.proallargtypes,
+            wrapper.proargmodes,
+            wrapper.pronargdefaults,
+            wrapper.provariadic,
+            wrapper.prosqlbody IS NULL,
+            wrapper.prosrc
         FROM pg_catalog.pg_roles AS attestor_role
         LEFT JOIN pg_catalog.pg_proc AS control
           ON control.oid = pg_catalog.to_regprocedure(
@@ -190,6 +209,8 @@ def verify_runtime_identity(
           ON wrapper.pronamespace = wrapper_schema.oid
          AND wrapper.proname = 'cluster_system_identifier'
          AND wrapper.pronargs = 0
+        LEFT JOIN pg_catalog.pg_language AS wrapper_language
+          ON wrapper_language.oid = wrapper.prolang
         WHERE attestor_role.rolname = current_user
         """
     ).fetchone()
@@ -219,6 +240,20 @@ def verify_runtime_identity(
         wrapper_owner,
         wrapper_argument_count,
         wrapper_config,
+        wrapper_language,
+        wrapper_return_type,
+        wrapper_returns_set,
+        wrapper_kind,
+        wrapper_volatility,
+        wrapper_strict,
+        wrapper_leakproof,
+        wrapper_parallel,
+        wrapper_all_argtypes,
+        wrapper_argmodes,
+        wrapper_argdefaults,
+        wrapper_variadic,
+        wrapper_has_no_sql_body,
+        wrapper_source,
     ) = identity_row
 
     if session_user != expected_role or current_user != expected_role:
@@ -250,6 +285,27 @@ def verify_runtime_identity(
         and wrapper_config == ["search_path=pg_catalog"]
     ):
         raise AttestationFailure("runtime_effective_privilege_guard_failed")
+
+    # Exact approved SQL source after removing indentation from SQL dollar quotes.
+    # Reject body or execution-metadata drift before calling the privileged wrapper.
+    if not (
+        wrapper_language == "sql"
+        and wrapper_return_type == "text"
+        and wrapper_returns_set is False
+        and wrapper_kind == "f"
+        and wrapper_volatility == "v"
+        and wrapper_strict is False
+        and wrapper_leakproof is False
+        and wrapper_parallel == "u"
+        and wrapper_all_argtypes is None
+        and wrapper_argmodes is None
+        and wrapper_argdefaults == 0
+        and wrapper_variadic == 0
+        and wrapper_has_no_sql_body is True
+        and isinstance(wrapper_source, str)
+        and dedent(wrapper_source).strip() == APPROVED_WRAPPER_SOURCE
+    ):
+        raise AttestationFailure("runtime_wrapper_definition_unverified")
 
     exposed_functions = conn.execute(
         """
