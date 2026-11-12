@@ -503,7 +503,16 @@ def test_appointment_ui_keeps_standard_payment_optional_and_shows_balances() -> 
     assert 'checked={billingChoice === "standard"}' in payment_form
     assert 'onChange={() => chooseBilling("standard")}' in payment_form
     assert "visiblePulseBalances" in page
-    assert "primaryPackage.sessions_remaining" in page
+    assert "PatientPackageBalances" in page
+    assert "packages={patientPackages}" in page
+    assert "loadFailed={packageLoadFailed}" in page
+    package_list = (
+        root
+        / "frontend/src/app/(dashboard)/appointments/[appointmentId]/patient-package-balances.tsx"
+    ).read_text(encoding="utf-8")
+    assert "pkg.sessions_remaining" in package_list
+    assert "pkg.sessions_reserved" in package_list
+    assert "pkg.sessions_consumed" in package_list
     assert "pulseBalances={pulseBalances}" in page
     assert "pulsePackOffers={pulsePackOffers}" in page
     assert 'useState<"standard" | "package" | "pulse">("standard")' in additional_form

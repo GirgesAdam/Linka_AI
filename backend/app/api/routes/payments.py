@@ -120,7 +120,7 @@ def create_payment(
 def checkout_appointment_payment(
     appointment_id: UUID,
     payload: AppointmentCheckoutCreate,
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_access)],
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
     idempotency_key: Annotated[
         str | None,
@@ -148,6 +148,11 @@ def checkout_appointment_payment(
         if detail == "Appointment not found.":
             raise _not_found(detail) from exc
         raise _conflict(detail) from exc
+    except Exception:
+        # No partial payment, pulse purchase, usage, history or appointment
+        # status survives a failed flush/commit.
+        db.rollback()
+        raise
 
     return get_appointment_payment_summary(
         db,
