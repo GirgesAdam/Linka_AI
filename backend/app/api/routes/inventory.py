@@ -183,10 +183,10 @@ def add_product_to_appointment(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[AppointmentProductLineRead]:
     try:
-        appointment = _locked_appointment(
+        _locked_appointment(
             db, workspace_id=access.workspace.id, appointment_id=appointment_id
         )
-        line = add_appointment_product(
+        add_appointment_product(
             db,
             workspace_id=access.workspace.id,
             appointment_id=appointment_id,
@@ -195,7 +195,6 @@ def add_product_to_appointment(
             unit_price_minor=payload.unit_price_minor,
             created_by_user_id=access.user.id,
         )
-        appointment.price_minor = int(appointment.price_minor) + int(line.quantity) * int(line.unit_price_minor)
         refresh_appointment_payment_snapshots(
             db,
             workspace_id=access.workspace.id,
@@ -222,7 +221,7 @@ def remove_product_from_appointment(
         line = next((item for item in existing if item.id == line_id), None)
         if line is None:
             raise InventoryNotFound("Appointment product line not found.")
-        appointment = _locked_appointment(
+        _locked_appointment(
             db, workspace_id=access.workspace.id, appointment_id=appointment_id
         )
         delete_appointment_product(
@@ -231,7 +230,6 @@ def remove_product_from_appointment(
             appointment_id=appointment_id,
             line_id=line_id,
         )
-        appointment.price_minor = max(int(appointment.price_minor) - int(line.total_minor), 0)
         refresh_appointment_payment_snapshots(
             db,
             workspace_id=access.workspace.id,
