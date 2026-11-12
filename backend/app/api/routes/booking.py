@@ -798,6 +798,14 @@ def create_appointment(
             raise booking_conflict(str(exc)) from exc
 
     if payload.use_pulse_balance:
+        branch = db.scalar(
+            select(Branch).where(
+                Branch.workspace_id == access.workspace.id,
+                Branch.id == payload.branch_id,
+            )
+        )
+        if branch is None:
+            raise not_found("Branch")
         try:
             validate_pulse_booking(
                 db,
@@ -805,7 +813,7 @@ def create_appointment(
                 patient_id=payload.patient_id,
                 device_key=slot.laser_device_key,
                 appointment_date=slot.start_at.astimezone(
-                    ZoneInfo(access.workspace.timezone or "UTC")
+                    resolve_timezone(access.workspace, branch)
                 ).date(),
             )
         except PulseBillingError as exc:
@@ -973,7 +981,7 @@ def create_quick_appointment(
                 patient_id=payload.patient_id,
                 device_key=laser_device_key,
                 appointment_date=start_at.astimezone(
-                    ZoneInfo(access.workspace.timezone or "UTC")
+                    resolve_timezone(access.workspace, branch)
                 ).date(),
             )
         except PulseBillingError as exc:

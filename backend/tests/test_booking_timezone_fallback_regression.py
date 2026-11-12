@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from app.api.routes import booking as booking_routes
 from app.models.appointment import Appointment
 from app.models.automation_job import AutomationJob
 from app.models.availability_block import AvailabilityBlock
@@ -96,9 +97,7 @@ def _booking_context(*, current=None):
         SimpleNamespace(custom_price_minor=None),
         doctor,
     )
-    branch_hours = [
-        SimpleNamespace(start_time=time(10, 0), end_time=time(12, 0))
-    ]
+    branch_hours = [SimpleNamespace(start_time=time(10, 0), end_time=time(12, 0))]
     doctor_hours = [
         SimpleNamespace(
             doctor_id=doctor_id,
@@ -163,13 +162,17 @@ def test_appointment_creation_persists_workspace_fallback_slot_as_utc(monkeypatc
     now, _local_date, expected_start_at = _future_tokyo_slot()
     patient_id = uuid4()
 
-    monkeypatch.setattr(appointment_creation, "configured_device_price", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        appointment_creation, "configured_device_price", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         appointment_creation,
         "initial_confirmation_decision",
         lambda *_args, **_kwargs: SimpleNamespace(status="confirmed", confirmed_at=now),
     )
-    monkeypatch.setattr(appointment_creation, "record_activity_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        appointment_creation, "record_activity_event", lambda *_args, **_kwargs: None
+    )
 
     appointment = appointment_creation.create_appointment_operation(
         db,
@@ -188,6 +191,56 @@ def test_appointment_creation_persists_workspace_fallback_slot_as_utc(monkeypatc
     assert appointment.start_at == expected_start_at
     assert appointment.end_at == expected_start_at + timedelta(minutes=30)
     assert appointment.start_at.utcoffset() == timedelta(0)
+
+
+def test_pulse_booking_timezone_prefers_branch_over_workspace() -> None:
+    workspace = SimpleNamespace(timezone="Europe/London")
+    branch = SimpleNamespace(timezone="Asia/Tokyo")
+    start_at = datetime(2026, 11, 12, 15, 30, tzinfo=UTC)
+
+    assert (
+        start_at.astimezone(booking.resolve_timezone(workspace, branch)).date().isoformat()
+        == "2026-11-13"
+    )
+
+
+def test_pulse_booking_timezone_falls_back_to_workspace_when_branch_invalid() -> None:
+    workspace = SimpleNamespace(timezone="Asia/Tokyo")
+    branch = SimpleNamespace(timezone="Invalid/Branch-Zone")
+    start_at = datetime(2026, 11, 12, 15, 30, tzinfo=UTC)
+
+    assert (
+        start_at.astimezone(booking.resolve_timezone(workspace, branch)).date().isoformat()
+        == "2026-11-13"
+    )
+
+
+def test_pulse_booking_timezone_falls_back_to_cairo_when_both_zones_invalid() -> None:
+    workspace = SimpleNamespace(timezone="Invalid/Workspace-Zone")
+    branch = SimpleNamespace(timezone="Invalid/Branch-Zone")
+    start_at = datetime(2026, 11, 12, 22, 30, tzinfo=UTC)
+
+    assert booking.resolve_timezone(workspace, branch).key == "Africa/Cairo"
+    assert (
+        start_at.astimezone(booking.resolve_timezone(workspace, branch)).date().isoformat()
+        == "2026-11-13"
+    )
+
+
+def test_pulse_validation_call_sites_use_branch_timezone_resolution() -> None:
+    import inspect
+
+    normal_source = inspect.getsource(booking_routes.create_appointment)
+    quick_source = inspect.getsource(booking_routes.create_quick_appointment)
+    shared_source = inspect.getsource(appointment_creation.create_appointment_operation)
+
+    assert "resolve_timezone(access.workspace, branch)" in normal_source
+    assert "Branch.workspace_id == access.workspace.id" in normal_source
+    assert "resolve_timezone(access.workspace, branch)" in quick_source
+    assert "resolve_timezone(workspace, branch)" in shared_source
+    assert "Branch.workspace_id == workspace.id" in shared_source
+    assert "ZoneInfo(access.workspace.timezone" not in normal_source + quick_source
+    assert "ZoneInfo(workspace.timezone" not in shared_source
 
 
 def test_appointment_reschedule_persists_workspace_fallback_slot_as_utc(monkeypatch):

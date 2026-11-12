@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.appointment import Appointment
+from app.models.branch import Branch
 from app.models.lead import Lead
 from app.models.workspace import Workspace
 from app.services.activity import ActivityActorType, record_activity_event
 from app.services.appointment_confirmation import initial_confirmation_decision
 from app.services.appointment_operations import AppointmentOperationError, add_appointment_history
-from app.services.booking import BookingRuleError, find_exact_slot
+from app.services.booking import BookingRuleError, find_exact_slot, resolve_timezone
 from app.services.inventory import InventoryOperationError, configured_device_price
 from app.services.patient_packages import (
     PackageOperationError,
@@ -158,6 +158,14 @@ def create_appointment_operation(
             raise AppointmentOperationError(str(exc)) from exc
 
     if use_pulse_balance:
+        branch = db.scalar(
+            select(Branch).where(
+                Branch.workspace_id == workspace.id,
+                Branch.id == branch_id,
+            )
+        )
+        if branch is None:
+            raise AppointmentOperationError("Branch not found.")
         try:
             validate_pulse_booking(
                 db,
@@ -165,7 +173,7 @@ def create_appointment_operation(
                 patient_id=patient_id,
                 device_key=slot.laser_device_key,
                 appointment_date=slot.start_at.astimezone(
-                    ZoneInfo(workspace.timezone or "UTC")
+                    resolve_timezone(workspace, branch)
                 ).date(),
             )
         except PulseBillingError as exc:
