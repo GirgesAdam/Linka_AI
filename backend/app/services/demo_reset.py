@@ -56,6 +56,7 @@ RESET_RESEED_TABLES = frozenset({
     "clinic_products",
     "doctor_availability_windows",
     "doctor_branches",
+    "doctor_laser_device_weekday_exclusions",
     "doctor_service_categories",
     "doctor_services",
     "doctor_working_hours",

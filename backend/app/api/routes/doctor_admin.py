@@ -17,6 +17,7 @@ from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
 from app.models.doctor_service import DoctorService
 from app.models.staff import Staff
 from app.models.working_hours import DoctorWorkingHour
@@ -200,6 +201,14 @@ def _replace_doctor_hours(
         for interval in payload.intervals
     ]
     db.add_all(replacements)
+    active_days = {interval.weekday for interval in payload.intervals}
+    for exclusion in list(db.scalars(select(DoctorLaserWeekdayExclusion).where(
+        DoctorLaserWeekdayExclusion.workspace_id == workspace.id,
+        DoctorLaserWeekdayExclusion.doctor_id == doctor_id,
+        DoctorLaserWeekdayExclusion.branch_id == branch.id,
+    ))):
+        if exclusion.weekday not in active_days:
+            db.delete(exclusion)
     return replacements
 
 

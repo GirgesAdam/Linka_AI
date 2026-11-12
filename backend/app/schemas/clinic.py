@@ -108,7 +108,7 @@ class StaffRead(ORMModel):
 
 class DoctorCreate(BaseModel):
     staff_id: UUID
-    doctor_type: str = Field(default="regular", pattern=r"^(regular|visiting)$")
+    doctor_type: str = Field(default="regular", pattern=r"^regular$")
     specialization: str | None = Field(default=None, max_length=200)
     license_number: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=2000)
@@ -116,7 +116,7 @@ class DoctorCreate(BaseModel):
 
 
 class DoctorUpdate(BaseModel):
-    doctor_type: str | None = Field(default=None, pattern=r"^(regular|visiting)$")
+    doctor_type: str | None = Field(default=None, pattern=r"^regular$")
     specialization: str | None = Field(default=None, max_length=200)
     license_number: str | None = Field(default=None, max_length=120)
     bio: str | None = Field(default=None, max_length=2000)

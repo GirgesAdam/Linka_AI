@@ -34,6 +34,7 @@ class Doctor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     workspace_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
     staff_id: Mapped[UUID] = mapped_column(index=True, nullable=False)
+    # Archival legacy discriminator. Never used by operational scheduling.
     doctor_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="regular", server_default="regular"
     )

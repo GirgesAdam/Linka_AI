@@ -27,7 +27,6 @@ const emptyDraft = (): ClinicSetupDraft => ({
   doctor_services: [],
   clinic_hours: [],
   doctor_hours: [],
-  visiting_windows: [],
   booking_policy: {},
 });
 
@@ -38,7 +37,6 @@ const labels: Record<string, string> = {
   doctor_services: "خدمات الدكاترة",
   clinic_hours: "مواعيد العيادة",
   doctor_hours: "مواعيد الدكاترة الثابتين",
-  visiting_windows: "زيارات الدكاترة الزائرين",
   booking_policy: "سياسة الحجز",
 };
 
@@ -69,7 +67,6 @@ function snapshotToDraft(setup: ClinicSetupV2Snapshot): ClinicSetupDraft {
     })),
     doctors: setup.doctors.map((doctor) => ({
       full_name: doctor.full_name,
-      doctor_type: doctor.doctor_type,
       specialization: doctor.specialization || "",
     })),
     doctor_services: doctorServices,
@@ -84,14 +81,6 @@ function snapshotToDraft(setup: ClinicSetupV2Snapshot): ClinicSetupDraft {
       start_time: row.start_time.slice(0, 5),
       end_time: row.end_time.slice(0, 5),
     }))),
-    visiting_windows: setup.doctors.flatMap((doctor) => doctor.visiting_windows.map((window) => {
-      const start = new Date(window.start_at);
-      const end = new Date(window.end_at);
-      const cairoDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo", year: "numeric", month: "2-digit", day: "2-digit" }).format(start);
-      const cairoStart = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", hour: "2-digit", minute: "2-digit", hour12: false }).format(start);
-      const cairoEnd = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", hour: "2-digit", minute: "2-digit", hour12: false }).format(end);
-      return { doctor_name: doctor.full_name, date: cairoDate, start_time: cairoStart, end_time: cairoEnd };
-    })),
     booking_policy: {
       slot_interval_minutes: setup.booking_policy.slot_interval_minutes,
       minimum_notice_minutes: setup.booking_policy.minimum_notice_minutes,
@@ -179,10 +168,10 @@ export function ClinicSetupImporter({ initialSetup }: { initialSetup: ClinicSetu
   const importedCells = useMemo(() => {
     const profile = Object.values(draft.clinic_profile).filter((value) => value !== null && value !== "").length;
     const policy = Object.values(draft.booking_policy).filter((value) => value !== null && value !== "").length;
-    return profile + policy + draft.services.length + draft.doctors.length + draft.doctor_services.length + draft.clinic_hours.length + draft.doctor_hours.length + draft.visiting_windows.length;
+    return profile + policy + draft.services.length + draft.doctors.length + draft.doctor_services.length + draft.clinic_hours.length + draft.doctor_hours.length;
   }, [draft]);
 
-  const updateRows = (key: keyof Pick<ClinicSetupDraft, "services" | "doctors" | "doctor_services" | "clinic_hours" | "doctor_hours" | "visiting_windows">, rows: ClinicSetupDraftRow[]) => {
+  const updateRows = (key: keyof Pick<ClinicSetupDraft, "services" | "doctors" | "doctor_services" | "clinic_hours" | "doctor_hours">, rows: ClinicSetupDraftRow[]) => {
     setDraft((current) => ({ ...current, [key]: rows }));
     setSaveResult(null);
     setDirty(true);
@@ -272,7 +261,6 @@ export function ClinicSetupImporter({ initialSetup }: { initialSetup: ClinicSetu
 
         <TableEditor title="الدكاترة" rows={draft.doctors} onChange={(rows) => updateRows("doctors", rows)} columns={[
           { key: "full_name", label: "اسم الدكتور" },
-          { key: "doctor_type", label: "النوع", type: "select", options: [{ value: "regular", label: "ثابت" }, { value: "visiting", label: "زائر" }] },
           { key: "specialization", label: "التخصص" },
         ]} />
 
@@ -284,12 +272,8 @@ export function ClinicSetupImporter({ initialSetup }: { initialSetup: ClinicSetu
           { key: "day", label: "اليوم" }, { key: "start_time", label: "من", type: "time" }, { key: "end_time", label: "إلى", type: "time" },
         ]} />
 
-        <TableEditor title="مواعيد الدكاترة الثابتين" rows={draft.doctor_hours} onChange={(rows) => updateRows("doctor_hours", rows)} columns={[
+        <TableEditor title="مواعيد عمل الدكاترة الأسبوعية" rows={draft.doctor_hours} onChange={(rows) => updateRows("doctor_hours", rows)} columns={[
           { key: "doctor_name", label: "الدكتور" }, { key: "day", label: "اليوم" }, { key: "start_time", label: "من", type: "time" }, { key: "end_time", label: "إلى", type: "time" },
-        ]} />
-
-        <TableEditor title="زيارات الدكاترة الزائرين" rows={draft.visiting_windows} onChange={(rows) => updateRows("visiting_windows", rows)} columns={[
-          { key: "doctor_name", label: "الدكتور" }, { key: "date", label: "التاريخ", type: "date" }, { key: "start_time", label: "من", type: "time" }, { key: "end_time", label: "إلى", type: "time" },
         ]} />
 
         <section className="rounded-2xl border border-[var(--border)] bg-white p-4">

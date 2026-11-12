@@ -1,5 +1,4 @@
 export type ClinicHour = { weekday: number; start_time: string; end_time: string };
-export type VisitingWindow = { start_at: string; end_at: string };
 
 export type ClinicServiceV2 = {
   id: string;
@@ -13,11 +12,10 @@ export type ClinicDoctorV2 = {
   id: string;
   staff_id: string;
   full_name: string;
-  doctor_type: "regular" | "visiting";
+  doctor_type: "regular";
   specialization: string | null;
   service_ids: string[];
   weekly_hours: ClinicHour[];
-  visiting_windows: VisitingWindow[];
 };
 
 export type ClinicSetupV2Snapshot = {
@@ -106,7 +104,6 @@ export type ClinicSetupDraft = {
   doctor_services: ClinicSetupDraftRow[];
   clinic_hours: ClinicSetupDraftRow[];
   doctor_hours: ClinicSetupDraftRow[];
-  visiting_windows: ClinicSetupDraftRow[];
   booking_policy: ClinicSetupDraftRow;
 };
 

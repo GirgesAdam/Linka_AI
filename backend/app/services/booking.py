@@ -17,11 +17,11 @@ from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
 from app.models.doctor_service import DoctorService
 from app.models.service import Service
 from app.models.working_hours import (
     BranchWorkingHour,
-    DoctorAvailabilityWindow,
     DoctorWorkingHour,
 )
 from app.models.workspace import Workspace
@@ -126,26 +126,6 @@ def _interval_intersections(
         for doctor_hour in doctor_hours:
             doctor_start = _combine(local_date, doctor_hour.start_time, tz)
             doctor_end = _combine(local_date, doctor_hour.end_time, tz)
-            start = max(branch_start, doctor_start)
-            end = min(branch_end, doctor_end)
-            if end > start:
-                intersections.append((start, end))
-    return intersections
-
-
-def _window_intersections(
-    branch_hours: list[BranchWorkingHour],
-    windows: list[DoctorAvailabilityWindow],
-    local_date: date,
-    tz: ZoneInfo,
-) -> list[tuple[datetime, datetime]]:
-    intersections: list[tuple[datetime, datetime]] = []
-    for branch_hour in branch_hours:
-        branch_start = _combine(local_date, branch_hour.start_time, tz)
-        branch_end = _combine(local_date, branch_hour.end_time, tz)
-        for window in windows:
-            doctor_start = window.start_at.astimezone(tz)
-            doctor_end = window.end_at.astimezone(tz)
             start = max(branch_start, doctor_start)
             end = min(branch_end, doctor_end)
             if end > start:
@@ -309,6 +289,20 @@ def calculate_availability(
     )
     if doctor_id is not None:
         assignment_stmt = assignment_stmt.where(DoctorBranch.doctor_id == doctor_id)
+    if requires_device:
+        # Default ON; the correlated exclusion applies to every doctor candidate.
+        # Filter here before availability, rescheduling and AI exact-slot booking.
+        excluded = (
+            select(DoctorLaserWeekdayExclusion.id)
+            .where(
+                DoctorLaserWeekdayExclusion.workspace_id == workspace.id,
+                DoctorLaserWeekdayExclusion.doctor_id == DoctorBranch.doctor_id,
+                DoctorLaserWeekdayExclusion.branch_id == branch.id,
+                DoctorLaserWeekdayExclusion.weekday == weekday,
+                DoctorLaserWeekdayExclusion.device_key == laser_device_key,
+            ).exists()
+        )
+        assignment_stmt = assignment_stmt.where(~excluded)
 
     assignments = list(db.execute(assignment_stmt).all())
     if doctor_id is not None and not assignments:
@@ -331,8 +325,6 @@ def calculate_availability(
     doctor_ids = [doctor.id for _, _, doctor in assignments]
     day_start_local = datetime.combine(booking_date, time.min, tzinfo=tz)
     day_end_local = day_start_local + timedelta(days=1)
-    day_start_utc = day_start_local.astimezone(UTC)
-    day_end_utc = day_end_local.astimezone(UTC)
     conflict_start_utc = (day_start_local - before).astimezone(UTC)
     conflict_end_utc = (day_end_local + duration + after).astimezone(UTC)
 
@@ -427,44 +419,15 @@ def calculate_availability(
     for doctor_hour in doctor_hour_rows:
         doctor_hours_by_doctor.setdefault(doctor_hour.doctor_id, []).append(doctor_hour)
 
-    window_rows = list(
-        db.scalars(
-            select(DoctorAvailabilityWindow).where(
-                DoctorAvailabilityWindow.workspace_id == workspace.id,
-                DoctorAvailabilityWindow.doctor_id.in_(doctor_ids),
-                DoctorAvailabilityWindow.branch_id == branch.id,
-                DoctorAvailabilityWindow.start_at < day_end_utc,
-                DoctorAvailabilityWindow.end_at > day_start_utc,
-            )
-        )
-    )
-    windows_by_doctor: dict[UUID, list[DoctorAvailabilityWindow]] = {
-        doctor_id_value: [] for doctor_id_value in doctor_ids
-    }
-    for window in window_rows:
-        windows_by_doctor.setdefault(window.doctor_id, []).append(window)
-
     for _, doctor_service, doctor in assignments:
-        doctor_hours = doctor_hours_by_doctor.get(doctor.id, [])
-        dated_windows = windows_by_doctor.get(doctor.id, [])
-        if doctor.doctor_type == "visiting":
-            availability_intervals = _window_intersections(
-                branch_hours,
-                dated_windows,
-                booking_date,
-                tz,
-            )
-        else:
-            availability_intervals = _interval_intersections(
-                branch_hours,
-                doctor_hours,
-                booking_date,
-                tz,
-            )
-            if dated_windows:
-                availability_intervals.extend(
-                    _window_intersections(branch_hours, dated_windows, booking_date, tz)
-                )
+        # All doctors (including legacy rows still marked visiting) need
+        # explicit weekly hours; archived dated windows are never bookable.
+        availability_intervals = _interval_intersections(
+            branch_hours,
+            doctor_hours_by_doctor.get(doctor.id, []),
+            booking_date,
+            tz,
+        )
         if not availability_intervals:
             continue
 

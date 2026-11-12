@@ -27,6 +27,7 @@ from app.models.clinic_integration import ClinicIntegration, ClinicIntegrationEn
 from app.models.clinic_inventory import ServiceDevicePrice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
 from app.models.doctor_service import DoctorService
 from app.models.service import Service
 from app.models.staff import Staff
@@ -693,6 +694,14 @@ def replace_doctor_working_hours(
         for item in payload.intervals
     ]
     db.add_all(rows)
+    active_days = {interval.weekday for interval in payload.intervals}
+    for exclusion in db.scalars(select(DoctorLaserWeekdayExclusion).where(
+        DoctorLaserWeekdayExclusion.workspace_id == workspace.id,
+        DoctorLaserWeekdayExclusion.doctor_id == doctor_id,
+        DoctorLaserWeekdayExclusion.branch_id == branch_id,
+    )).all():
+        if exclusion.weekday not in active_days:
+            db.delete(exclusion)
     record_activity_event(
         db, workspace_id=workspace.id, actor_type="staff", actor_user_id=actor_user_id,
         action="clinic.doctor_working_hours_replaced", entity_type="doctor", entity_id=doctor_id,

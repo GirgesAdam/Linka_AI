@@ -53,7 +53,6 @@ from app.services.clinic_setup_v2 import (
     create_service_v2,
     replace_clinic_hours_v2,
     replace_regular_doctor_hours_v2,
-    replace_visiting_windows_v2,
     update_booking_policy_v2,
     update_doctor_v2,
     update_service_v2,
@@ -365,14 +364,10 @@ def save_visiting_doctor_windows_v2(
     access: Annotated[WorkspaceAccess, Depends(require_section_access("administration"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClinicSetupV2Snapshot:
-    try:
-        replace_visiting_windows_v2(db, workspace=access.workspace, doctor_id=doctor_id, payload=payload)
-        _activity(db, access=access, action="clinic.doctor_visiting_windows_updated", entity_type="doctor", entity_id=doctor_id, summary="Visiting doctor dated availability updated.", metadata={"window_count": len(payload.windows)})
-        _commit(db)
-        return build_setup_v2_snapshot(db, workspace=access.workspace)
-    except ClinicSetupV2Error as exc:
-        db.rollback()
-        raise _setup_error(exc) from exc
+    raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Visiting Doctor dated windows are retired. Configure weekly working hours.",
+        )
 
 
 @router.put("/setup-v2/booking-policy", response_model=ClinicSetupV2Snapshot)

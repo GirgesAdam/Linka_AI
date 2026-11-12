@@ -20,9 +20,10 @@ from app.models.booking_settings import BookingSettings
 from app.models.branch import Branch
 from app.models.channel_connection import ChannelConnection
 from app.models.clinic_integration import ClinicIntegration
-from app.models.clinic_inventory import InventoryItem
+from app.models.clinic_inventory import ClinicLaserDevice, InventoryItem
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
 from app.models.doctor_service import DoctorService
 from app.models.patient import Patient
 from app.models.patient_package import PackageUsage, PatientPackage
@@ -304,7 +305,7 @@ def _business_signature(db: Session, workspace_id) -> tuple:
 def test_demo_reset_manifest_classifies_every_workspace_table() -> None:
     validate_demo_reset_manifest()
     discovered = set(_workspace_tables())
-    assert len(discovered) == 77
+    assert len(discovered) == 78
     assert discovered == set(PRESERVE_TABLES | RESET_RESEED_TABLES | CLEAR_TABLES)
 
 
@@ -550,4 +551,73 @@ def test_new_demo_request_fails_safely_while_reset_exclusive_lock_is_held() -> N
         cleanup.execute(delete(Workspace).where(Workspace.id == wid))
         cleanup.execute(delete(User).where(User.id == uid))
         cleanup.commit()
+    engine.dispose()
+
+
+def test_demo_laser_exclusion_canonical_reset_rollback_and_workspace_isolation() -> None:
+    """New workspace-scoped device settings reseed without affecting real workspaces."""
+    engine = _engine()
+
+    def add_exclusion(db: Session, fx: dict, device_key: str) -> None:
+        workspace_id = fx["workspace"].id
+        db.add(ClinicLaserDevice(
+            workspace_id=workspace_id,
+            device_key=device_key,
+            name=f"Synthetic {device_key}",
+        ))
+        db.flush()
+        db.add(DoctorLaserWeekdayExclusion(
+            workspace_id=workspace_id,
+            doctor_id=fx["doctor"].id,
+            branch_id=fx["branch"].id,
+            weekday=0,
+            device_key=device_key,
+        ))
+        db.flush()
+
+    def exclusions(db: Session, workspace_id) -> set[str]:
+        return set(db.scalars(
+            select(DoctorLaserWeekdayExclusion.device_key).where(
+                DoctorLaserWeekdayExclusion.workspace_id == workspace_id
+            )
+        ))
+
+    with Session(engine) as db:
+        demo = _fixture(db, demo=True, slug_prefix="laser-seed")
+        real = _fixture(db, demo=False, slug_prefix="laser-real")
+        demo_id, real_id = demo["workspace"].id, real["workspace"].id
+        add_exclusion(db, demo, "candela")
+        add_exclusion(db, real, "candela")
+        db.commit()
+        capture_demo_canonical_seed(db, workspace_id=demo_id)
+        assert exclusions(db, demo_id) == {"candela"}
+        assert exclusions(db, real_id) == {"candela"}
+
+        # An added device/exclusion and deleted canonical exclusion are demo-only mutations.
+        db.execute(delete(DoctorLaserWeekdayExclusion).where(
+            DoctorLaserWeekdayExclusion.workspace_id == demo_id
+        ))
+        add_exclusion(db, demo, "temporary")
+        db.commit()
+        assert exclusions(db, demo_id) == {"temporary"}
+
+        with pytest.raises(DemoResetError, match="Injected"):
+            reset_demo_workspace(db, workspace_id=demo_id, injected_failure_after_clear=True)
+        assert exclusions(db, demo_id) == {"temporary"}  # Reset transaction rolled back.
+        assert exclusions(db, real_id) == {"candela"}
+
+        reset_demo_workspace(db, workspace_id=demo_id)
+        assert exclusions(db, demo_id) == {"candela"}  # Canonical OFF selection restored.
+        assert exclusions(db, real_id) == {"candela"}
+        assert db.scalar(select(ClinicLaserDevice.id).where(
+            ClinicLaserDevice.workspace_id == demo_id,
+            ClinicLaserDevice.device_key == "temporary",
+        )) is None
+        reset_demo_workspace(db, workspace_id=demo_id)
+        assert exclusions(db, demo_id) == {"candela"}  # Idempotent reseed.
+
+        for fx in (demo, real):
+            db.execute(delete(Workspace).where(Workspace.id == fx["workspace"].id))
+            db.execute(delete(User).where(User.id == fx["user"].id))
+        db.commit()
     engine.dispose()

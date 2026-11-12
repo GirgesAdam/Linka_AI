@@ -43,6 +43,7 @@ from app.models.crm_cohort import CRMCohort, CRMCohortMember
 from app.models.crm_task import CRMTask
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
+from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
 from app.models.doctor_service import DoctorService
 from app.models.doctor_service_category import DoctorServiceCategory
 from app.models.expense import Expense
@@ -121,6 +122,7 @@ __all__ = [
     "CRMTask",
     "Doctor",
     "DoctorBranch",
+    "DoctorLaserWeekdayExclusion",
     "DoctorService",
     "DoctorServiceCategory",
     "DoctorWorkingHour",

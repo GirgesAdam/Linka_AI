@@ -490,16 +490,18 @@ def test_replace_never_deletes_patients_or_workspace_wide_appointments() -> None
 
 def test_historical_doctors_are_passive_until_admin_configures_availability() -> None:
     source = (BACKEND / "app/services/historical_import.py").read_text(encoding="utf-8")
-    doctor_block = source[source.index("def _create_visiting_doctor"):source.index("def _unassigned_historical_doctor")]
-    assert "doctor_type=\"visiting\"" in doctor_block
+    doctor_block = source[source.index("def _create_archival_doctor"):source.index("def _unassigned_historical_doctor")]
+    assert 'doctor_type="regular"' in doctor_block
     assert "booking_enabled=False" in doctor_block
+    assert "DoctorWorkingHour(" not in doctor_block
 
 
-def test_visiting_doctors_use_dated_windows_in_booking_engine() -> None:
+def test_all_doctors_require_weekly_hours_and_dated_windows_are_not_bookable() -> None:
     source = (BACKEND / "app/services/booking.py").read_text(encoding="utf-8")
-    assert "DoctorAvailabilityWindow" in source
-    assert 'if doctor.doctor_type == "visiting"' in source
-    assert "_window_intersections" in source
+    assert "DoctorWorkingHour" in source
+    assert "DoctorAvailabilityWindow" not in source
+    assert 'doctor.doctor_type == "visiting"' not in source
+    assert "_window_intersections" not in source
 
 
 def test_primary_branch_is_used_as_single_branch_boundary() -> None:
@@ -581,14 +583,14 @@ def test_setup_excel_template_is_fixed_and_uploadable_without_mapping() -> None:
     try:
         assert wb.sheetnames == [
             "README", "clinic_profile", "services", "doctors", "doctor_services",
-            "clinic_hours", "doctor_hours", "visiting_windows", "booking_policy",
+            "clinic_hours", "doctor_hours", "booking_policy",
         ]
         services_headers = [cell.value for cell in next(wb["services"].iter_rows(min_row=1, max_row=1))]
         doctor_headers = [cell.value for cell in next(wb["doctors"].iter_rows(min_row=1, max_row=1))]
         clinic_hours_headers = [cell.value for cell in next(wb["clinic_hours"].iter_rows(min_row=1, max_row=1))]
         doctor_hours_headers = [cell.value for cell in next(wb["doctor_hours"].iter_rows(min_row=1, max_row=1))]
         assert services_headers == ["name", "category", "duration_minutes", "price"]
-        assert doctor_headers == ["full_name", "doctor_type", "specialization"]
+        assert doctor_headers == ["full_name", "specialization"]
         assert clinic_hours_headers == ["day", "start_time", "end_time"]
         assert doctor_hours_headers == ["doctor_name", "day", "start_time", "end_time"]
         assert "weekday" not in clinic_hours_headers
@@ -697,13 +699,15 @@ def test_setup_excel_optional_columns_are_tolerant_and_preserve_required_runtime
             User.__table__, Staff.__table__, Doctor.__table__, DoctorBranch.__table__,
             DoctorService.__table__, BranchWorkingHour.__table__, DoctorWorkingHour.__table__,
             DoctorAvailabilityWindow.__table__,
+            Base.metadata.tables["clinic_laser_devices"],
+            Base.metadata.tables["doctor_laser_device_weekday_exclusions"],
         ],
     )
 
     workbook = load_workbook(io.BytesIO(build_clinic_setup_template()))
     workbook["clinic_profile"]["B2"] = "Flexible Clinic"
     workbook["services"].append(["Hydrafacial", None, 60, 1800])
-    workbook["doctors"].append(["Dr. Mariam Adel", "regular", None])
+    workbook["doctors"].append(["Dr. Mariam Adel", None])
     workbook["doctor_services"].append(["Dr. Mariam Adel", "Hydrafacial"])
     workbook["clinic_hours"].append(["Monday", "10:00", "22:00"])
     workbook["doctor_hours"].append(["Dr. Mariam Adel", "الإثنين", "12:00", "20:00"])
@@ -763,6 +767,8 @@ def test_setup_apply_does_not_invent_defaults_for_incomplete_new_rows() -> None:
             User.__table__, Staff.__table__, Doctor.__table__, DoctorBranch.__table__,
             DoctorService.__table__, BranchWorkingHour.__table__, DoctorWorkingHour.__table__,
             DoctorAvailabilityWindow.__table__,
+            Base.metadata.tables["clinic_laser_devices"],
+            Base.metadata.tables["doctor_laser_device_weekday_exclusions"],
         ],
     )
     workbook = Workbook()
@@ -774,8 +780,8 @@ def test_setup_apply_does_not_invent_defaults_for_incomplete_new_rows() -> None:
     services.append(["name", "category", "duration_minutes", "price"])
     services.append(["Missing Price", None, 45, None])
     doctors = workbook.create_sheet("doctors")
-    doctors.append(["full_name", "doctor_type", "specialization"])
-    doctors.append(["Dr. Missing Type", None, None])
+    doctors.append(["full_name", "specialization"])
+    doctors.append(["Dr. No Type Needed", None])
     stream = io.BytesIO()
     workbook.save(stream)
     workbook.close()
@@ -790,11 +796,11 @@ def test_setup_apply_does_not_invent_defaults_for_incomplete_new_rows() -> None:
         )
         db.commit()
         assert db.scalar(select(Service).where(Service.name == "Missing Price")) is None
-        assert db.scalar(select(Doctor)) is None
+        doctor = db.scalar(select(Doctor))
+        assert doctor is not None and doctor.doctor_type == "regular"
         assert result.skipped_counts["services"] == 1
-        assert result.skipped_counts["doctors"] == 1
+        assert result.skipped_counts["doctors"] == 0
         assert any(issue.sheet == "services" and "price" in issue.message for issue in result.issues)
-        assert any(issue.sheet == "doctors" and "doctor_type" in issue.message for issue in result.issues)
 
 
 def test_setup_ui_has_one_draft_save_action_and_one_next_step_location() -> None:
@@ -857,6 +863,8 @@ def test_setup_excel_import_applies_valid_rows_and_keeps_invalid_rows_editable()
             User.__table__, Staff.__table__, Doctor.__table__, DoctorBranch.__table__,
             DoctorService.__table__, BranchWorkingHour.__table__, DoctorWorkingHour.__table__,
             DoctorAvailabilityWindow.__table__,
+            Base.metadata.tables["clinic_laser_devices"],
+            Base.metadata.tables["doctor_laser_device_weekday_exclusions"],
         ],
     )
 
@@ -866,7 +874,7 @@ def test_setup_excel_import_applies_valid_rows_and_keeps_invalid_rows_editable()
     services.append(["PRP Face", "Skin", 45, 2000])
     services.append(["Broken Service", "Skin", None, 1200])
     doctors = workbook["doctors"]
-    doctors.append(["Dr. Salma Nabil", "regular", "Dermatology"])
+    doctors.append(["Dr. Salma Nabil", "Dermatology"])
     doctor_services = workbook["doctor_services"]
     doctor_services.append(["Dr. Salma Nabil", "PRP Face"])
     clinic_hours = workbook["clinic_hours"]
