@@ -86,6 +86,11 @@ RESET_RESEED_TABLES = frozenset({
 
 CLEAR_TABLES = frozenset({
     "activity_events",
+    "vault_accounts",
+    "vault_branch_grants",
+    "vault_ledger_entries",
+    "vault_pending_payments",
+    "vault_transfers",
     "agent_actions",
     "automation_jobs",
     "channel_delivery_events",

@@ -8,6 +8,7 @@ dedicated database MUST be upgraded to 0099 before running these tests.
 """
 from __future__ import annotations
 
+import os
 from uuid import uuid4
 
 import pytest
@@ -26,6 +27,15 @@ from app.models.appointment import Appointment
 from app.models.payment_transaction import PaymentAllocation, PaymentTransaction
 from app.models.vault import VaultAccount, VaultLedgerEntry, VaultPendingPayment
 from app.services.vault import activate_account, transfer_full_balance
+
+# These six cases require a clean, fully migrated 0099 PostgreSQL database.
+# The normal backend job's separate package regression DB uses create_all()
+# and deliberately has no Alembic version; ONLY the mandatory PG17 workflow
+# may run this module. That job asserts 63 executed cases and zero skips.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("VAULT_PG17_REQUIRED") != "1",
+    reason="Mandatory Vault PG17 job runs these six cases with migration 0099 active",
+)
 
 
 @pytest.fixture(autouse=True)
