@@ -85,6 +85,7 @@ class ExpenseUpdate(BaseModel):
 
 
 class ExpenseRead(BaseModel):
+    is_vault_linked: bool = False
     id: UUID
     workspace_id: UUID
     created_by_user_id: UUID | None

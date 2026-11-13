@@ -48,6 +48,9 @@ def test_expense_mutations_emit_workspace_scoped_staff_activity(monkeypatch) -> 
     monkeypatch.setattr(finance_service, "record_activity_event", fake_record_activity)
 
     class _Db:
+        def scalar(self, _query):
+            return None
+
         def add(self, value):
             value.id = expense_id
 
@@ -82,6 +85,7 @@ def test_expense_mutations_emit_workspace_scoped_staff_activity(monkeypatch) -> 
 
     existing = SimpleNamespace(
         id=expense_id,
+        workspace_id=workspace_id,
         category="rent",
         amount_minor=250000,
         currency="EGP",

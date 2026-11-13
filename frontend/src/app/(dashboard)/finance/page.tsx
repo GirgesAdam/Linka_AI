@@ -12,6 +12,9 @@ import { formatMoney } from "@/lib/format";
 import { canAccessSection } from "@/lib/section-access";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
+import type { WorkspaceMember } from "@/lib/types";
+import type { MainTreasury, MainTreasuryMovement, ReceptionVault, VaultPendingPayment } from "@/lib/vault";
+import { MainTreasurySection } from "./main-treasury-section";
 
 import { createExpense, deleteExpense, updateExpense } from "./actions";
 
@@ -36,6 +39,7 @@ type Expense = {
   currency: string;
   incurred_on: string;
   note: string | null;
+  is_vault_linked: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -66,7 +70,16 @@ type PaymentBreakdown = {
   }>;
 };
 
-type SearchParams = { start_date?: string; end_date?: string; notice?: string };
+type SearchParams = {
+  start_date?: string;
+  end_date?: string;
+  notice?: string;
+  treasury_from?: string;
+  treasury_to?: string;
+  treasury_kind?: string;
+  treasury_method?: string;
+  treasury_branch?: string;
+};
 
 const categoryLabels: Record<ExpenseCategory, string> = {
   rent: "إيجار",
@@ -196,6 +209,31 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
     tiaRequest<PaymentBreakdown>(`/finance/payment-method-breakdown?${periodQuery.toString()}`),
   ]);
 
+  const isWorkspaceAdmin = workspace.role === "admin";
+  const treasuryQuery = new URLSearchParams();
+  if (validDate(raw.treasury_from)) treasuryQuery.set("start_date", raw.treasury_from!);
+  if (validDate(raw.treasury_to)) treasuryQuery.set("end_date", raw.treasury_to!);
+  if (raw.treasury_kind) treasuryQuery.set("kind", raw.treasury_kind);
+  if (["cash", "visa", "instapay"].includes(raw.treasury_method || "")) treasuryQuery.set("method", raw.treasury_method!);
+  if (/^[0-9a-f-]{36}$/i.test(raw.treasury_branch || "")) treasuryQuery.set("branch_id", raw.treasury_branch!);
+
+  // Vault availability must not break the existing Finance reports before 0099 deploy.
+  const vaultResults = isWorkspaceAdmin ? await Promise.allSettled([
+    tiaRequest<MainTreasury>("/vault/treasury"),
+    tiaRequest<ReceptionVault[]>("/vault/reception"),
+    tiaRequest<WorkspaceMember[]>("/auth/workspace/members"),
+    tiaRequest<Array<{ user_id: string; branch_id: string }>>("/vault/branch-grants"),
+    tiaRequest<MainTreasuryMovement[]>(`/vault/treasury/movements?${treasuryQuery.toString()}`),
+    tiaRequest<VaultPendingPayment[]>("/vault/pending-payments"),
+  ]) : null;
+  const treasury = vaultResults?.[0]?.status === "fulfilled" ? vaultResults[0].value : null;
+  const vaults = vaultResults?.[1]?.status === "fulfilled" ? vaultResults[1].value : [];
+  const members = vaultResults?.[2]?.status === "fulfilled" ? vaultResults[2].value : [];
+  const grants = vaultResults?.[3]?.status === "fulfilled" ? vaultResults[3].value : [];
+  const movements = vaultResults?.[4]?.status === "fulfilled" ? vaultResults[4].value : [];
+  const pendingPayments = vaultResults?.[5]?.status === "fulfilled" ? vaultResults[5].value : [];
+  const pendingUnavailable = vaultResults?.[5]?.status === "rejected";
+
   return (
     <>
       <PageHeader
@@ -204,6 +242,22 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
       />
 
       {notice ? <div role={noticeIsError ? "alert" : "status"} aria-live="polite" className={"mb-5 rounded-xl px-4 py-3 text-sm font-bold " + (noticeIsError ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-800")}>{notice}</div> : null}
+
+      {isWorkspaceAdmin && treasury && (
+        <MainTreasurySection
+          treasury={treasury}
+          vaults={vaults}
+          members={members}
+          grants={grants}
+          movements={movements}
+          pendingPayments={pendingPayments}
+          pendingUnavailable={pendingUnavailable}
+          filters={raw}
+        />
+      )}
+      {isWorkspaceAdmin && !treasury && (
+        <div role="alert" className="mb-5 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">الخزنة الرئيسية غير متاحة مؤقتًا. تقارير المالية الأخرى ما زالت تعمل.</div>
+      )}
 
       <Card className="mb-5">
         <CardContent className="pt-5">
@@ -282,7 +336,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                     <div><div className="font-black text-slate-950">{expense.title}</div><div className="mt-1 text-xs font-semibold text-[var(--muted)]">{expenseTypeLabels[expense.expense_type]} · {categoryLabels[expense.category]} · {expense.incurred_on}</div>{expense.note && <div className="mt-2 text-sm text-slate-600">{expense.note}</div>}</div>
                     <div className="text-left text-lg font-black text-slate-950">{formatMoney(expense.amount_minor, expense.currency)}</div>
                   </div>
-                  {canManageAdministration && (
+                  {expense.is_vault_linked && (
+                    <p className="mt-3 rounded-lg bg-violet-50 p-2 text-xs font-semibold text-violet-800">مصروف خزنة الريسبشن؛ لا يمكن تعديله أو حذفه دون حركة تصحيح معتمدة.</p>
+                  )}
+                  {canManageAdministration && !expense.is_vault_linked && (
                     <div className="mt-3 border-t border-slate-100 pt-3">
                       <details>
                         <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-bold text-teal-700 hover:text-teal-800"><Pencil size={14} /> تعديل المصروف</summary>

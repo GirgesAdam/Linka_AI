@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, load_only
 
 from app.api.dependencies.section_access import require_section_access
@@ -1190,6 +1190,14 @@ def cancel_package_and_refund(
     except PackageOperationError as exc:
         db.rollback()
         raise booking_conflict(str(exc)) from exc
+    except DBAPIError as exc:
+        db.rollback()
+        if "VAULT_REFUND_REQUIRES_APPROVED_FUNDING" in str(exc.orig):
+            raise booking_conflict(
+                "رصيد الكاش في خزنة الريسبشن غير كافٍ لتنفيذ مرتجع الباقة بعد التوريد. "
+                "لم تُلغ الباقة ولم يُسجل المرتجع. يجب مراجعة المدير."
+            ) from exc
+        raise
 
 
 @router.get("/appointments", response_model=list[AppointmentRead])

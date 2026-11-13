@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.section_access import require_section_access
@@ -51,6 +52,18 @@ def _not_found(detail: str) -> HTTPException:
 
 def _conflict(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+def _vault_refund_conflict(exc: DBAPIError) -> HTTPException | None:
+    message = str(exc.orig)
+    if "VAULT_REFUND_REQUIRES_APPROVED_FUNDING" in message:
+        return _conflict(
+            "رصيد الكاش في خزنة الريسبشن غير كافٍ لتنفيذ المرتجع بعد التوريد. "
+            "لم يُسجّل المرتجع؛ يلزم توفر كاش كافٍ أو قرار من المدير بشأن تمويله."
+        )
+    if "VAULT_REFUND_SOURCE_MISMATCH" in message:
+        return _conflict("تعذر إثبات مصدر تمويل المرتجع. لم يُسجّل أي مرتجع نقدي.")
+    return None
 
 
 @router.get("/appointments/{appointment_id}", response_model=AppointmentPaymentSummaryRead)
@@ -104,6 +117,12 @@ def create_payment(
     except PaymentOperationError as exc:
         db.rollback()
         raise _conflict(str(exc)) from exc
+    except DBAPIError as exc:
+        db.rollback()
+        vault_conflict = _vault_refund_conflict(exc)
+        if vault_conflict is not None:
+            raise vault_conflict from exc
+        raise
 
     return get_appointment_payment_summary(
         db,
@@ -229,6 +248,12 @@ def create_refund(
     except PaymentOperationError as exc:
         db.rollback()
         raise _conflict(str(exc)) from exc
+    except DBAPIError as exc:
+        db.rollback()
+        vault_conflict = _vault_refund_conflict(exc)
+        if vault_conflict is not None:
+            raise vault_conflict from exc
+        raise
 
     return get_appointment_payment_summary(
         db,
