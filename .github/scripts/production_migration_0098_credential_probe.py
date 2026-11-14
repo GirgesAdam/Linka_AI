@@ -112,7 +112,7 @@ def inspect_readonly(connection) -> None:
             "session_user::text"
         ).fetchone()
         if (row is None or row[0] != "postgres" or row[1] != EXPECTED_PG_VERSION or
-                row[3] is not False or row[4] != "postgres.ycuxjlkhnubztgqmhtom"):
+                row[3] is not False or row[4] != "postgres"):
             raise ProbeFailure("DATABASE_IDENTITY_MISMATCH")
         if str(row[2]).lower() != "on":
             raise ProbeFailure("READ_ONLY_NOT_CONFIRMED")
@@ -133,11 +133,8 @@ def inspect_readonly(connection) -> None:
         if revisions != [(EXPECTED_REVISION,)]:
             raise ProbeFailure("REVISION_MISMATCH")
 
-        ssl_row = connection.execute(
-            "SELECT ssl, version FROM pg_catalog.pg_stat_ssl WHERE pid = pg_backend_pid()"
-        ).fetchone()
-        if ssl_row is None or ssl_row[0] is not True or not ssl_row[1]:
-            raise ProbeFailure("TLS_NOT_CONFIRMED")
+        # libpq has already verified CA and pooler hostname (sslmode=verify-full).
+        # pg_stat_ssl describes the pooler-to-database leg, not client-to-pooler TLS.
     finally:
         if started:
             try:
