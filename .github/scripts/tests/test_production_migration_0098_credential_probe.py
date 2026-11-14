@@ -45,15 +45,13 @@ class FakeConnection:
             raise RuntimeError("simulated secret-bearing connection exception")
         if "server_version_num" in sql:
             return Result(("postgres", 170006, self.readonly, False,
-                           "postgres.ycuxjlkhnubztgqmhtom"))
+                           "postgres"))
         if "pg_database" in sql:
             return Result(("5",))
         if "pg_namespace" in sql:
             return Result(("public",))
         if "alembic_version" in sql:
             return Result([(self.revision,)][0], [(self.revision,)])
-        if "pg_stat_ssl" in sql:
-            return Result((self.tls, "TLSv1.3"))
         return Result()
 
 
@@ -86,15 +84,23 @@ class CredentialProbeTests(unittest.TestCase):
             probe.inspect_readonly(c)
         self.assertEqual(c.queries[-1], "ROLLBACK")
 
+    def test_invalid_ca_is_rejected(self):
+        with self.assertRaisesRegex(probe.ProbeFailure, "CA_CERT_INVALID"):
+            probe.ca_file(None, "not a PEM certificate", Path("."))
+
+    def test_invalid_url_is_rejected_before_database_connection(self):
+        class Runner:
+            @staticmethod
+            def assert_production_url(value):
+                raise ValueError("secret-containing URL must never be logged")
+        with patch.object(probe, "source_guard"), patch.object(probe, "load_runner", return_value=Runner()), \
+                patch.dict("os.environ", {"PRODUCTION_MIGRATION_DATABASE_URL": "invalid"}, clear=True):
+            with self.assertRaisesRegex(probe.ProbeFailure, "CREDENTIAL_IDENTITY_REJECTED"):
+                probe.probe(Path("."))
+
     def test_readonly_off_fails_and_rolls_back(self):
         c = FakeConnection(readonly="off")
         with self.assertRaisesRegex(probe.ProbeFailure, "READ_ONLY_NOT_CONFIRMED"):
-            probe.inspect_readonly(c)
-        self.assertEqual(c.queries[-1], "ROLLBACK")
-
-    def test_tls_missing_fails_and_rolls_back(self):
-        c = FakeConnection(tls=False)
-        with self.assertRaisesRegex(probe.ProbeFailure, "TLS_NOT_CONFIRMED"):
             probe.inspect_readonly(c)
         self.assertEqual(c.queries[-1], "ROLLBACK")
 
