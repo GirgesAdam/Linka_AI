@@ -65,6 +65,7 @@ new Function("require", "module", "exports", refreshHookCompiled)(
   (name) => {
     if (name === "react") return {
       useEffect: (effect, dependencies) => activeRefreshHarness.useEffect(effect, dependencies),
+      useRef: (initialValue) => activeRefreshHarness.useRef(initialValue),
     };
     if (name === "next/navigation") return { useRouter: () => activeRefreshHarness.router };
     if (name === "react/jsx-runtime") return { jsx: () => null, jsxs: () => null, Fragment: Symbol.for("react.fragment") };
@@ -79,8 +80,9 @@ const useRefreshAfterSuccess = refreshHookModule.exports.useRefreshAfterSuccess;
 function createRefreshHarness() {
   let now = 0;
   let nextTimerId = 0;
-  let previousDependencies;
-  let cleanup;
+  let hookIndex = 0;
+  const refs = [];
+  const effects = [];
   const timers = new Map();
   const router = {
     refreshCalls: 0,
@@ -88,16 +90,26 @@ function createRefreshHarness() {
   };
   const hooks = {
     router,
-    useEffect(effect, dependencies) {
-      const changed = !previousDependencies
-        || dependencies.length !== previousDependencies.length
-        || dependencies.some((value, index) => !Object.is(value, previousDependencies[index]));
-      if (!changed) return;
-      cleanup?.();
-      previousDependencies = dependencies;
-      cleanup = effect();
+    useRef(initialValue) {
+      const index = hookIndex++;
+      if (!refs[index]) refs[index] = { current: initialValue };
+      return refs[index];
     },
-    cleanup() { cleanup?.(); },
+    useEffect(effect, dependencies) {
+      const index = hookIndex++;
+      const previous = effects[index];
+      const changed = !previous
+        || dependencies.length !== previous.dependencies.length
+        || dependencies.some((value, dependencyIndex) => !Object.is(value, previous.dependencies[dependencyIndex]));
+      if (!changed) return;
+      previous?.cleanup?.();
+      effects[index] = { dependencies: [...dependencies], cleanup: effect() };
+    },
+    beginRender() { hookIndex = 0; },
+    cleanup() {
+      for (const effect of effects) effect?.cleanup?.();
+      effects.length = 0;
+    },
   };
   const windowApi = {
     setTimeout(callback, delay) {
@@ -123,7 +135,6 @@ function createRefreshHarness() {
   }
   return { hooks, router, timers, windowApi, advance };
 }
-
 test("doctors page loads separate laser rows and device list only with clinic operations access", () => {
   assert.match(doctorsPage, /canManageClinic = canAccessSection\(ctx\.workspace, "clinic_operations"\)/);
   assert.match(doctorsPage, /canManageClinic \? tiaRequest<DoctorLaserWeekday\[\]>\("\/clinic\/doctor-laser-weekdays"\)/);
@@ -292,41 +303,79 @@ test("doctor profile update reports confirmed success and preserves the open edi
 });
 
 
-test("repeated identical successful doctor saves each refresh after the 1600ms confirmation; failures do not refresh", () => {
+test("repeated identical successful doctor saves refresh after 1600ms and survive a later failed save", () => {
   const previousWindow = globalThis.window;
   const harness = createRefreshHarness();
   globalThis.window = harness.windowApi;
   activeRefreshHarness = harness.hooks;
   try {
     const idle = { notice: null, error: null };
+    harness.hooks.beginRender();
     useRefreshAfterSuccess(idle);
+    harness.hooks.beginRender();
     useRefreshAfterSuccess(idle);
     assert.equal(harness.timers.size, 0, "ordinary renders must not schedule a refresh");
 
-    const firstSuccess = { notice: "Same successful save message", error: null };
+    const successMessage = "Same successful save message";
+    const firstSuccess = { notice: successMessage, error: null };
+    harness.hooks.beginRender();
     useRefreshAfterSuccess(firstSuccess);
-    useRefreshAfterSuccess(firstSuccess);
-    assert.equal(harness.timers.size, 1, "one action result must schedule only one refresh");
+    assert.equal(harness.timers.size, 1, "the first successful save must schedule a refresh");
     assert.equal([...harness.timers.values()][0].delay, 1600);
-    harness.advance(1599);
-    assert.equal(harness.router.refreshCalls, 0, "refresh must wait for the full confirmation interval");
-    harness.advance(1);
-    assert.equal(harness.router.refreshCalls, 1, "the first successful save must refresh");
 
-    const secondSuccess = { notice: firstSuccess.notice, error: null };
-    assert.equal(secondSuccess.notice, firstSuccess.notice, "both saves must use the identical success message");
-    assert.notEqual(secondSuccess, firstSuccess, "each successful action result has a new state identity");
-    useRefreshAfterSuccess(secondSuccess);
-    assert.equal(harness.timers.size, 1, "the second action result must schedule another refresh");
-    harness.advance(1599);
-    assert.equal(harness.router.refreshCalls, 1);
+    harness.advance(700);
+    const failedSecondSave = { notice: null, error: "Save failed" };
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess(failedSecondSave);
+    assert.equal(harness.timers.size, 1, "a later failed save must preserve the earlier successful refresh");
+    assert.equal(harness.router.refreshCalls, 0, "the earlier refresh must remain delayed");
+    harness.advance(899);
+    assert.equal(harness.router.refreshCalls, 0, "no refresh may occur before the original 1600ms deadline");
     harness.advance(1);
-    assert.equal(harness.router.refreshCalls, 2, "the second successful save must refresh again");
-
-    useRefreshAfterSuccess({ notice: null, error: "Save failed" });
+    assert.equal(harness.router.refreshCalls, 1, "the first successful save must refresh at its original deadline");
     assert.equal(harness.timers.size, 0);
+
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess({ notice: null, error: "Save failed without a preceding success" });
+    assert.equal(harness.timers.size, 0, "a failed save without a pending success must not schedule refresh");
     harness.advance(1600);
-    assert.equal(harness.router.refreshCalls, 2, "failed saves must never refresh");
+    assert.equal(harness.router.refreshCalls, 1, "a failed-only action must never refresh");
+
+    const secondSuccess = { notice: successMessage, error: null };
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess(secondSuccess);
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess(secondSuccess);
+    assert.equal(harness.timers.size, 1, "re-rendering the same action state must not duplicate its timer");
+    harness.advance(400);
+
+    const thirdSuccess = { notice: successMessage, error: null };
+    assert.equal(thirdSuccess.notice, secondSuccess.notice, "consecutive saves must return identical success text");
+    assert.notEqual(thirdSuccess, secondSuccess, "each successful action result has a new state identity");
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess(thirdSuccess);
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess(thirdSuccess);
+    assert.equal(harness.timers.size, 2, "a second successful save must retain its own refresh timer");
+    assert.deepEqual([...harness.timers.values()].map((timer) => timer.delay), [1600, 1600]);
+
+    harness.advance(1199);
+    assert.equal(harness.router.refreshCalls, 1, "the second save's timer must not fire early");
+    harness.advance(1);
+    assert.equal(harness.router.refreshCalls, 2, "the first of two identical successes must refresh at 1600ms");
+    harness.advance(399);
+    assert.equal(harness.router.refreshCalls, 2);
+    harness.advance(1);
+    assert.equal(harness.router.refreshCalls, 3, "the second identical success must also refresh at its own deadline");
+
+    const pendingAtUnmount = { notice: successMessage, error: null };
+    harness.hooks.beginRender();
+    useRefreshAfterSuccess(pendingAtUnmount);
+    assert.equal(harness.timers.size, 1);
+    harness.hooks.cleanup();
+    assert.equal(harness.timers.size, 0, "pending timers are cleared when the hook unmounts");
+    harness.advance(1600);
+    assert.equal(harness.router.refreshCalls, 3, "unmounted components must not refresh");
   } finally {
     harness.hooks.cleanup();
     activeRefreshHarness = undefined;
@@ -334,7 +383,6 @@ test("repeated identical successful doctor saves each refresh after the 1600ms c
     else globalThis.window = previousWindow;
   }
 });
-
 test("failed profile and schedule updates display safe errors and never claim success", async () => {
   revalidated.length = 0;
   let requests = 0;

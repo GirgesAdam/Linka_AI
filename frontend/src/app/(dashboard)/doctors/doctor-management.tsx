@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Clock3, LoaderCircle, Plus, Save, Stethoscope, Trash2, UserPlus } from "lucide-react";
 
@@ -71,11 +71,21 @@ function ActionState({ state }: { state: DoctorAdminState }) {
 
 export function useRefreshAfterSuccess(state: Pick<DoctorAdminState, "notice" | "error">) {
   const router = useRouter();
+  const pendingRefreshes = useRef(new Set<number>());
+
   useEffect(() => {
     if (state.error || !state.notice) return;
-    const timeout = window.setTimeout(() => router.refresh(), 1600);
-    return () => window.clearTimeout(timeout);
+    const timeout = window.setTimeout(() => {
+      pendingRefreshes.current.delete(timeout);
+      router.refresh();
+    }, 1600);
+    pendingRefreshes.current.add(timeout);
   }, [router, state]);
+
+  useEffect(() => () => {
+    for (const timeout of pendingRefreshes.current) window.clearTimeout(timeout);
+    pendingRefreshes.current.clear();
+  }, []);
 }
 
 function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] }) {
