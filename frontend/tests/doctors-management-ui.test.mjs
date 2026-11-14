@@ -51,6 +51,79 @@ function form(entries) {
 }
 const initial = { notice: null, error: null, saved: null };
 
+let activeRefreshHarness;
+const refreshHookCompiled = ts.transpileModule(doctorsUI, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+    jsx: ts.JsxEmit.ReactJSX,
+    esModuleInterop: true,
+  },
+}).outputText;
+const refreshHookModule = { exports: {} };
+new Function("require", "module", "exports", refreshHookCompiled)(
+  (name) => {
+    if (name === "react") return {
+      useEffect: (effect, dependencies) => activeRefreshHarness.useEffect(effect, dependencies),
+    };
+    if (name === "next/navigation") return { useRouter: () => activeRefreshHarness.router };
+    if (name === "react/jsx-runtime") return { jsx: () => null, jsxs: () => null, Fragment: Symbol.for("react.fragment") };
+    if (name === "lucide-react" || name.startsWith("@/components/ui/") || name === "./doctor-laser-weekdays" || name === "./actions") return {};
+    throw new Error("Unexpected doctor UI import " + name);
+  },
+  refreshHookModule,
+  refreshHookModule.exports,
+);
+const useRefreshAfterSuccess = refreshHookModule.exports.useRefreshAfterSuccess;
+
+function createRefreshHarness() {
+  let now = 0;
+  let nextTimerId = 0;
+  let previousDependencies;
+  let cleanup;
+  const timers = new Map();
+  const router = {
+    refreshCalls: 0,
+    refresh() { this.refreshCalls += 1; },
+  };
+  const hooks = {
+    router,
+    useEffect(effect, dependencies) {
+      const changed = !previousDependencies
+        || dependencies.length !== previousDependencies.length
+        || dependencies.some((value, index) => !Object.is(value, previousDependencies[index]));
+      if (!changed) return;
+      cleanup?.();
+      previousDependencies = dependencies;
+      cleanup = effect();
+    },
+    cleanup() { cleanup?.(); },
+  };
+  const windowApi = {
+    setTimeout(callback, delay) {
+      const id = ++nextTimerId;
+      timers.set(id, { callback, dueAt: now + delay, delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  function advance(milliseconds) {
+    const target = now + milliseconds;
+    while (true) {
+      const next = [...timers.entries()]
+        .filter(([, timer]) => timer.dueAt <= target)
+        .sort((left, right) => left[1].dueAt - right[1].dueAt)[0];
+      if (!next) break;
+      const [id, timer] = next;
+      timers.delete(id);
+      now = timer.dueAt;
+      timer.callback();
+    }
+    now = target;
+  }
+  return { hooks, router, timers, windowApi, advance };
+}
+
 test("doctors page loads separate laser rows and device list only with clinic operations access", () => {
   assert.match(doctorsPage, /canManageClinic = canAccessSection\(ctx\.workspace, "clinic_operations"\)/);
   assert.match(doctorsPage, /canManageClinic \? tiaRequest<DoctorLaserWeekday\[\]>\("\/clinic\/doctor-laser-weekdays"\)/);
@@ -215,7 +288,51 @@ test("doctor profile update reports confirmed success and preserves the open edi
   assert.equal(calls[0].options.method, "PATCH");
   assert.deepEqual(JSON.parse(calls[0].options.body).service_categories, ["laser"]);
   assert.doesNotMatch(doctorsUI, /<DoctorProfileForm[^>]*key=\{state/);
-  assert.match(doctorsUI, /useRefreshAfterSuccess\(state\.notice\)/);
+  assert.equal((doctorsUI.match(/useRefreshAfterSuccess\(state\)/g) || []).length, 2);
+});
+
+
+test("repeated identical successful doctor saves each refresh after the 1600ms confirmation; failures do not refresh", () => {
+  const previousWindow = globalThis.window;
+  const harness = createRefreshHarness();
+  globalThis.window = harness.windowApi;
+  activeRefreshHarness = harness.hooks;
+  try {
+    const idle = { notice: null, error: null };
+    useRefreshAfterSuccess(idle);
+    useRefreshAfterSuccess(idle);
+    assert.equal(harness.timers.size, 0, "ordinary renders must not schedule a refresh");
+
+    const firstSuccess = { notice: "Same successful save message", error: null };
+    useRefreshAfterSuccess(firstSuccess);
+    useRefreshAfterSuccess(firstSuccess);
+    assert.equal(harness.timers.size, 1, "one action result must schedule only one refresh");
+    assert.equal([...harness.timers.values()][0].delay, 1600);
+    harness.advance(1599);
+    assert.equal(harness.router.refreshCalls, 0, "refresh must wait for the full confirmation interval");
+    harness.advance(1);
+    assert.equal(harness.router.refreshCalls, 1, "the first successful save must refresh");
+
+    const secondSuccess = { notice: firstSuccess.notice, error: null };
+    assert.equal(secondSuccess.notice, firstSuccess.notice, "both saves must use the identical success message");
+    assert.notEqual(secondSuccess, firstSuccess, "each successful action result has a new state identity");
+    useRefreshAfterSuccess(secondSuccess);
+    assert.equal(harness.timers.size, 1, "the second action result must schedule another refresh");
+    harness.advance(1599);
+    assert.equal(harness.router.refreshCalls, 1);
+    harness.advance(1);
+    assert.equal(harness.router.refreshCalls, 2, "the second successful save must refresh again");
+
+    useRefreshAfterSuccess({ notice: null, error: "Save failed" });
+    assert.equal(harness.timers.size, 0);
+    harness.advance(1600);
+    assert.equal(harness.router.refreshCalls, 2, "failed saves must never refresh");
+  } finally {
+    harness.hooks.cleanup();
+    activeRefreshHarness = undefined;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 });
 
 test("failed profile and schedule updates display safe errors and never claim success", async () => {

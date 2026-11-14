@@ -386,10 +386,10 @@ jobs:
           output = Path(os.environ["RUNNER_TEMP"], "doctors-management-ui.tap").read_text()
           matches = re.findall(r"^# (tests|pass|fail|cancelled|skipped) (\d+)\s*$", output, re.M)
           totals = {key: int(value) for key, value in matches}
-          expected = {"tests": 12, "pass": 12, "fail": 0, "cancelled": 0, "skipped": 0}
+          expected = {"tests": 13, "pass": 13, "fail": 0, "cancelled": 0, "skipped": 0}
           if len(matches) != len(expected) or totals != expected:
-              raise SystemExit(f"Doctors management UI regression gate did not run all 12 cases: {totals}")
-          print("DOCTORS_MANAGEMENT_UI: 12 passed, 0 skipped")
+              raise SystemExit(f"Doctors management UI regression gate did not run all 13 cases: {totals}")
+          print("DOCTORS_MANAGEMENT_UI: 13 passed, 0 skipped")
           PY
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high

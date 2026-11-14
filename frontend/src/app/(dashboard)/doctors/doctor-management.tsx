@@ -69,13 +69,13 @@ function ActionState({ state }: { state: DoctorAdminState }) {
   return null;
 }
 
-function useRefreshAfterSuccess(notice: string | null) {
+export function useRefreshAfterSuccess(state: Pick<DoctorAdminState, "notice" | "error">) {
   const router = useRouter();
   useEffect(() => {
-    if (!notice) return;
+    if (state.error || !state.notice) return;
     const timeout = window.setTimeout(() => router.refresh(), 1600);
     return () => window.clearTimeout(timeout);
-  }, [router, notice]);
+  }, [router, state]);
 }
 
 function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] }) {
@@ -183,7 +183,7 @@ function CreateDoctorForm() {
 
 function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorAction, initialDoctorAdminState);
-  useRefreshAfterSuccess(state.notice);
+  useRefreshAfterSuccess(state);
   return (
     <form action={action} className="space-y-4">
       <input type="hidden" name="doctor_id" value={doctor.id} />
@@ -204,7 +204,7 @@ function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
 
 function DoctorScheduleForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorScheduleAction, initialDoctorAdminState);
-  useRefreshAfterSuccess(state.notice);
+  useRefreshAfterSuccess(state);
   return (
     <form action={action} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
       <input type="hidden" name="doctor_id" value={doctor.id} />
