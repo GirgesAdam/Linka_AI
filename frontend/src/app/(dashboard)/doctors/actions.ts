@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { TiaApiError, tiaRequest } from "@/lib/tia/api";
+import type { ActionFeedbackState } from "@/lib/action-feedback";
 
 export type DoctorAdminState = {
   notice: string | null;
@@ -13,6 +14,8 @@ export type DoctorAdminState = {
     booking_enabled: boolean;
   } | null;
 };
+
+class DoctorInputError extends Error {}
 
 type WorkingHourInterval = {
   weekday: number;
@@ -30,7 +33,7 @@ function serviceCategories(formData: FormData) {
     formData.getAll("service_category").map((value) => String(value).trim()).filter(Boolean),
   )];
   const allowed = new Set(["laser", "dermatology", "slimming"]);
-  if (values.some((value) => !allowed.has(value))) throw new Error("تصنيف خدمات الدكتور غير صالح.");
+  if (values.some((value) => !allowed.has(value))) throw new DoctorInputError("تصنيف خدمات الدكتور غير صالح.");
   return values;
 }
 
@@ -40,19 +43,19 @@ function parseIntervals(formData: FormData): WorkingHourInterval[] {
   try {
     value = JSON.parse(raw);
   } catch {
-    throw new Error("مواعيد العمل غير صالحة. راجع الأيام والساعات وحاول مرة أخرى.");
+    throw new DoctorInputError("مواعيد العمل غير صالحة. راجع الأيام والساعات وحاول مرة أخرى.");
   }
-  if (!Array.isArray(value)) throw new Error("مواعيد العمل غير صالحة.");
+  if (!Array.isArray(value)) throw new DoctorInputError("مواعيد العمل غير صالحة.");
   const intervals: WorkingHourInterval[] = [];
   for (const item of value) {
-    if (!item || typeof item !== "object") throw new Error("مواعيد العمل غير صالحة.");
+    if (!item || typeof item !== "object") throw new DoctorInputError("مواعيد العمل غير صالحة.");
     const row = item as Record<string, unknown>;
     const weekday = Number(row.weekday);
     const startTime = String(row.start_time || "");
     const endTime = String(row.end_time || "");
-    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new Error("يوم العمل غير صالح.");
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new DoctorInputError("يوم العمل غير صالح.");
     if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || endTime <= startTime) {
-      throw new Error("وقت نهاية كل فترة لازم يكون بعد وقت البداية.");
+      throw new DoctorInputError("وقت نهاية كل فترة لازم يكون بعد وقت البداية.");
     }
     intervals.push({ weekday, start_time: startTime, end_time: endTime });
   }
@@ -61,9 +64,9 @@ function parseIntervals(formData: FormData): WorkingHourInterval[] {
 
 function stateFromError(error: unknown): DoctorAdminState {
   if (error instanceof TiaApiError) {
-    return { notice: null, error: error.technicalMessage || error.message, saved: null };
+    return { notice: null, error: error.message, saved: null };
   }
-  if (error instanceof Error) return { notice: null, error: error.message, saved: null };
+  if (error instanceof DoctorInputError) return { notice: null, error: error.message, saved: null };
   return { notice: null, error: "تعذر تنفيذ التعديل. حاول مرة أخرى.", saved: null };
 }
 
@@ -147,6 +150,7 @@ export async function updateDoctorScheduleAction(
       method: "PUT",
       body: JSON.stringify({ intervals: parseIntervals(formData) }),
     });
+    // The editor refreshes after showing confirmation, without immediately remounting the open form.
     refreshDoctorRelatedViews();
     return { notice: "تم تحديث مواعيد عمل الدكتور.", error: null, saved: null };
   } catch (error) {
@@ -166,5 +170,36 @@ export async function removeDoctorAction(
     return { notice: "تمت إزالة الدكتور من الحجز النشط مع الاحتفاظ بالسجل التاريخي.", error: null, saved: null };
   } catch (error) {
     return stateFromError(error);
+  }
+}
+
+export async function saveDoctorLaserWeekday(
+  _previousState: ActionFeedbackState,
+  formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    const doctorId = String(formData.get("doctor_id") || "");
+    const branchId = String(formData.get("branch_id") || "");
+    const rawWeekday = String(formData.get("weekday") ?? "");
+    const weekday = /^\d$/.test(rawWeekday) ? Number(rawWeekday) : NaN;
+    if (!doctorId || !branchId || !Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+      throw new DoctorInputError("بيانات الدكتور أو اليوم غير صحيحة.");
+    }
+    const devices = formData.getAll("device_key").map(String);
+    const allowed = new Set(formData.getAll("allowed_device_key").map(String));
+    if (devices.length !== new Set(devices).size || [...allowed].some((key) => !devices.includes(key))) {
+      throw new DoctorInputError("اختيارات الأجهزة غير صحيحة.");
+    }
+
+    await tiaRequest(`/clinic/doctor-laser-weekdays/${doctorId}/${branchId}/${weekday}`, {
+      method: "PUT",
+      body: JSON.stringify({ excluded_device_keys: devices.filter((key) => !allowed.has(key)) }),
+    });
+    revalidatePath("/doctors");
+    return { notice: "تم حفظ أجهزة الليزر المسموحة لهذا اليوم.", error: null };
+  } catch (error) {
+    if (error instanceof TiaApiError) return { notice: null, error: error.message };
+    if (error instanceof DoctorInputError) return { notice: null, error: error.message };
+    return { notice: null, error: "تعذر حفظ أجهزة الدكتور. حاول مرة أخرى." };
   }
 }

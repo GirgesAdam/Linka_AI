@@ -11,7 +11,9 @@ import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import { cn } from "@/lib/utils";
 
+import type { ClinicLaserDevice } from "@/lib/types";
 import { DoctorManagementPanel, type DoctorAdminItem } from "./doctor-management";
+import type { DoctorLaserWeekday } from "./doctor-laser-weekdays";
 
 type DoctorCalendarDoctor = {
   id: string;
@@ -147,9 +149,11 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
   const query = new URLSearchParams({ start_date: dateKey(rangeStart), end_date: dateKey(rangeEnd) });
   if (doctorId) query.set("doctor_id", doctorId);
 
-  const [calendar, adminDoctors] = await Promise.all([
+  const [calendar, adminDoctors, laserRows, laserDevices] = await Promise.all([
     tiaRequest<DoctorCalendar>(`/booking/doctor-calendar?${query.toString()}`),
-    canManageClinic ? tiaRequest<DoctorAdminItem[]>("/clinic/doctor-admin") : Promise.resolve([]),
+    canManageClinic ? tiaRequest<DoctorAdminItem[]>("/clinic/doctor-admin").catch(() => null) : Promise.resolve([]),
+    canManageClinic ? tiaRequest<DoctorLaserWeekday[]>("/clinic/doctor-laser-weekdays").catch(() => null) : Promise.resolve([]),
+    canManageClinic ? tiaRequest<ClinicLaserDevice[]>("/inventory/laser-devices").catch(() => null) : Promise.resolve([]),
   ]);
 
   const selectedDoctor = calendar.doctors.find((doctor) => doctor.id === doctorId) || null;
@@ -180,7 +184,13 @@ export default async function DoctorsPage({ searchParams }: { searchParams: Prom
         description="تابع مواعيد كل دكتور يوميًا أو على مستوى الشهر، وافتح أي موعد مباشرة من الجدول."
       />
 
-      {canManageClinic && <DoctorManagementPanel doctors={adminDoctors} />}
+      {canManageClinic && (adminDoctors === null ? (
+        <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">
+          تعذر تحميل إدارة الدكاترة حالياً. يمكن متابعة جدول المواعيد؛ حدّث الصفحة للمحاولة مجدداً.
+        </div>
+      ) : (
+        <DoctorManagementPanel doctors={adminDoctors} laserRows={laserRows} laserDevices={laserDevices} />
+      ))}
 
       <Card className="mb-5">
         <CardContent className="flex flex-col gap-4 p-4 sm:p-4">

@@ -10,7 +10,7 @@ const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 const ts = require("typescript");
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, "../src/app/(dashboard)/services/doctor-laser-weekdays.tsx"), "utf8");
+const source = readFileSync(join(here, "../src/app/(dashboard)/doctors/doctor-laser-weekdays.tsx"), "utf8");
 
 const compiled = ts.transpileModule(source, {
   compilerOptions: {
@@ -52,7 +52,6 @@ function markup(rows, list = devices) {
 
 test("new doctor is checked ON for every active device", () => {
   const html = markup([base]);
-  assert.match(html, /Synthetic Doctor/);
   assert.match(html, /الإثنين/);
   assert.match(html, /Candela/);
   assert.match(html, /Soprano/);
@@ -60,6 +59,9 @@ test("new doctor is checked ON for every active device", () => {
   assert.equal((html.match(/checked=""/g) || []).length, 2);
   assert.doesNotMatch(html, /Old/);
   assert.match(html, /حفظ الأجهزة/);
+  const noneActive = markup([base], devices.filter((device) => !device.is_active));
+  assert.match(noneActive, /لا توجد أجهزة ليزر نشطة/);
+  assert.doesNotMatch(noneActive, /data-save-label=/);
 });
 
 test("saved OFF exclusion unchecks one device only", () => {

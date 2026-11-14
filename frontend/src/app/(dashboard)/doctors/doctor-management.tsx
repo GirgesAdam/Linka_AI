@@ -1,11 +1,14 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, Clock3, LoaderCircle, Plus, Save, Stethoscope, Trash2, UserPlus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { KnowledgeHour } from "@/lib/agent-knowledge-types";
+import type { ClinicLaserDevice } from "@/lib/types";
+import { DoctorLaserWeekdayPanel, type DoctorLaserWeekday } from "./doctor-laser-weekdays";
 
 import {
   createDoctorAction,
@@ -58,12 +61,31 @@ function normalizeHours(hours: KnowledgeHour[]): EditableInterval[] {
 
 function ActionState({ state }: { state: DoctorAdminState }) {
   if (state.error) {
-    return <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">{state.error}</div>;
+    return <div role="alert" aria-live="polite" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">{state.error}</div>;
   }
   if (state.notice) {
-    return <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800"><CheckCircle2 size={14} /> {state.notice}</div>;
+    return <div role="status" aria-live="polite" className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800"><CheckCircle2 size={14} /> {state.notice}</div>;
   }
   return null;
+}
+
+export function useRefreshAfterSuccess(state: Pick<DoctorAdminState, "notice" | "error">) {
+  const router = useRouter();
+  const pendingRefreshes = useRef(new Set<number>());
+
+  useEffect(() => {
+    if (state.error || !state.notice) return;
+    const timeout = window.setTimeout(() => {
+      pendingRefreshes.current.delete(timeout);
+      router.refresh();
+    }, 1600);
+    pendingRefreshes.current.add(timeout);
+  }, [router, state]);
+
+  useEffect(() => () => {
+    for (const timeout of pendingRefreshes.current) window.clearTimeout(timeout);
+    pendingRefreshes.current.clear();
+  }, []);
 }
 
 function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] }) {
@@ -171,6 +193,7 @@ function CreateDoctorForm() {
 
 function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorAction, initialDoctorAdminState);
+  useRefreshAfterSuccess(state);
   return (
     <form action={action} className="space-y-4">
       <input type="hidden" name="doctor_id" value={doctor.id} />
@@ -191,6 +214,7 @@ function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
 
 function DoctorScheduleForm({ doctor }: { doctor: DoctorAdminItem }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorScheduleAction, initialDoctorAdminState);
+  useRefreshAfterSuccess(state);
   return (
     <form action={action} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
       <input type="hidden" name="doctor_id" value={doctor.id} />
@@ -214,7 +238,13 @@ function RemoveDoctorForm({ doctor }: { doctor: DoctorAdminItem }) {
   );
 }
 
-function DoctorEditorCard({ doctor }: { doctor: DoctorAdminItem }) {
+function DoctorEditorCard({
+  doctor, laserRows, laserDevices,
+}: {
+  doctor: DoctorAdminItem;
+  laserRows: DoctorLaserWeekday[] | null;
+  laserDevices: ClinicLaserDevice[] | null;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -231,6 +261,21 @@ function DoctorEditorCard({ doctor }: { doctor: DoctorAdminItem }) {
         <div className="mt-5 space-y-5">
           <DoctorProfileForm doctor={doctor} />
           <DoctorScheduleForm doctor={doctor} />
+          {doctor.service_categories.includes("laser") || laserRows?.some((row) => row.doctor_id === doctor.id) ? (
+            <section className="space-y-3 rounded-2xl border border-teal-200 bg-white p-3" aria-label={`أجهزة الليزر للدكتور ${doctor.name}`}>
+              <h3 className="text-sm font-black text-slate-900">أجهزة الليزر حسب يوم العمل والفرع</h3>
+              {laserRows === null || laserDevices === null ? (
+                <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm font-semibold text-red-700">
+                  تعذر تحميل إعدادات أجهزة الليزر. حدّث الصفحة للمحاولة مجدداً.
+                </div>
+              ) : (
+                <DoctorLaserWeekdayPanel
+                  rows={laserRows.filter((row) => row.doctor_id === doctor.id)}
+                  devices={laserDevices}
+                />
+              )}
+            </section>
+          ) : null}
           <RemoveDoctorForm doctor={doctor} />
         </div>
       )}
@@ -238,7 +283,13 @@ function DoctorEditorCard({ doctor }: { doctor: DoctorAdminItem }) {
   );
 }
 
-export function DoctorManagementPanel({ doctors }: { doctors: DoctorAdminItem[] }) {
+export function DoctorManagementPanel({
+  doctors, laserRows, laserDevices,
+}: {
+  doctors: DoctorAdminItem[];
+  laserRows: DoctorLaserWeekday[] | null;
+  laserDevices: ClinicLaserDevice[] | null;
+}) {
   const activeDoctors = doctors.filter((doctor) => doctor.is_active);
 
   return (
@@ -248,8 +299,13 @@ export function DoctorManagementPanel({ doctors }: { doctors: DoctorAdminItem[] 
       </CardHeader>
       <CardContent className="space-y-4">
         <CreateDoctorForm />
+        {laserRows === null || laserDevices === null ? (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">
+            تعذر تحميل إعدادات أجهزة الليزر. لا يزال بإمكانك عرض الدكاترة وتعديل بياناتهم ومواعيدهم.
+          </div>
+        ) : null}
         {activeDoctors.map((doctor) => (
-          <DoctorEditorCard key={doctor.id} doctor={doctor} />
+          <DoctorEditorCard key={doctor.id} doctor={doctor} laserRows={laserRows} laserDevices={laserDevices} />
         ))}
       </CardContent>
     </Card>
