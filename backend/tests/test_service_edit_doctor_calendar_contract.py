@@ -51,8 +51,49 @@ def test_doctor_admin_is_section_gated_and_branchless_in_the_ui() -> None:
     assert 'require_section_access("clinic_operations")' in route
     assert '"/doctor-admin/{doctor_id}/working-hours"' in route
     assert "branch_id" not in DoctorAdminCreate.model_fields
-    assert "branch_id" not in actions
-    assert "الفرع" not in panel
+    # Doctor administration remains branchless, but laser-device eligibility is
+    # intentionally scoped by doctor, branch and weekday in the same actions file.
+    def section(source: str, start: str, end: str) -> str:
+        assert source.count(start) == 1, f"Expected exactly one section: {start}"
+        remainder = source.split(start, 1)[1]
+        assert end in remainder, f"Missing section boundary: {end}"
+        return remainder.split(end, 1)[0]
+
+    admin_actions = (
+        section(actions, "export async function createDoctorAction(", "export async function updateDoctorAction("),
+        section(actions, "export async function updateDoctorAction(", "export async function updateDoctorScheduleAction("),
+        section(actions, "export async function updateDoctorScheduleAction(", "export async function removeDoctorAction("),
+    )
+    for admin_action in admin_actions:
+        assert "branch_id" not in admin_action
+        assert "branchId" not in admin_action
+
+    laser_action = actions.split("export async function saveDoctorLaserWeekday(", 1)
+    assert len(laser_action) == 2
+    assert 'formData.get("branch_id")' in laser_action[1]
+    assert 'formData.get("weekday")' in laser_action[1]
+    assert '/clinic/doctor-laser-weekdays/${doctorId}/${branchId}/${weekday}' in laser_action[1]
+
+    # Check only the branchless creation/profile/schedule controls. The laser
+    # editor is allowed (and required) to show the branch explicitly.
+    admin_controls = (
+        section(panel, "function ScheduleFields(", "const categoryOptions ="),
+        section(panel, "function CreateDoctorForm(", "function DoctorProfileForm("),
+        section(panel, "function DoctorProfileForm(", "function DoctorScheduleForm("),
+        section(panel, "function DoctorScheduleForm(", "function RemoveDoctorForm("),
+    )
+    for control in admin_controls:
+        assert 'name="branch_id"' not in control
+        assert "الفرع" not in control
+
+    laser_editor = section(panel, "function DoctorEditorCard(", "export function DoctorManagementPanel(")
+    assert "أجهزة الليزر حسب يوم العمل والفرع" in laser_editor
+    assert "<DoctorLaserWeekdayPanel" in laser_editor
+    laser_panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-laser-weekdays.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'name="branch_id"' in laser_panel
+    assert "{row.branch_name}" in laser_panel
     assert 'canAccessSection(ctx.workspace, "clinic_operations")' in page
     assert "DoctorManagementPanel" in page
     assert "doctor_admin_read_router" in router

@@ -29,11 +29,12 @@ export function DoctorLaserWeekdayPanel({
         <p className="text-sm text-slate-600">
           لا توجد أيام عمل مسجلة حالياً لأطباء الليزر.
         </p>
+      ) : activeDevices.length === 0 ? (
+        <p className="text-sm text-slate-600">لا توجد أجهزة ليزر نشطة يمكن تخصيصها حالياً.</p>
       ) : doctors.map((doctorId) => {
         const doctorRows = rows.filter((row) => row.doctor_id === doctorId);
         return (
           <div key={doctorId} className="space-y-2 rounded-xl border border-slate-200 p-3">
-            <h3 className="text-sm font-black text-slate-900">{doctorRows[0].doctor_name}</h3>
             {doctorRows.map((row) => {
               const excluded = new Set(row.excluded_device_keys);
               return (

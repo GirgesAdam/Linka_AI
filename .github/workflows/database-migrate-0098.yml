@@ -100,7 +100,7 @@ jobs:
         id: execute
         shell: bash
         env:
-          PRODUCTION_MIGRATION_0098_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_0098_DATABASE_URL }}
+          PRODUCTION_MIGRATION_0098_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
           PRODUCTION_MIGRATION_DB_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_DB_CA_CERT }}
         run: python .github/scripts/production_migration_0098.py execute
 

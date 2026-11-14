@@ -245,22 +245,143 @@ def test_postflight_rejects_mismatched_columns(monkeypatch):
         m.validate_after_locked(MissingColumns(), set(), set(), {})
 
 
+def _assert_0098_security_contract(workflow: str, runner: str) -> None:
+    """Preserve the Runner contract while permitting the existing GitHub secret."""
+    assert re.search(r"(?m)^on:\s*\n  workflow_dispatch:", workflow)
+    events = workflow.split("on:", 1)[1].split("permissions:", 1)[0]
+    for trigger in ("push:", "pull_request:", "pull_request_target:",
+                    "schedule:", "workflow_call:"):
+        assert trigger not in events
+    assert "permissions:\n  contents: read" in workflow
+    assert "group: database-migration-global" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert workflow.count("github.run_attempt == '1'") >= 2
+    assert workflow.count("github.ref == 'refs/heads/main'") >= 2
+    assert workflow.count("persist-credentials: false") >= 2
+    assert "secrets.PRODUCTION_MIGRATION_0098_DATABASE_URL" not in workflow
+
+    # GitHub Secret source is shared, but the Runner's INTERNAL variable is unchanged.
+    assert re.search(
+        r"(?m)^          PRODUCTION_MIGRATION_0098_DATABASE_URL:\s*"
+        r"\$\{\{\s*secrets\.PRODUCTION_MIGRATION_DATABASE_URL\s*\}\}\s*$",
+        workflow,
+    )
+    assert re.search(
+        r"(?m)^          PRODUCTION_MIGRATION_DB_CA_CERT:\s*"
+        r"\$\{\{\s*secrets\.PRODUCTION_MIGRATION_DB_CA_CERT\s*\}\}\s*$",
+        workflow,
+    )
+    preflight = workflow.split("  source-preflight:\n", 1)[1].split(
+        "  migrate-production-0098:\n", 1
+    )[0]
+    protected = workflow.split("  migrate-production-0098:\n", 1)[1]
+    assert "secrets." not in preflight
+    assert "PRODUCTION_MIGRATION_0098_DATABASE_URL" not in preflight
+    assert "environment:" not in preflight
+    assert "environment:\n      name: production" in protected
+    assert "needs: source-preflight" in protected
+    assert "needs.source-preflight.result == 'success'" in protected
+    assert "github.ref == 'refs/heads/main'" in protected
+    assert "github.run_attempt == '1'" in protected
+    assert "EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}" in preflight
+    assert "EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}" in preflight
+    assert "EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}" in preflight
+    assert "python .github/scripts/production_migration_0098.py source" in preflight
+    assert "python .github/scripts/production_migration_0098.py execute" in protected
+    assert "alembic upgrade head" not in workflow
+    assert "alembic downgrade" not in workflow
+
+    # Also pin the existing Runner guards, not only the YAML variable spelling.
+    for guard in (
+        "APPROVED_MIGRATION_SHA256 = ",
+        "if github_sha != expected_main_sha:",
+        "if expected_current_revision != REVISION_BEFORE:",
+        "if expected_migration_sha256.lower() != APPROVED_MIGRATION_SHA256:",
+        "assert_production_url(raw_url)",
+        'query.get("sslmode", "verify-full") == "verify-full"',
+        'connect_args={"sslmode": "verify-full"',
+        "sslrootcert",
+        "_write_ca(ca_pem",
+        "with migration_session_lock(connection):",
+        "with connection.begin():",
+        "validate_before_locked(connection)",
+        "validate_after_locked(connection",
+        "module.upgrade()",
+        "ALEMBIC_VERSION_UPDATE_RACE",
+    ):
+        assert guard in runner, guard
+
+
 def test_workflow_only_manual_dispatch_and_protected_environment():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert re.search(r"(?m)^on:\s*\n  workflow_dispatch:", text)
-    triggers_section = text.split("on:", 1)[1].split("permissions:", 1)[0]
-    for auto_trigger in ("push:", "pull_request:", "schedule:", "workflow_call:"):
-        assert auto_trigger not in triggers_section
-    assert "name: production" in text
-    assert "group: database-migration-global" in text
-    assert "cancel-in-progress: false" in text
-    assert text.count("github.run_attempt == '1'") >= 2
-    assert "persist-credentials: false" in text
-    assert "secrets.PRODUCTION_MIGRATION_0098_DATABASE_URL" in text
-    assert "secrets.PRODUCTION_MIGRATION_DB_CA_CERT" in text
-    assert text.index("environment:") > text.index("source-preflight:")
-    assert "alembic downgrade" not in text
-    assert "PRODUCTION_MIGRATION_0098_DATABASE_URL" not in text.split("source-preflight:", 1)[1].split("  migrate-production-0098:", 1)[0]
+    _assert_0098_security_contract(
+        WORKFLOW.read_text(encoding="utf-8"),
+        SCRIPT.read_text(encoding="utf-8"),
+    )
+
+
+@pytest.mark.parametrize("violation", [
+    "old_secret", "runner_variable_changed", "ca_binding_removed",
+    "main_guard_removed", "source_sha_untrusted", "revision_untrusted",
+    "auto_dispatch_added", "tls_downgraded", "ca_check_removed",
+    "migration_lock_removed", "postflight_removed",
+])
+def test_0098_protected_workflow_rejects_synthetic_regression(violation: str):
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    runner = SCRIPT.read_text(encoding="utf-8")
+    source_is_runner = violation in {
+        "tls_downgraded", "ca_check_removed",
+        "migration_lock_removed", "postflight_removed",
+    }
+    original = runner if source_is_runner else workflow
+    mutations = {
+        "old_secret": (
+            "secrets.PRODUCTION_MIGRATION_DATABASE_URL",
+            "secrets.PRODUCTION_MIGRATION_0098_DATABASE_URL",
+        ),
+        "runner_variable_changed": (
+            "          PRODUCTION_MIGRATION_0098_DATABASE_URL:",
+            "          DATABASE_URL:",
+        ),
+        "ca_binding_removed": (
+            "secrets.PRODUCTION_MIGRATION_DB_CA_CERT",
+            "secrets.UNTRUSTED_CA",
+        ),
+        "main_guard_removed": ("github.ref == 'refs/heads/main' && ", ""),
+        "source_sha_untrusted": (
+            "EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}",
+            "EXPECTED_MAIN_SHA: invalid",
+        ),
+        "revision_untrusted": (
+            "EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}",
+            "EXPECTED_CURRENT_REVISION: invalid",
+        ),
+        "auto_dispatch_added": (
+            "  workflow_dispatch:\n",
+            "  workflow_dispatch:\n  schedule:\n    - cron: '0 * * * *'\n",
+        ),
+        "tls_downgraded": (
+            'connect_args={"sslmode": "verify-full"',
+            'connect_args={"sslmode": "require"',
+        ),
+        "ca_check_removed": ("_write_ca(ca_pem", "_untrusted_ca(ca_pem"),
+        "migration_lock_removed": (
+            "with migration_session_lock(connection):",
+            "if True:  # missing lock",
+        ),
+        "postflight_removed": (
+            "validate_after_locked(connection", "skip_after_locked(connection",
+        ),
+    }
+    old, new = mutations[violation]
+    assert old in original, violation
+    mutated = original.replace(old, new)
+    if source_is_runner:
+        runner = mutated
+    else:
+        workflow = mutated
+    with pytest.raises(AssertionError):
+        _assert_0098_security_contract(workflow, runner)
+
 
 
 def test_lock_timeout_and_rollback_contract_statically_attested():

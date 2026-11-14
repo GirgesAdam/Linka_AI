@@ -374,6 +374,23 @@ jobs:
               raise SystemExit(f"Doctor-weekday UI gate did not execute all 10 cases: {totals}")
           print("DOCTOR_WEEKLY_LASER_UI: 10 passed, 0 skipped")
           PY
+      - name: Verify doctors management UI and migrated laser controls with no skips
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/doctors-management-ui.test.mjs | tee "$RUNNER_TEMP/doctors-management-ui.tap"
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          output = Path(os.environ["RUNNER_TEMP"], "doctors-management-ui.tap").read_text()
+          matches = re.findall(r"^# (tests|pass|fail|cancelled|skipped) (\d+)\s*$", output, re.M)
+          totals = {key: int(value) for key, value in matches}
+          expected = {"tests": 13, "pass": 13, "fail": 0, "cancelled": 0, "skipped": 0}
+          if len(matches) != len(expected) or totals != expected:
+              raise SystemExit(f"Doctors management UI regression gate did not run all 13 cases: {totals}")
+          print("DOCTORS_MANAGEMENT_UI: 13 passed, 0 skipped")
+          PY
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Install Chromium for Playwright browser verification
