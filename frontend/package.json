@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --experimental-strip-types --test tests/historical-preview-timeout.test.mjs tests/section-access.test.mjs"
+    "test:unit": "node --experimental-strip-types --test tests/historical-preview-timeout.test.mjs tests/section-access.test.mjs tests/vault-actions.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

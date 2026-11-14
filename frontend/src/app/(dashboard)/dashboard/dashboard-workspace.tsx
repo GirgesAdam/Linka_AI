@@ -19,6 +19,8 @@ import type {
 } from "@/lib/types";
 import { setTaskStatus } from "../tasks/actions";
 import { TodayAgenda } from "./today-agenda";
+import { ReceptionVaultSection } from "./reception-vault-section";
+import type { ReceptionVault } from "@/lib/vault";
 
 function formatClinicDate(localDate: string, timezone: string) {
   const value = localDate ? new Date(`${localDate}T12:00:00Z`) : new Date();
@@ -230,8 +232,11 @@ export function DashboardWorkspace({
   teamMessages,
   followUps,
   revenue,
+  receptionVaults,
+  receptionVaultsUnavailable = false,
   currentUserId,
   isAdmin,
+  isDemo = false,
   teamMessagesUnavailable = false,
   followUpsUnavailable = false,
   revenueUnavailable = false,
@@ -240,8 +245,11 @@ export function DashboardWorkspace({
   teamMessages: InboxConversationListItem[];
   followUps: CRMTask[];
   revenue: DashboardTodayRevenue | null;
+  receptionVaults: ReceptionVault[];
+  receptionVaultsUnavailable?: boolean;
   currentUserId: string;
   isAdmin: boolean;
+  isDemo?: boolean;
   teamMessagesUnavailable?: boolean;
   followUpsUnavailable?: boolean;
   revenueUnavailable?: boolean;
@@ -339,6 +347,8 @@ export function DashboardWorkspace({
           )}
         </div>
       </section>
+
+      <ReceptionVaultSection vaults={receptionVaults} unavailable={receptionVaultsUnavailable} isDemo={isDemo} />
 
       <RevenueSection revenue={revenue} unavailable={revenueUnavailable} />
     </main>

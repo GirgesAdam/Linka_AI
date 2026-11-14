@@ -8,6 +8,7 @@ import type {
   InboxConversationListItem,
 } from "@/lib/types";
 import { DashboardWorkspace } from "./dashboard-workspace";
+import type { ReceptionVault } from "@/lib/vault";
 
 async function loadToday(): Promise<DashboardToday> {
   try {
@@ -25,11 +26,12 @@ async function loadToday(): Promise<DashboardToday> {
 
 export default async function DashboardPage() {
   const ctx = await getAppContext();
-  const [todayResult, teamMessagesResult, followUpsResult, revenueResult] = await Promise.allSettled([
+  const [todayResult, teamMessagesResult, followUpsResult, revenueResult, vaultsResult] = await Promise.allSettled([
     loadToday(),
     tiaRequest<InboxConversationListItem[]>("/inbox/conversations?owner_type=human&status=pending&limit=100"),
     tiaRequest<CRMTask[]>("/crm/tasks?scope=due&task_type=follow_up&limit=100"),
     tiaRequest<DashboardTodayRevenue>("/dashboard/today-revenue"),
+    tiaRequest<ReceptionVault[]>("/vault/reception"),
   ]);
 
   if (todayResult.status === "rejected") throw todayResult.reason;
@@ -43,8 +45,11 @@ export default async function DashboardPage() {
       teamMessagesUnavailable={teamMessagesResult.status === "rejected"}
       followUpsUnavailable={followUpsResult.status === "rejected"}
       revenueUnavailable={revenueResult.status === "rejected"}
+      receptionVaults={vaultsResult.status === "fulfilled" ? vaultsResult.value : []}
+      receptionVaultsUnavailable={vaultsResult.status === "rejected"}
       currentUserId={ctx.me.user.id}
       isAdmin={ctx.workspace.role === "admin"}
+      isDemo={ctx.workspace.is_demo === true}
     />
   );
 }
