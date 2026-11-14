@@ -166,7 +166,7 @@ def probe(repo: Path) -> None:
                 host=u.host, port=u.port, user=u.username, password=u.password,
                 dbname=u.database, sslmode="verify-full", sslrootcert=str(root),
                 connect_timeout=10, application_name="linka_0098_compatibility_probe",
-                options="-c default_transaction_read_only=on", autocommit=True
+                autocommit=True
             )
             inspect_readonly(conn)
         except ProbeFailure:
