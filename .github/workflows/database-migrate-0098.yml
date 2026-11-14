@@ -1,0 +1,127 @@
+name: Production Database Migration 0098 (Manual Approval Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact separately approved Main commit SHA
+        required: true
+        type: string
+      expected_migration_sha256:
+        description: Approved Git blob SHA-256 for Migration 0098
+        required: true
+        type: string
+      expected_current_revision:
+        description: Must be 0097_member_page_permissions
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Exactly the same mutex as the original 0097 production workflow.
+concurrency:
+  group: database-migration-global
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  source-preflight:
+    name: Attest manually approved source before Production authorization
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout dispatch commit without persistent credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact Main and immutable 0098 migration hash
+        shell: bash
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}
+          EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+        run: python .github/scripts/production_migration_0098.py source
+
+      - name: Record source-only audit result
+        if: always()
+        shell: bash
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "## 0098 production migration — source preflight"
+            echo "Actor: ${GITHUB_ACTOR}"
+            echo "Run: ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+            echo "Source: ${GITHUB_SHA}"
+            echo "Source approval: see source preflight result"
+            echo "Reviewed migration blob SHA-256: 0d1c63717653e5b7f56e91698279b8896636c014601a75f75cf0794a9f77d100"
+            echo "Result: ${RESULT}"
+            echo "Production was not accessed in this job."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  migrate-production-0098:
+    name: Apply exactly 0098 after protected Production approval
+    needs: source-preflight
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == '1' && needs.source-preflight.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: production
+    env:
+      ENVIRONMENT: production
+      EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+      EXPECTED_MIGRATION_SHA256: ${{ inputs.expected_migration_sha256 }}
+      EXPECTED_CURRENT_REVISION: ${{ inputs.expected_current_revision }}
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install pinned backend dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Execute locked transactional 0098 upgrade and full schema attestation
+        id: execute
+        shell: bash
+        env:
+          PRODUCTION_MIGRATION_0098_DATABASE_URL: ${{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}
+          PRODUCTION_MIGRATION_DB_CA_CERT: ${{ secrets.PRODUCTION_MIGRATION_DB_CA_CERT }}
+        run: python .github/scripts/production_migration_0098.py execute
+
+      - name: Record final operational audit without revealing secrets
+        if: always()
+        shell: bash
+        env:
+          RESULT: ${{ job.status }}
+          APPLY_RESULT: ${{ steps.execute.outcome }}
+        run: |
+          {
+            echo "## 0098 protected production migration attestation"
+            echo "Actor: ${GITHUB_ACTOR}"
+            echo "Run: ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+            echo "Workflow SHA: ${GITHUB_WORKFLOW_SHA}"
+            echo "Source: ${GITHUB_SHA}"
+            echo "Main approval evidence: see successful source preflight"
+            echo "Reviewed migration SHA-256: 0d1c63717653e5b7f56e91698279b8896636c014601a75f75cf0794a9f77d100"
+            echo "Expected previous revision: 0097_member_page_permissions"
+            echo "Target revision: 0098_doctor_laser_weekday_exclusions"
+            echo "Execution and postflight: ${APPLY_RESULT}"
+            echo "Job result: ${RESULT}"
+            echo "Any failure requires manual review; no automatic downgrade or restore."
+          } >> "$GITHUB_STEP_SUMMARY"

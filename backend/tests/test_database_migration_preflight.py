@@ -254,11 +254,139 @@ def test_production_secret_is_environment_job_scoped_and_staging_job_is_absent()
     assert "PRODUCTION_MIGRATION_DATABASE_URL" not in jobs["preflight"]
 
 
-def test_production_secret_name_is_not_referenced_by_other_workflows() -> None:
-    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
-        if path == WORKFLOW:
+
+# A filename alone cannot authorize a credential consumer: verify the exact job,
+# its protected environment, manual trigger, source guard and step-level binding.
+PRODUCTION_SECRET = re.compile(
+    r"\$\{\{\s*secrets\.PRODUCTION_MIGRATION_DATABASE_URL\s*\}\}"
+)
+APPROVED_PRODUCTION_JOBS = {
+    "database-migrate.yml": ("migrate-production", "preflight"),
+    "database-migrate-0098.yml": ("migrate-production-0098", "source-preflight"),
+    "production-0098-existing-credential-compatibility.yml": (
+        "read-only-compatibility", "source-guard"
+    ),
+}
+
+
+def _assert_production_secret_allowlist(
+    workflow_files: list[tuple[Path, str]], *, check_all: bool = True
+) -> None:
+    seen: set[tuple[str, str]] = set()
+    for path, workflow in workflow_files:
+        total = len(PRODUCTION_SECRET.findall(workflow))
+        if not total:
             continue
-        assert "secrets.PRODUCTION_MIGRATION_DATABASE_URL" not in path.read_text(encoding="utf-8")
+        assert path.name in APPROVED_PRODUCTION_JOBS, (path, "unauthorized workflow")
+        permitted, preflight = APPROVED_PRODUCTION_JOBS[path.name]
+        assert re.search(r"(?m)^on:\s*$", workflow), path
+        events = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+        assert re.findall(r"(?m)^  ([\w-]+):", events) == ["workflow_dispatch"], (
+            path, "automatic triggers forbidden"
+        )
+        assert "permissions:\n  contents: read" in workflow, path
+        assert not re.search(r"(?m)^  [a-z_-]+:\s*write\s*$", workflow), path
+        jobs = dict(_all_workflow_job_blocks(workflow))
+        assert permitted in jobs and preflight in jobs, path
+        assert not PRODUCTION_SECRET.search(jobs[preflight]), (path, "source job leaked secret")
+        counted = 0
+        for job_name, job in jobs.items():
+            count = len(PRODUCTION_SECRET.findall(job))
+            counted += count
+            if not count:
+                continue
+            assert job_name == permitted, (path, job_name, "unapproved job")
+            assert (
+                re.search(r"(?m)^    environment:\s*\n      name: production\s*$", job)
+                or re.search(r"(?m)^    environment:\s*production\s*$", job)
+            ), (path, job_name, "missing production environment")
+            assert "github.ref == 'refs/heads/main'" in job, path
+            assert "github.run_attempt == '1'" in job, path
+            assert f"needs: {preflight}" in job, path
+            assert f"needs.{preflight}.result == 'success'" in job, path
+
+            # Secret interpolation must occur only inside step env, never run:
+            allowed_count = 0
+            for step in re.split(r"(?m)(?=^      - (?:name|uses|run):)", job):
+                if not PRODUCTION_SECRET.search(step):
+                    continue
+                env = re.search(r"(?m)^        env:[ \t]*\n", step)
+                assert env is not None, (path, job_name, "step env missing")
+                for line in step[env.end():].splitlines():
+                    if not line.startswith("          "):
+                        break
+                    if PRODUCTION_SECRET.search(line):
+                        assert re.fullmatch(
+                            r"          [A-Z][A-Z0-9_]*:\s*"
+                            r"\$\{\{\s*secrets\.PRODUCTION_MIGRATION_DATABASE_URL\s*\}\}",
+                            line,
+                        ), (path, job_name, "credential not assigned via step env")
+                        allowed_count += 1
+            assert allowed_count == count, (path, job_name, "secret outside step env")
+            seen.add((path.name, job_name))
+        assert counted == total, (path, "credential referenced outside jobs")
+        if path.name == "database-migrate.yml":
+            assert "alembic upgrade 0097_member_page_permissions" in jobs[permitted]
+            assert "database-migration-global" in workflow
+        elif path.name == "database-migrate-0098.yml":
+            assert "database-migration-global" in workflow
+            assert "python .github/scripts/production_migration_0098.py execute" in jobs[permitted]
+        else:
+            assert "python .github/scripts/production_migration_0098_credential_probe.py probe" in jobs[permitted]
+            assert "python .github/scripts/production_migration_0098_credential_probe.py source" in jobs[permitted]
+            assert not re.search(r"\balembic\s+(upgrade|stamp|downgrade)\b", workflow)
+    if check_all:
+        assert seen == {
+            (name, job) for name, (job, _preflight) in APPROVED_PRODUCTION_JOBS.items()
+        }, "only the three approved protected consumers may reference the secret"
+
+
+def test_production_secret_name_is_not_referenced_by_other_workflows() -> None:
+    workflows = [
+        (path, path.read_text(encoding="utf-8"))
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml"))
+    ]
+    _assert_production_secret_allowlist(workflows)
+
+
+@pytest.mark.parametrize("violation", [
+    "unknown_workflow", "sibling_job", "unprotected_job",
+    "automatic_trigger", "source_job_secret", "top_level_secret",
+    "secret_in_run", "missing_main_guard",
+])
+def test_production_secret_allowlist_rejects_synthetic_violation(violation: str) -> None:
+    path = ROOT / ".github/workflows/production-0098-existing-credential-compatibility.yml"
+    text = path.read_text(encoding="utf-8")
+    secret = "$" + "{{ secrets.PRODUCTION_MIGRATION_DATABASE_URL }}"
+    if violation == "unknown_workflow":
+        path = Path(".github/workflows/not-allowed.yml")
+    elif violation == "sibling_job":
+        text += (
+            "\n  extra:\n    environment:\n      name: production\n"
+            "    steps:\n      - name: Unsafe\n"
+            f"        env:\n          DATABASE_URL: {secret}\n"
+            "        run: echo unsafe\n"
+        )
+    elif violation == "unprotected_job":
+        text = text.replace("    environment:\n      name: production\n", "", 1)
+    elif violation == "automatic_trigger":
+        text = text.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n  push:\n", 1)
+    elif violation == "source_job_secret":
+        text = text.replace(
+            "  read-only-compatibility:\n",
+            "      - name: Unsafe source\n"
+            f"        env:\n          DATABASE_URL: {secret}\n"
+            "        run: echo unsafe\n\n  read-only-compatibility:\n", 1
+        )
+    elif violation == "top_level_secret":
+        text = text.replace("jobs:\n", f"env:\n  DATABASE_URL: {secret}\n\njobs:\n", 1)
+    elif violation == "secret_in_run":
+        text = text.replace("          set +x\n", f"          echo {secret}\n          set +x\n", 1)
+    elif violation == "missing_main_guard":
+        text = text.replace("github.ref == 'refs/heads/main' && ", "")
+    with pytest.raises(AssertionError):
+        _assert_production_secret_allowlist([(path, text)], check_all=False)
+
 
 
 def test_staging_database_secret_users_remain_staging_scoped() -> None:
