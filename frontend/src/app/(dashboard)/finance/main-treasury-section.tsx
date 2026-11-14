@@ -79,7 +79,7 @@ function Movement({
 }
 
 export function MainTreasurySection({
-  treasury, vaults, members, grants, movements, pendingPayments, pendingUnavailable, filters,
+  treasury, vaults, members, grants, movements, pendingPayments, pendingUnavailable, filters, isDemo = false,
 }: {
   treasury: MainTreasury;
   vaults: ReceptionVault[];
@@ -89,6 +89,7 @@ export function MainTreasurySection({
   pendingPayments: VaultPendingPayment[];
   pendingUnavailable: boolean;
   filters: TreasuryFilters;
+  isDemo?: boolean;
 }) {
   const channels = [
     { kind: "main_cash" as const, label: "كاش مستلم من الريسبشن", amount: treasury.cash_minor, icon: Banknote },
@@ -104,6 +105,11 @@ export function MainTreasurySection({
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
+        {isDemo && (
+          <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+            الخزنة غير متاحة في الوضع التجريبي حالياً.
+          </p>
+        )}
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-950">
           ترتيب التفعيل: راجع Visa وInstaPay والحركات غير المرحلة أولًا، ثم سجّل الرصيد الافتتاحي الحقيقي
           لكل قناة مرة واحدة. المدفوعات السابقة لتفعيل القناة تظهر في المراجعة أدناه، ولا تُضاف تلقائيًا
@@ -119,7 +125,7 @@ export function MainTreasurySection({
             <div key={kind} className="rounded-xl border border-slate-200 p-4">
               <div className="flex items-center gap-2 text-xs font-semibold text-slate-600"><Icon size={15} />{label}</div>
               <div className="mt-2 text-xl font-black text-slate-950">{formatMoney(amount, treasury.currency)}</div>
-              {!treasury.active_channels.includes(kind) && (
+              {!isDemo && !treasury.active_channels.includes(kind) && (
                 <div className="mt-3 border-t border-slate-100 pt-3">
                   <p className="mb-2 text-xs text-amber-800">لم يتم تفعيل الحساب.</p>
                   <ActivationForm kind={kind} />
@@ -128,7 +134,7 @@ export function MainTreasurySection({
             </div>
           ))}
         </div>
-        {vaults.some((v) => !v.activated) && (
+        {!isDemo && vaults.some((v) => !v.activated) && (
           <section className="rounded-xl border border-amber-200 p-4">
             <h3 className="mb-3 font-bold text-slate-900">تفعيل عهدة فروع الريسبشن</h3>
             <div className="grid gap-4 sm:grid-cols-2">

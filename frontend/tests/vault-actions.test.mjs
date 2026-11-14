@@ -324,3 +324,88 @@ test("reviewed preactivation receipt remains visible but is not offered for repo
   assert.match(html, /Bank opening reconciliation/);
   assert.doesNotMatch(html, /<form/);
 });
+
+
+test("Demo Finance renders the vault policy explanation and no activation controls", () => {
+  const StubIcon = () => React.createElement("i");
+  const { MainTreasurySection } = compileSource(
+    "src/app/(dashboard)/finance/main-treasury-section.tsx",
+    {
+      "lucide-react": Object.fromEntries(
+        ["Banknote", "Building2", "CreditCard", "Receipt", "ShieldCheck", "WalletCards"]
+          .map((name) => [name, StubIcon]),
+      ),
+      "@/components/action-feedback-form": { ActionFeedbackForm: displayStub("form") },
+      "@/components/vault-action-form": { VaultActionForm: displayStub("form") },
+      "@/components/ui/card": {
+        Card: displayStub("section"), CardHeader: displayStub("div"),
+        CardTitle: displayStub("h3"), CardContent: displayStub("div"),
+      },
+      "@/components/ui/input": { Input: displayStub("input") },
+      "@/components/ui/select": { Select: displayStub("select") },
+      "@/lib/format": { formatMoney: (amount, currency) => `${amount} ${currency}` },
+      "./pending-vault-payments": {
+        PendingVaultPayments: () => React.createElement("div"),
+      },
+      "../vault-actions": {
+        activateVaultAccount: () => ({}),
+        setReceptionBranchGrant: () => ({}),
+      },
+    },
+  );
+  const props = {
+    treasury: {
+      cash_minor: 0, visa_minor: 0, instapay_minor: 0, currency: "EGP",
+      total_recorded_minor: 0, transfers_today_minor: 0,
+      active_channels: [], unattributed_payment_count: 0,
+    },
+    vaults: [{
+      branch_id: BRANCH, branch_name: "Synthetic Branch", activated: false,
+      balance_minor: 0, currency: "EGP",
+    }],
+    members: [], grants: [], movements: [], pendingPayments: [],
+    pendingUnavailable: false, filters: {},
+  };
+  const demo = renderToStaticMarkup(React.createElement(
+    MainTreasurySection, { ...props, isDemo: true },
+  ));
+  assert.match(demo, /الخزنة غير متاحة في الوضع التجريبي حالياً/);
+  assert.doesNotMatch(demo, /name="opening_balance"/);
+  assert.doesNotMatch(demo, /name="kind"/);
+
+  const real = renderToStaticMarkup(React.createElement(
+    MainTreasurySection, { ...props, isDemo: false },
+  ));
+  assert.match(real, /name="opening_balance"/);
+  assert.match(real, /name="kind"/);
+});
+
+test("Demo Reception remains visible with a vault-disabled explanation", () => {
+  const { ReceptionVaultSection } = compileSource(
+    "src/app/(dashboard)/dashboard/reception-vault-section.tsx",
+    {
+      "lucide-react": {
+        Banknote: () => React.createElement("i"),
+        ArrowLeftRight: () => React.createElement("i"),
+        Receipt: () => React.createElement("i"),
+      },
+      "@/components/vault-action-form": { VaultActionForm: displayStub("form") },
+      "@/components/ui/card": {
+        Card: displayStub("section"), CardHeader: displayStub("div"),
+        CardTitle: displayStub("h3"), CardContent: displayStub("div"),
+      },
+      "@/components/ui/input": { Input: displayStub("input") },
+      "@/components/ui/textarea": { Textarea: displayStub("textarea") },
+      "@/lib/format": { formatMoney: (amount, currency) => `${amount} ${currency}` },
+      "../vault-actions": {
+        recordReceptionExpense: () => ({}), transferReceptionBalance: () => ({}),
+      },
+    },
+  );
+  const html = renderToStaticMarkup(React.createElement(
+    ReceptionVaultSection, { vaults: [], unavailable: false, isDemo: true },
+  ));
+  assert.match(html, /الخزنة غير متاحة في الوضع التجريبي حالياً/);
+  assert.match(html, /خزنة الريسبشن/);
+  assert.doesNotMatch(html, /name="opening_balance"/);
+});

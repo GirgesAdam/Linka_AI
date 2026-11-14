@@ -595,6 +595,23 @@ def _reset_demo_workspace(
         raise DemoResetError("Demo canonical seed is malformed.")
 
     tables = _workspace_tables()
+
+    # Posted financial history is protected by several independent PostgreSQL
+    # triggers (ledger, allocation, expense). A demo reset may not bypass any
+    # of them. Fail before mutating the workspace or deleting a single row;
+    # the existing reset wrapper rolls back and the DB triggers remain the
+    # final protection against concurrent postings.
+    vault_ledger = tables["vault_ledger_entries"]
+    if db.execute(
+        select(vault_ledger.c.id)
+        .where(vault_ledger.c.workspace_id == workspace.id)
+        .limit(1)
+    ).first() is not None:
+        raise DemoResetError(
+            "Demo reset blocked: immutable Vault financial history exists. "
+            "No financial records have been changed."
+        )
+
     mutable_names = set(RESET_RESEED_TABLES | CLEAR_TABLES)
     mutable = {name: tables[name] for name in mutable_names}
     reset_tables = {name: tables[name] for name in RESET_RESEED_TABLES}

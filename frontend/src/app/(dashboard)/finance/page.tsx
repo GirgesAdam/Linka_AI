@@ -253,6 +253,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           pendingPayments={pendingPayments}
           pendingUnavailable={pendingUnavailable}
           filters={raw}
+          isDemo={workspace.is_demo === true}
         />
       )}
       {isWorkspaceAdmin && !treasury && (

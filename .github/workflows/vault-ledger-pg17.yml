@@ -182,6 +182,14 @@ jobs:
             --junitxml="$RUNNER_TEMP/vault-checkout-pg17.xml"
           python tests/integration/vault_0099_ci_gate.py "$RUNNER_TEMP/vault-checkout-pg17.xml" 63
 
+      - name: Verify Demo Reset financial immutability and atomic rollback on PostgreSQL 17.6
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_demo_vault_reset_0099_pg17.py \
+            --junitxml="$RUNNER_TEMP/demo-vault-reset-pg17.xml"
+          python tests/integration/vault_0099_ci_gate.py \
+            "$RUNNER_TEMP/demo-vault-reset-pg17.xml" 13
+
       - name: Verify missing DB configuration fails closed
         run: |
           set -euo pipefail

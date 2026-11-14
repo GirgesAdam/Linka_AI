@@ -135,7 +135,13 @@ def activate_account(
     # Serializes concurrent activation and payment-trigger decisions.
     # The workspace lock is also acquired before any account insert.
     from app.models.workspace import Workspace
-    db.scalar(select(Workspace).where(Workspace.id == workspace_id).with_for_update())
+    workspace = db.scalar(
+        select(Workspace).where(Workspace.id == workspace_id).with_for_update()
+    )
+    if workspace is None:
+        raise VaultError("Workspace not found.")
+    if workspace.is_demo:
+        raise VaultError("Vault activation is unavailable in demo mode.")
     existing = db.scalar(select(VaultAccount).where(
         VaultAccount.workspace_id == workspace_id,
         VaultAccount.kind == kind,

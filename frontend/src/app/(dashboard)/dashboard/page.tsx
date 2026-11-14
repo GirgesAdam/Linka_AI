@@ -49,6 +49,7 @@ export default async function DashboardPage() {
       receptionVaultsUnavailable={vaultsResult.status === "rejected"}
       currentUserId={ctx.me.user.id}
       isAdmin={ctx.workspace.role === "admin"}
+      isDemo={ctx.workspace.is_demo === true}
     />
   );
 }

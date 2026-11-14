@@ -14,10 +14,11 @@ function Amount({ amount, currency }: { amount: number; currency: string }) {
 }
 
 export function ReceptionVaultSection({
-  vaults, unavailable,
+  vaults, unavailable, isDemo = false,
 }: {
   vaults: ReceptionVault[];
   unavailable: boolean;
+  isDemo?: boolean;
 }) {
   return (
     <section aria-labelledby="reception-vault-heading" className="mt-8 sm:mt-10">
@@ -25,6 +26,12 @@ export function ReceptionVaultSection({
         <h2 id="reception-vault-heading" className="text-xl font-semibold text-slate-950">خزنة الريسبشن</h2>
         <p className="mt-1 text-sm text-slate-500">الكاش الفعلي المتبقي، شامل العهدة المرحلة من الأيام السابقة.</p>
       </div>
+
+      {isDemo && (
+        <p role="status" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+          الخزنة غير متاحة في الوضع التجريبي حالياً.
+        </p>
+      )}
 
       {unavailable ? (
         <div role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">

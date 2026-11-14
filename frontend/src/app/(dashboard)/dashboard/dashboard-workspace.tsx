@@ -236,6 +236,7 @@ export function DashboardWorkspace({
   receptionVaultsUnavailable = false,
   currentUserId,
   isAdmin,
+  isDemo = false,
   teamMessagesUnavailable = false,
   followUpsUnavailable = false,
   revenueUnavailable = false,
@@ -248,6 +249,7 @@ export function DashboardWorkspace({
   receptionVaultsUnavailable?: boolean;
   currentUserId: string;
   isAdmin: boolean;
+  isDemo?: boolean;
   teamMessagesUnavailable?: boolean;
   followUpsUnavailable?: boolean;
   revenueUnavailable?: boolean;
@@ -346,7 +348,7 @@ export function DashboardWorkspace({
         </div>
       </section>
 
-      <ReceptionVaultSection vaults={receptionVaults} unavailable={receptionVaultsUnavailable} />
+      <ReceptionVaultSection vaults={receptionVaults} unavailable={receptionVaultsUnavailable} isDemo={isDemo} />
 
       <RevenueSection revenue={revenue} unavailable={revenueUnavailable} />
     </main>
