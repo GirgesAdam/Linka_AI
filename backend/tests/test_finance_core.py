@@ -46,6 +46,7 @@ def test_expense_mutations_emit_workspace_scoped_staff_activity(monkeypatch) -> 
         return None
 
     monkeypatch.setattr(finance_service, "record_activity_event", fake_record_activity)
+    monkeypatch.setattr(finance_service, "vault_ledger_schema_available", lambda _db: False)
 
     class _Db:
         def scalar(self, _query):

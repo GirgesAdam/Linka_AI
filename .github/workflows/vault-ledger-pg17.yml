@@ -54,6 +54,8 @@ jobs:
       PYTHONPATH: .
       VAULT_PG17_REQUIRED: "1"
       VAULT_PG17_TEST_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
+      FINANCE_COMPAT_0098_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_finance_0098_test
+      FINANCE_COMPAT_0099_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
       VAULT_PG17_BACKEND_DATABASE_URL: postgresql+psycopg://vault_ci_backend:ci_vault_backend_password@127.0.0.1:55443/vault_0099_financial_test
       EXISTING_PACKAGE_TEST_DATABASE_URL: postgresql+psycopg://package_ci_user:ci_package_disposable_password@127.0.0.1:55432/package_service_ci
       DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
@@ -84,6 +86,7 @@ jobs:
           CREATE ROLE authenticated NOLOGIN;
           CREATE ROLE vault_ci_backend LOGIN PASSWORD 'ci_vault_backend_password' BYPASSRLS NOSUPERUSER;
           SQL
+          createdb -h 127.0.0.1 -p 55443 -U postgres vault_finance_0098_test
           export PGPASSWORD=ci_package_disposable_password
           psql -h 127.0.0.1 -p 55432 -U package_ci_user -d package_service_ci -v ON_ERROR_STOP=1 <<'SQL'
           CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -189,6 +192,12 @@ jobs:
             --junitxml="$RUNNER_TEMP/demo-vault-reset-pg17.xml"
           python tests/integration/vault_0099_ci_gate.py \
             "$RUNNER_TEMP/demo-vault-reset-pg17.xml" 13
+
+      - name: Verify Finance compatibility on PostgreSQL 17.6 at revisions 0098 and 0099
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/test_finance_schema_compatibility_pg17.py \
+            --junitxml="$RUNNER_TEMP/finance-schema-compatibility-pg17.xml"
 
       - name: Verify missing DB configuration fails closed
         run: |

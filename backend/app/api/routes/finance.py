@@ -32,6 +32,7 @@ from app.services.finance import (
     payment_method_breakdown,
     profitability_summary,
     update_expense,
+    vault_ledger_schema_available,
 )
 from app.services.finance_dashboard import financial_dashboard_trend
 
@@ -73,11 +74,19 @@ def expense_list(
         )
     except FinanceOperationError as exc:
         raise _bad_request(str(exc)) from exc
+    try:
+        vault_available = vault_ledger_schema_available(db)
+    except FinanceOperationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     expense_ids = [row.id for row in rows]
-    posted = set(db.scalars(select(VaultLedgerEntry.expense_id).where(
-        VaultLedgerEntry.workspace_id == access.workspace.id,
-        VaultLedgerEntry.expense_id.in_(expense_ids),
-    ))) if expense_ids else set()
+    posted = (
+        set(db.scalars(select(VaultLedgerEntry.expense_id).where(
+            VaultLedgerEntry.workspace_id == access.workspace.id,
+            VaultLedgerEntry.expense_id.in_(expense_ids),
+        )))
+        if vault_available and expense_ids
+        else set()
+    )
     return [ExpenseRead.model_validate(row).model_copy(
         update={"is_vault_linked": row.id in posted}
     ) for row in rows]

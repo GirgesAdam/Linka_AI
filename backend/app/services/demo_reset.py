@@ -14,6 +14,11 @@ from sqlalchemy import bindparam, delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.database.base import Base
+from app.database.schema_capabilities import (
+    VAULT_SCHEMA_TABLES,
+    SchemaCapabilityError,
+    vault_ledger_schema_available,
+)
 from app.models.activity_event import ActivityEvent
 from app.models.workspace import Workspace
 from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
@@ -595,24 +600,34 @@ def _reset_demo_workspace(
         raise DemoResetError("Demo canonical seed is malformed.")
 
     tables = _workspace_tables()
-
-    # Posted financial history is protected by several independent PostgreSQL
-    # triggers (ledger, allocation, expense). A demo reset may not bypass any
-    # of them. Fail before mutating the workspace or deleting a single row;
-    # the existing reset wrapper rolls back and the DB triggers remain the
-    # final protection against concurrent postings.
-    vault_ledger = tables["vault_ledger_entries"]
-    if db.execute(
-        select(vault_ledger.c.id)
-        .where(vault_ledger.c.workspace_id == workspace.id)
-        .limit(1)
-    ).first() is not None:
+    try:
+        vault_available = vault_ledger_schema_available(db)
+    except SchemaCapabilityError as exc:
         raise DemoResetError(
-            "Demo reset blocked: immutable Vault financial history exists. "
-            "No financial records have been changed."
-        )
+            "Demo reset blocked: Vault schema is inconsistent. No records were changed."
+        ) from exc
 
-    mutable_names = set(RESET_RESEED_TABLES | CLEAR_TABLES)
+    # Posted financial history is protected by independent PostgreSQL triggers.
+    # A pre-0099 database has no Vault tables and no Vault postings to preserve;
+    # an inconsistent or partially installed Vault schema fails before mutation.
+    if vault_available:
+        vault_ledger = tables["vault_ledger_entries"]
+        if db.execute(
+            select(vault_ledger.c.id)
+            .where(vault_ledger.c.workspace_id == workspace.id)
+            .limit(1)
+        ).first() is not None:
+            raise DemoResetError(
+                "Demo reset blocked: immutable Vault financial history exists. "
+                "No financial records have been changed."
+            )
+    else:
+        tables = {
+            name: table for name, table in tables.items()
+            if name not in VAULT_SCHEMA_TABLES
+        }
+
+    mutable_names = set(RESET_RESEED_TABLES | CLEAR_TABLES) & set(tables)
     mutable = {name: tables[name] for name in mutable_names}
     reset_tables = {name: tables[name] for name in RESET_RESEED_TABLES}
 

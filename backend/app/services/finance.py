@@ -7,6 +7,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from app.database.schema_capabilities import (
+    SchemaCapabilityError,
+)
+from app.database.schema_capabilities import (
+    vault_ledger_schema_available as check_vault_ledger_schema,
+)
 from app.models.appointment import Appointment
 from app.models.clinic_inventory import AppointmentProductLine
 from app.models.expense import Expense
@@ -47,7 +53,18 @@ def _expense_or_raise(db: Session, *, workspace_id: UUID, expense_id: UUID) -> E
     return expense
 
 
+def vault_ledger_schema_available(db: Session) -> bool:
+    try:
+        return check_vault_ledger_schema(db)
+    except SchemaCapabilityError as exc:
+        raise FinanceOperationError(
+            "Vault schema is inconsistent; financial operations are blocked."
+        ) from exc
+
+
 def _require_unposted_expense(db: Session, expense: Expense) -> None:
+    if not vault_ledger_schema_available(db):
+        return
     linked = db.scalar(select(VaultLedgerEntry.id).where(
         VaultLedgerEntry.workspace_id == expense.workspace_id,
         VaultLedgerEntry.expense_id == expense.id,
