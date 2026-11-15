@@ -1,0 +1,122 @@
+name: Member Permissions 0097 Controlled Release
+
+# Preparation only. Manual dispatch is blocked until target identity and a
+# verifiable GitHub/Railway single-writer control are approved and implemented.
+on:
+  workflow_dispatch:
+    inputs:
+      freeze_comment_id:
+        description: "GitHub PR #306 issue-comment ID containing owner-signed JSON freeze"
+        required: true
+        type: string
+      execute_ack:
+        description: "Explicit one-time execution acknowledgement"
+        required: true
+        type: choice
+        options:
+          - NOT_AUTHORIZED
+          - EXECUTE_APPROVED_0097_ONLY
+        default: NOT_AUTHORIZED
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+  deployments: read
+
+# Coordinates only with database-migrate.yml. It does not coordinate with
+# apply-0068-production.yml or Railway Pre-deploy; hard release gates remain.
+concurrency:
+  group: database-migration-production
+  cancel-in-progress: false
+
+jobs:
+  verify-controls:
+    name: Verify GitHub controls and freeze (no production credentials)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed release code from main
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: "3.12.9"
+
+      - name: Install exact release guard dependencies
+        run: |
+          python -m pip install --only-binary=:all: --no-deps "pip==25.3"
+          python -m pip install --only-binary=:all: --no-deps -r release/.github/scripts/requirements-0097-release.txt
+          python -m pip check
+
+      - name: Fail-closed GitHub and Railway controls
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXECUTION_ACK: ${{ inputs.execute_ack }}
+          FREEZE_COMMENT_ID: ${{ inputs.freeze_comment_id }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test "$EXECUTION_ACK" = "EXECUTE_APPROVED_0097_ONLY"
+          python release/.github/scripts/member_permissions_0097_release.py \
+            --phase controls \
+            --freeze-comment-id "$FREEZE_COMMENT_ID" \
+            --source release
+
+  execute-0097:
+    name: One approved Alembic 0097 transaction only
+    needs: verify-controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment:
+      name: production
+    steps:
+      - name: Checkout reviewed release code
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          persist-credentials: false
+
+      - name: Checkout exact approved permissions commit
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          ref: 594c920ca3655851e5c9c54f7d6fec3dc7e2d32a
+          path: approved
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: "3.12.9"
+
+      - name: Install exact approved migration dependencies
+        run: |
+          python -m pip install --only-binary=:all: --no-deps "pip==25.3"
+          python -m pip install --only-binary=:all: --no-deps -r release/.github/scripts/requirements-0097-release.txt
+          python -m pip check
+
+      - name: Execute once with same-transaction DDL guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXECUTION_ACK: ${{ inputs.execute_ack }}
+          FREEZE_COMMENT_ID: ${{ inputs.freeze_comment_id }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          ENVIRONMENT: production
+          DEBUG: "false"
+          DOCS_ENABLED: "false"
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          python release/.github/scripts/member_permissions_0097_release.py \
+            --phase execute \
+            --freeze-comment-id "$FREEZE_COMMENT_ID" \
+            --source approved
