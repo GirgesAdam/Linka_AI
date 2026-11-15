@@ -411,9 +411,9 @@ def test_t5_sequential_alembic_upgrades_read_current_head_without_reapplying(
             third_revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert third_revision == expected_head == "0098_doctor_laser_weekday_exclusions"
+        assert third_revision == expected_head == "0099_reception_main_vault_ledger"
         assert third_revision != second_revision
-        # Upgrading an already-current database must not reapply revision 0098.
+        # Upgrading an already-current database must not reapply revisions 0098 or 0099.
         command.upgrade(config, "head")
         with engine.connect() as connection:
             final_revision = connection.execute(

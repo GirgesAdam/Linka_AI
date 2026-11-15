@@ -92,7 +92,7 @@ jobs:
           python -m compileall -q .github/scripts/production_migration_preflight.py .github/scripts/production_migration_credential_guard.py
           python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0098_doctor_laser_weekday_exclusions (head)"
+        run: test "$(python -m alembic heads)" = "0099_reception_main_vault_ledger (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password
@@ -399,6 +399,23 @@ jobs:
         run: npx playwright test e2e/idempotent-financial-submit.spec.ts
       - name: Verify member section route policy in Chromium
         run: npx playwright test e2e/member-section-access-browser.spec.ts
+      - name: Verify Reception and Treasury frontend actions and reviews
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/vault-actions.test.mjs | tee "$RUNNER_TEMP/vault-actions.tap"
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          output = Path(os.environ["RUNNER_TEMP"], "vault-actions.tap").read_text()
+          found = dict((key, int(value)) for key, value in re.findall(
+              r"^# (tests|pass|fail|cancelled|skipped) (\d+)\s*$", output, re.M,
+          ))
+          expected = {"tests": 18, "pass": 18, "fail": 0, "cancelled": 0, "skipped": 0}
+          if found != expected:
+              raise SystemExit(f"Vault frontend tests not all executed: {found}")
+          print("VAULT_FRONTEND_ACTIONS: 18 passed, 0 skipped")
+          PY
       - name: Verify historical preview timeout and section access contracts
         run: npm run test:unit
       - run: npm run lint

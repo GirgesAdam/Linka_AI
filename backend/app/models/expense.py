@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +37,7 @@ class Expense(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "expenses"
     __table_args__ = (
+        UniqueConstraint("workspace_id", "id", name="uq_expenses_workspace_id_id"),
         CheckConstraint("amount_minor > 0", name="expense_amount_positive"),
         CheckConstraint(
             "category IN ('rent', 'payroll', 'supplies', 'marketing', 'utilities', 'maintenance', 'software', 'taxes', 'other')",

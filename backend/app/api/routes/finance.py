@@ -6,11 +6,13 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
+from app.models.vault import VaultLedgerEntry
 from app.schemas.finance import (
     ExpenseCreate,
     ExpenseRead,
@@ -30,6 +32,7 @@ from app.services.finance import (
     payment_method_breakdown,
     profitability_summary,
     update_expense,
+    vault_ledger_schema_available,
 )
 from app.services.finance_dashboard import financial_dashboard_trend
 
@@ -71,7 +74,22 @@ def expense_list(
         )
     except FinanceOperationError as exc:
         raise _bad_request(str(exc)) from exc
-    return [ExpenseRead.model_validate(row) for row in rows]
+    try:
+        vault_available = vault_ledger_schema_available(db)
+    except FinanceOperationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    expense_ids = [row.id for row in rows]
+    posted = (
+        set(db.scalars(select(VaultLedgerEntry.expense_id).where(
+            VaultLedgerEntry.workspace_id == access.workspace.id,
+            VaultLedgerEntry.expense_id.in_(expense_ids),
+        )))
+        if vault_available and expense_ids
+        else set()
+    )
+    return [ExpenseRead.model_validate(row).model_copy(
+        update={"is_vault_linked": row.id in posted}
+    ) for row in rows]
 
 
 @router.post("/expenses", response_model=ExpenseRead, status_code=status.HTTP_201_CREATED)
@@ -111,6 +129,9 @@ def expense_update(
     except FinanceNotFound as exc:
         db.rollback()
         raise _not_found(str(exc)) from exc
+    except FinanceOperationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ExpenseRead.model_validate(expense)
 
 
@@ -131,6 +152,9 @@ def expense_delete(
     except FinanceNotFound as exc:
         db.rollback()
         raise _not_found(str(exc)) from exc
+    except FinanceOperationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

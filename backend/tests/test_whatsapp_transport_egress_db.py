@@ -70,6 +70,13 @@ def transport_case(monkeypatch):
             raise
         pytest.skip("Start disposable local ci_db and apply Alembic migrations")
     outer = connection.begin()
+    # Full backend CI runs other synthetic channel tests in the same ci_db.
+    # Hide THEIR active connections only inside this rolled-back transaction,
+    # so query-budget assertions measure the fixture's connections, not
+    # previously created test workspaces. Never changes shared/runtime data.
+    connection.execute(text(
+        "UPDATE channel_connections SET status='disconnected' WHERE status='active'"
+    ))
     db = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
     now = datetime.now(UTC).replace(microsecond=0)
     workspace = Workspace(name="Transport egress", slug=f"transport-egress-{uuid4()}", timezone="UTC")

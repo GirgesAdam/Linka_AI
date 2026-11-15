@@ -31,6 +31,7 @@ from app.models.payment_transaction import PaymentTransaction
 from app.models.service import Service
 from app.models.staff import Staff
 from app.models.user import User
+from app.models.vault import VaultPendingPayment
 from app.models.working_hours import BranchWorkingHour, DoctorWorkingHour
 from app.models.workspace import Workspace
 from app.models.workspace_member import WorkspaceMember
@@ -59,6 +60,15 @@ def _engine():
     if url.host not in {"localhost", "127.0.0.1", "::1", "postgres"} or url.database != "ci_db":
         pytest.fail("Demo reset PostgreSQL gate requires disposable ci_db.")
     return create_engine(url, connect_args={"connect_timeout": 3})
+
+
+def _clear_synthetic_vault_pending(db: Session, workspace_id) -> None:
+    """CI test teardown: remove unposted 0099 payment review stubs before deleting
+    its synthetic workspace. Real financial ledger rows are never deleted here.
+    """
+    db.execute(delete(VaultPendingPayment).where(
+        VaultPendingPayment.workspace_id == workspace_id,
+    ))
 
 
 def _fixture(db: Session, *, demo: bool = True, slug_prefix: str = "demo"):
@@ -305,7 +315,7 @@ def _business_signature(db: Session, workspace_id) -> tuple:
 def test_demo_reset_manifest_classifies_every_workspace_table() -> None:
     validate_demo_reset_manifest()
     discovered = set(_workspace_tables())
-    assert len(discovered) == 78
+    assert len(discovered) == 83  # 78 pre-vault tables plus five revision-0099 workspace tables
     assert discovered == set(PRESERVE_TABLES | RESET_RESEED_TABLES | CLEAR_TABLES)
 
 
@@ -398,6 +408,7 @@ def test_demo_mutations_are_visible_then_reset_restores_canonical_state() -> Non
         first = _business_signature(db, wid)
         reset_demo_workspace(db, workspace_id=wid, reset_date=date(2026, 9, 17))
         assert _business_signature(db, wid) == first
+        _clear_synthetic_vault_pending(db, wid)
         db.execute(delete(Workspace).where(Workspace.id == wid))
         db.execute(delete(User).where(User.id == fx["user"].id))
         db.commit()
@@ -424,6 +435,7 @@ def test_demo_reset_injected_failure_rolls_back_and_writes_no_success_marker() -
             )
         )
         assert markers == 0
+        _clear_synthetic_vault_pending(db, wid)
         db.execute(delete(Workspace).where(Workspace.id == wid))
         db.execute(delete(User).where(User.id == fx["user"].id))
         db.commit()
@@ -453,6 +465,7 @@ def test_daily_marker_restart_and_missed_window_behavior() -> None:
         )
         assert restarted.scalar(select(Service.price_minor).where(Service.workspace_id == wid)) == 999_000
         user_id = restarted.scalar(select(WorkspaceMember.user_id).where(WorkspaceMember.workspace_id == wid))
+        _clear_synthetic_vault_pending(restarted, wid)
         restarted.execute(delete(Workspace).where(Workspace.id == wid))
         restarted.execute(delete(User).where(User.id == user_id))
         restarted.commit()
@@ -471,6 +484,7 @@ def test_real_workspace_isolation_and_manual_reset_guard() -> None:
         with pytest.raises(DemoResetError, match="real workspace"):
             reset_demo_workspace(db, workspace_id=real["workspace"].id)
         for fx in (demo, real):
+            _clear_synthetic_vault_pending(db, fx["workspace"].id)
             db.execute(delete(Workspace).where(Workspace.id == fx["workspace"].id))
             db.execute(delete(User).where(User.id == fx["user"].id))
         db.commit()
@@ -526,6 +540,7 @@ def test_reset_waits_for_active_demo_request_shared_lock() -> None:
         assert reset_future.result(timeout=5).workspace_id == wid
 
     with Session(engine) as cleanup:
+        _clear_synthetic_vault_pending(cleanup, wid)
         cleanup.execute(delete(Workspace).where(Workspace.id == wid))
         cleanup.execute(delete(User).where(User.id == uid))
         cleanup.commit()
@@ -548,6 +563,7 @@ def test_new_demo_request_fails_safely_while_reset_exclusive_lock_is_held() -> N
             assert wall_time.monotonic() - started >= 2.5
         reset_session.rollback()
     with Session(engine) as cleanup:
+        _clear_synthetic_vault_pending(cleanup, wid)
         cleanup.execute(delete(Workspace).where(Workspace.id == wid))
         cleanup.execute(delete(User).where(User.id == uid))
         cleanup.commit()
@@ -617,6 +633,7 @@ def test_demo_laser_exclusion_canonical_reset_rollback_and_workspace_isolation()
         assert exclusions(db, demo_id) == {"candela"}  # Idempotent reseed.
 
         for fx in (demo, real):
+            _clear_synthetic_vault_pending(db, fx["workspace"].id)
             db.execute(delete(Workspace).where(Workspace.id == fx["workspace"].id))
             db.execute(delete(User).where(User.id == fx["user"].id))
         db.commit()

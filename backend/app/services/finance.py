@@ -7,12 +7,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from app.database.schema_capabilities import (
+    SchemaCapabilityError,
+)
+from app.database.schema_capabilities import (
+    vault_ledger_schema_available as check_vault_ledger_schema,
+)
 from app.models.appointment import Appointment
 from app.models.clinic_inventory import AppointmentProductLine
 from app.models.expense import Expense
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
 from app.models.pulse_billing import AppointmentPulseSettlement, PatientPulsePack
+from app.models.vault import VaultLedgerEntry
 from app.schemas.finance import (
     ExpenseCreate,
     ExpenseUpdate,
@@ -44,6 +51,28 @@ def _expense_or_raise(db: Session, *, workspace_id: UUID, expense_id: UUID) -> E
     if expense is None:
         raise FinanceNotFound("Expense not found.")
     return expense
+
+
+def vault_ledger_schema_available(db: Session) -> bool:
+    try:
+        return check_vault_ledger_schema(db)
+    except SchemaCapabilityError as exc:
+        raise FinanceOperationError(
+            "Vault schema is inconsistent; financial operations are blocked."
+        ) from exc
+
+
+def _require_unposted_expense(db: Session, expense: Expense) -> None:
+    if not vault_ledger_schema_available(db):
+        return
+    linked = db.scalar(select(VaultLedgerEntry.id).where(
+        VaultLedgerEntry.workspace_id == expense.workspace_id,
+        VaultLedgerEntry.expense_id == expense.id,
+    ))
+    if linked is not None:
+        raise FinanceOperationError(
+            "This reception vault expense is posted. Use an approved reversal instead of editing or deleting."
+        )
 
 
 def list_expenses(
@@ -110,6 +139,7 @@ def update_expense(
     payload: ExpenseUpdate,
 ) -> Expense:
     expense = _expense_or_raise(db, workspace_id=workspace_id, expense_id=expense_id)
+    _require_unposted_expense(db, expense)
     requested_changes = payload.model_dump(exclude_unset=True)
     changed_fields: list[str] = []
     for field_name, value in requested_changes.items():
@@ -143,6 +173,7 @@ def delete_expense(
     actor_user_id: UUID,
 ) -> None:
     expense = _expense_or_raise(db, workspace_id=workspace_id, expense_id=expense_id)
+    _require_unposted_expense(db, expense)
     metadata = {
         "category": expense.category,
         "amount_minor": expense.amount_minor,
