@@ -16,7 +16,7 @@ jobs:
   vault-postgres-17-6:
     name: Vault Financial Ledger / PostgreSQL 17.6
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:17.6
@@ -57,10 +57,15 @@ jobs:
       FINANCE_COMPAT_PG17_REQUIRED: "1"
       FINANCE_COMPAT_0098_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_finance_0098_test
       FINANCE_COMPAT_0099_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
+      FINANCE_COMPAT_0098_RUNTIME_DATABASE_URL: postgresql+psycopg://tia_backend_runtime:ci_only_runtime_password@127.0.0.1:55443/vault_finance_0098_test
+      FINANCE_COMPAT_0099_RUNTIME_DATABASE_URL: postgresql+psycopg://tia_backend_runtime:ci_only_runtime_password@127.0.0.1:55443/vault_0099_financial_test
+      FINANCE_COMPAT_0098_MIGRATION_DATABASE_URL: postgresql+psycopg://tia_migrator:ci_only_migrator_password@127.0.0.1:55443/vault_finance_0098_test
+      FINANCE_COMPAT_0099_MIGRATION_DATABASE_URL: postgresql+psycopg://tia_migrator:ci_only_migrator_password@127.0.0.1:55443/vault_0099_financial_test
       VAULT_PG17_BACKEND_DATABASE_URL: postgresql+psycopg://vault_ci_backend:ci_vault_backend_password@127.0.0.1:55443/vault_0099_financial_test
       EXISTING_PACKAGE_TEST_DATABASE_URL: postgresql+psycopg://package_ci_user:ci_package_disposable_password@127.0.0.1:55432/package_service_ci
-      DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
-      MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
+      # The application and migration URLs are the same 0099 database with distinct roles.
+      DATABASE_URL: postgresql+psycopg://tia_backend_runtime:ci_only_runtime_password@127.0.0.1:55443/vault_0099_financial_test
+      MIGRATION_DATABASE_URL: postgresql+psycopg://tia_migrator:ci_only_migrator_password@127.0.0.1:55443/vault_0099_financial_test
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_dummy
       SUPABASE_SECRET_KEY: sb_secret_ci_dummy
@@ -77,60 +82,150 @@ jobs:
       - name: Install backend test dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
-      - name: Verify isolated PostgreSQL 17 and bootstrap synthetic roles
+      - name: Verify isolated PostgreSQL 17.6 and provision CI-only roles
         run: |
           set -euo pipefail
           export PGPASSWORD=ci_vault_disposable_password
-          psql -h 127.0.0.1 -p 55443 -U postgres -d vault_0099_financial_test -v ON_ERROR_STOP=1 <<'SQL'
-          CREATE EXTENSION IF NOT EXISTS btree_gist;
-          CREATE ROLE anon NOLOGIN;
-          CREATE ROLE authenticated NOLOGIN;
-          CREATE ROLE vault_ci_backend LOGIN PASSWORD 'ci_vault_backend_password' BYPASSRLS NOSUPERUSER;
-          SQL
+          psql -h 127.0.0.1 -p 55443 -U postgres -d vault_0099_financial_test \
+            -v ON_ERROR_STOP=1 -f tests/fixtures/finance_pg17_role_bootstrap.sql
           createdb -h 127.0.0.1 -p 55443 -U postgres vault_finance_0098_test
+          for database in vault_finance_0098_test vault_0099_financial_test; do
+            psql -h 127.0.0.1 -p 55443 -U postgres -d "$database" \
+              -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS btree_gist;"
+          done
+
           export PGPASSWORD=ci_package_disposable_password
-          psql -h 127.0.0.1 -p 55432 -U package_ci_user -d package_service_ci -v ON_ERROR_STOP=1 <<'SQL'
+          psql -h 127.0.0.1 -p 55432 -U package_ci_user -d package_service_ci \
+            -v ON_ERROR_STOP=1 <<'SQL'
           CREATE EXTENSION IF NOT EXISTS btree_gist;
-          CREATE ROLE anon NOLOGIN;
-          CREATE ROLE authenticated NOLOGIN;
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN
+              EXECUTE 'CREATE ROLE anon NOLOGIN';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'authenticated') THEN
+              EXECUTE 'CREATE ROLE authenticated NOLOGIN';
+            END IF;
+          END
+          $$;
           SQL
+
           python - <<'PY'
           import os
           from sqlalchemy import create_engine, text
           from sqlalchemy.engine import make_url
+
           cfg = (
-              ("VAULT_PG17_TEST_DATABASE_URL", "postgres", 55443, "vault_0099_financial_test"),
-              ("VAULT_PG17_BACKEND_DATABASE_URL", "vault_ci_backend", 55443, "vault_0099_financial_test"),
-              ("EXISTING_PACKAGE_TEST_DATABASE_URL", "package_ci_user", 55432, "package_service_ci"),
+              ("VAULT_PG17_TEST_DATABASE_URL", "postgres", "vault_0099_financial_test"),
+              ("VAULT_PG17_BACKEND_DATABASE_URL", "vault_ci_backend", "vault_0099_financial_test"),
+              ("FINANCE_COMPAT_0098_DATABASE_URL", "postgres", "vault_finance_0098_test"),
+              ("FINANCE_COMPAT_0099_DATABASE_URL", "postgres", "vault_0099_financial_test"),
+              ("FINANCE_COMPAT_0098_RUNTIME_DATABASE_URL", "tia_backend_runtime", "vault_finance_0098_test"),
+              ("FINANCE_COMPAT_0099_RUNTIME_DATABASE_URL", "tia_backend_runtime", "vault_0099_financial_test"),
+              ("FINANCE_COMPAT_0098_MIGRATION_DATABASE_URL", "tia_migrator", "vault_finance_0098_test"),
+              ("FINANCE_COMPAT_0099_MIGRATION_DATABASE_URL", "tia_migrator", "vault_0099_financial_test"),
+              ("EXISTING_PACKAGE_TEST_DATABASE_URL", "package_ci_user", "package_service_ci"),
           )
-          for key, user, port, database in cfg:
+          for key, user, database in cfg:
               url = make_url(os.environ[key])
+              port = 55432 if database == "package_service_ci" else 55443
               if (url.host, url.port, url.database, url.username) != ("127.0.0.1", port, database, user):
-                  raise SystemExit(f"Unsafe or missing disposable PG17 connection: {key}")
+                  raise SystemExit(f"Unsafe or missing disposable PostgreSQL connection: {key}")
               with create_engine(url, connect_args={"connect_timeout": 5}).connect() as conn:
                   version = int(conn.scalar(text("SELECT current_setting('server_version_num')")))
-                  if version // 10000 != 17:
-                      raise SystemExit(f"Postgres 17 is required for {key}: {version}")
-                  print(f"{key}: PostgreSQL {version}, localhost-only, disposable")
+                  if version != 170006:
+                      raise SystemExit(f"PostgreSQL 17.6 is required for {key}: {version}")
+                  print(f"{key}: PostgreSQL 17.6, localhost-only, disposable")
           PY
 
-      - name: Apply all Alembic revisions through 0099 to both PostgreSQL 17 databases
+      - name: Bootstrap actual pre-0098 schema on both Finance databases
         run: |
           set -euo pipefail
           test "$(python -m alembic heads)" = "0099_reception_main_vault_ledger (head)"
-          python -m alembic upgrade head
-          MIGRATION_DATABASE_URL="$EXISTING_PACKAGE_TEST_DATABASE_URL" python -m alembic upgrade head
+          DATABASE_URL="$FINANCE_COMPAT_0098_DATABASE_URL" \
+            MIGRATION_DATABASE_URL="$FINANCE_COMPAT_0098_DATABASE_URL" \
+            python -m alembic upgrade 0097_member_page_permissions
+          DATABASE_URL="$FINANCE_COMPAT_0099_DATABASE_URL" \
+            MIGRATION_DATABASE_URL="$FINANCE_COMPAT_0099_DATABASE_URL" \
+            python -m alembic upgrade 0097_member_page_permissions
           python - <<'PY'
           import os
           from sqlalchemy import create_engine, text
-          for env in ("VAULT_PG17_TEST_DATABASE_URL", "EXISTING_PACKAGE_TEST_DATABASE_URL"):
-              engine = create_engine(os.environ[env])
+          for key in ("FINANCE_COMPAT_0098_DATABASE_URL", "FINANCE_COMPAT_0099_DATABASE_URL"):
+              engine = create_engine(os.environ[key])
               with engine.connect() as db:
-                  current = db.scalar(text("SELECT version_num FROM public.alembic_version"))
-                  assert current == "0099_reception_main_vault_ledger", (env, current)
-                  assert db.scalar(text("SELECT to_regclass('public.vault_ledger_entries')")) is not None
-                  print(f"ALEMBIC_0099_APPLIED: {env} / PostgreSQL 17.6")
+                  revision = db.scalar(text("SELECT version_num FROM public.alembic_version"))
+                  assert revision == "0097_member_page_permissions", (key, revision)
+                  assert db.scalar(text("SELECT to_regclass('public.expenses')")) is not None
+                  assert db.scalar(text("SELECT to_regclass('public.doctor_branches')")) is not None
+                  assert db.scalar(text("SELECT to_regclass('public.clinic_laser_devices')")) is not None
+                  print(f"REAL_ALEMBIC_BASE_0097_PASS: {key}")
               engine.dispose()
+          PY
+
+      - name: Apply production-shaped pre-0098 migrator handoff
+        run: |
+          set -euo pipefail
+          export PGPASSWORD=ci_vault_disposable_password
+          for database in vault_finance_0098_test vault_0099_financial_test; do
+            psql -h 127.0.0.1 -p 55443 -U postgres -d "$database" \
+              -v ON_ERROR_STOP=1 -f tests/fixtures/finance_pg17_pre_0098_handoff.sql
+          done
+
+      - name: Run real Alembic Migration 0098 as tia_migrator on both databases
+        run: |
+          set -euo pipefail
+          DATABASE_URL="$FINANCE_COMPAT_0098_RUNTIME_DATABASE_URL" \
+            MIGRATION_DATABASE_URL="$FINANCE_COMPAT_0098_MIGRATION_DATABASE_URL" \
+            python -m alembic upgrade 0098_doctor_laser_weekday_exclusions
+          DATABASE_URL="$FINANCE_COMPAT_0099_RUNTIME_DATABASE_URL" \
+            MIGRATION_DATABASE_URL="$FINANCE_COMPAT_0099_MIGRATION_DATABASE_URL" \
+            python -m alembic upgrade 0098_doctor_laser_weekday_exclusions
+
+      - name: Apply narrow 0098-to-0099 legacy ownership handoff
+        run: |
+          set -euo pipefail
+          PGPASSWORD=ci_vault_disposable_password psql \
+            -h 127.0.0.1 -p 55443 -U postgres -d vault_0099_financial_test \
+            -v ON_ERROR_STOP=1 -f tests/fixtures/finance_pg17_0098_to_0099_handoff.sql
+
+      - name: Run real Alembic Migration 0099 as tia_migrator
+        run: |
+          set -euo pipefail
+          DATABASE_URL="$FINANCE_COMPAT_0099_RUNTIME_DATABASE_URL" \
+            MIGRATION_DATABASE_URL="$FINANCE_COMPAT_0099_MIGRATION_DATABASE_URL" \
+            python -m alembic upgrade 0099_reception_main_vault_ledger
+
+      - name: Grant minimal CI Finance privileges to actual tia_backend_runtime
+        run: |
+          set -euo pipefail
+          export PGPASSWORD=ci_vault_disposable_password
+          psql -h 127.0.0.1 -p 55443 -U postgres -d vault_finance_0098_test \
+            -v ON_ERROR_STOP=1 -f tests/fixtures/finance_pg17_runtime_grants_0098.sql
+          psql -h 127.0.0.1 -p 55443 -U postgres -d vault_0099_financial_test \
+            -v ON_ERROR_STOP=1 -f tests/fixtures/finance_pg17_runtime_grants_0099.sql
+
+      - name: Verify same-database Runtime and Migrator identities on real 0098 and 0099 schemas
+        run: |
+          set -euo pipefail
+          python tests/integration/finance_pg17_role_gate.py
+
+      - name: Apply existing package-service migration in its separate disposable database
+        run: |
+          set -euo pipefail
+          DATABASE_URL="$EXISTING_PACKAGE_TEST_DATABASE_URL" \
+            MIGRATION_DATABASE_URL="$EXISTING_PACKAGE_TEST_DATABASE_URL" \
+            python -m alembic upgrade head
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ["EXISTING_PACKAGE_TEST_DATABASE_URL"])
+          with engine.connect() as db:
+              current = db.scalar(text("SELECT version_num FROM public.alembic_version"))
+              assert current == "0099_reception_main_vault_ledger", current
+              assert db.scalar(text("SELECT to_regclass('public.vault_ledger_entries')")) is not None
+              print("PACKAGE_SERVICE_CI_ALEMBIC_HEAD_PASS")
+          engine.dispose()
           PY
 
       - name: Verify backend runtime SQL grants and browser role restrictions
@@ -165,6 +260,7 @@ jobs:
             THEN RAISE EXCEPTION 'Browser role gained financial table/function privileges'; END IF;
           END $$;
           SQL
+
       - name: Verify Vault PostgreSQL financial concurrency with mandatory assertions
         run: |
           set -euo pipefail
@@ -194,7 +290,7 @@ jobs:
           python tests/integration/vault_0099_ci_gate.py \
             "$RUNNER_TEMP/demo-vault-reset-pg17.xml" 13
 
-      - name: Verify Finance compatibility on PostgreSQL 17.6 at revisions 0098 and 0099
+      - name: Verify Finance compatibility and actual Runtime Role behavior on PostgreSQL 17.6
         run: |
           set -euo pipefail
           python -m pytest -q tests/test_finance_schema_compatibility_pg17.py \

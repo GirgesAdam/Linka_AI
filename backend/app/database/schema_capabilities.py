@@ -1,9 +1,9 @@
 """Runtime-safe capability checks for the optional Reception Vault schema.
 
 The backend runtime deliberately does not need SELECT on Alembic's control
-table. Detect the supported schema shapes from PostgreSQL catalogs and, only
-when the current role already has SELECT, cross-check the Alembic revision.
-Partial shapes are schema drift and must fail closed.
+table. Detect the supported schema shapes from PostgreSQL catalogs and use
+Migration 0099's independent expenses constraint as a marker when Alembic is
+not readable. Partial shapes are schema drift and must fail closed.
 """
 from __future__ import annotations
 
@@ -26,6 +26,30 @@ _VAULT_REVISION = "0099_reception_main_vault_ledger"
 _VAULT_SCHEMA_STATE = text(
     """
     SELECT
+      EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS c
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = 'expenses'
+          AND c.relkind IN ('r', 'p')
+      ) AS expenses_exists,
+      EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_constraint AS con
+        JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'expenses'
+          AND con.conname = 'uq_expenses_workspace_id_id'
+          AND con.contype = 'u'
+          AND con.convalidated
+          AND (
+            SELECT array_agg(a.attname ORDER BY key.ordinality)
+            FROM unnest(con.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+            JOIN pg_catalog.pg_attribute AS a
+              ON a.attrelid = con.conrelid AND a.attnum = key.attnum
+          ) = ARRAY['workspace_id', 'id']::name[]
+      ) AS vault_migration_marker,
       EXISTS (
         SELECT 1
         FROM pg_catalog.pg_class AS c
@@ -100,14 +124,19 @@ class SchemaCapabilityError(RuntimeError):
 def vault_ledger_schema_available(db: Session) -> bool:
     """Return False for intact pre-0099, True for intact 0099, else fail closed.
 
-    Catalog reads identify all five Vault tables and both enabled immutable
-    triggers without requiring table-level financial privileges. If the current
-    role already has SELECT on Alembic's version table, its single revision is
-    also checked. No permission is added to the runtime role.
+    Catalog reads identify the independent Migration 0099 marker, all five
+    Vault tables, and both enabled immutable triggers without requiring
+    table-level financial privileges. If the current role already has SELECT
+    on Alembic's version table, its single revision is also cross-checked.
+    No permission is added to the runtime role.
 
     SQL/catalog permission or connection errors are deliberately not caught.
     """
     state = db.execute(_VAULT_SCHEMA_STATE).mappings().one()
+    if not state["expenses_exists"]:
+        raise SchemaCapabilityError(
+            "Expenses table is missing; Finance schema capabilities cannot be verified."
+        )
     if not state["alembic_version_exists"]:
         raise SchemaCapabilityError(
             "Alembic version metadata is missing; Vault schema cannot be verified."
@@ -120,16 +149,23 @@ def vault_ledger_schema_available(db: Session) -> bool:
     present = {name for name, exists in table_state.items() if exists}
     expense_guard = bool(state["posted_expense_guard"])
     ledger_guard = bool(state["ledger_immutable_guard"])
+    migration_marker = bool(state["vault_migration_marker"])
 
-    if not present and not expense_guard and not ledger_guard:
+    if not migration_marker and not present and not expense_guard and not ledger_guard:
         available = False
-    elif present == VAULT_SCHEMA_TABLES and expense_guard and ledger_guard:
+    elif (
+        migration_marker
+        and present == VAULT_SCHEMA_TABLES
+        and expense_guard
+        and ledger_guard
+    ):
         available = True
     else:
         missing = sorted(VAULT_SCHEMA_TABLES - present)
         raise SchemaCapabilityError(
             "Vault schema is inconsistent; Finance and Demo Reset operations are blocked "
-            f"(missing_tables={missing}, posted_expense_guard={expense_guard}, "
+            f"(migration_marker={migration_marker}, missing_tables={missing}, "
+            f"posted_expense_guard={expense_guard}, "
             f"ledger_immutable_guard={ledger_guard})."
         )
 
@@ -140,9 +176,9 @@ def vault_ledger_schema_available(db: Session) -> bool:
                 "Alembic revision state is ambiguous; Vault schema cannot be verified."
             )
         revision = revisions[0]
-        if revision == _PRE_VAULT_REVISION and not available:
+        if revision == _PRE_VAULT_REVISION and not migration_marker and not available:
             return False
-        if revision == _VAULT_REVISION and available:
+        if revision == _VAULT_REVISION and migration_marker and available:
             return True
         raise SchemaCapabilityError(
             "Alembic revision and Vault schema capabilities do not match; "

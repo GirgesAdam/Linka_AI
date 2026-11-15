@@ -1,9 +1,7 @@
-"""Focused PostgreSQL 17.6 coverage for Finance on the pre/post-0099 schemas.
+"""Focused PostgreSQL 17.6 Finance coverage on real Alembic 0098/0099 schemas.
 
-The 0098 fixture builds only the pre-Vault ORM schema; the local 0099 fallback
-builds a disposable schema from metadata plus the two migration guard triggers.
-CI instead uses its already-migrated disposable 0099 database. No Alembic
-migration is run by this test module.
+Both disposable databases must be prepared by the Vault PG17 workflow with
+actual Alembic migrations. This module never synthesizes or reshapes schemas.
 """
 from __future__ import annotations
 
@@ -14,14 +12,13 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import MetaData, create_engine, select, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 import app.models  # noqa: F401
 from app.api.routes.finance import expense_list
-from app.database.base import Base
 from app.database.schema_capabilities import (
     VAULT_SCHEMA_TABLES,
     SchemaCapabilityError,
@@ -85,157 +82,49 @@ def _engine_from_env(name: str, database: str):
     return engine
 
 
-def _database_is_empty(connection) -> bool:
-    return int(
-        connection.scalar(
-            text(
-                """
-                SELECT count(*)
-                FROM pg_catalog.pg_class AS c
-                JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
-                  AND c.relname NOT LIKE 'pg_%'
-                """
-            )
-        )
-        or 0
-    ) == 0
-
-
-def _create_alembic_marker(connection, revision: str) -> None:
-    connection.execute(
-        text(
-            """
-            CREATE TABLE public.alembic_version (
-                version_num varchar(64) NOT NULL PRIMARY KEY
-            )
-            """
-        )
+_MIGRATION_MARKER_EXISTS = text(
+    """
+    SELECT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_constraint AS con
+      JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname = 'expenses'
+        AND con.conname = 'uq_expenses_workspace_id_id'
+        AND con.contype = 'u'
+        AND con.convalidated
+        AND (
+          SELECT array_agg(a.attname ORDER BY key.ordinality)
+          FROM unnest(con.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+          JOIN pg_catalog.pg_attribute AS a
+            ON a.attrelid = con.conrelid AND a.attnum = key.attnum
+        ) = ARRAY['workspace_id', 'id']::name[]
     )
-    connection.execute(
-        text("INSERT INTO public.alembic_version (version_num) VALUES (:revision)"),
-        {"revision": revision},
-    )
-
-
-def _create_test_schema(connection, *, include_vault: bool) -> None:
-    selected = [
-        table for table in Base.metadata.tables.values()
-        if include_vault or table.name not in VAULT_SCHEMA_TABLES
-    ]
-    metadata = MetaData()
-    for table in selected:
-        table.to_metadata(metadata)
-
-    # Two existing model declarations publish the same index twice. Deduplicate
-    # only identical definitions in this disposable metadata copy; production
-    # models and repository schema definitions remain untouched.
-    if not include_vault:
-        for constraint in list(metadata.tables["expenses"].constraints):
-            if constraint.name == "uq_expenses_workspace_id_id":
-                metadata.tables["expenses"].constraints.remove(constraint)
-
-    for table in metadata.tables.values():
-        seen_indexes = {}
-        for index in list(table.indexes):
-            signature = (
-                tuple(column.name for column in index.columns),
-                index.unique,
-            )
-            previous = seen_indexes.get(index.name)
-            if previous is None:
-                seen_indexes[index.name] = signature
-                continue
-            if previous != signature:
-                pytest.fail(f"Conflicting duplicate test index definition: {table.name}.{index.name}")
-            table.indexes.remove(index)
-    metadata.create_all(connection)
-
-
-def _bootstrap_0098(connection) -> None:
-    if not _database_is_empty(connection):
-        pytest.fail("The 0098 compatibility database is not empty; refusing to reshape it")
-    connection.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
-    _create_test_schema(connection, include_vault=False)
-    _create_alembic_marker(connection, "0098_doctor_laser_weekday_exclusions")
-
-
-def _bootstrap_local_0099(connection) -> None:
-    if not _database_is_empty(connection):
-        pytest.fail("The local 0099 compatibility database is not empty; refusing to reshape it")
-    connection.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
-    _create_test_schema(connection, include_vault=True)
-    _create_alembic_marker(connection, "0099_reception_main_vault_ledger")
-    # Test-only equivalents of the two immutable migration guards. CI uses the
-    # real Migration 0099 triggers already installed in its disposable database.
-    connection.execute(
-        text(
-            """
-            CREATE FUNCTION public.vault_reject_posted_expense_change()
-            RETURNS trigger LANGUAGE plpgsql AS $$
-            BEGIN
-              IF EXISTS (
-                SELECT 1 FROM public.vault_ledger_entries
-                WHERE workspace_id = OLD.workspace_id AND expense_id = OLD.id
-              ) THEN
-                RAISE EXCEPTION 'VAULT_POSTED_EXPENSE_IMMUTABLE';
-              END IF;
-              IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
-              RETURN NEW;
-            END;
-            $$
-            """
-        )
-    )
-    connection.execute(
-        text(
-            """
-            CREATE TRIGGER vault_protect_expense
-            BEFORE UPDATE OR DELETE ON public.expenses
-            FOR EACH ROW EXECUTE FUNCTION public.vault_reject_posted_expense_change()
-            """
-        )
-    )
-    connection.execute(
-        text(
-            """
-            CREATE FUNCTION public.vault_reject_entry_mutation()
-            RETURNS trigger LANGUAGE plpgsql AS $$
-            BEGIN
-              RAISE EXCEPTION 'VAULT_LEDGER_IMMUTABLE';
-            END;
-            $$
-            """
-        )
-    )
-    connection.execute(
-        text(
-            """
-            CREATE TRIGGER vault_ledger_immutable
-            BEFORE UPDATE OR DELETE ON public.vault_ledger_entries
-            FOR EACH ROW EXECUTE FUNCTION public.vault_reject_entry_mutation()
-            """
-        )
-    )
+    """
+)
 
 
 @pytest.fixture(scope="module")
 def pg17_0098_engine():
     engine = _engine_from_env("FINANCE_COMPAT_0098_DATABASE_URL", DATABASE_0098)
     try:
-        with engine.begin() as connection:
-            revision_table = connection.scalar(text("SELECT to_regclass('public.alembic_version')"))
-            if revision_table is None:
-                _bootstrap_0098(connection)
-            revision = connection.scalar(text("SELECT version_num FROM public.alembic_version"))
-            assert revision == "0098_doctor_laser_weekday_exclusions"
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT to_regclass('public.alembic_version')")) is not None
+            revisions = list(connection.scalars(text("SELECT version_num FROM public.alembic_version")))
+            assert revisions == ["0098_doctor_laser_weekday_exclusions"]
+            assert connection.scalar(text("SELECT to_regclass('public.expenses')")) is not None
+            assert connection.scalar(_MIGRATION_MARKER_EXISTS) is False
             assert connection.scalar(
                 text(
                     """
                     SELECT EXISTS (
-                      SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'public.expenses'::regclass
-                        AND conname = 'uq_expenses_workspace_id_id'
+                      SELECT 1 FROM pg_catalog.pg_trigger AS t
+                      JOIN pg_catalog.pg_class AS c ON c.oid=t.tgrelid
+                      JOIN pg_catalog.pg_namespace AS n ON n.oid=c.relnamespace
+                      WHERE n.nspname='public' AND c.relname='expenses'
+                        AND t.tgname='vault_protect_expense'
+                        AND NOT t.tgisinternal
                     )
                     """
                 )
@@ -254,23 +143,11 @@ def pg17_0098_engine():
 def pg17_0099_engine():
     engine = _engine_from_env("FINANCE_COMPAT_0099_DATABASE_URL", DATABASE_0099)
     try:
-        with engine.begin() as connection:
-            revision_table = connection.scalar(text("SELECT to_regclass('public.alembic_version')"))
-            if revision_table is None:
-                _bootstrap_local_0099(connection)
-            revision = connection.scalar(text("SELECT version_num FROM public.alembic_version"))
-            assert revision == "0099_reception_main_vault_ledger"
-            assert connection.scalar(
-                text(
-                    """
-                    SELECT EXISTS (
-                      SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'public.expenses'::regclass
-                        AND conname = 'uq_expenses_workspace_id_id'
-                    )
-                    """
-                )
-            ) is True
+        with engine.connect() as connection:
+            assert connection.scalar(text("SELECT to_regclass('public.alembic_version')")) is not None
+            revisions = list(connection.scalars(text("SELECT version_num FROM public.alembic_version")))
+            assert revisions == ["0099_reception_main_vault_ledger"]
+            assert connection.scalar(_MIGRATION_MARKER_EXISTS) is True
             for table_name in VAULT_SCHEMA_TABLES:
                 assert connection.scalar(
                     text("SELECT to_regclass(:name)"),
@@ -587,7 +464,7 @@ def test_revision_0099_alembic_revision_rejects_missing_vault_artifacts(pg17_009
             with Session(bind=connection) as db:
                 with pytest.raises(
                     SchemaCapabilityError,
-                    match="Alembic revision and Vault schema capabilities do not match",
+                    match="Vault schema is inconsistent",
                 ):
                     vault_ledger_schema_available(db)
         finally:
@@ -662,3 +539,419 @@ def test_revision_0099_database_triggers_keep_posted_financial_history_immutable
             with pytest.raises(DBAPIError, match="VAULT_POSTED_EXPENSE_IMMUTABLE"):
                 with connection.begin_nested():
                     connection.execute(text(statement), {"expense_id": identity.expense_id})
+
+def _runtime_engine_from_env(name: str, database: str):
+    raw = os.environ.get(name)
+    if not raw:
+        if os.environ.get("FINANCE_COMPAT_PG17_REQUIRED") == "1":
+            pytest.fail(f"Mandatory disposable runtime PostgreSQL 17.6 URL missing: {name}")
+        pytest.skip(f"Set {name} to the disposable local PostgreSQL 17.6 runtime database")
+
+    url = make_url(raw)
+    if (url.host, url.port, url.database, url.username) != (
+        PG17_HOST,
+        PG17_PORT,
+        database,
+        "tia_backend_runtime",
+    ):
+        pytest.fail(f"Refusing non-disposable/non-local Runtime target for {name}")
+    if os.environ.get("ENVIRONMENT") != "test":
+        pytest.fail("ENVIRONMENT=test is required for Finance runtime compatibility tests")
+
+    engine = create_engine(raw, connect_args={"connect_timeout": 5}, pool_pre_ping=True)
+    with engine.connect() as connection:
+        version = connection.scalar(text("SELECT current_setting('server_version_num')"))
+        assert version == PG17_VERSION, f"PostgreSQL 17.6 required for {name}; found {version}"
+        identity = connection.execute(
+            text(
+                """
+                SELECT current_user AS current_user,
+                       session_user AS session_user,
+                       has_table_privilege(current_user, 'public.alembic_version', 'SELECT')
+                         AS can_read_alembic
+                """
+            )
+        ).mappings().one()
+        assert identity["current_user"] == "tia_backend_runtime"
+        assert identity["session_user"] == "tia_backend_runtime"
+        assert identity["can_read_alembic"] is False
+    return engine
+
+
+@pytest.fixture(scope="module")
+def pg17_0098_runtime_engine():
+    engine = _runtime_engine_from_env(
+        "FINANCE_COMPAT_0098_RUNTIME_DATABASE_URL", DATABASE_0098
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="module")
+def pg17_0099_runtime_engine():
+    engine = _runtime_engine_from_env(
+        "FINANCE_COMPAT_0099_RUNTIME_DATABASE_URL", DATABASE_0099
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+def _assert_runtime_cannot_read_alembic(engine) -> None:
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text(
+                "SELECT has_table_privilege(current_user, "
+                "'public.alembic_version', 'SELECT')"
+            )
+        ) is False
+        with pytest.raises(DBAPIError, match="permission denied"):
+            connection.execute(text("SELECT version_num FROM public.alembic_version"))
+        connection.rollback()
+
+
+def _demo_workspace_snapshot(engine, identity):
+    table_names = (
+        "expenses",
+        "activity_events",
+        "branches",
+        "services",
+        "doctors",
+        "staff",
+        "booking_settings",
+        "workspace_members",
+        "appointments",
+        "payment_transactions",
+        "payment_allocations",
+    )
+    with engine.connect() as connection:
+        counts = {
+            name: int(
+                connection.scalar(
+                    text(f"SELECT count(*) FROM public.{name} WHERE workspace_id = :workspace_id"),
+                    {"workspace_id": identity.workspace_id},
+                )
+                or 0
+            )
+            for name in table_names
+        }
+        expense = connection.execute(
+            text(
+                """
+                SELECT amount_minor, updated_at, note
+                FROM public.expenses
+                WHERE id = :expense_id
+                """
+            ),
+            {"expense_id": identity.expense_id},
+        ).mappings().one()
+        primary_branch_id = connection.scalar(
+            text("SELECT primary_branch_id FROM public.workspaces WHERE id = :workspace_id"),
+            {"workspace_id": identity.workspace_id},
+        )
+    return counts, dict(expense), primary_branch_id
+
+
+def test_revision_0098_runtime_role_can_list_update_and_delete_unposted_expense(
+    pg17_0098_engine, pg17_0098_runtime_engine
+):
+    _assert_runtime_cannot_read_alembic(pg17_0098_runtime_engine)
+    identity = _create_finance_fixture(pg17_0098_engine)
+
+    with Session(pg17_0098_runtime_engine) as db:
+        workspace = db.get(Workspace, identity.workspace_id)
+        rows = expense_list(
+            access=SimpleNamespace(workspace=workspace),
+            db=db,
+            limit=200,
+        )
+        assert len(rows) == 1
+        assert rows[0].id == identity.expense_id
+        assert rows[0].is_vault_linked is False
+
+        updated = update_expense(
+            db,
+            workspace_id=identity.workspace_id,
+            expense_id=identity.expense_id,
+            actor_user_id=identity.user_id,
+            payload=ExpenseUpdate(amount_minor=1600),
+        )
+        db.commit()
+        assert updated.amount_minor == 1600
+
+    with Session(pg17_0098_runtime_engine) as db:
+        delete_expense(
+            db,
+            workspace_id=identity.workspace_id,
+            expense_id=identity.expense_id,
+            actor_user_id=identity.user_id,
+        )
+        db.commit()
+        assert db.get(Expense, identity.expense_id) is None
+
+
+def test_revision_0099_runtime_role_preserves_posted_protection_and_unposted_management(
+    pg17_0099_engine, pg17_0099_runtime_engine
+):
+    _assert_runtime_cannot_read_alembic(pg17_0099_runtime_engine)
+    posted = _create_finance_fixture(pg17_0099_engine)
+    _post_expense_to_vault(pg17_0099_engine, posted)
+
+    with Session(pg17_0099_runtime_engine) as db:
+        workspace = db.get(Workspace, posted.workspace_id)
+        rows = expense_list(
+            access=SimpleNamespace(workspace=workspace),
+            db=db,
+            limit=200,
+        )
+        assert len(rows) == 1
+        assert rows[0].is_vault_linked is True
+        with pytest.raises(FinanceOperationError, match="is posted"):
+            update_expense(
+                db,
+                workspace_id=posted.workspace_id,
+                expense_id=posted.expense_id,
+                actor_user_id=posted.user_id,
+                payload=ExpenseUpdate(amount_minor=1800),
+            )
+        db.rollback()
+
+    with Session(pg17_0099_runtime_engine) as db:
+        with pytest.raises(FinanceOperationError, match="is posted"):
+            delete_expense(
+                db,
+                workspace_id=posted.workspace_id,
+                expense_id=posted.expense_id,
+                actor_user_id=posted.user_id,
+            )
+        db.rollback()
+
+    unposted = _create_finance_fixture(pg17_0099_engine)
+    with Session(pg17_0099_runtime_engine) as db:
+        workspace = db.get(Workspace, unposted.workspace_id)
+        rows = expense_list(
+            access=SimpleNamespace(workspace=workspace),
+            db=db,
+            limit=200,
+        )
+        assert len(rows) == 1
+        assert rows[0].is_vault_linked is False
+        updated = update_expense(
+            db,
+            workspace_id=unposted.workspace_id,
+            expense_id=unposted.expense_id,
+            actor_user_id=unposted.user_id,
+            payload=ExpenseUpdate(amount_minor=1900),
+        )
+        db.commit()
+        assert updated.amount_minor == 1900
+
+    with Session(pg17_0099_runtime_engine) as db:
+        delete_expense(
+            db,
+            workspace_id=unposted.workspace_id,
+            expense_id=unposted.expense_id,
+            actor_user_id=unposted.user_id,
+        )
+        db.commit()
+        assert db.get(Expense, unposted.expense_id) is None
+
+
+def test_revision_0098_partial_vault_objects_without_marker_fail_closed(pg17_0098_engine):
+    with pg17_0098_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text("CREATE TABLE public.vault_accounts (id uuid PRIMARY KEY)")
+            )
+            with Session(bind=connection) as db:
+                with pytest.raises(SchemaCapabilityError, match="Vault schema is inconsistent"):
+                    vault_ledger_schema_available(db)
+        finally:
+            transaction.rollback()
+
+
+def test_revision_0099_missing_expense_guard_fails_closed(pg17_0099_engine):
+    with pg17_0099_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text("DROP TRIGGER vault_protect_expense ON public.expenses")
+            )
+            with Session(bind=connection) as db:
+                with pytest.raises(SchemaCapabilityError, match="Vault schema is inconsistent"):
+                    vault_ledger_schema_available(db)
+        finally:
+            transaction.rollback()
+
+
+def test_revision_0099_missing_ledger_immutable_guard_fails_closed(pg17_0099_engine):
+    with pg17_0099_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text("DROP TRIGGER vault_ledger_immutable ON public.vault_ledger_entries")
+            )
+            with Session(bind=connection) as db:
+                with pytest.raises(SchemaCapabilityError, match="Vault schema is inconsistent"):
+                    vault_ledger_schema_available(db)
+        finally:
+            transaction.rollback()
+
+
+def test_revision_0099_alembic_0098_revision_conflict_with_marker_fails_closed(
+    pg17_0099_engine,
+):
+    with pg17_0099_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text(
+                    "UPDATE public.alembic_version "
+                    "SET version_num = '0098_doctor_laser_weekday_exclusions'"
+                )
+            )
+            with Session(bind=connection) as db:
+                with pytest.raises(
+                    SchemaCapabilityError,
+                    match="Alembic revision and Vault schema capabilities do not match",
+                ):
+                    vault_ledger_schema_available(db)
+        finally:
+            transaction.rollback()
+
+
+def test_revision_0099_marker_requires_exact_unique_constraint_shape(pg17_0099_engine):
+    # The ledger FK depends on this unique index; CASCADE is rolled back with the test transaction.
+    with pg17_0099_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text("ALTER TABLE public.expenses DROP CONSTRAINT uq_expenses_workspace_id_id CASCADE")
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE public.expenses "
+                    "ADD CONSTRAINT uq_expenses_workspace_id_id "
+                    "UNIQUE (workspace_id, amount_minor, id)"
+                )
+            )
+            with Session(bind=connection) as db:
+                with pytest.raises(SchemaCapabilityError, match="Vault schema is inconsistent"):
+                    vault_ledger_schema_available(db)
+        finally:
+            transaction.rollback()
+
+
+def test_revision_0099_runtime_marker_survives_total_vault_loss_and_blocks_all_mutations(
+    pg17_0099_engine, pg17_0099_runtime_engine
+):
+    # This is deliberately the final test: it destroys Vault artifacts only in
+    # this disposable CI database, leaving the 0099 expenses marker in place.
+    identity = _create_finance_fixture(pg17_0099_engine, demo=True)
+    before = _demo_workspace_snapshot(pg17_0099_engine, identity)
+
+    with pg17_0099_engine.begin() as admin:
+        assert admin.scalar(_MIGRATION_MARKER_EXISTS) is True
+        for trigger_name, table_name in (
+            ("vault_protect_expense", "expenses"),
+            ("vault_ledger_immutable", "vault_ledger_entries"),
+        ):
+            exists = admin.scalar(
+                text(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1 FROM pg_catalog.pg_trigger AS t
+                      JOIN pg_catalog.pg_class AS c ON c.oid=t.tgrelid
+                      JOIN pg_catalog.pg_namespace AS n ON n.oid=c.relnamespace
+                      WHERE n.nspname='public' AND c.relname=:table_name
+                        AND t.tgname=:trigger_name AND NOT t.tgisinternal
+                    )
+                    """
+                ),
+                {"table_name": table_name, "trigger_name": trigger_name},
+            )
+            assert exists is True
+            admin.execute(
+                text(f'DROP TRIGGER "{trigger_name}" ON public."{table_name}"')
+            )
+
+        for table_name in (
+            "vault_ledger_entries",
+            "vault_pending_payments",
+            "vault_branch_grants",
+            "vault_transfers",
+            "vault_accounts",
+        ):
+            admin.execute(text(f'DROP TABLE public."{table_name}"'))
+
+        assert admin.scalar(_MIGRATION_MARKER_EXISTS) is True
+        for table_name in VAULT_SCHEMA_TABLES:
+            assert admin.scalar(
+                text("SELECT to_regclass(:name)"),
+                {"name": f"public.{table_name}"},
+            ) is None
+
+    with pg17_0099_runtime_engine.connect() as runtime:
+        identity_state = runtime.execute(
+            text(
+                """
+                SELECT current_user AS current_user,
+                       session_user AS session_user,
+                       has_table_privilege(current_user, 'public.alembic_version', 'SELECT')
+                         AS can_read_alembic
+                """
+            )
+        ).mappings().one()
+        assert identity_state["current_user"] == "tia_backend_runtime"
+        assert identity_state["session_user"] == "tia_backend_runtime"
+        assert identity_state["can_read_alembic"] is False
+        assert runtime.scalar(_MIGRATION_MARKER_EXISTS) is True
+
+    with Session(pg17_0099_runtime_engine) as db:
+        with pytest.raises(SchemaCapabilityError, match="Vault schema is inconsistent"):
+            vault_ledger_schema_available(db)
+        db.rollback()
+
+    with Session(pg17_0099_runtime_engine) as db:
+        workspace = db.get(Workspace, identity.workspace_id)
+        with pytest.raises(HTTPException) as response:
+            expense_list(
+                access=SimpleNamespace(workspace=workspace),
+                db=db,
+                limit=200,
+            )
+        assert response.value.status_code == 503
+        db.rollback()
+
+    with Session(pg17_0099_runtime_engine) as db:
+        with pytest.raises(FinanceOperationError, match="schema is inconsistent"):
+            update_expense(
+                db,
+                workspace_id=identity.workspace_id,
+                expense_id=identity.expense_id,
+                actor_user_id=identity.user_id,
+                payload=ExpenseUpdate(amount_minor=2200),
+            )
+        db.rollback()
+
+    with Session(pg17_0099_runtime_engine) as db:
+        with pytest.raises(FinanceOperationError, match="schema is inconsistent"):
+            delete_expense(
+                db,
+                workspace_id=identity.workspace_id,
+                expense_id=identity.expense_id,
+                actor_user_id=identity.user_id,
+            )
+        db.rollback()
+
+    with Session(pg17_0099_runtime_engine) as db:
+        with pytest.raises(DemoResetError, match="Vault schema is inconsistent"):
+            reset_demo_workspace(db, workspace_id=identity.workspace_id)
+        db.rollback()
+
+    after = _demo_workspace_snapshot(pg17_0099_engine, identity)
+    assert after == before, "Finance/Demo records changed before schema drift was detected"
