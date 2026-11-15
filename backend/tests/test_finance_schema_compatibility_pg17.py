@@ -61,7 +61,7 @@ DATABASE_0099 = "vault_0099_financial_test"
 def _engine_from_env(name: str, database: str):
     raw = os.environ.get(name)
     if not raw:
-        if os.environ.get("CI"):
+        if os.environ.get("FINANCE_COMPAT_PG17_REQUIRED") == "1":
             pytest.fail(f"Mandatory disposable PostgreSQL 17.6 URL missing: {name}")
         pytest.skip(f"Set {name} to the disposable local PostgreSQL 17.6 database")
 

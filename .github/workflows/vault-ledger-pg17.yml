@@ -54,6 +54,7 @@ jobs:
       PYTHONPATH: .
       VAULT_PG17_REQUIRED: "1"
       VAULT_PG17_TEST_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
+      FINANCE_COMPAT_PG17_REQUIRED: "1"
       FINANCE_COMPAT_0098_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_finance_0098_test
       FINANCE_COMPAT_0099_DATABASE_URL: postgresql+psycopg://postgres:ci_vault_disposable_password@127.0.0.1:55443/vault_0099_financial_test
       VAULT_PG17_BACKEND_DATABASE_URL: postgresql+psycopg://vault_ci_backend:ci_vault_backend_password@127.0.0.1:55443/vault_0099_financial_test
