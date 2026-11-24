@@ -123,7 +123,7 @@ def activate_account(
     db: Session, *, workspace_id: UUID, actor_user_id: UUID,
     kind: str, branch_id: UUID | None, opening_balance_minor: int, currency: str,
 ) -> VaultAccount:
-    if kind not in {"reception", "main_cash", "main_visa", "main_instapay"} or currency != "EGP":
+    if kind not in {"reception", "main_cash", "main_visa", "main_instapay", "main_bank"} or currency != "EGP":
         raise VaultError("Invalid vault kind or currency.")
     if opening_balance_minor < 0 or opening_balance_minor > 10_000_000_000_00:
         raise VaultError("Invalid opening amount.")
@@ -149,7 +149,20 @@ def activate_account(
         else VaultAccount.branch_id.is_(None),
     ))
     if existing is not None:
-        raise VaultError("This vault account has already been activated.")
+        opening = db.scalar(select(VaultLedgerEntry).where(
+            VaultLedgerEntry.workspace_id == workspace_id,
+            VaultLedgerEntry.account_id == existing.id,
+            VaultLedgerEntry.kind == "opening",
+        ))
+        recorded = opening.amount_minor if opening is not None else 0
+        if (
+            existing.opened_by_user_id == actor_user_id
+            and recorded == opening_balance_minor
+            and (opening is None or opening.actor_user_id == actor_user_id)
+        ):
+            return existing
+        raise VaultError("This vault account has already been activated with a different opening balance or administrator.")
+
     account = VaultAccount(
         workspace_id=workspace_id, kind=kind, branch_id=branch_id,
         currency="EGP", opened_by_user_id=actor_user_id,
@@ -162,6 +175,17 @@ def activate_account(
             amount_minor=opening_balance_minor, actor_user_id=actor_user_id,
             note="Owner-attested opening physical/recorded balance",
         ))
+    if kind == "main_bank":
+        existing_kinds = set(db.scalars(select(VaultAccount.kind).where(
+            VaultAccount.workspace_id == workspace_id,
+            VaultAccount.kind.in_(("main_visa", "main_instapay")),
+        )))
+        for electronic_kind in ("main_visa", "main_instapay"):
+            if electronic_kind not in existing_kinds:
+                db.add(VaultAccount(
+                    workspace_id=workspace_id, kind=electronic_kind,
+                    branch_id=None, currency="EGP", opened_by_user_id=actor_user_id,
+                ))
     record_activity_event(
         db, workspace_id=workspace_id, actor_type="staff",
         actor_user_id=actor_user_id, action="vault.activated",
@@ -258,6 +282,58 @@ def transfer_full_balance(
         entity_type="vault_transfer", entity_id=transfer.id,
         summary="Reception cash handed over to main treasury.",
         metadata={"branch_id":str(branch_id),"amount_minor":amount,"currency":"EGP"},
+    )
+    db.flush()
+    return transfer
+
+
+def record_bank_deposit(
+    db: Session, *, workspace_id: UUID, actor_user_id: UUID,
+    amount_minor: int, idempotency_key: str,
+) -> VaultTransfer:
+    if not 0 < amount_minor <= 1_000_000_000_000:
+        raise VaultError("A positive bank deposit amount is required.")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise VaultError("A valid idempotency key is required.")
+
+    cash = _account(db, workspace_id, "main_cash")
+    bank = _account(db, workspace_id, "main_bank")
+    _lock_accounts(db, workspace_id, [cash.id, bank.id])
+    previous = db.scalar(select(VaultTransfer).where(
+        VaultTransfer.workspace_id == workspace_id,
+        VaultTransfer.idempotency_key == idempotency_key,
+    ))
+    if previous is not None:
+        if (previous.branch_id is None and previous.amount_minor == amount_minor
+                and previous.actor_user_id == actor_user_id):
+            return previous
+        raise VaultError("Idempotency key already used for a different transfer.")
+    if _balance(db, workspace_id=workspace_id, account_id=cash.id) < amount_minor:
+        raise VaultError("Insufficient main cash balance for this bank deposit.")
+    transfer = VaultTransfer(
+        workspace_id=workspace_id, branch_id=None, amount_minor=amount_minor,
+        currency="EGP", actor_user_id=actor_user_id, idempotency_key=idempotency_key,
+    )
+    db.add(transfer)
+    db.flush()
+    db.add_all([
+        VaultLedgerEntry(
+            workspace_id=workspace_id, account_id=cash.id, kind="transfer_out",
+            amount_minor=-amount_minor, transfer_id=transfer.id, actor_user_id=actor_user_id,
+            note="Cash deposited into bank.",
+        ),
+        VaultLedgerEntry(
+            workspace_id=workspace_id, account_id=bank.id, kind="transfer_in",
+            amount_minor=amount_minor, transfer_id=transfer.id, actor_user_id=actor_user_id,
+            note="Bank deposit received.",
+        ),
+    ])
+    record_activity_event(
+        db, workspace_id=workspace_id, actor_type="staff", actor_user_id=actor_user_id,
+        action="vault.cash_deposited_to_bank", entity_type="vault_transfer",
+        entity_id=transfer.id, summary="Main treasury cash deposited into bank.",
+        metadata={"amount_minor": amount_minor, "currency": "EGP",
+                  "source_account_id": str(cash.id), "destination_account_id": str(bank.id)},
     )
     db.flush()
     return transfer
@@ -376,7 +452,7 @@ def main_treasury_summary(
     _today, start, end = _local_bounds(workspace_timezone)
     accounts = list(db.scalars(select(VaultAccount).where(
         VaultAccount.workspace_id == workspace_id,
-        VaultAccount.kind.in_(("main_cash","main_visa","main_instapay")),
+        VaultAccount.kind.in_(("main_cash","main_visa","main_instapay","main_bank")),
         VaultAccount.currency == "EGP",
     )))
     channels = {a.kind: _balance(db, workspace_id=workspace_id, account_id=a.id)
@@ -404,7 +480,10 @@ def main_treasury_summary(
         VaultPendingPayment.workspace_id == workspace_id,
     )) or 0
     return {
-        "currency":"EGP","activated":len(accounts)==3,
+        "currency":"EGP","activated":len(accounts) >= 3,
+        "cash_activated":"main_cash" in channels,
+        "bank_activated":all(kind in channels for kind in ("main_bank", "main_visa", "main_instapay")),
+        "bank_minor":sum(channels.get(kind, 0) for kind in ("main_bank", "main_visa", "main_instapay")),
         "active_channels":[a.kind for a in accounts],
         "cash_minor":channels.get("main_cash",0),
         "visa_minor":channels.get("main_visa",0),
@@ -439,7 +518,7 @@ def treasury_movements(
 ) -> list[dict]:
     if start_date is not None and end_date is not None and start_date > end_date:
         raise VaultError("Invalid date filter.")
-    if method not in {None,"cash","visa","instapay"}:
+    if method not in {None,"cash","visa","instapay","bank"}:
         raise VaultError("Unsupported payment method.")
     if kind is not None and kind not in {
         "opening","payment","refund","expense","transfer_out","transfer_in","correction",
@@ -449,7 +528,7 @@ def treasury_movements(
         _branch(db, workspace_id, branch_id)
     accounts = select(VaultAccount.id).where(
         VaultAccount.workspace_id == workspace_id,
-        VaultAccount.kind.in_(("main_cash","main_visa","main_instapay")),
+        VaultAccount.kind.in_(("main_cash","main_visa","main_instapay","main_bank")),
     )
     if method is not None:
         accounts = accounts.where(VaultAccount.kind == "main_" + method)

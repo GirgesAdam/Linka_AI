@@ -358,10 +358,26 @@ def review_preactivation_electronic(
     if existing is not None:
         raise VaultError("This electronic payment is already in the vault ledger.")
 
+    review_account = account
     if outcome == "included_in_opening":
-        opening = int(db.scalar(select(func.coalesce(func.sum(VaultLedgerEntry.amount_minor), 0)).where(
+        # New consolidated bank openings cover both electronic channels. Lock the
+        # common cap so simultaneous Visa/InstaPay attestations cannot overrun it.
+        channel_opening = db.scalar(select(VaultLedgerEntry.id).where(
             VaultLedgerEntry.workspace_id == workspace_id,
             VaultLedgerEntry.account_id == account.id,
+            VaultLedgerEntry.kind == "opening",
+        ))
+        if channel_opening is None:
+            bank = db.scalar(select(VaultAccount).where(
+                VaultAccount.workspace_id == workspace_id,
+                VaultAccount.kind == "main_bank",
+                VaultAccount.currency == "EGP",
+            ).with_for_update())
+            if bank is not None:
+                review_account = bank
+        opening = int(db.scalar(select(func.coalesce(func.sum(VaultLedgerEntry.amount_minor), 0)).where(
+            VaultLedgerEntry.workspace_id == workspace_id,
+            VaultLedgerEntry.account_id == review_account.id,
             VaultLedgerEntry.kind == "opening",
         )) or 0)
         included = int(db.scalar(select(func.coalesce(func.sum(PaymentTransaction.amount_minor), 0))
@@ -374,7 +390,7 @@ def review_preactivation_electronic(
             )
             .where(
                 VaultPendingPayment.workspace_id == workspace_id,
-                VaultPendingPayment.reviewed_account_id == account.id,
+                VaultPendingPayment.reviewed_account_id == review_account.id,
                 VaultPendingPayment.review_outcome == "included_in_opening",
             )
         ) or 0)
@@ -389,7 +405,7 @@ def review_preactivation_electronic(
     pending.review_note = explanation
     pending.reviewed_at = datetime.now(UTC)
     pending.reviewed_by_user_id = actor_user_id
-    pending.reviewed_account_id = account.id
+    pending.reviewed_account_id = review_account.id
     db.flush()
     record_activity_event(
         db, workspace_id=workspace_id, actor_type="staff",
@@ -398,7 +414,7 @@ def review_preactivation_electronic(
         summary="Treasury electronic pre-activation receipt reconciled or held for policy.",
         metadata={
             "pending_id":str(pending_id),
-            "account_id":str(account.id),
+            "account_id":str(review_account.id),
             "outcome":outcome,
             "amount_minor":payment.amount_minor,
             "payment_method":payment.payment_method,

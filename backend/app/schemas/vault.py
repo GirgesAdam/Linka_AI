@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-VaultKind = Literal["reception", "main_cash", "main_visa", "main_instapay"]
+VaultKind = Literal["reception", "main_cash", "main_visa", "main_instapay", "main_bank"]
 
 
 class VaultActivationRequest(BaseModel):
@@ -51,11 +51,16 @@ class VaultTransferRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
+class VaultBankDepositRequest(BaseModel):
+    amount_minor: int = Field(gt=0, le=1_000_000_000_000)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
 class VaultTransferRead(BaseModel):
     transfer_id: UUID
     amount_minor: int
     currency: str
-    branch_id: UUID
+    branch_id: UUID | None
 
 
 class ReceptionVaultRead(BaseModel):
@@ -85,6 +90,9 @@ class MainTreasuryRead(BaseModel):
     activated: bool
     active_channels: list[str]
     cash_minor: int
+    bank_minor: int = 0
+    cash_activated: bool = False
+    bank_activated: bool = False
     visa_minor: int
     instapay_minor: int
     total_recorded_minor: int

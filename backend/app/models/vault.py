@@ -21,7 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, UUIDPrimaryKeyMixin
 
-VAULT_KINDS = ("reception", "main_cash", "main_visa", "main_instapay")
+VAULT_KINDS = ("reception", "main_cash", "main_visa", "main_instapay", "main_bank")
 
 
 class VaultAccount(UUIDPrimaryKeyMixin, Base):
@@ -34,7 +34,7 @@ class VaultAccount(UUIDPrimaryKeyMixin, Base):
             ["branches.workspace_id", "branches.id"], ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "kind IN ('reception','main_cash','main_visa','main_instapay')",
+            "kind IN ('reception','main_cash','main_visa','main_instapay','main_bank')",
             name="vault_account_kind",
         ),
         CheckConstraint(
@@ -80,7 +80,7 @@ class VaultTransfer(UUIDPrimaryKeyMixin, Base):
         CheckConstraint("currency = 'EGP'", name="vault_transfer_currency"),
     )
     workspace_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
-    branch_id: Mapped[UUID] = mapped_column(nullable=False)
+    branch_id: Mapped[UUID | None] = mapped_column(nullable=True)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="EGP")
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
