@@ -15,6 +15,7 @@ from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
 from app.models.appointment import ACTIVE_APPOINTMENT_STATUSES, Appointment
 from app.models.branch import Branch
+from app.models.clinic_inventory import ClinicLaserDevice
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_laser_weekday_exclusion import DoctorLaserWeekdayExclusion
@@ -34,6 +35,16 @@ from app.services.doctor_categories import (
 router = APIRouter()
 
 
+class DoctorLaserDayInput(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    excluded_device_keys: list[str] = Field(default_factory=list, max_length=100)
+
+
+class DoctorAdminHoursReplace(WorkingHoursReplace):
+    branch_id: UUID | None = None
+    laser_weekday_exclusions: list[DoctorLaserDayInput] | None = Field(default=None, max_length=7)
+
+
 class DoctorAdminCreate(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     first_name: str | None = Field(default=None, max_length=120)
@@ -44,6 +55,7 @@ class DoctorAdminCreate(BaseModel):
     service_categories: list[Literal["laser", "dermatology", "slimming"]] | None = None
     service_ids: list[UUID] = Field(default_factory=list, max_length=200)
     working_hours: WorkingHoursReplace = Field(default_factory=WorkingHoursReplace)
+    laser_weekday_exclusions: list[DoctorLaserDayInput] | None = Field(default=None, max_length=7)
     booking_enabled: bool = True
 
 
@@ -168,12 +180,23 @@ def _replace_doctor_hours(
     workspace: Workspace,
     doctor_id: UUID,
     payload: WorkingHoursReplace,
+    branch_id: UUID | None = None,
+    restrictions: list[DoctorLaserDayInput] | None = None,
 ) -> list[DoctorWorkingHour]:
-    branch = _doctor_operational_branch(
-        db,
-        workspace=workspace,
-        doctor_id=doctor_id,
-    )
+    if branch_id is None:
+        branch = _doctor_operational_branch(db, workspace=workspace, doctor_id=doctor_id)
+    else:
+        branch = db.scalar(select(Branch).join(
+            DoctorBranch,
+            (DoctorBranch.workspace_id == Branch.workspace_id)
+            & (DoctorBranch.branch_id == Branch.id),
+        ).where(
+            Branch.workspace_id == workspace.id, Branch.id == branch_id,
+            Branch.is_active.is_(True), DoctorBranch.doctor_id == doctor_id,
+            DoctorBranch.is_active.is_(True),
+        ))
+        if branch is None:
+            raise HTTPException(status_code=404, detail="Doctor branch assignment not found.")
     rows = list(
         db.scalars(
             select(DoctorWorkingHour).where(
@@ -209,6 +232,33 @@ def _replace_doctor_hours(
     ))):
         if exclusion.weekday not in active_days:
             db.delete(exclusion)
+    if restrictions is not None:
+        by_day = {row.weekday: set(row.excluded_device_keys) for row in restrictions}
+        if len(by_day) != len(restrictions) or set(by_day) != active_days:
+            raise HTTPException(status_code=422, detail="Laser restrictions must match active workdays.")
+        devices = set(db.scalars(select(ClinicLaserDevice.device_key).where(
+            ClinicLaserDevice.workspace_id == workspace.id,
+            ClinicLaserDevice.is_active.is_(True),
+        )))
+        if any(len(set(row.excluded_device_keys)) != len(row.excluded_device_keys)
+               or not set(row.excluded_device_keys).issubset(devices) for row in restrictions):
+            raise HTTPException(status_code=422, detail="Invalid, inactive or duplicate laser device.")
+        existing = list(db.scalars(select(DoctorLaserWeekdayExclusion).where(
+            DoctorLaserWeekdayExclusion.workspace_id == workspace.id,
+            DoctorLaserWeekdayExclusion.doctor_id == doctor_id,
+            DoctorLaserWeekdayExclusion.branch_id == branch.id,
+            DoctorLaserWeekdayExclusion.weekday.in_(active_days),
+        ).with_for_update())) if active_days else []
+        desired = {(day, key) for day, keys in by_day.items() for key in keys}
+        current = {(row.weekday, row.device_key) for row in existing}
+        for row in existing:
+            if row.device_key in devices and (row.weekday, row.device_key) not in desired:
+                db.delete(row)
+        for day, key in sorted(desired - current):
+            db.add(DoctorLaserWeekdayExclusion(
+                workspace_id=workspace.id, doctor_id=doctor_id, branch_id=branch.id,
+                weekday=day, device_key=key,
+            ))
     return replacements
 
 
@@ -274,6 +324,7 @@ def create_doctor_from_admin(
         workspace=workspace,
         doctor_id=doctor.id,
         payload=payload.working_hours,
+        restrictions=payload.laser_weekday_exclusions,
     )
     record_activity_event(
         db,
@@ -377,7 +428,7 @@ def update_doctor_from_admin(
 )
 def update_doctor_hours_from_admin(
     doctor_id: UUID,
-    payload: WorkingHoursReplace,
+    payload: DoctorAdminHoursReplace,
     access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[DoctorWorkingHour]:
@@ -395,6 +446,8 @@ def update_doctor_hours_from_admin(
         workspace=access.workspace,
         doctor_id=doctor.id,
         payload=payload,
+        branch_id=getattr(payload, "branch_id", None),
+        restrictions=getattr(payload, "laser_weekday_exclusions", None),
     )
     record_activity_event(
         db,

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies.section_access import require_section_access
 from app.api.dependencies.security import WorkspaceAccess
 from app.database.session import get_db
+from app.models.branch import Branch
 from app.models.doctor import Doctor
 from app.models.doctor_branch import DoctorBranch
 from app.models.doctor_service import DoctorService
@@ -34,6 +35,13 @@ class DoctorAdminHour(BaseModel):
     end_time: str
 
 
+class DoctorAdminBranchSchedule(BaseModel):
+    branch_id: UUID
+    branch_name: str
+    is_primary: bool
+    working_hours: list[DoctorAdminHour] = Field(default_factory=list)
+
+
 class DoctorAdminListItem(BaseModel):
     id: UUID
     staff_id: UUID
@@ -48,6 +56,7 @@ class DoctorAdminListItem(BaseModel):
     services: list[DoctorAdminNamedLink]
     service_categories: list[str] = Field(default_factory=list)
     working_hours: list[DoctorAdminHour] = Field(default_factory=list)
+    branch_schedules: list[DoctorAdminBranchSchedule] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -103,7 +112,9 @@ def list_doctors_for_admin(
     assignments = list(
         db.scalars(
             select(DoctorBranch)
+            .join(Branch, (Branch.workspace_id == DoctorBranch.workspace_id) & (Branch.id == DoctorBranch.branch_id))
             .where(
+                Branch.is_active.is_(True),
                 DoctorBranch.workspace_id == workspace_id,
                 DoctorBranch.doctor_id.in_(doctor_ids),
                 DoctorBranch.is_active.is_(True),
@@ -138,7 +149,7 @@ def list_doctors_for_admin(
         hour_rows = [
             row
             for row in candidate_hours
-            if primary_branch_by_doctor.get(row.doctor_id) == row.branch_id
+            if any(a.doctor_id == row.doctor_id and a.branch_id == row.branch_id for a in assignments)
         ]
 
     services_by_doctor: dict[UUID, list[DoctorAdminNamedLink]] = defaultdict(list)
@@ -150,9 +161,9 @@ def list_doctors_for_admin(
     for row in category_rows:
         categories_by_doctor[row.doctor_id].append(row.category)
 
-    hours_by_doctor: dict[UUID, list[DoctorAdminHour]] = defaultdict(list)
+    hours_by_doctor: dict[tuple[UUID, UUID], list[DoctorAdminHour]] = defaultdict(list)
     for hour in hour_rows:
-        hours_by_doctor[hour.doctor_id].append(
+        hours_by_doctor[(hour.doctor_id, hour.branch_id)].append(
             DoctorAdminHour(
                 weekday=hour.weekday,
                 start_time=hour.start_time.strftime("%H:%M"),
@@ -160,6 +171,10 @@ def list_doctors_for_admin(
             )
         )
 
+    branch_ids = {a.branch_id for a in assignments}
+    branch_names = {b.id: b.name for b in db.scalars(select(Branch).where(
+        Branch.workspace_id == workspace_id, Branch.id.in_(branch_ids),
+    ))} if branch_ids else {}
     return [
         DoctorAdminListItem(
             id=doctor.id,
@@ -174,7 +189,11 @@ def list_doctors_for_admin(
             is_active=doctor.is_active,
             services=sorted(services_by_doctor.get(doctor.id, []), key=lambda item: item.name),
             service_categories=sorted(categories_by_doctor.get(doctor.id, [])),
-            working_hours=hours_by_doctor.get(doctor.id, []),
+            working_hours=hours_by_doctor.get((doctor.id, primary_branch_by_doctor.get(doctor.id)), []),
+            branch_schedules=[DoctorAdminBranchSchedule(
+                branch_id=a.branch_id, branch_name=branch_names[a.branch_id],
+                is_primary=a.is_primary, working_hours=hours_by_doctor.get((doctor.id, a.branch_id), []),
+            ) for a in assignments if a.doctor_id == doctor.id and a.branch_id in branch_names],
         )
         for doctor, staff in rows
     ]

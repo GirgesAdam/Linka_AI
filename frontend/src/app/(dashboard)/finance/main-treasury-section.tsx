@@ -1,4 +1,4 @@
-import { Banknote, Building2, CreditCard, Receipt, ShieldCheck, WalletCards } from "lucide-react";
+import { Banknote, Building2, Landmark, Receipt, ShieldCheck } from "lucide-react";
 
 import { ActionFeedbackForm } from "@/components/action-feedback-form";
 import { VaultActionForm } from "@/components/vault-action-form";
@@ -10,17 +10,9 @@ import type { WorkspaceMember } from "@/lib/types";
 import type { MainTreasury, MainTreasuryMovement, ReceptionVault, VaultPendingPayment } from "@/lib/vault";
 import { PendingVaultPayments } from "./pending-vault-payments";
 
-import { activateVaultAccount, setReceptionBranchGrant } from "../vault-actions";
+import { activateVaultAccount, recordMainBankDeposit, setReceptionBranchGrant } from "../vault-actions";
 
 type Grant = { user_id: string; branch_id: string };
-type TreasuryFilters = {
-  treasury_kind?: string;
-  treasury_method?: string;
-  treasury_branch?: string;
-  treasury_from?: string;
-  treasury_to?: string;
-};
-
 const movementLabels: Record<string, string> = {
   opening: "رصيد افتتاحي",
   payment: "تحصيل",
@@ -32,21 +24,19 @@ const movementLabels: Record<string, string> = {
 };
 
 function ActivationForm({
-  kind, branch,
+  kind,
 }: {
-  kind: "reception" | "main_cash" | "main_visa" | "main_instapay";
-  branch?: ReceptionVault;
+  kind: "main_cash" | "main_bank";
 }) {
   return (
     <VaultActionForm
       action={activateVaultAccount}
-      confirmMessage={`هل تؤكد الرصيد الافتتاحي الفعلي لحساب ${branch ? branch.branch_name : kind}؟ لا يمكن تعديل هذا السجل بعد التفعيل.`}
+      confirmMessage={`هل تؤكد الرصيد الافتتاحي الفعلي لحساب ${kind === "main_bank" ? "الرصيد البنكي الإضافي" : "الكاش"}؟ لا يمكن تعديل هذا السجل بعد التفعيل.`}
       submitLabel="تفعيل الحساب"
       pendingLabel="جاري التفعيل..."
       className="space-y-2"
     >
       <input type="hidden" name="kind" value={kind} />
-      {branch ? <input type="hidden" name="branch_id" value={branch.branch_id} /> : null}
       <label className="block">
         <span className="mb-1 block text-xs font-semibold text-slate-600">الرصيد الافتتاحي بالجنيه (صفر مسموح)</span>
         <Input name="opening_balance" type="number" min="0" step="0.01" required defaultValue="0" />
@@ -65,11 +55,11 @@ function Movement({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 py-3 text-sm last:border-0">
       <div>
-        <div className="font-semibold text-slate-900">{movementLabels[entry.kind] || entry.kind}</div>
+        <div className="font-semibold text-slate-900">{entry.account_kind === "main_bank" && entry.kind === "transfer_in" ? "إيداع في البنك" : entry.account_kind === "main_cash" && entry.kind === "transfer_out" && !entry.branch_id ? "توريد إلى البنك" : movementLabels[entry.kind] || entry.kind}</div>
         <div className="mt-1 text-xs text-slate-500">
           {new Date(entry.created_at).toLocaleString("ar-EG")}
           {" · "}
-          {entry.account_kind === "main_cash" ? "Cash" : entry.account_kind === "main_visa" ? "Visa" : "InstaPay"}
+          {entry.account_kind === "main_cash" ? "Cash" : entry.account_kind === "main_visa" ? "Visa" : entry.account_kind === "main_bank" ? "البنك" : "InstaPay"}
           {source ? ` · من فرع ${source.branch_name}` : null}
         </div>
       </div>
@@ -79,7 +69,7 @@ function Movement({
 }
 
 export function MainTreasurySection({
-  treasury, vaults, members, grants, movements, pendingPayments, pendingUnavailable, filters, isDemo = false,
+  treasury, vaults, members, grants, movements, pendingPayments, pendingUnavailable, isDemo = false,
 }: {
   treasury: MainTreasury;
   vaults: ReceptionVault[];
@@ -88,20 +78,18 @@ export function MainTreasurySection({
   movements: MainTreasuryMovement[];
   pendingPayments: VaultPendingPayment[];
   pendingUnavailable: boolean;
-  filters: TreasuryFilters;
   isDemo?: boolean;
 }) {
   const channels = [
-    { kind: "main_cash" as const, label: "كاش مستلم من الريسبشن", amount: treasury.cash_minor, icon: Banknote },
-    { kind: "main_visa" as const, label: "رصيد Visa المسجل", amount: treasury.visa_minor, icon: CreditCard },
-    { kind: "main_instapay" as const, label: "رصيد InstaPay المسجل", amount: treasury.instapay_minor, icon: WalletCards },
+    { kind: "main_cash" as const, label: "رصيد الكاش", amount: treasury.cash_minor, icon: Banknote, activated: treasury.cash_activated },
+    { kind: "main_bank" as const, label: "الرصيد البنكي", amount: treasury.bank_minor, icon: Landmark, activated: treasury.bank_activated },
   ];
   return (
     <Card className="mb-5">
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Building2 size={18} /> الخزنة الرئيسية</CardTitle>
         <p className="mt-1 text-xs text-slate-600">
-          كاش مُورّد فعليًا بالإضافة إلى أرصدة Visa وInstaPay المسجلة. القنوات الإلكترونية ليست نقدًا في درج الخزنة ولا تؤكد التسوية البنكية. رصيد الخزنة ليس الإيراد أو الربح.
+          الكاش المُورّد فعليًا والرصيد البنكي المسجل (Visa وInstaPay وإيداعات الكاش). الرصيد المسجل لا يثبت التسوية البنكية.
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -111,21 +99,14 @@ export function MainTreasurySection({
           </p>
         )}
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-950">
-          ترتيب التفعيل: راجع Visa وInstaPay والحركات غير المرحلة أولًا، ثم سجّل الرصيد الافتتاحي الحقيقي
-          لكل قناة مرة واحدة. المدفوعات السابقة لتفعيل القناة تظهر في المراجعة أدناه، ولا تُضاف تلقائيًا
-          على الرصيد الافتتاحي. لا تعتمد شمولها في الافتتاحية إلا بعد المطابقة البنكية والمحاسبية.
+          راجع المدفوعات القديمة قبل التفعيل. أدخل فقط الرصيد البنكي الافتتاحي غير المسجل بالفعل في Visa أو InstaPay، منعًا لتكرار الاحتساب.
         </p>
-        <div className="rounded-xl bg-violet-50 p-4">
-          <div className="text-xs font-bold text-violet-800">إجمالي الأرصدة المسجلة</div>
-          <div className="mt-2 text-2xl font-black text-violet-950">{formatMoney(treasury.total_recorded_minor, treasury.currency)}</div>
-          <div className="mt-1 text-xs text-violet-700">توريدات اليوم: {formatMoney(treasury.transfers_today_minor, treasury.currency)}</div>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-3">
-          {channels.map(({ kind, label, amount, icon: Icon }) => (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {channels.map(({ kind, label, amount, icon: Icon, activated }) => (
             <div key={kind} className="rounded-xl border border-slate-200 p-4">
               <div className="flex items-center gap-2 text-xs font-semibold text-slate-600"><Icon size={15} />{label}</div>
               <div className="mt-2 text-xl font-black text-slate-950">{formatMoney(amount, treasury.currency)}</div>
-              {!isDemo && !treasury.active_channels.includes(kind) && (
+              {!isDemo && !activated && (
                 <div className="mt-3 border-t border-slate-100 pt-3">
                   <p className="mb-2 text-xs text-amber-800">لم يتم تفعيل الحساب.</p>
                   <ActivationForm kind={kind} />
@@ -134,17 +115,12 @@ export function MainTreasurySection({
             </div>
           ))}
         </div>
-        {!isDemo && vaults.some((v) => !v.activated) && (
-          <section className="rounded-xl border border-amber-200 p-4">
-            <h3 className="mb-3 font-bold text-slate-900">تفعيل عهدة فروع الريسبشن</h3>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {vaults.filter((v) => !v.activated).map((branch) => (
-                <div key={branch.branch_id} className="rounded-lg border border-slate-100 p-3">
-                  <div className="mb-2 text-sm font-semibold">{branch.branch_name}</div>
-                  <ActivationForm kind="reception" branch={branch} />
-                </div>
-              ))}
-            </div>
+        {!isDemo && treasury.cash_activated && treasury.bank_activated && (
+          <section className="rounded-xl border border-slate-200 p-4">
+            <h3 className="font-bold">توريد الكاش إلى البنك</h3>
+            <VaultActionForm action={recordMainBankDeposit} confirmMessage="هل تؤكد توريد المبلغ إلى البنك؟" submitLabel="تأكيد التوريد" pendingLabel="جاري التسجيل..." className="mt-3 space-y-2">
+              <label className="block text-sm">المبلغ بالجنيه<Input name="amount" type="number" min="0.01" step="0.01" required /></label>
+            </VaultActionForm>
           </section>
         )}
         <section className="rounded-xl border border-slate-200 p-4">
@@ -193,30 +169,8 @@ export function MainTreasurySection({
         <PendingVaultPayments payments={pendingPayments} vaults={vaults} unavailable={pendingUnavailable} />
         <section>
           <h3 className="mb-3 flex items-center gap-2 font-bold"><Receipt size={17} /> سجل حركات الخزنة الرئيسية</h3>
-          <form method="GET" className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <label><span className="mb-1 block text-xs">من</span><Input name="treasury_from" type="date" defaultValue={filters.treasury_from || ""} /></label>
-            <label><span className="mb-1 block text-xs">إلى</span><Input name="treasury_to" type="date" defaultValue={filters.treasury_to || ""} /></label>
-            <label><span className="mb-1 block text-xs">الفرع المصدر</span>
-              <Select name="treasury_branch" defaultValue={filters.treasury_branch || ""}>
-                <option value="">كل الفروع</option>
-                {vaults.map((v) => <option key={v.branch_id} value={v.branch_id}>{v.branch_name}</option>)}
-              </Select>
-            </label>
-            <label><span className="mb-1 block text-xs">طريقة الدفع</span>
-              <Select name="treasury_method" defaultValue={filters.treasury_method || ""}>
-                <option value="">الكل</option><option value="cash">Cash</option><option value="visa">Visa</option><option value="instapay">InstaPay</option>
-              </Select>
-            </label>
-            <label><span className="mb-1 block text-xs">نوع الحركة</span>
-              <Select name="treasury_kind" defaultValue={filters.treasury_kind || ""}>
-                <option value="">الكل</option>
-                {Object.entries(movementLabels).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
-              </Select>
-            </label>
-            <button type="submit" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white sm:col-span-2 lg:col-span-5">تطبيق فلاتر الخزنة</button>
-          </form>
           {movements.length ? movements.map((entry) => <Movement key={entry.id} entry={entry} branches={vaults} />) : (
-            <p className="rounded-lg border border-dashed p-4 text-sm text-slate-500">لا توجد حركات مطابقة للفلاتر.</p>
+            <p className="rounded-lg border border-dashed p-4 text-sm text-slate-500">لا توجد حركات مسجلة حتى الآن.</p>
           )}
         </section>
       </CardContent>
