@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.dependencies.security import WorkspaceAccess, get_workspace_access
-from app.api.routes import doctor_laser_weekdays
+from app.api.routes import doctor_admin, doctor_admin_read, doctor_laser_weekdays
 from app.database.base import Base
 from app.database.session import get_db
 from app.integrations.clinic.base import AvailabilityRequest
@@ -105,6 +105,8 @@ def laser(ctx, engine, install_weekday_tables):
         db.commit()
     app = FastAPI()
     app.include_router(doctor_laser_weekdays.router, prefix="/clinic")
+    app.include_router(doctor_admin.router, prefix="/clinic")
+    app.include_router(doctor_admin_read.router, prefix="/clinic")
     access = WorkspaceAccess(
         user=ctx["user"], workspace=ctx["workspace"], membership=ctx["member"]
     )
@@ -746,3 +748,53 @@ def test_ai_adapter_reschedule_denies_now_excluded_laser_device(laser):
         assert old.status == old_status
         assert old.start_at == old_start
         assert old.laser_device_key == "candela"
+
+
+def test_inline_schedule_saves_periods_and_devices_atomically(laser):
+    wid = laser["workspace"].id
+    doctor = laser["doctor"].id
+    day = laser["weekday"]
+    primary = laser["branch"].id
+    with laser["sessions"]() as db:
+        branch = Branch(workspace_id=wid, name="Other Schedule Branch", code="B" + uuid4().hex[:8])
+        db.add(branch)
+        db.flush()
+        secondary = branch.id
+        db.add(DoctorBranch(workspace_id=wid, doctor_id=doctor, branch_id=secondary, is_active=True))
+        db.flush()
+        db.add(DoctorWorkingHour(workspace_id=wid, doctor_id=doctor, branch_id=secondary,
+                                 weekday=day, start_time=time(10), end_time=time(16)))
+        db.commit()
+    endpoint = f"/clinic/doctor-admin/{doctor}/working-hours"
+    intervals = [
+        {"weekday": day, "start_time": "09:00", "end_time": "12:00"},
+        {"weekday": day, "start_time": "14:00", "end_time": "18:00"},
+    ]
+    payload = {"branch_id": str(primary), "intervals": intervals,
+               "laser_weekday_exclusions": [{"weekday": day, "excluded_device_keys": ["candela"]}]}
+    response = laser["client"].put(endpoint, json=payload)
+    assert response.status_code == 200, response.text
+    assert len(response.json()) == 2
+    assert availability(laser, device="candela", doctor=False) == []
+    assert availability(laser, device="other")
+    listing = laser["client"].get("/clinic/doctor-admin")
+    assert listing.status_code == 200, listing.text
+    record = next(row for row in listing.json() if row["id"] == str(doctor))
+    schedules = {row["branch_id"]: row["working_hours"] for row in record["branch_schedules"]}
+    assert len(schedules[str(primary)]) == 2
+    assert schedules[str(secondary)] == [{"weekday": day, "start_time": "10:00", "end_time": "16:00"}]
+    bad = {**payload, "intervals": [{"weekday": day, "start_time": "10:00", "end_time": "11:00"}],
+           "laser_weekday_exclusions": [{"weekday": day, "excluded_device_keys": ["not-registered"]}]}
+    assert laser["client"].put(endpoint, json=bad).status_code == 422
+    reread = laser["client"].get("/clinic/doctor-admin")
+    row = next(row for row in reread.json() if row["id"] == str(doctor))
+    assert {r["branch_id"]: r["working_hours"] for r in row["branch_schedules"]} == schedules
+    assert laser["client"].put(endpoint, json={**payload, "branch_id": str(uuid4())}).status_code == 404
+    # Failed device loading omits the field and must preserve saved exclusions.
+    assert laser["client"].put(endpoint, json={"branch_id": str(primary), "intervals": intervals}).status_code == 200
+    assert availability(laser, device="candela", doctor=False) == []
+    # Explicit empty exclusion for the retained workday means all devices ON.
+    assert laser["client"].put(endpoint, json={**payload, "laser_weekday_exclusions": [
+        {"weekday": day, "excluded_device_keys": []},
+    ]}).status_code == 200
+    assert availability(laser, device="candela")

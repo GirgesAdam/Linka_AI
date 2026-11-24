@@ -464,7 +464,8 @@ def update_doctor_hours_from_admin(
         entity_type="doctor",
         entity_id=doctor.id,
         summary="Doctor working hours replaced from doctors schedule page.",
-        metadata={"interval_count": len(rows)},
+        metadata={"interval_count": len(rows), "branch_id": str(getattr(payload, "branch_id", None) or (rows[0].branch_id if rows else "")),
+                  "laser_weekdays_updated": getattr(payload, "laser_weekday_exclusions", None) is not None},
         flush=False,
     )
     _commit_or_conflict(db, "Doctor working-hour intervals must be unique and valid.")

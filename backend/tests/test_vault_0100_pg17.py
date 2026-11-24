@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from app.models.branch import Branch
@@ -127,5 +128,9 @@ def test_actual_0099_to_0100_reception_and_bank_deposits():
             print("VAULT_0100_REAL_MIGRATION_AUTO_RECEPTION_BANK_RETRY_CONCURRENCY_PASS")
         assert deposit("same-key", 1000) is None
         assert deposit("overdraw", 2001) is None
+        with pytest.raises(DBAPIError, match="VAULT_BANK_TRANSFER_REQUIRES_MATCHING_LEDGER_SIDES"):
+            with sessions.begin() as db:
+                db.add(VaultTransfer(workspace_id=wid, branch_id=None, amount_minor=100,
+                                     currency="EGP", idempotency_key="unpaired", actor_user_id=uid))
     finally:
         engine.dispose()

@@ -94,7 +94,8 @@ export function useRefreshAfterSuccess(state: Pick<DoctorAdminState, "notice" | 
 export function ScheduleFields({ initialHours = [], devices, rows = [] }: { initialHours?: KnowledgeHour[]; devices?: ClinicLaserDevice[] | null; rows?: DoctorLaserWeekday[] }) {
   const [intervals, setIntervals] = useState<EditableInterval[]>(() => normalizeHours(initialHours));
   const activeDevices = (devices || []).filter((device) => device.is_active);
-  const [excluded, setExcluded] = useState<Record<number, string[]>>(() => Object.fromEntries(rows.map((row) => [row.weekday, row.excluded_device_keys])));
+  const [overrides, setOverrides] = useState<Record<number, string[]>>({});
+  const excluded: Record<number, string[]> = { ...Object.fromEntries(rows.map((row) => [row.weekday, row.excluded_device_keys])), ...overrides };
   const restrictions = [...new Set(intervals.map((interval) => interval.weekday))].map((weekday) => ({
     weekday, excluded_device_keys: (excluded[weekday] || []).filter((key) => activeDevices.some((device) => device.device_key === key)),
   }));
@@ -146,8 +147,8 @@ export function ScheduleFields({ initialHours = [], devices, rows = [] }: { init
                   <input type="checkbox" checked={!(excluded[day.weekday] || []).includes(device.device_key)}
                     onChange={(event) => {
                       const checked = event.target.checked;
-                      setExcluded((current) => {
-                        const next = new Set(current[day.weekday] || []);
+                      setOverrides((current) => {
+                        const next = new Set(current[day.weekday] || excluded[day.weekday] || []);
                         if (checked) next.delete(device.device_key); else next.add(device.device_key);
                         return { ...current, [day.weekday]: [...next] };
                       });

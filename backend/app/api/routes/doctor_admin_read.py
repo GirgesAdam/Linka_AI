@@ -130,6 +130,7 @@ def list_doctors_for_admin(
     for assignment in assignments:
         primary_branch_by_doctor.setdefault(assignment.doctor_id, assignment.branch_id)
 
+    assigned_pairs = {(a.doctor_id, a.branch_id) for a in assignments}
     hour_rows: list[DoctorWorkingHour] = []
     if primary_branch_by_doctor:
         candidate_hours = list(
@@ -149,7 +150,7 @@ def list_doctors_for_admin(
         hour_rows = [
             row
             for row in candidate_hours
-            if any(a.doctor_id == row.doctor_id and a.branch_id == row.branch_id for a in assignments)
+            if (row.doctor_id, row.branch_id) in assigned_pairs
         ]
 
     services_by_doctor: dict[UUID, list[DoctorAdminNamedLink]] = defaultdict(list)
