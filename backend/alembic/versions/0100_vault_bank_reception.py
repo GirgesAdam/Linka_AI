@@ -3,8 +3,9 @@
 Revision ID: 0100_vault_bank_reception
 Revises: 0099_reception_main_vault_ledger
 """
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0100_vault_bank_reception"
 down_revision = "0099_reception_main_vault_ledger"

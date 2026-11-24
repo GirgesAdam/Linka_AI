@@ -91,7 +91,7 @@ export function useRefreshAfterSuccess(state: Pick<DoctorAdminState, "notice" | 
   }, []);
 }
 
-function ScheduleFields({ initialHours = [], devices, rows = [] }: { initialHours?: KnowledgeHour[]; devices?: ClinicLaserDevice[] | null; rows?: DoctorLaserWeekday[] }) {
+export function ScheduleFields({ initialHours = [], devices, rows = [] }: { initialHours?: KnowledgeHour[]; devices?: ClinicLaserDevice[] | null; rows?: DoctorLaserWeekday[] }) {
   const [intervals, setIntervals] = useState<EditableInterval[]>(() => normalizeHours(initialHours));
   const activeDevices = (devices || []).filter((device) => device.is_active);
   const [excluded, setExcluded] = useState<Record<number, string[]>>(() => Object.fromEntries(rows.map((row) => [row.weekday, row.excluded_device_keys])));
@@ -169,7 +169,7 @@ const categoryOptions = [
   { value: "slimming", label: "تخسيس" },
 ] as const;
 
-function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: string[] }) {
+function CategoryChecklist({ selectedCategories = [], onChange }: { selectedCategories?: string[]; onChange?: (value: string, checked: boolean) => void }) {
   const selected = new Set(selectedCategories);
   return (
     <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-3">
@@ -180,6 +180,7 @@ function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: s
             name="service_category"
             value={category.value}
             defaultChecked={selected.has(category.value)}
+            onChange={(event) => onChange?.(category.value, event.target.checked)}
           />
           <span>{category.label}</span>
         </label>
@@ -190,6 +191,7 @@ function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: s
 
 function CreateDoctorForm({ laserDevices }: { laserDevices: ClinicLaserDevice[] | null }) {
   const [open, setOpen] = useState(false);
+  const [laserSelected, setLaserSelected] = useState(false);
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(createDoctorAction, initialDoctorAdminState);
   return (
     <div className="rounded-2xl border border-teal-200 bg-teal-50/40 p-4">
@@ -206,8 +208,8 @@ function CreateDoctorForm({ laserDevices }: { laserDevices: ClinicLaserDevice[] 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <label className="text-xs font-bold text-slate-700">الاسم<input name="name" maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
           </div>
-          <div><div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات التي يقدمها الدكتور</div><CategoryChecklist /></div>
-          <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields devices={laserDevices} /></div>
+          <div><div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات التي يقدمها الدكتور</div><CategoryChecklist onChange={(value, checked) => { if (value === "laser") setLaserSelected(checked); }} /></div>
+          <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields devices={laserSelected ? laserDevices : null} /></div>
           <ActionState state={state} />
           <Button type="submit" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <UserPlus size={15} />} إضافة الدكتور</Button>
         </form>

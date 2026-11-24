@@ -233,6 +233,10 @@ def _replace_doctor_hours(
         if exclusion.weekday not in active_days:
             db.delete(exclusion)
     if restrictions is not None:
+        if any(row.excluded_device_keys for row in restrictions) and "laser" not in doctor_service_categories(
+            db, workspace_id=workspace.id, doctor_id=doctor_id,
+        ):
+            raise HTTPException(status_code=422, detail="Laser restrictions require a laser doctor.")
         by_day = {row.weekday: set(row.excluded_device_keys) for row in restrictions}
         if len(by_day) != len(restrictions) or set(by_day) != active_days:
             raise HTTPException(status_code=422, detail="Laser restrictions must match active workdays.")
@@ -319,6 +323,8 @@ def create_doctor_from_admin(
     service_ids = sync_doctor_service_assignments(
         db, workspace_id=workspace.id, doctor=doctor, categories=categories
     )
+    if payload.laser_weekday_exclusions is not None:
+        db.flush()  # Make the new service category visible to the same transaction.
     _replace_doctor_hours(
         db,
         workspace=workspace,

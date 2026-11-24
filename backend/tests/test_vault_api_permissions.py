@@ -39,7 +39,7 @@ def test_pending_and_main_endpoints_are_admin_only():
         "/pending-payments/{pending_id}/electronic-opening-review",
         "/pending-payments/{pending_id}/electronic-retry",
         "/treasury", "/treasury/movements", "/branch-grants",
-        "/accounts/activate",
+        "/accounts/activate", "/treasury/bank-deposits",
     ):
         route = next((r for r in vault_api.router.routes if r.path == path), None)
         assert route is not None, path

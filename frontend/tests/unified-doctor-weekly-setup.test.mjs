@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "../src");
 const setup = readFileSync(join(root, "app/(dashboard)/setup/setup-importer.tsx"), "utf8");
 const types = readFileSync(join(root, "lib/clinic-setup-v2-types.ts"), "utf8");
-const laser = readFileSync(join(root, "app/(dashboard)/doctors/doctor-laser-weekdays.tsx"), "utf8");
+const laser = readFileSync(join(root, "app/(dashboard)/doctors/doctor-management.tsx"), "utf8");
 
 test("setup UI no longer offers doctor type or visiting options", () => {
   assert.match(setup, /title="الدكاترة"/);
@@ -30,6 +30,6 @@ test("frontend doctor contract does not include a visiting type or dated windows
 test("laser per-weekday device management is retained", () => {
   assert.match(laser, /excluded_device_keys/);
   assert.match(laser, /row\.weekday/);
-  assert.match(laser, /saveDoctorLaserWeekday/);
+  assert.match(laser, /laser_weekday_exclusions_json/);
   assert.doesNotMatch(laser, /visiting/i);
 });

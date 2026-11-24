@@ -480,7 +480,7 @@ def main_treasury_summary(
         VaultPendingPayment.workspace_id == workspace_id,
     )) or 0
     return {
-        "currency":"EGP","activated":len(accounts) >= 3,
+        "currency":"EGP","activated":all(kind in channels for kind in ("main_cash", "main_visa", "main_instapay")),
         "cash_activated":"main_cash" in channels,
         "bank_activated":all(kind in channels for kind in ("main_bank", "main_visa", "main_instapay")),
         "bank_minor":sum(channels.get(kind, 0) for kind in ("main_bank", "main_visa", "main_instapay")),

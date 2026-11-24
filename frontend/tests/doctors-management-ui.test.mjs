@@ -150,9 +150,9 @@ test("services page no longer contains a duplicate doctor laser editor or endpoi
 
 test("doctor editor includes weekly hours beside doctor/branch/day laser device controls", () => {
   assert.match(doctorsUI, /<DoctorProfileForm doctor=\{doctor\} \/>/);
-  assert.match(doctorsUI, /<DoctorScheduleForm doctor=\{doctor\} \/>/);
-  assert.match(doctorsUI, /أجهزة الليزر حسب يوم العمل والفرع/);
-  assert.match(doctorsUI, /<DoctorLaserWeekdayPanel/);
+  assert.match(doctorsUI, /<DoctorScheduleForm key=\{branch\.branch_id\}/);
+  assert.match(doctorsUI, /laser_weekday_exclusions_json/);
+  assert.doesNotMatch(doctorsUI, /<DoctorLaserWeekdayPanel/);
   assert.match(doctorsUI, /row\.doctor_id === doctor\.id/);
   assert.match(doctorsUI, /doctor\.service_categories\.includes\("laser"\)/);
 });
@@ -177,7 +177,7 @@ test("doctor create, profile and schedule use visible success/error states witho
   assert.match(doctorsUI, /useActionState<DoctorAdminState, FormData>\(updateDoctorScheduleAction/);
   assert.match(doctorsUI, /role="alert" aria-live="polite"/);
   assert.match(doctorsUI, /role="status" aria-live="polite"/);
-  assert.match(doctorsUI, /<ScheduleFields initialHours=\{doctor\.working_hours\} \/>/);
+  assert.match(doctorsUI, /<ScheduleFields initialHours=\{branch\?\.working_hours \|\| doctor\.working_hours\}/);
   assert.match(doctorsUI, /router\.refresh\(\)/);
   assert.doesNotMatch(doctorsUI, /\.reset\(\)/);
 });
@@ -220,11 +220,14 @@ test("updating doctor schedule confirms the save and invalidates only after succ
   const result = await actions.updateDoctorScheduleAction(initial, form([
     ["doctor_id", "doc-1"],
     ["intervals_json", JSON.stringify([{ weekday: 5, start_time: "10:00", end_time: "15:00" }])],
+    ["branch_id", "branch-2"],
+    ["laser_weekday_exclusions_json", JSON.stringify([{ weekday: 5, excluded_device_keys: ["candela"] }])],
   ]));
   assert.equal(result.error, null);
   assert.match(result.notice, /تم تحديث مواعيد عمل الدكتور/);
   assert.equal(calls[0].url, "/clinic/doctor-admin/doc-1/working-hours");
   assert.equal(calls[0].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { intervals: [{ weekday: 5, start_time: "10:00", end_time: "15:00" }], branch_id: "branch-2", laser_weekday_exclusions: [{ weekday: 5, excluded_device_keys: ["candela"] }] });
   // Preserve the open editor until its client refresh runs after showing success.
   assert.ok(!revalidated.includes("/doctors"));
   assert.ok(revalidated.includes("/appointments"));
