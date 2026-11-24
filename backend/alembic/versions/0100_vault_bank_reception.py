@@ -70,6 +70,11 @@ def upgrade():
       valid_sides integer;
     BEGIN
       IF TG_TABLE_NAME = 'vault_transfers' THEN
+        IF TG_OP = 'UPDATE' THEN
+          IF (OLD.branch_id IS NULL) <> (NEW.branch_id IS NULL) THEN
+            RAISE EXCEPTION 'VAULT_TRANSFER_SCOPE_IMMUTABLE';
+          END IF;
+        END IF;
         tid := NEW.id;
         wid := NEW.workspace_id;
       ELSE
@@ -81,10 +86,11 @@ def upgrade():
         WHERE id=tid AND workspace_id=wid;
       IF NOT FOUND OR header.branch_id IS NOT NULL THEN RETURN NEW; END IF;
       SELECT count(*), count(*) FILTER (
-        WHERE (l.kind='transfer_out' AND a.kind='main_cash'
+        WHERE l.payment_transaction_id IS NULL AND l.expense_id IS NULL
+          AND ((l.kind='transfer_out' AND a.kind='main_cash'
                  AND l.amount_minor=-header.amount_minor)
            OR (l.kind='transfer_in' AND a.kind='main_bank'
-                 AND l.amount_minor=header.amount_minor)
+                 AND l.amount_minor=header.amount_minor))
       ) INTO side_count, valid_sides
       FROM public.vault_ledger_entries l
       JOIN public.vault_accounts a

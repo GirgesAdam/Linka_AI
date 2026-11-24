@@ -14,8 +14,10 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from app.models.branch import Branch
+from app.models.patient import Patient
+from app.models.payment_transaction import PaymentTransaction
 from app.models.user import User
-from app.models.vault import VaultAccount, VaultLedgerEntry, VaultTransfer
+from app.models.vault import VaultAccount, VaultLedgerEntry, VaultPendingPayment, VaultTransfer
 from app.models.workspace import Workspace
 from app.services.vault import (
     VaultError,
@@ -23,6 +25,7 @@ from app.services.vault import (
     main_treasury_summary,
     record_bank_deposit,
 )
+from app.services.vault_pending import review_preactivation_electronic
 
 
 def test_actual_0099_to_0100_reception_and_bank_deposits():
@@ -49,16 +52,19 @@ def test_actual_0099_to_0100_reception_and_bank_deposits():
             prior = Branch(workspace_id=wid, name="Existing", code="existing")
             inactive = Branch(workspace_id=wid, name="Inactive", code="inactive", is_active=False)
             demo_branch = Branch(workspace_id=did, name="Demo", code="demo")
-            db.add_all([prior, inactive, demo_branch])
+            legacy = Branch(workspace_id=wid, name="Existing Activated", code="legacy")
+            db.add_all([prior, inactive, demo_branch, legacy])
             db.flush()
             prior_id, inactive_id = prior.id, inactive.id
+            legacy_id = activate_account(db, workspace_id=wid, actor_user_id=uid, kind="reception",
+                                         branch_id=legacy.id, opening_balance_minor=700, currency="EGP").id
             activate_account(db, workspace_id=wid, actor_user_id=uid, kind="main_cash",
                              branch_id=None, opening_balance_minor=10000, currency="EGP")
             activate_account(db, workspace_id=wid, actor_user_id=uid, kind="main_visa",
                              branch_id=None, opening_balance_minor=2000, currency="EGP")
             assert db.scalar(select(func.count(VaultAccount.id)).where(
                 VaultAccount.workspace_id == wid, VaultAccount.kind == "reception",
-            )) == 0
+            )) == 1
         engine.dispose()
         env = {**os.environ, "DATABASE_URL": raw, "MIGRATION_DATABASE_URL": raw}
         subprocess.run([sys.executable, "-m", "alembic", "upgrade", "0100_vault_bank_reception"],
@@ -70,6 +76,9 @@ def test_actual_0099_to_0100_reception_and_bank_deposits():
             ))
             assert reception is not None
             assert reception.opened_by_user_id is None
+            assert db.scalar(select(func.sum(VaultLedgerEntry.amount_minor)).where(
+                VaultLedgerEntry.account_id == legacy_id,
+            )) == 700
             assert db.scalar(select(func.count(VaultLedgerEntry.id)).where(
                 VaultLedgerEntry.account_id == reception.id,
             )) == 0
@@ -85,7 +94,7 @@ def test_actual_0099_to_0100_reception_and_bank_deposits():
             db.flush()
             assert db.scalar(select(func.count(VaultAccount.id)).where(
                 VaultAccount.workspace_id == wid, VaultAccount.kind == "reception",
-            )) == 3
+            )) == 4
             bank = activate_account(db, workspace_id=wid, actor_user_id=uid, kind="main_bank",
                                     branch_id=None, opening_balance_minor=3000, currency="EGP")
             bank_id = bank.id
@@ -132,5 +141,76 @@ def test_actual_0099_to_0100_reception_and_bank_deposits():
             with sessions.begin() as db:
                 db.add(VaultTransfer(workspace_id=wid, branch_id=None, amount_minor=100,
                                      currency="EGP", idempotency_key="unpaired", actor_user_id=uid))
+
+        # Both electronic channels must share the consolidated opening cap.
+        with sessions.begin() as db:
+            clinic = Workspace(name="Synthetic Bank Review", slug="vault-review-" + uuid4().hex)
+            db.add(clinic)
+            db.flush()
+            review_wid = clinic.id
+            patient = Patient(workspace_id=review_wid, first_name="Synthetic")
+            db.add(patient)
+            db.flush()
+            patient_id = patient.id
+            receipts = [
+                PaymentTransaction(workspace_id=review_wid, patient_id=patient_id,
+                                   transaction_type="payment", amount_minor=2000, currency="EGP",
+                                   payment_method=method, source="staff", created_by_user_id=uid)
+                for method in ("visa", "instapay")
+            ]
+            db.add_all(receipts)
+            db.flush()
+            pending_ids = list(db.scalars(select(VaultPendingPayment.id).where(
+                VaultPendingPayment.workspace_id == review_wid,
+            )))
+            assert len(pending_ids) == 2
+        with sessions.begin() as db:
+            bank = activate_account(db, workspace_id=review_wid, actor_user_id=uid, kind="main_bank",
+                                    branch_id=None, opening_balance_minor=3000, currency="EGP")
+            review_bank_id = bank.id
+        with sessions.begin() as db:
+            reviewed = review_preactivation_electronic(
+                db, workspace_id=review_wid, pending_id=pending_ids[0], actor_user_id=uid,
+                outcome="included_in_opening", explanation="Synthetic verified bank opening",
+            )
+            assert reviewed.reviewed_account_id == review_bank_id
+        with pytest.raises(VaultError, match="does not cover"):
+            with sessions.begin() as db:
+                review_preactivation_electronic(
+                    db, workspace_id=review_wid, pending_id=pending_ids[1], actor_user_id=uid,
+                    outcome="included_in_opening", explanation="Synthetic verified bank opening",
+                )
+        with sessions.begin() as db:
+            before = main_treasury_summary(db, workspace_id=review_wid, workspace_timezone="Africa/Cairo")
+            assert before["bank_minor"] == 3000
+            receipts = [
+                PaymentTransaction(workspace_id=review_wid, patient_id=patient_id,
+                                   transaction_type="payment", amount_minor=amount, currency="EGP",
+                                   payment_method=method, source="staff", created_by_user_id=uid)
+                for method, amount in (("visa", 800), ("instapay", 600))
+            ]
+            db.add_all(receipts)
+            db.flush()
+            visa_id = receipts[0].id
+            assert db.scalar(select(func.count(VaultLedgerEntry.id)).where(
+                VaultLedgerEntry.workspace_id == review_wid,
+                VaultLedgerEntry.kind == "payment",
+            )) == 2
+        with sessions.begin() as db:
+            refund = PaymentTransaction(
+                workspace_id=review_wid, patient_id=patient_id, transaction_type="refund",
+                amount_minor=300, currency="EGP", payment_method="visa", source="staff",
+                created_by_user_id=uid, reference_transaction_id=visa_id,
+            )
+            db.add(refund)
+            db.flush()
+            after = main_treasury_summary(db, workspace_id=review_wid, workspace_timezone="Africa/Cairo")
+            assert (after["visa_minor"], after["instapay_minor"], after["bank_minor"]) == (500, 600, 4100)
+            assert db.scalar(select(func.count(VaultLedgerEntry.id)).where(
+                VaultLedgerEntry.workspace_id == review_wid,
+                VaultLedgerEntry.kind == "refund",
+                VaultLedgerEntry.payment_transaction_id == refund.id,
+            )) == 1
+        print("VAULT_0100_SHARED_OPENING_CAP_PAYMENT_REFUND_PASS")
     finally:
         engine.dispose()
