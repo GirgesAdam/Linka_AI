@@ -61,7 +61,7 @@ def upgrade():
     op.execute(sa.text("""
     CREATE FUNCTION public.vault_check_bank_transfer()
     RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER
-    SET search_path = public, pg_catalog AS $
+    SET search_path = public, pg_catalog AS $$
     DECLARE
       tid uuid;
       wid uuid;
@@ -101,7 +101,7 @@ def upgrade():
       END IF;
       RETURN NEW;
     END;
-    $;
+    $$;
     CREATE CONSTRAINT TRIGGER vault_bank_transfer_header_guard
     AFTER INSERT OR UPDATE ON public.vault_transfers
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW

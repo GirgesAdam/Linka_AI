@@ -13,6 +13,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
+from app.database.schema_capabilities import vault_ledger_schema_available
 from app.models.branch import Branch
 from app.models.patient import Patient
 from app.models.payment_transaction import PaymentTransaction
@@ -71,6 +72,7 @@ def test_actual_0099_to_0100_reception_and_bank_deposits():
                        env=env, check=True, timeout=120)
         with sessions.begin() as db:
             assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0100_vault_bank_reception"
+            assert vault_ledger_schema_available(db) is True
             reception = db.scalar(select(VaultAccount).where(
                 VaultAccount.workspace_id == wid, VaultAccount.branch_id == prior_id,
             ))
