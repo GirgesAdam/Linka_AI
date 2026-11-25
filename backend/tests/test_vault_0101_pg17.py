@@ -37,7 +37,12 @@ from app.models import (
 )
 from app.models.expense import Expense
 from app.models.vault import VaultAccount, VaultBranchGrant, VaultLedgerEntry, VaultPendingPayment
-from app.services.vault import VaultError, activate_account, main_treasury_summary, record_manual_funding
+from app.services.vault import (
+    VaultError,
+    activate_account,
+    main_treasury_summary,
+    record_manual_funding,
+)
 from app.services.vault_pending import review_preactivation_electronic
 
 pytestmark = pytest.mark.skipif(
