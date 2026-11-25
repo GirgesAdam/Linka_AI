@@ -28,7 +28,7 @@ export function VaultActionForm({
     if (!state.notice) return;
     idempotencyKey.current = null;
     router.refresh();
-  }, [router, state.notice]);
+  }, [router, state]);
 
   function confirm(event: FormEvent<HTMLFormElement>) {
     if (!window.confirm(confirmMessage)) {

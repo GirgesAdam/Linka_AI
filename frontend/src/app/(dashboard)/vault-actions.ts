@@ -4,15 +4,15 @@ import { revalidatePath } from "next/cache";
 import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
 import { tiaRequest } from "@/lib/tia/api";
 
-const vaultKinds = new Set(["main_cash", "main_bank"]);
+const vaultKinds = new Set(["reception", "main_cash", "main_bank"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function moneyMinor(value: FormDataEntryValue | null, allowZero = false): number {
+function moneyMinor(value: FormDataEntryValue | null): number {
   const raw = String(value ?? "").trim();
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) throw new Error("راجع قيمة المبلغ المدخلة.");
   const [whole, fraction = ""] = raw.split(".");
   const amount = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
-  if (!Number.isSafeInteger(amount) || amount < 0 || (!allowZero && amount === 0)) {
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
     throw new Error("المبلغ غير صالح.");
   }
   return amount;
@@ -72,26 +72,28 @@ export async function recordReceptionExpense(
   }
 }
 
-export async function activateVaultAccount(
+export async function recordVaultFunding(
   _previous: ActionFeedbackState, formData: FormData,
 ): Promise<ActionFeedbackState> {
   try {
     const kind = String(formData.get("kind") || "");
     if (!vaultKinds.has(kind)) throw new Error("نوع الخزنة غير صالح.");
     const rawBranch = String(formData.get("branch_id") || "");
-    const branch_id = kind === "reception" ? branchId(formData) : null;
-    if (kind !== "reception" && rawBranch) throw new Error("القنوات الرئيسية لا تتبع فرعًا.");
-    await tiaRequest("/vault/accounts/activate", {
+    if (kind !== "reception" && rawBranch) throw new Error("الخزنة الرئيسية لا تتبع فرعًا.");
+    const path = kind === "reception"
+      ? "/vault/reception/" + branchId(formData) + "/funding"
+      : "/vault/treasury/" + kind + "/funding";
+    const amount_minor = moneyMinor(formData.get("amount"));
+    const note = String(formData.get("note") || "").trim();
+    if (amount_minor > 1_000_000_000_000 || note.length > 500) throw new Error("راجع المبلغ والملاحظات.");
+    await tiaRequest(path, {
       method: "POST",
-      body: JSON.stringify({
-        kind, branch_id, opening_balance_minor: moneyMinor(formData.get("opening_balance"), true),
-        currency: "EGP",
-      }),
+      body: JSON.stringify({ amount_minor, note: note || null, idempotency_key: idempotencyKey(formData) }),
     });
     refreshFinanceAndReception();
-    return { notice: "تم تفعيل الحساب وتسجيل الرصيد الافتتاحي بنجاح.", error: null };
+    return { notice: "تمت إضافة الأموال إلى الخزنة دون تسجيل إيراد.", error: null };
   } catch (error) {
-    return actionFeedbackFailure(error, "تعذر تفعيل الحساب. لم يتم تغيير الرصيد.");
+    return actionFeedbackFailure(error, "تعذر تأكيد إضافة الأموال. حدّث الرصيد قبل إعادة المحاولة.");
   }
 }
 
@@ -112,27 +114,6 @@ export async function recordMainBankDeposit(
     return actionFeedbackFailure(error, "تعذر تأكيد التوريد إلى البنك. حدّث الرصيد قبل إعادة المحاولة.");
   }
 }
-
-export async function setReceptionBranchGrant(
-  _previous: ActionFeedbackState, formData: FormData,
-): Promise<ActionFeedbackState> {
-  try {
-    const user_id = String(formData.get("user_id") || "");
-    if (!uuidPattern.test(user_id)) throw new Error("اختر عضوًا صحيحًا.");
-    await tiaRequest("/vault/branch-grants", {
-      method: "POST",
-      body: JSON.stringify({
-        user_id, branch_id: branchId(formData),
-        enabled: String(formData.get("enabled")) === "true",
-      }),
-    });
-    refreshFinanceAndReception();
-    return { notice: "تم تحديث صلاحية الوصول لخزنة الفرع.", error: null };
-  } catch (error) {
-    return actionFeedbackFailure(error, "تعذر تحديث صلاحية خزنة الفرع.");
-  }
-}
-
 
 export async function resolvePendingVaultPayment(
   _previous: ActionFeedbackState, formData: FormData,
@@ -181,7 +162,7 @@ export async function reviewElectronicOpeningReceipt(
     refreshFinanceAndReception();
     return {
       notice: outcome === "included_in_opening"
-        ? "تم توثيق أن المبلغ مشمول في الرصيد الافتتاحي دون إضافة تحصيل جديد."
+        ? "تم توثيق أن المبلغ مشمول في رصيد افتتاحي تاريخي مسجل، دون إضافة تحصيل جديد."
         : "تم توثيق الحالة كمعلقة لقرار محاسبي، دون ترحيل أي مبلغ.",
       error: null,
     };

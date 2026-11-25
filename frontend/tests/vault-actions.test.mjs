@@ -128,17 +128,22 @@ test("resolution with missing audit explanation is rejected before API call", as
   assert.equal(h.requests.length, 0);
 });
 
-test("zero opening balance activation is accepted for the main cash account", async () => {
-  const h = actionHarness();
-  const result = await h.actions.activateVaultAccount(
-    { notice: null, error: null },
-    data({ kind: "main_cash", opening_balance: "0" }),
-  );
-  assert.ok(result.notice);
-  assert.deepEqual(h.requests[0].body, {
-    kind: "main_cash", branch_id: null, opening_balance_minor: 0,
-    currency: "EGP",
-  });
+test("funding uses explicit account, exact minor units, note and idempotency key", async () => {
+  for (const kind of ["reception", "main_cash", "main_bank"]) {
+    const h = actionHarness();
+    const result = await h.actions.recordVaultFunding(
+      { notice: null, error: null },
+      data({ kind, ...(kind === "reception" ? { branch_id: BRANCH } : {}), amount: "12.34", note: " float ", idempotency_key: UUID }),
+    );
+    assert.ok(result.notice);
+    assert.deepEqual(h.requests, [{
+      path: kind === "reception" ? "/vault/reception/" + BRANCH + "/funding" : "/vault/treasury/" + kind + "/funding",
+      method: "POST", body: { amount_minor: 1234, note: "float", idempotency_key: UUID },
+    }]);
+    assert.deepEqual(h.validations, ["/dashboard", "/finance"]);
+    assert.equal(h.actions.activateVaultAccount, undefined);
+    assert.equal(h.actions.setReceptionBranchGrant, undefined);
+  }
 });
 
 const displayStub = (tag) => function Stub({ children, ...props }) {
@@ -152,6 +157,13 @@ const displayStub = (tag) => function Stub({ children, ...props }) {
     ? React.createElement(tag, stripped, children, submit)
     : React.createElement(tag, stripped, children);
 };
+
+const { VaultFundingForm } = compileSource("src/app/(dashboard)/vault-funding-form.tsx", {
+  "@/components/vault-action-form": { VaultActionForm: displayStub("form") },
+  "@/components/ui/input": { Input: displayStub("input") },
+  "@/components/ui/textarea": { Textarea: displayStub("textarea") },
+  "./vault-actions": { recordVaultFunding: () => ({}) },
+});
 
 const ElectronicPendingActions = compileSource(
   "src/app/(dashboard)/finance/electronic-pending-actions.tsx",
@@ -288,7 +300,8 @@ test("unactivated electronic channel displays warning without posting form", () 
   const html = renderToStaticMarkup(React.createElement(
     ElectronicPendingActions, { payment: electronicPayment() },
   ));
-  assert.match(html, /فعّل القناة أولًا/);
+  assert.match(html, /القناة غير متاحة حاليًا/);
+  assert.doesNotMatch(html, /مع رصيد افتتاحي مُطابق|فعّل القناة أولًا/);
   assert.doesNotMatch(html, /<form/);
 });
 
@@ -300,6 +313,8 @@ test("preactivation electronic receipt requires explicit opening reconciliation 
   assert.match(html, /name="outcome"/);
   assert.match(html, /included_in_opening/);
   assert.match(html, /requires_accounting_decision/);
+  assert.match(html, /رصيد افتتاحي تاريخي مسجل/);
+  assert.match(html, /إضافة الأموال يدويًا لا تغطي هذه الدفعات تلقائيًا/);
   assert.match(html, /name="explanation"/);
 });
 
@@ -344,18 +359,18 @@ test("Demo Finance renders the vault policy explanation and no activation contro
       "@/components/ui/input": { Input: displayStub("input") },
       "@/components/ui/select": { Select: displayStub("select") },
       "@/lib/format": { formatMoney: (amount, currency) => `${amount} ${currency}` },
+      "../vault-funding-form": { VaultFundingForm },
       "./pending-vault-payments": {
         PendingVaultPayments: () => React.createElement("div"),
       },
       "../vault-actions": {
-        activateVaultAccount: () => ({}),
-        setReceptionBranchGrant: () => ({}),
+        recordMainBankDeposit: () => ({}),
       },
     },
   );
   const props = {
     treasury: {
-      cash_minor: 0, bank_minor: 0, cash_activated: false, bank_activated: false, visa_minor: 0, instapay_minor: 0, currency: "EGP",
+      cash_minor: 0, bank_minor: 0, cash_activated: true, bank_activated: true, visa_minor: 0, instapay_minor: 0, currency: "EGP",
       total_recorded_minor: 0, transfers_today_minor: 0,
       active_channels: [], unattributed_payment_count: 0,
     },
@@ -376,8 +391,11 @@ test("Demo Finance renders the vault policy explanation and no activation contro
   const real = renderToStaticMarkup(React.createElement(
     MainTreasurySection, { ...props, isDemo: false },
   ));
-  assert.match(real, /name="opening_balance"/);
-  assert.match(real, /name="kind"/);
+  assert.doesNotMatch(real, /name="opening_balance"|صلاحيات خزنة الفروع|تفعيل الحساب/);
+  assert.match(real, /name="kind" value="main_cash"/);
+  assert.match(real, /name="kind" value="main_bank"/);
+  assert.match(real, /إضافة أموال/);
+  assert.match(real, /إجمالي الرصيد/);
   assert.match(real, /الرصيد البنكي/);
   assert.doesNotMatch(real, /name="kind" value="reception"|treasury_method|treasury_from/);
 });
@@ -399,6 +417,7 @@ test("Demo Reception remains visible with a vault-disabled explanation", () => {
       "@/components/ui/input": { Input: displayStub("input") },
       "@/components/ui/textarea": { Textarea: displayStub("textarea") },
       "@/lib/format": { formatMoney: (amount, currency) => `${amount} ${currency}` },
+      "../vault-funding-form": { VaultFundingForm },
       "../vault-actions": {
         recordReceptionExpense: () => ({}), transferReceptionBalance: () => ({}),
       },
@@ -409,10 +428,24 @@ test("Demo Reception remains visible with a vault-disabled explanation", () => {
   ));
   assert.match(html, /الخزنة غير متاحة في الوضع التجريبي حالياً/);
   assert.match(html, /خزنة الريسبشن/);
-  assert.doesNotMatch(html, /name="opening_balance"/);
+  assert.doesNotMatch(html, /name="opening_balance"|إضافة أموال/);
+  const real = renderToStaticMarkup(React.createElement(
+    ReceptionVaultSection, { vaults: [{ branch_id: BRANCH, branch_name: "Clinic", activated: true,
+      currency: "EGP", balance_minor: 1234, opening_carried_minor: 0, cash_today_minor: 0,
+      refunds_today_minor: 0, expenses_today_minor: 0, transfers_today_minor: 0,
+      manual_funding_today_minor: 1234, recent_movements: [{ id: UUID, kind: "manual_funding",
+        amount_minor: 1234, created_at: "2026-11-25T00:00:00Z", note: "Recorded funds" }] }],
+      unavailable: false, isDemo: false },
+  ));
+  assert.match(real, /name="kind" value="reception"/);
+  assert.match(real, /إضافة أموال يدوياً/);
+  assert.match(real, /Recorded funds/);
+  assert.match(real, /توريد العهدة/);
+  assert.match(real, /خصم مصروفات/);
+  assert.doesNotMatch(real, /name="opening_balance"/);
 });
 
-test("bank deposit submits exact piasters and idempotency key; manual reception activation is refused", async () => {
+test("bank deposit submits exact piasters and idempotency key; invalid funding is refused", async () => {
   const h = actionHarness();
   const result = await h.actions.recordMainBankDeposit(
     { notice: null, error: null }, data({ amount: "12.34", idempotency_key: UUID }),
@@ -422,9 +455,17 @@ test("bank deposit submits exact piasters and idempotency key; manual reception 
     path: "/vault/treasury/bank-deposits", method: "POST",
     body: { amount_minor: 1234, idempotency_key: UUID },
   }]);
-  const rejected = await h.actions.activateVaultAccount(
-    { notice: null, error: null }, data({ kind: "reception", branch_id: BRANCH, opening_balance: "0" }),
-  );
-  assert.ok(rejected.error);
+  for (const fields of [
+    { kind: "reception", branch_id: BRANCH, amount: "0" },
+    { kind: "main_cash", amount: "-1" },
+    { kind: "main_bank", amount: "1.001" },
+    { kind: "main_cash", branch_id: BRANCH, amount: "1" },
+    { kind: "main_visa", amount: "1" },
+  ]) {
+    const rejected = await h.actions.recordVaultFunding(
+      { notice: null, error: null }, data({ ...fields, idempotency_key: UUID }),
+    );
+    assert.ok(rejected.error);
+  }
   assert.equal(h.requests.length, 1);
 });

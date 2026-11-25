@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -22,10 +22,10 @@ from app.schemas.vault import (
     VaultActivationRead,
     VaultActivationRequest,
     VaultBankDepositRequest,
-    VaultBranchGrantRead,
-    VaultBranchGrantRequest,
     VaultExpenseRead,
     VaultExpenseRequest,
+    VaultFundingRead,
+    VaultFundingRequest,
     VaultTransferRead,
     VaultTransferRequest,
 )
@@ -40,14 +40,12 @@ from app.schemas.vault_pending import (
 )
 from app.services.vault import (
     VaultError,
-    activate_account,
     allowed_branch,
-    list_branch_grants,
     main_treasury_summary,
     reception_summaries,
     record_bank_deposit,
     record_cash_expense,
-    set_branch_grant,
+    record_manual_funding,
     transfer_full_balance,
     treasury_movements,
 )
@@ -164,25 +162,7 @@ def activate(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> VaultActivationRead:
-    if payload.kind == "reception":
-        raise _conflict("Reception vaults are activated automatically with their branch.")
-    try:
-        row = activate_account(
-            db, workspace_id=access.workspace.id, actor_user_id=access.user.id,
-            kind=payload.kind, branch_id=payload.branch_id,
-            opening_balance_minor=payload.opening_balance_minor,
-            currency=payload.currency,
-        )
-        _safe_write(db)
-    except VaultError as exc:
-        db.rollback()
-        raise _conflict(str(exc)) from exc
-    except SQLAlchemyError as exc:
-        db.rollback()
-        raise _conflict("Could not confirm account activation. Refresh before retrying.") from exc
-    return VaultActivationRead(
-        account_id=row.id, kind=row.kind, branch_id=row.branch_id, currency=row.currency,
-    )
+    raise HTTPException(status_code=410, detail="Manual activation is retired. Use manual funding.")
 
 
 @router.post("/treasury/bank-deposits", response_model=VaultTransferRead, status_code=201)
@@ -208,35 +188,51 @@ def treasury_bank_deposit(
     )
 
 
-@router.post("/branch-grants", status_code=204)
-def branch_grant(
-    payload: VaultBranchGrantRequest,
+@router.post("/reception/{branch_id}/funding", response_model=VaultFundingRead, status_code=201)
+def reception_funding(
+    branch_id: UUID, payload: VaultFundingRequest,
+    access: Annotated[WorkspaceAccess, Depends(require_section_access("clinic_operations"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> VaultFundingRead:
+    try:
+        allowed_branch(
+            db, workspace_id=access.workspace.id, branch_id=branch_id,
+            actor_user_id=access.user.id, membership=access.membership,
+        )
+        return _fund(db, access, "reception", branch_id, payload)
+    except VaultError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/treasury/{kind}/funding", response_model=VaultFundingRead, status_code=201)
+def treasury_funding(
+    kind: Literal["main_cash", "main_bank"], payload: VaultFundingRequest,
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
     db: Annotated[Session, Depends(get_db)],
-) -> None:
+) -> VaultFundingRead:
+    return _fund(db, access, kind, None, payload)
+
+
+def _fund(
+    db: Session, access: WorkspaceAccess, kind: str,
+    branch_id: UUID | None, payload: VaultFundingRequest,
+) -> VaultFundingRead:
     try:
-        set_branch_grant(
-            db, workspace_id=access.workspace.id, branch_id=payload.branch_id,
-            user_id=payload.user_id, actor_user_id=access.user.id,
-            enabled=payload.enabled,
+        row = record_manual_funding(
+            db, workspace_id=access.workspace.id, kind=kind, branch_id=branch_id,
+            actor_user_id=access.user.id, amount_minor=payload.amount_minor,
+            note=payload.note, idempotency_key=payload.idempotency_key,
         )
+        result = VaultFundingRead(entry_id=row.id, amount_minor=row.amount_minor)
         _safe_write(db)
     except VaultError as exc:
         db.rollback()
         raise _conflict(str(exc)) from exc
     except SQLAlchemyError as exc:
         db.rollback()
-        raise _conflict("Could not confirm branch grant change.") from exc
-
-
-@router.get("/branch-grants", response_model=list[VaultBranchGrantRead])
-def branch_grant_list(
-    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
-    db: Annotated[Session, Depends(get_db)],
-) -> list[VaultBranchGrantRead]:
-    return [VaultBranchGrantRead.model_validate(row) for row in list_branch_grants(
-        db, workspace_id=access.workspace.id,
-    )]
+        raise _conflict("Could not confirm the funding result. Refresh before retrying.") from exc
+    return result
 
 
 @router.get("/treasury/movements", response_model=list[TreasuryMovementRead])

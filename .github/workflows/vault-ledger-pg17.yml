@@ -143,7 +143,7 @@ jobs:
       - name: Bootstrap actual pre-0098 schema on both Finance databases
         run: |
           set -euo pipefail
-          test "$(python -m alembic heads)" = "0100_vault_bank_reception (head)"
+          test "$(python -m alembic heads)" = "0101_vault_manual_funding (head)"
           DATABASE_URL="$FINANCE_COMPAT_0098_DATABASE_URL" \
             MIGRATION_DATABASE_URL="$FINANCE_COMPAT_0098_DATABASE_URL" \
             python -m alembic upgrade 0097_member_page_permissions
@@ -315,3 +315,9 @@ jobs:
           VAULT_0100_TEST_DATABASE_URL="$EXISTING_PACKAGE_TEST_DATABASE_URL" \
             python -m pytest -q tests/test_vault_0100_pg17.py --junitxml="$RUNNER_TEMP/vault-0100.xml"
           python tests/integration/vault_0099_ci_gate.py "$RUNNER_TEMP/vault-0100.xml" 1
+
+      - name: Rehearse 0100 to 0101 and verify automatic funding on actual PostgreSQL 17.6
+        run: |
+          set -euo pipefail
+          VAULT_0101_REQUIRED=1 python -m pytest -q tests/test_vault_0101_pg17.py --junitxml="$RUNNER_TEMP/vault-0101.xml"
+          python tests/integration/vault_0099_ci_gate.py "$RUNNER_TEMP/vault-0101.xml" 1

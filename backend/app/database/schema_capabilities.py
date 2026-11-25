@@ -23,6 +23,7 @@ VAULT_SCHEMA_TABLES = frozenset(
 _PRE_VAULT_REVISION = "0098_doctor_laser_weekday_exclusions"
 _VAULT_REVISION = "0099_reception_main_vault_ledger"
 _VAULT_BANK_REVISION = "0100_vault_bank_reception"
+_VAULT_FUNDING_REVISION = "0101_vault_manual_funding"
 
 _VAULT_SCHEMA_STATE = text(
     """
@@ -179,7 +180,7 @@ def vault_ledger_schema_available(db: Session) -> bool:
         revision = revisions[0]
         if revision == _PRE_VAULT_REVISION and not migration_marker and not available:
             return False
-        if revision in (_VAULT_REVISION, _VAULT_BANK_REVISION) and migration_marker and available:
+        if revision in (_VAULT_REVISION, _VAULT_BANK_REVISION, _VAULT_FUNDING_REVISION) and migration_marker and available:
             return True
         raise SchemaCapabilityError(
             "Alembic revision and Vault schema capabilities do not match; "

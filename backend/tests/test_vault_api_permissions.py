@@ -13,6 +13,7 @@ from app.api.dependencies.security import get_workspace_admin
 from app.api.routes import payments as payment_api
 from app.api.routes import vault as vault_api
 from app.schemas.payments import RefundCreate
+from app.schemas.vault import VaultActivationRequest, VaultFundingRequest
 from app.schemas.vault_pending import VaultResolveRequest
 from app.services import vault as service
 
@@ -38,7 +39,7 @@ def test_pending_and_main_endpoints_are_admin_only():
         "/pending-payments", "/pending-payments/{pending_id}/resolve",
         "/pending-payments/{pending_id}/electronic-opening-review",
         "/pending-payments/{pending_id}/electronic-retry",
-        "/treasury", "/treasury/movements", "/branch-grants",
+        "/treasury", "/treasury/movements", "/treasury/{kind}/funding",
         "/accounts/activate", "/treasury/bank-deposits",
     ):
         route = next((r for r in vault_api.router.routes if r.path == path), None)
@@ -57,20 +58,38 @@ def test_member_cannot_pass_workspace_admin_guard():
     assert err.value.status_code == 403
 
 
-def test_branch_member_requires_explicit_grant(monkeypatch):
+def test_branch_member_uses_existing_section_access_without_grant(monkeypatch):
     ws, branch, actor = uuid4(), uuid4(), uuid4()
     model_branch = SimpleNamespace(id=branch)
     monkeypatch.setattr(service, "_branch", lambda *_args: model_branch)
-    member = SimpleNamespace(workspace_id=ws, user_id=actor, is_active=True, role="member")
-    with pytest.raises(service.VaultError, match="not granted"):
-        service.allowed_branch(
-            DB(), workspace_id=ws, branch_id=branch,
-            actor_user_id=actor, membership=member,
-        )
+    member = SimpleNamespace(workspace_id=ws, user_id=actor, is_active=True, role="member",
+                             section_access={"clinic_operations": True, "administration": False})
     assert service.allowed_branch(
-        DB(uuid4()), workspace_id=ws, branch_id=branch,
-        actor_user_id=actor, membership=member,
+        DB(), workspace_id=ws, branch_id=branch, actor_user_id=actor, membership=member,
     ) is model_branch
+    member.section_access["clinic_operations"] = False
+    with pytest.raises(service.VaultError, match="Access denied"):
+        service.allowed_branch(
+            DB(), workspace_id=ws, branch_id=branch, actor_user_id=actor, membership=member,
+        )
+
+
+def test_manual_activation_endpoint_is_retired_and_grant_endpoints_removed():
+    db = DB()
+    with pytest.raises(HTTPException) as error:
+        vault_api.activate(
+            VaultActivationRequest(kind="main_cash", opening_balance_minor=100),
+            access=SimpleNamespace(), db=db,
+        )
+    assert error.value.status_code == 410
+    assert db.commits == 0
+    assert not any(r.path == "/branch-grants" for r in vault_api.router.routes)
+
+
+@pytest.mark.parametrize("amount", [0, -1, 1.5, True, "100", 1_000_000_000_001])
+def test_manual_funding_requires_positive_integer_minor_units(amount):
+    with pytest.raises(ValidationError):
+        VaultFundingRequest(amount_minor=amount, idempotency_key="funding-1")
 
 
 def test_branch_cross_workspace_rejected(monkeypatch):

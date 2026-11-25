@@ -13,7 +13,7 @@ export function ElectronicPendingActions({ payment }: { payment: VaultPendingPay
         <strong>مراجعة إدارية مسجلة</strong>
         <p className="mt-1">
           {payment.review_outcome === "included_in_opening"
-            ? "الدفعة مشمولة في الرصيد الافتتاحي وفق اعتماد المدير، ولم تُرحّل كإيراد نقدي جديد."
+            ? "الدفعة مشمولة في رصيد افتتاحي تاريخي مسجل وفق اعتماد المدير، ولم تُرحّل كإيراد نقدي جديد."
             : "الدفعة معلقة لحين اتخاذ قرار محاسبي؛ لم يجرِ ترحيلها."}
         </p>
         {payment.reviewed_at ? <p className="mt-1">تاريخ المراجعة: {new Date(payment.reviewed_at).toLocaleString("ar-EG")}</p> : null}
@@ -26,7 +26,7 @@ export function ElectronicPendingActions({ payment }: { payment: VaultPendingPay
       <VaultActionForm
         action={reviewElectronicOpeningReceipt}
         className="mt-4 space-y-2"
-        confirmMessage="هل تؤكد مراجعة الدفعة الإلكترونية وتحديد علاقتها بالرصيد الافتتاحي؟ لا يتم إضافة أي رصيد تلقائيًا."
+        confirmMessage="هل تؤكد تسجيل نتيجة مراجعة الدفعة القديمة؟ لا يتم إضافة أي رصيد تلقائيًا."
         submitLabel="تسجيل المراجعة المالية"
         pendingLabel="جاري حفظ قرار المراجعة..."
       >
@@ -34,9 +34,9 @@ export function ElectronicPendingActions({ payment }: { payment: VaultPendingPay
         <label className="block text-xs font-semibold">
           نتيجة مراجعة الدفعة السابقة لتفعيل القناة
           <select name="outcome" required defaultValue="" className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2">
-            <option value="" disabled>اختر النتيجة بعد المطابقة مع الرصيد الافتتاحي</option>
-            <option value="included_in_opening">الدفعة مشمولة ضمن الرصيد الافتتاحي المعلن</option>
-            <option value="requires_accounting_decision">غير مثبتة ضمن الرصيد؛ تستلزم قرارًا محاسبيًا</option>
+            <option value="" disabled>اختر نتيجة المراجعة</option>
+            <option value="included_in_opening">الدفعة مشمولة ضمن رصيد افتتاحي تاريخي مسجل سابقًا</option>
+            <option value="requires_accounting_decision">لا يوجد رصيد افتتاحي تاريخي يغطي الدفعة؛ تستلزم قرارًا محاسبيًا</option>
           </select>
         </label>
         <label className="block text-xs font-semibold">
@@ -46,7 +46,7 @@ export function ElectronicPendingActions({ payment }: { payment: VaultPendingPay
             placeholder="بيان الإيداع، المطابقة البنكية، أو سبب تعليق التسوية" />
         </label>
         <p className="text-xs text-amber-800">
-          لا يتم ترحيل الحركات السابقة للتفعيل مرة ثانية. إثبات شمولها في الرصيد الافتتاحي يخضع للتحقق من سعة الرصيد على السيرفر.
+          لا يتم ترحيل الدفعات القديمة تلقائيًا. اختر الشمول فقط إذا كان هناك قيد افتتاحي تاريخي مسجل يغطي الدفعة. إضافة الأموال يدويًا لا تغطي هذه الدفعات تلقائيًا ولا تُعد قيدًا افتتاحيًا.
         </p>
       </VaultActionForm>
     );
@@ -72,7 +72,7 @@ export function ElectronicPendingActions({ payment }: { payment: VaultPendingPay
   }
   return (
     <p className="mt-3 text-xs font-semibold text-amber-900">
-      لم تُفعّل قناة الدفع المطلوبة بعد أو لا توجد أدلة كافية للتسوية. فعّل القناة أولًا مع رصيد افتتاحي مُطابق، ثم راجع الدفعة هنا. لن يُضاف مبلغ قديم تلقائيًا.
+      القناة غير متاحة حاليًا أو لا توجد أدلة كافية للمراجعة. حدّث الصفحة وراجع الدفعة عند توفر الأدلة. لا يلزم إدخال رصيد افتتاحي جديد، ولن يُضاف مبلغ قديم تلقائيًا.
     </p>
   );
 }

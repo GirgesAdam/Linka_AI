@@ -35,6 +35,18 @@ class VaultBranchGrantRead(BaseModel):
     user_id: UUID
 
 
+class VaultFundingRequest(BaseModel):
+    amount_minor: int = Field(strict=True, gt=0, le=1_000_000_000_000)
+    note: str | None = Field(default=None, max_length=500)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class VaultFundingRead(BaseModel):
+    entry_id: UUID
+    amount_minor: int
+    currency: Literal["EGP"] = "EGP"
+
+
 class VaultExpenseRequest(BaseModel):
     amount_minor: int = Field(gt=0, le=1_000_000_000_000)
     description: str = Field(min_length=1, max_length=200)
@@ -63,6 +75,16 @@ class VaultTransferRead(BaseModel):
     branch_id: UUID | None
 
 
+class TreasuryMovementRead(BaseModel):
+    id: UUID
+    kind: str
+    amount_minor: int
+    account_kind: str
+    branch_id: UUID | None
+    created_at: datetime
+    note: str | None = None
+
+
 class ReceptionVaultRead(BaseModel):
     branch_id: UUID
     branch_name: str
@@ -74,15 +96,8 @@ class ReceptionVaultRead(BaseModel):
     refunds_today_minor: int
     expenses_today_minor: int
     transfers_today_minor: int
-
-
-class TreasuryMovementRead(BaseModel):
-    id: UUID
-    kind: str
-    amount_minor: int
-    account_kind: str
-    branch_id: UUID | None
-    created_at: datetime
+    manual_funding_today_minor: int = 0
+    recent_movements: list[TreasuryMovementRead] = Field(default_factory=list)
 
 
 class MainTreasuryRead(BaseModel):

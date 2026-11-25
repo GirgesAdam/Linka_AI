@@ -16,15 +16,16 @@ from app.models.branch import Branch
 from app.models.expense import Expense
 from app.models.vault import (
     VaultAccount,
-    VaultBranchGrant,
     VaultLedgerEntry,
     VaultPendingPayment,
     VaultTransfer,
 )
-from app.models.workspace_member import WORKSPACE_ROLE_ADMIN, WorkspaceMember
+from app.models.workspace import Workspace
+from app.models.workspace_member import WorkspaceMember
 from app.schemas.finance import ExpenseCreate
 from app.services.activity import record_activity_event
 from app.services.finance import create_expense
+from app.services.section_access import section_access_allows
 
 
 class VaultError(ValueError):
@@ -50,7 +51,7 @@ def _branch(db: Session, workspace_id: UUID, branch_id: UUID) -> Branch:
         Branch.workspace_id == workspace_id, Branch.id == branch_id, Branch.is_active.is_(True),
     ))
     if branch is None:
-        raise VaultError("Branch not found in this workspace.")
+        raise VaultError("Branch access denied: active branch not found in this workspace.")
     return branch
 
 
@@ -58,21 +59,12 @@ def allowed_branch(
     db: Session, *, workspace_id: UUID, branch_id: UUID,
     actor_user_id: UUID, membership: WorkspaceMember,
 ) -> Branch:
-    branch = _branch(db, workspace_id, branch_id)
-    if membership.workspace_id != workspace_id or membership.user_id != actor_user_id or not membership.is_active:
+    if not section_access_allows(
+        membership, workspace_id=workspace_id, user_id=actor_user_id,
+        section="clinic_operations",
+    ):
         raise VaultError("Access denied.")
-    if membership.role == WORKSPACE_ROLE_ADMIN:
-        return branch
-    # An ordinary member must be explicitly granted access. Staff profile and
-    # primary branch are not proof of financial custody.
-    grant = db.scalar(select(VaultBranchGrant.id).where(
-        VaultBranchGrant.workspace_id == workspace_id,
-        VaultBranchGrant.branch_id == branch_id,
-        VaultBranchGrant.user_id == actor_user_id,
-    ))
-    if grant is None:
-        raise VaultError("Reception vault access not granted for this branch.")
-    return branch
+    return _branch(db, workspace_id, branch_id)
 
 
 def _account(
@@ -89,7 +81,7 @@ def _account(
         stmt = stmt.where(VaultAccount.branch_id == branch_id)
     account = db.scalar(stmt)
     if account is None:
-        raise VaultError("Vault has not been activated by the administrator.")
+        raise VaultError("Vault account is not available.")
     return account
 
 
@@ -123,6 +115,7 @@ def activate_account(
     db: Session, *, workspace_id: UUID, actor_user_id: UUID,
     kind: str, branch_id: UUID | None, opening_balance_minor: int, currency: str,
 ) -> VaultAccount:
+    # Historical migration regression helper only; not exposed through any API.
     if kind not in {"reception", "main_cash", "main_visa", "main_instapay", "main_bank"} or currency != "EGP":
         raise VaultError("Invalid vault kind or currency.")
     if opening_balance_minor < 0 or opening_balance_minor > 10_000_000_000_00:
@@ -134,7 +127,6 @@ def activate_account(
 
     # Serializes concurrent activation and payment-trigger decisions.
     # The workspace lock is also acquired before any account insert.
-    from app.models.workspace import Workspace
     workspace = db.scalar(
         select(Workspace).where(Workspace.id == workspace_id).with_for_update()
     )
@@ -198,35 +190,55 @@ def activate_account(
     return account
 
 
-def set_branch_grant(
-    db: Session, *, workspace_id: UUID, branch_id: UUID, user_id: UUID,
-    actor_user_id: UUID, enabled: bool,
-) -> None:
-    _branch(db, workspace_id, branch_id)
-    membership = db.scalar(select(WorkspaceMember).where(
-        WorkspaceMember.workspace_id == workspace_id,
-        WorkspaceMember.user_id == user_id,
-        WorkspaceMember.is_active.is_(True),
+def record_manual_funding(
+    db: Session, *, workspace_id: UUID, kind: str, branch_id: UUID | None,
+    actor_user_id: UUID, amount_minor: int, note: str | None,
+    idempotency_key: str,
+) -> VaultLedgerEntry:
+    if type(amount_minor) is not int or not 0 < amount_minor <= 1_000_000_000_000:
+        raise VaultError("A positive funding amount in integer minor units is required.")
+    if kind not in {"reception", "main_cash", "main_bank"} or (kind == "reception") != (branch_id is not None):
+        raise VaultError("Invalid funding account.")
+    if not idempotency_key.strip() or len(idempotency_key) > 128:
+        raise VaultError("A valid idempotency key is required.")
+    note = (note or "").strip() or None
+    if note and len(note) > 500:
+        raise VaultError("Funding note is too long.")
+    workspace = db.scalar(select(Workspace).where(
+        Workspace.id == workspace_id, Workspace.is_active.is_(True),
     ))
-    if membership is None:
-        raise VaultError("User is not an active member of this workspace.")
-    existing = db.scalar(select(VaultBranchGrant).where(
-        VaultBranchGrant.workspace_id == workspace_id,
-        VaultBranchGrant.branch_id == branch_id, VaultBranchGrant.user_id == user_id,
+    if workspace is None or workspace.is_demo:
+        raise VaultError("Funding is unavailable for this workspace.")
+    if branch_id is not None:
+        _branch(db, workspace_id, branch_id)
+    account = _account(db, workspace_id, kind, branch_id)
+    _lock_accounts(db, workspace_id, [account.id])
+    previous = db.scalar(select(VaultLedgerEntry).where(
+        VaultLedgerEntry.workspace_id == workspace_id,
+        VaultLedgerEntry.idempotency_key == idempotency_key,
     ))
-    if enabled and existing is None:
-        db.add(VaultBranchGrant(
-            workspace_id=workspace_id, branch_id=branch_id, user_id=user_id,
-            granted_by_user_id=actor_user_id,
-        ))
-    elif not enabled and existing is not None:
-        db.delete(existing)
+    if previous is not None:
+        if (previous.kind != "manual_funding" or previous.account_id != account.id
+                or previous.amount_minor != amount_minor or previous.actor_user_id != actor_user_id
+                or previous.note != note):
+            raise VaultError("Idempotency key already used with different funding details.")
+        return previous
+    entry = VaultLedgerEntry(
+        workspace_id=workspace_id, account_id=account.id, kind="manual_funding",
+        amount_minor=amount_minor, note=note, idempotency_key=idempotency_key,
+        actor_user_id=actor_user_id,
+    )
+    db.add(entry)
+    db.flush()
     record_activity_event(
         db, workspace_id=workspace_id, actor_type="staff", actor_user_id=actor_user_id,
-        action="vault.branch_access_changed", entity_type="branch", entity_id=branch_id,
-        summary="Reception financial access changed.",
-        metadata={"target_user_id":str(user_id),"enabled":enabled},
+        action="vault.manual_funding", entity_type="vault_ledger_entry", entity_id=entry.id,
+        summary="Manual funds added to vault (not patient revenue).",
+        metadata={"kind":kind,"branch_id":str(branch_id) if branch_id else None,
+                  "amount_minor":amount_minor,"currency":"EGP"},
     )
+    db.flush()
+    return entry
 
 
 def transfer_full_balance(
@@ -405,12 +417,11 @@ def reception_summaries(
     stmt = select(Branch).where(
         Branch.workspace_id == workspace_id, Branch.is_active.is_(True),
     )
-    if membership.role != WORKSPACE_ROLE_ADMIN:
-        stmt = stmt.join(VaultBranchGrant, (
-            (VaultBranchGrant.workspace_id == Branch.workspace_id)
-            & (VaultBranchGrant.branch_id == Branch.id)
-            & (VaultBranchGrant.user_id == actor_user_id)
-        ))
+    if not section_access_allows(
+        membership, workspace_id=workspace_id, user_id=actor_user_id,
+        section="clinic_operations",
+    ):
+        raise VaultError("Access denied.")
     branches = list(db.scalars(stmt.order_by(Branch.name)))
     output = []
     for branch in branches:
@@ -434,6 +445,10 @@ def reception_summaries(
         ).group_by(VaultLedgerEntry.kind)).all()
         daily = {str(k):int(n) for k,n in entries}
         balance = _balance(db, workspace_id=workspace_id, account_id=account.id)
+        recent = list(db.scalars(select(VaultLedgerEntry).where(
+            VaultLedgerEntry.workspace_id == workspace_id,
+            VaultLedgerEntry.account_id == account.id,
+        ).order_by(VaultLedgerEntry.created_at.desc(), VaultLedgerEntry.id.desc()).limit(30)))
         output.append({
             "branch_id":branch.id, "branch_name":branch.name,
             "activated":True,"currency":"EGP","balance_minor":balance,
@@ -442,6 +457,13 @@ def reception_summaries(
             "refunds_today_minor":-daily.get("refund",0),
             "expenses_today_minor":-daily.get("expense",0),
             "transfers_today_minor":-daily.get("transfer_out",0),
+            "manual_funding_today_minor":daily.get("manual_funding",0),
+            "recent_movements":[
+                {"id":entry.id,"kind":entry.kind,"amount_minor":entry.amount_minor,
+                 "account_kind":"reception","branch_id":branch.id,
+                 "created_at":entry.created_at,"note":entry.note}
+                for entry in recent
+            ],
         })
     return output
 
@@ -495,19 +517,12 @@ def main_treasury_summary(
             {
                 "id":entry.id,"kind":entry.kind,"amount_minor":entry.amount_minor,
                 "account_kind":next((a.kind for a in accounts if a.id==entry.account_id),"unknown"),
-                "branch_id":branch_id,"created_at":entry.created_at,
+                "branch_id":branch_id,"created_at":entry.created_at,"note":entry.note,
             }
             for entry,branch_id in recent
         ],
     }
 
-
-
-def list_branch_grants(db: Session, *, workspace_id: UUID) -> list[dict]:
-    rows = db.execute(select(VaultBranchGrant.branch_id, VaultBranchGrant.user_id).where(
-        VaultBranchGrant.workspace_id == workspace_id,
-    )).all()
-    return [{"branch_id":branch_id, "user_id":user_id} for branch_id,user_id in rows]
 
 
 def treasury_movements(
@@ -521,7 +536,7 @@ def treasury_movements(
     if method not in {None,"cash","visa","instapay","bank"}:
         raise VaultError("Unsupported payment method.")
     if kind is not None and kind not in {
-        "opening","payment","refund","expense","transfer_out","transfer_in","correction",
+        "opening","payment","refund","expense","transfer_out","transfer_in","correction","manual_funding",
     }:
         raise VaultError("Unsupported movement type.")
     if branch_id is not None:
@@ -570,6 +585,6 @@ def treasury_movements(
     ).all()
     return [
         {"id":entry.id,"kind":entry.kind,"amount_minor":entry.amount_minor,
-         "account_kind":account_kind,"branch_id":source_branch,"created_at":entry.created_at}
+         "account_kind":account_kind,"branch_id":source_branch,"created_at":entry.created_at,"note":entry.note}
         for entry,source_branch,account_kind in rows
     ]

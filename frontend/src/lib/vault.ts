@@ -9,6 +9,8 @@ export type ReceptionVault = {
   refunds_today_minor: number;
   expenses_today_minor: number;
   transfers_today_minor: number;
+  manual_funding_today_minor?: number;
+  recent_movements?: MainTreasuryMovement[];
 };
 
 export type MainTreasuryMovement = {
@@ -18,6 +20,7 @@ export type MainTreasuryMovement = {
   account_kind: string;
   branch_id: string | null;
   created_at: string;
+  note?: string | null;
 };
 
 export type MainTreasury = {

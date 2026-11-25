@@ -12,7 +12,6 @@ import { formatMoney } from "@/lib/format";
 import { canAccessSection } from "@/lib/section-access";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
-import type { WorkspaceMember } from "@/lib/types";
 import type { MainTreasury, ReceptionVault, VaultPendingPayment } from "@/lib/vault";
 import { MainTreasurySection } from "./main-treasury-section";
 
@@ -74,11 +73,6 @@ type SearchParams = {
   start_date?: string;
   end_date?: string;
   notice?: string;
-  treasury_from?: string;
-  treasury_to?: string;
-  treasury_kind?: string;
-  treasury_method?: string;
-  treasury_branch?: string;
 };
 
 const categoryLabels: Record<ExpenseCategory, string> = {
@@ -213,17 +207,13 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const vaultResults = isWorkspaceAdmin ? await Promise.allSettled([
     tiaRequest<MainTreasury>("/vault/treasury"),
     tiaRequest<ReceptionVault[]>("/vault/reception"),
-    tiaRequest<WorkspaceMember[]>("/auth/workspace/members"),
-    tiaRequest<Array<{ user_id: string; branch_id: string }>>("/vault/branch-grants"),
     tiaRequest<VaultPendingPayment[]>("/vault/pending-payments"),
   ]) : null;
   const treasury = vaultResults?.[0]?.status === "fulfilled" ? vaultResults[0].value : null;
   const vaults = vaultResults?.[1]?.status === "fulfilled" ? vaultResults[1].value : [];
-  const members = vaultResults?.[2]?.status === "fulfilled" ? vaultResults[2].value : [];
-  const grants = vaultResults?.[3]?.status === "fulfilled" ? vaultResults[3].value : [];
   const movements = treasury?.recent_movements || [];
-  const pendingPayments = vaultResults?.[4]?.status === "fulfilled" ? vaultResults[4].value : [];
-  const pendingUnavailable = vaultResults?.[4]?.status === "rejected";
+  const pendingPayments = vaultResults?.[2]?.status === "fulfilled" ? vaultResults[2].value : [];
+  const pendingUnavailable = vaultResults?.[2]?.status === "rejected";
 
   return (
     <>
@@ -238,8 +228,6 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <MainTreasurySection
           treasury={treasury}
           vaults={vaults}
-          members={members}
-          grants={grants}
           movements={movements}
           pendingPayments={pendingPayments}
           pendingUnavailable={pendingUnavailable}
