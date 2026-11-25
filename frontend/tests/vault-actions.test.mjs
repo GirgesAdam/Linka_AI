@@ -301,6 +301,7 @@ test("unactivated electronic channel displays warning without posting form", () 
     ElectronicPendingActions, { payment: electronicPayment() },
   ));
   assert.match(html, /القناة غير متاحة حاليًا/);
+  assert.doesNotMatch(html, /مع رصيد افتتاحي مُطابق|فعّل القناة أولًا/);
   assert.doesNotMatch(html, /<form/);
 });
 
@@ -312,6 +313,8 @@ test("preactivation electronic receipt requires explicit opening reconciliation 
   assert.match(html, /name="outcome"/);
   assert.match(html, /included_in_opening/);
   assert.match(html, /requires_accounting_decision/);
+  assert.match(html, /رصيد افتتاحي تاريخي مسجل/);
+  assert.match(html, /إضافة الأموال يدويًا لا تغطي هذه الدفعات تلقائيًا/);
   assert.match(html, /name="explanation"/);
 });
 

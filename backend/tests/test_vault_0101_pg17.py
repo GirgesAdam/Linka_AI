@@ -36,8 +36,9 @@ from app.models import (
     WorkspaceMember,
 )
 from app.models.expense import Expense
-from app.models.vault import VaultAccount, VaultBranchGrant, VaultLedgerEntry
-from app.services.vault import activate_account, main_treasury_summary, record_manual_funding
+from app.models.vault import VaultAccount, VaultBranchGrant, VaultLedgerEntry, VaultPendingPayment
+from app.services.vault import VaultError, activate_account, main_treasury_summary, record_manual_funding
+from app.services.vault_pending import review_preactivation_electronic
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("VAULT_0101_REQUIRED") != "1",
@@ -77,6 +78,7 @@ def test_0101_upgrade_and_manual_funding_actual_api(visit):
     with sessions.begin() as db:
         assert db.scalar(text("SELECT current_setting('server_version_num')")) == "170006"
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0100_vault_bank_reception"
+        assert vault_ledger_schema_available(db)
         branch_id = db.get(Appointment, visit["appointment"].id).branch_id
         reception_id = account(db, "reception").id
         cash = activate_account(db, workspace_id=wid, actor_user_id=uid, kind="main_cash",
@@ -113,6 +115,20 @@ def test_0101_upgrade_and_manual_funding_actual_api(visit):
         grant_id = grant.id
         before = facts(db)
         assert account(db, "main_bank") is None
+        # A historical InstaPay receipt predates automatic channel creation.
+        historical = PaymentTransaction(
+            workspace_id=wid, patient_id=visit["patient"].id, transaction_type="payment",
+            amount_minor=1000, currency="EGP", payment_method="instapay", source="staff",
+            created_by_user_id=uid,
+        )
+        db.add(historical)
+        db.flush()
+        historical_id = historical.id
+        pending_id = db.scalar(select(VaultPendingPayment.id).where(
+            VaultPendingPayment.payment_transaction_id == historical_id,
+        ))
+        assert pending_id is not None
+        before = facts(db)
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "0101_vault_manual_funding"],
                    env={**os.environ, "DATABASE_URL": raw, "MIGRATION_DATABASE_URL": raw},
                    check=True, timeout=120)
@@ -199,6 +215,23 @@ def test_0101_upgrade_and_manual_funding_actual_api(visit):
     app.dependency_overrides[get_workspace_access] = lambda: admin_access
     assert fund(cash_path, 3000, "main-cash-one").status_code == 201
     assert fund(bank_path, 4000, "main-bank-one").status_code == 201
+    # Manual funding is not evidence of an old opening balance.
+    with pytest.raises(VaultError, match="does not cover"), sessions.begin() as db:
+        review_preactivation_electronic(
+            db, workspace_id=wid, pending_id=pending_id, actor_user_id=uid,
+            outcome="included_in_opening", explanation="Synthetic receipt review",
+        )
+    with sessions.begin() as db:
+        pending = db.get(VaultPendingPayment, pending_id)
+        assert pending.review_outcome is None
+        assert db.scalar(select(VaultLedgerEntry.id).where(
+            VaultLedgerEntry.payment_transaction_id == historical_id,
+        )) is None
+        reviewed = review_preactivation_electronic(
+            db, workspace_id=wid, pending_id=pending_id, actor_user_id=uid,
+            outcome="requires_accounting_decision", explanation="No historical opening balance",
+        )
+        assert reviewed.review_outcome == "requires_accounting_decision"
     assert fund(bank_path, 3000, "main-cash-one").status_code == 409
     assert fund(base + "/funding", 1000, "reception-one", "verified cash").status_code == 409
     assert client.post("/vault/accounts/activate", json={

@@ -162,7 +162,7 @@ export async function reviewElectronicOpeningReceipt(
     refreshFinanceAndReception();
     return {
       notice: outcome === "included_in_opening"
-        ? "تم توثيق أن المبلغ مشمول في الرصيد الافتتاحي دون إضافة تحصيل جديد."
+        ? "تم توثيق أن المبلغ مشمول في رصيد افتتاحي تاريخي مسجل، دون إضافة تحصيل جديد."
         : "تم توثيق الحالة كمعلقة لقرار محاسبي، دون ترحيل أي مبلغ.",
       error: null,
     };

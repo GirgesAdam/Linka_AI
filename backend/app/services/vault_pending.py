@@ -345,7 +345,7 @@ def review_preactivation_electronic(
         payment_method=payment.payment_method, lock=True,
     )
     if account is None:
-        raise VaultError("Activate this treasury channel before opening balance review.")
+        raise VaultError("Treasury channel is not available for historical receipt review.")
     pending = _under_review_lock(db, workspace_id=workspace_id, pending_id=pending_id)
     if not _predates_channel_activation(pending, payment, account):
         raise VaultError("This receipt is after activation; use eligible posting retry.")
@@ -360,7 +360,7 @@ def review_preactivation_electronic(
 
     review_account = account
     if outcome == "included_in_opening":
-        # New consolidated bank openings cover both electronic channels. Lock the
+        # Historical consolidated bank openings cover both electronic channels. Lock the
         # common cap so simultaneous Visa/InstaPay attestations cannot overrun it.
         channel_opening = db.scalar(select(VaultLedgerEntry.id).where(
             VaultLedgerEntry.workspace_id == workspace_id,

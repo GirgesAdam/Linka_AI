@@ -45,6 +45,7 @@ from app.services.vault import (
     VaultError,
     activate_account,
     record_cash_expense,
+    record_manual_funding,
     transfer_full_balance,
 )
 
@@ -281,7 +282,7 @@ def test_demo_vault_activation_is_denied_without_any_opening_ledger(pg17_engine)
     assert _snapshot(pg17_engine, fx.workspace) == before
 
 
-def test_demo_activation_direct_api_handler_returns_business_conflict(pg17_engine):
+def test_demo_activation_direct_api_handler_returns_gone_without_financial_writes(pg17_engine):
     fx = _synthetic_workspace(pg17_engine)
     with Session(pg17_engine) as db:
         access = SimpleNamespace(
@@ -294,8 +295,13 @@ def test_demo_activation_direct_api_handler_returns_business_conflict(pg17_engin
         )
         with pytest.raises(HTTPException) as error:
             vault_api.activate(payload=payload, access=access, db=db)
-        assert error.value.status_code == 409
-        assert "unavailable in demo mode" in error.value.detail
+        assert error.value.status_code == 410
+        assert "Manual activation is retired" in error.value.detail
+        with pytest.raises(VaultError, match="Funding is unavailable"):
+            record_manual_funding(
+                db, workspace_id=fx.workspace, kind="main_cash", branch_id=None,
+                actor_user_id=fx.user, amount_minor=10000, note=None, idempotency_key="demo-funding",
+            )
         assert db.scalar(select(func.count(VaultAccount.id)).where(
             VaultAccount.workspace_id == fx.workspace,
         )) == 0
