@@ -94,7 +94,7 @@ jobs:
           python -m compileall -q .github/scripts/production_migration_preflight.py .github/scripts/production_migration_credential_guard.py
           python -m unittest discover -s .github/scripts/tests -p "test_production_db_readonly_attestation.py" -v
       - name: Verify single Alembic head
-        run: test "$(python -m alembic heads)" = "0100_vault_bank_reception (head)"
+        run: test "$(python -m alembic heads)" = "0101_vault_manual_funding (head)"
       - name: Bootstrap Supabase compatibility roles
         env:
           PGPASSWORD: ci_password

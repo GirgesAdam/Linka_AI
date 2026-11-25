@@ -8,6 +8,13 @@ import { formatMoney } from "@/lib/format";
 import type { ReceptionVault } from "@/lib/vault";
 
 import { recordReceptionExpense, transferReceptionBalance } from "../vault-actions";
+import { VaultFundingForm } from "../vault-funding-form";
+
+const movementLabels: Record<string, string> = {
+  opening: "رصيد افتتاحي سابق", payment: "تحصيل", refund: "مرتجع",
+  expense: "مصروف", transfer_out: "توريد", transfer_in: "توريد وارد",
+  correction: "تسوية معتمدة", manual_funding: "إضافة أموال يدوياً",
+};
 
 function Amount({ amount, currency }: { amount: number; currency: string }) {
   return <span className="font-black text-slate-950">{formatMoney(amount, currency)}</span>;
@@ -39,7 +46,7 @@ export function ReceptionVaultSection({
         </div>
       ) : vaults.length === 0 ? (
         <div className="rounded-xl bg-white p-5 text-sm text-slate-600">
-          لا توجد فروع مصرح لك باستخدام خزنتها. يُرجى مراجعة مدير النظام.
+          لا توجد فروع نشطة متاحة لك.
         </div>
       ) : (
         <div className="grid gap-4">
@@ -52,9 +59,9 @@ export function ReceptionVaultSection({
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
-                {!vault.activated ? (
+                {isDemo || !vault.activated ? (
                   <p className="rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-900">
-                    لم يتم تفعيل خزنة هذا الفرع أو إثبات العهدة الافتتاحية بواسطة المدير.
+                    خزنة الفرع غير متاحة حاليًا.
                   </p>
                 ) : (
                   <>
@@ -68,6 +75,7 @@ export function ReceptionVaultSection({
                       {[
                         ["العهدة المرحلة", vault.opening_carried_minor],
                         ["كاش اليوم", vault.cash_today_minor],
+                        ["إضافة أموال اليوم", vault.manual_funding_today_minor ?? 0],
                         ["مرتجعات نقدية", -vault.refunds_today_minor],
                         ["مصروفات اليوم", -vault.expenses_today_minor],
                         ["توريدات اليوم", -vault.transfers_today_minor],
@@ -78,6 +86,9 @@ export function ReceptionVaultSection({
                         </div>
                       ))}
                     </dl>
+                    <div className="rounded-xl border border-slate-200 p-4">
+                      <VaultFundingForm kind="reception" branchId={vault.branch_id} />
+                    </div>
                     <div className="grid gap-5 border-t border-slate-100 pt-4 lg:grid-cols-2">
                       <div className="space-y-2">
                         <div className="flex items-center gap-2 font-bold text-slate-900">
@@ -121,6 +132,19 @@ export function ReceptionVaultSection({
                         </VaultActionForm>
                       </div>
                     </div>
+                    <section className="border-t border-slate-100 pt-4">
+                      <h3 className="mb-2 font-bold">سجل الحركات</h3>
+                      {(vault.recent_movements ?? []).length ? (vault.recent_movements ?? []).map((entry) => (
+                        <div key={entry.id} className="flex justify-between gap-3 border-b border-slate-100 py-2 text-sm last:border-0">
+                          <div>
+                            <div className="font-semibold">{movementLabels[entry.kind] || entry.kind}</div>
+                            <div className="text-xs text-slate-500">{new Date(entry.created_at).toLocaleString("ar-EG")}</div>
+                            {entry.note && <p className="text-xs text-slate-600">{entry.note}</p>}
+                          </div>
+                          <Amount amount={entry.amount_minor} currency={vault.currency} />
+                        </div>
+                      )) : <p className="text-sm text-slate-500">لا توجد حركات مسجلة حتى الآن.</p>}
+                    </section>
                   </>
                 )}
               </CardContent>

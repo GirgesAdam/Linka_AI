@@ -115,8 +115,13 @@ class VaultLedgerEntry(UUIDPrimaryKeyMixin, Base):
         ),
         CheckConstraint("amount_minor <> 0", name="vault_entry_nonzero"),
         CheckConstraint(
-            "kind IN ('opening','payment','refund','expense','transfer_out','transfer_in','correction')",
+            "kind IN ('opening','payment','refund','expense','transfer_out','transfer_in','correction','manual_funding')",
             name="vault_entry_kind",
+        ),
+        CheckConstraint(
+            "kind <> 'manual_funding' OR (amount_minor > 0 AND payment_transaction_id IS NULL "
+            "AND expense_id IS NULL AND transfer_id IS NULL AND idempotency_key IS NOT NULL)",
+            name="vault_manual_funding_shape",
         ),
         UniqueConstraint("workspace_id", "payment_transaction_id", name="uq_vault_entry_payment"),
         UniqueConstraint("workspace_id", "expense_id", name="uq_vault_entry_expense"),
