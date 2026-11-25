@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { KnowledgeHour } from "@/lib/agent-knowledge-types";
 import type { ClinicLaserDevice } from "@/lib/types";
-import { DoctorLaserWeekdayPanel, type DoctorLaserWeekday } from "./doctor-laser-weekdays";
+import type { DoctorLaserWeekday } from "./doctor-laser-weekdays";
 
 import {
   createDoctorAction,
@@ -17,6 +17,8 @@ import {
   updateDoctorAction,
   updateDoctorScheduleAction,
 } from "./actions";
+
+type BranchSchedule = { branch_id: string; branch_name: string; is_primary: boolean; working_hours: KnowledgeHour[] };
 
 export type DoctorAdminItem = {
   id: string;
@@ -29,6 +31,7 @@ export type DoctorAdminItem = {
   services: Array<{ id: string; name: string }>;
   service_categories: Array<"laser" | "dermatology" | "slimming">;
   working_hours: KnowledgeHour[];
+  branch_schedules?: BranchSchedule[];
 };
 
 const initialDoctorAdminState: DoctorAdminState = { notice: null, error: null, saved: null };
@@ -88,8 +91,14 @@ export function useRefreshAfterSuccess(state: Pick<DoctorAdminState, "notice" | 
   }, []);
 }
 
-function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] }) {
+export function ScheduleFields({ initialHours = [], devices, rows = [] }: { initialHours?: KnowledgeHour[]; devices?: ClinicLaserDevice[] | null; rows?: DoctorLaserWeekday[] }) {
   const [intervals, setIntervals] = useState<EditableInterval[]>(() => normalizeHours(initialHours));
+  const activeDevices = (devices || []).filter((device) => device.is_active);
+  const [overrides, setOverrides] = useState<Record<number, string[]>>({});
+  const excluded: Record<number, string[]> = { ...Object.fromEntries(rows.map((row) => [row.weekday, row.excluded_device_keys])), ...overrides };
+  const restrictions = [...new Set(intervals.map((interval) => interval.weekday))].map((weekday) => ({
+    weekday, excluded_device_keys: (excluded[weekday] || []).filter((key) => activeDevices.some((device) => device.device_key === key)),
+  }));
   const byDay = useMemo(() => {
     const result = new Map<number, Array<{ row: EditableInterval; index: number }>>();
     intervals.forEach((row, index) => {
@@ -113,12 +122,13 @@ function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] 
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 overflow-x-auto">
+      {devices != null && <input type="hidden" name="laser_weekday_exclusions_json" value={JSON.stringify(restrictions)} />}
       <input type="hidden" name="intervals_json" value={JSON.stringify(intervals)} />
       {days.map((day) => {
         const dayIntervals = byDay.get(day.weekday) || [];
         return (
-          <div key={day.weekday} className="grid gap-2 rounded-xl border border-slate-100 bg-slate-50/70 p-2.5 sm:grid-cols-[80px_1fr_auto] sm:items-center">
+          <div key={day.weekday} className="grid gap-2 rounded-xl border border-slate-100 bg-slate-50/70 p-2.5 min-w-[820px] grid-cols-[80px_minmax(290px,1fr)_minmax(250px,1fr)] items-center">
             <div className="text-xs font-black text-slate-700">{day.label}</div>
             <div className="space-y-2">
               {dayIntervals.length ? dayIntervals.map(({ row, index }) => (
@@ -129,8 +139,24 @@ function ScheduleFields({ initialHours = [] }: { initialHours?: KnowledgeHour[] 
                   <button type="button" onClick={() => removeInterval(index)} className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-700" aria-label={`حذف فترة ${day.label}`}><Trash2 size={14} /></button>
                 </div>
               )) : null}
+              <Button type="button" size="sm" variant="ghost" onClick={() => addInterval(day.weekday)}><Plus size={13} /> فترة</Button>
             </div>
-            <Button type="button" size="sm" variant="ghost" onClick={() => addInterval(day.weekday)} className="justify-self-start sm:justify-self-end"><Plus size={13} /> فترة</Button>
+            <div className="flex flex-wrap gap-3">
+              {dayIntervals.length > 0 && activeDevices.map((device) => (
+                <label key={device.device_key} className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={!(excluded[day.weekday] || []).includes(device.device_key)}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setOverrides((current) => {
+                        const next = new Set(current[day.weekday] || excluded[day.weekday] || []);
+                        if (checked) next.delete(device.device_key); else next.add(device.device_key);
+                        return { ...current, [day.weekday]: [...next] };
+                      });
+                    }} />
+                  {device.name}
+                </label>
+              ))}
+            </div>
           </div>
         );
       })}
@@ -144,7 +170,7 @@ const categoryOptions = [
   { value: "slimming", label: "تخسيس" },
 ] as const;
 
-function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: string[] }) {
+function CategoryChecklist({ selectedCategories = [], onChange }: { selectedCategories?: string[]; onChange?: (value: string, checked: boolean) => void }) {
   const selected = new Set(selectedCategories);
   return (
     <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-3">
@@ -155,6 +181,7 @@ function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: s
             name="service_category"
             value={category.value}
             defaultChecked={selected.has(category.value)}
+            onChange={(event) => onChange?.(category.value, event.target.checked)}
           />
           <span>{category.label}</span>
         </label>
@@ -163,8 +190,9 @@ function CategoryChecklist({ selectedCategories = [] }: { selectedCategories?: s
   );
 }
 
-function CreateDoctorForm() {
+function CreateDoctorForm({ laserDevices }: { laserDevices: ClinicLaserDevice[] | null }) {
   const [open, setOpen] = useState(false);
+  const [laserSelected, setLaserSelected] = useState(false);
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(createDoctorAction, initialDoctorAdminState);
   return (
     <div className="rounded-2xl border border-teal-200 bg-teal-50/40 p-4">
@@ -181,8 +209,8 @@ function CreateDoctorForm() {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <label className="text-xs font-bold text-slate-700">الاسم<input name="name" maxLength={120} className="form-control mt-1.5 h-10 min-h-10" /></label>
           </div>
-          <div><div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات التي يقدمها الدكتور</div><CategoryChecklist /></div>
-          <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields /></div>
+          <div><div className="mb-2 text-xs font-black text-slate-700">تصنيفات الخدمات التي يقدمها الدكتور</div><CategoryChecklist onChange={(value, checked) => { if (value === "laser") setLaserSelected(checked); }} /></div>
+          <div><div className="mb-2 flex items-center gap-2 text-xs font-black text-slate-700"><Clock3 size={14} /> مواعيد العمل الأسبوعية</div><ScheduleFields devices={laserSelected ? laserDevices : null} /></div>
           <ActionState state={state} />
           <Button type="submit" disabled={pending}>{pending ? <LoaderCircle size={15} className="animate-spin" /> : <UserPlus size={15} />} إضافة الدكتور</Button>
         </form>
@@ -212,14 +240,15 @@ function DoctorProfileForm({ doctor }: { doctor: DoctorAdminItem }) {
   );
 }
 
-function DoctorScheduleForm({ doctor }: { doctor: DoctorAdminItem }) {
+function DoctorScheduleForm({ doctor, branch, laserRows, laserDevices }: { doctor: DoctorAdminItem; branch?: BranchSchedule; laserRows: DoctorLaserWeekday[] | null; laserDevices: ClinicLaserDevice[] | null }) {
   const [state, action, pending] = useActionState<DoctorAdminState, FormData>(updateDoctorScheduleAction, initialDoctorAdminState);
   useRefreshAfterSuccess(state);
   return (
     <form action={action} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
       <input type="hidden" name="doctor_id" value={doctor.id} />
-      <div className="flex items-center gap-2 text-sm font-black text-slate-900"><Clock3 size={15} /> مواعيد العمل الأسبوعية</div>
-      <ScheduleFields initialHours={doctor.working_hours} />
+      {branch && <input type="hidden" name="branch_id" value={branch.branch_id} />}
+      <div className="flex items-center gap-2 text-sm font-black text-slate-900"><Clock3 size={15} /> {branch?.branch_name || "مواعيد العمل الأسبوعية"}</div>
+      <ScheduleFields initialHours={branch?.working_hours || doctor.working_hours} devices={laserRows !== null && doctor.service_categories.includes("laser") ? laserDevices : null} rows={laserRows?.filter((row) => row.doctor_id === doctor.id && row.branch_id === branch?.branch_id) || []} />
       <ActionState state={state} />
       <Button type="submit" size="sm" variant="outline" disabled={pending}>{pending ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />} حفظ المواعيد</Button>
     </form>
@@ -260,22 +289,9 @@ function DoctorEditorCard({
       {open && (
         <div className="mt-5 space-y-5">
           <DoctorProfileForm doctor={doctor} />
-          <DoctorScheduleForm doctor={doctor} />
-          {doctor.service_categories.includes("laser") || laserRows?.some((row) => row.doctor_id === doctor.id) ? (
-            <section className="space-y-3 rounded-2xl border border-teal-200 bg-white p-3" aria-label={`أجهزة الليزر للدكتور ${doctor.name}`}>
-              <h3 className="text-sm font-black text-slate-900">أجهزة الليزر حسب يوم العمل والفرع</h3>
-              {laserRows === null || laserDevices === null ? (
-                <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm font-semibold text-red-700">
-                  تعذر تحميل إعدادات أجهزة الليزر. حدّث الصفحة للمحاولة مجدداً.
-                </div>
-              ) : (
-                <DoctorLaserWeekdayPanel
-                  rows={laserRows.filter((row) => row.doctor_id === doctor.id)}
-                  devices={laserDevices}
-                />
-              )}
-            </section>
-          ) : null}
+          {doctor.branch_schedules?.length ? doctor.branch_schedules.map((branch) => (
+            <DoctorScheduleForm key={branch.branch_id} doctor={doctor} branch={branch} laserRows={laserRows} laserDevices={laserDevices} />
+          )) : <DoctorScheduleForm doctor={doctor} laserRows={null} laserDevices={null} />}
           <RemoveDoctorForm doctor={doctor} />
         </div>
       )}
@@ -298,7 +314,7 @@ export function DoctorManagementPanel({
         <CardTitle className="flex items-center gap-2"><Stethoscope size={18} /> إدارة الدكاترة</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <CreateDoctorForm />
+        <CreateDoctorForm laserDevices={laserDevices} />
         {laserRows === null || laserDevices === null ? (
           <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">
             تعذر تحميل إعدادات أجهزة الليزر. لا يزال بإمكانك عرض الدكاترة وتعديل بياناتهم ومواعيدهم.

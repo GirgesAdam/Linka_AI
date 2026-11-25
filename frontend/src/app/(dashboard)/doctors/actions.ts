@@ -62,6 +62,18 @@ function parseIntervals(formData: FormData): WorkingHourInterval[] {
   return intervals;
 }
 
+function parseLaserWeekdays(formData: FormData) {
+  const raw = formData.get("laser_weekday_exclusions_json");
+  if (raw === null) return undefined;
+  try {
+    const rows = JSON.parse(String(raw));
+    if (!Array.isArray(rows)) throw new Error();
+    return rows;
+  } catch {
+    throw new DoctorInputError("اختيارات أجهزة الليزر غير صالحة.");
+  }
+}
+
 function stateFromError(error: unknown): DoctorAdminState {
   if (error instanceof TiaApiError) {
     return { notice: null, error: error.message, saved: null };
@@ -93,6 +105,7 @@ export async function createDoctorAction(
         service_categories: serviceCategories(formData),
         booking_enabled: true,
         working_hours: { intervals: parseIntervals(formData) },
+        laser_weekday_exclusions: parseLaserWeekdays(formData),
       }),
     });
     refreshDoctorViews();
@@ -148,7 +161,7 @@ export async function updateDoctorScheduleAction(
     if (!doctorId) return { notice: null, error: "تعذر تحديد الدكتور.", saved: null };
     await tiaRequest(`/clinic/doctor-admin/${doctorId}/working-hours`, {
       method: "PUT",
-      body: JSON.stringify({ intervals: parseIntervals(formData) }),
+      body: JSON.stringify({ intervals: parseIntervals(formData), branch_id: clean(formData.get("branch_id")), laser_weekday_exclusions: parseLaserWeekdays(formData) }),
     });
     // The editor refreshes after showing confirmation, without immediately remounting the open form.
     refreshDoctorRelatedViews();

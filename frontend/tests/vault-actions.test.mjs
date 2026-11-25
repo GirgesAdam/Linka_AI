@@ -128,15 +128,15 @@ test("resolution with missing audit explanation is rejected before API call", as
   assert.equal(h.requests.length, 0);
 });
 
-test("zero opening balance activation is accepted as an explicit one-time action", async () => {
+test("zero opening balance activation is accepted for the main cash account", async () => {
   const h = actionHarness();
   const result = await h.actions.activateVaultAccount(
     { notice: null, error: null },
-    data({ kind: "reception", branch_id: BRANCH, opening_balance: "0" }),
+    data({ kind: "main_cash", opening_balance: "0" }),
   );
   assert.ok(result.notice);
   assert.deepEqual(h.requests[0].body, {
-    kind: "reception", branch_id: BRANCH, opening_balance_minor: 0,
+    kind: "main_cash", branch_id: null, opening_balance_minor: 0,
     currency: "EGP",
   });
 });
@@ -332,7 +332,7 @@ test("Demo Finance renders the vault policy explanation and no activation contro
     "src/app/(dashboard)/finance/main-treasury-section.tsx",
     {
       "lucide-react": Object.fromEntries(
-        ["Banknote", "Building2", "CreditCard", "Receipt", "ShieldCheck", "WalletCards"]
+        ["Banknote", "Building2", "Landmark", "Receipt", "ShieldCheck"]
           .map((name) => [name, StubIcon]),
       ),
       "@/components/action-feedback-form": { ActionFeedbackForm: displayStub("form") },
@@ -355,7 +355,7 @@ test("Demo Finance renders the vault policy explanation and no activation contro
   );
   const props = {
     treasury: {
-      cash_minor: 0, visa_minor: 0, instapay_minor: 0, currency: "EGP",
+      cash_minor: 0, bank_minor: 0, cash_activated: false, bank_activated: false, visa_minor: 0, instapay_minor: 0, currency: "EGP",
       total_recorded_minor: 0, transfers_today_minor: 0,
       active_channels: [], unattributed_payment_count: 0,
     },
@@ -378,6 +378,8 @@ test("Demo Finance renders the vault policy explanation and no activation contro
   ));
   assert.match(real, /name="opening_balance"/);
   assert.match(real, /name="kind"/);
+  assert.match(real, /الرصيد البنكي/);
+  assert.doesNotMatch(real, /name="kind" value="reception"|treasury_method|treasury_from/);
 });
 
 test("Demo Reception remains visible with a vault-disabled explanation", () => {
@@ -408,4 +410,21 @@ test("Demo Reception remains visible with a vault-disabled explanation", () => {
   assert.match(html, /الخزنة غير متاحة في الوضع التجريبي حالياً/);
   assert.match(html, /خزنة الريسبشن/);
   assert.doesNotMatch(html, /name="opening_balance"/);
+});
+
+test("bank deposit submits exact piasters and idempotency key; manual reception activation is refused", async () => {
+  const h = actionHarness();
+  const result = await h.actions.recordMainBankDeposit(
+    { notice: null, error: null }, data({ amount: "12.34", idempotency_key: UUID }),
+  );
+  assert.ok(result.notice);
+  assert.deepEqual(h.requests, [{
+    path: "/vault/treasury/bank-deposits", method: "POST",
+    body: { amount_minor: 1234, idempotency_key: UUID },
+  }]);
+  const rejected = await h.actions.activateVaultAccount(
+    { notice: null, error: null }, data({ kind: "reception", branch_id: BRANCH, opening_balance: "0" }),
+  );
+  assert.ok(rejected.error);
+  assert.equal(h.requests.length, 1);
 });

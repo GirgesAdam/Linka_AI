@@ -13,7 +13,7 @@ import { canAccessSection } from "@/lib/section-access";
 import { tiaRequest } from "@/lib/tia/api";
 import { getAppContext } from "@/lib/tia/workspace";
 import type { WorkspaceMember } from "@/lib/types";
-import type { MainTreasury, MainTreasuryMovement, ReceptionVault, VaultPendingPayment } from "@/lib/vault";
+import type { MainTreasury, ReceptionVault, VaultPendingPayment } from "@/lib/vault";
 import { MainTreasurySection } from "./main-treasury-section";
 
 import { createExpense, deleteExpense, updateExpense } from "./actions";
@@ -210,29 +210,20 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   ]);
 
   const isWorkspaceAdmin = workspace.role === "admin";
-  const treasuryQuery = new URLSearchParams();
-  if (validDate(raw.treasury_from)) treasuryQuery.set("start_date", raw.treasury_from!);
-  if (validDate(raw.treasury_to)) treasuryQuery.set("end_date", raw.treasury_to!);
-  if (raw.treasury_kind) treasuryQuery.set("kind", raw.treasury_kind);
-  if (["cash", "visa", "instapay"].includes(raw.treasury_method || "")) treasuryQuery.set("method", raw.treasury_method!);
-  if (/^[0-9a-f-]{36}$/i.test(raw.treasury_branch || "")) treasuryQuery.set("branch_id", raw.treasury_branch!);
-
-  // Vault availability must not break the existing Finance reports before 0099 deploy.
   const vaultResults = isWorkspaceAdmin ? await Promise.allSettled([
     tiaRequest<MainTreasury>("/vault/treasury"),
     tiaRequest<ReceptionVault[]>("/vault/reception"),
     tiaRequest<WorkspaceMember[]>("/auth/workspace/members"),
     tiaRequest<Array<{ user_id: string; branch_id: string }>>("/vault/branch-grants"),
-    tiaRequest<MainTreasuryMovement[]>(`/vault/treasury/movements?${treasuryQuery.toString()}`),
     tiaRequest<VaultPendingPayment[]>("/vault/pending-payments"),
   ]) : null;
   const treasury = vaultResults?.[0]?.status === "fulfilled" ? vaultResults[0].value : null;
   const vaults = vaultResults?.[1]?.status === "fulfilled" ? vaultResults[1].value : [];
   const members = vaultResults?.[2]?.status === "fulfilled" ? vaultResults[2].value : [];
   const grants = vaultResults?.[3]?.status === "fulfilled" ? vaultResults[3].value : [];
-  const movements = vaultResults?.[4]?.status === "fulfilled" ? vaultResults[4].value : [];
-  const pendingPayments = vaultResults?.[5]?.status === "fulfilled" ? vaultResults[5].value : [];
-  const pendingUnavailable = vaultResults?.[5]?.status === "rejected";
+  const movements = treasury?.recent_movements || [];
+  const pendingPayments = vaultResults?.[4]?.status === "fulfilled" ? vaultResults[4].value : [];
+  const pendingUnavailable = vaultResults?.[4]?.status === "rejected";
 
   return (
     <>
@@ -252,7 +243,6 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           movements={movements}
           pendingPayments={pendingPayments}
           pendingUnavailable={pendingUnavailable}
-          filters={raw}
           isDemo={workspace.is_demo === true}
         />
       )}

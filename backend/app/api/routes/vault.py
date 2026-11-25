@@ -21,6 +21,7 @@ from app.schemas.vault import (
     TreasuryMovementRead,
     VaultActivationRead,
     VaultActivationRequest,
+    VaultBankDepositRequest,
     VaultBranchGrantRead,
     VaultBranchGrantRequest,
     VaultExpenseRead,
@@ -44,6 +45,7 @@ from app.services.vault import (
     list_branch_grants,
     main_treasury_summary,
     reception_summaries,
+    record_bank_deposit,
     record_cash_expense,
     set_branch_grant,
     transfer_full_balance,
@@ -162,6 +164,8 @@ def activate(
     access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
     db: Annotated[Session, Depends(get_db)],
 ) -> VaultActivationRead:
+    if payload.kind == "reception":
+        raise _conflict("Reception vaults are activated automatically with their branch.")
     try:
         row = activate_account(
             db, workspace_id=access.workspace.id, actor_user_id=access.user.id,
@@ -178,6 +182,29 @@ def activate(
         raise _conflict("Could not confirm account activation. Refresh before retrying.") from exc
     return VaultActivationRead(
         account_id=row.id, kind=row.kind, branch_id=row.branch_id, currency=row.currency,
+    )
+
+
+@router.post("/treasury/bank-deposits", response_model=VaultTransferRead, status_code=201)
+def treasury_bank_deposit(
+    payload: VaultBankDepositRequest,
+    access: Annotated[WorkspaceAccess, Depends(get_workspace_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> VaultTransferRead:
+    try:
+        row = record_bank_deposit(
+            db, workspace_id=access.workspace.id, actor_user_id=access.user.id,
+            amount_minor=payload.amount_minor, idempotency_key=payload.idempotency_key,
+        )
+        _safe_write(db)
+    except VaultError as exc:
+        db.rollback()
+        raise _conflict(str(exc)) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise _conflict("Could not confirm bank deposit. Refresh before retrying.") from exc
+    return VaultTransferRead(
+        transfer_id=row.id, amount_minor=row.amount_minor, currency=row.currency, branch_id=None,
     )
 
 

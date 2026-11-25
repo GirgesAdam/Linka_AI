@@ -41,7 +41,7 @@ def test_service_editor_handles_conflicts_inline() -> None:
     assert "Ø" not in error_mapper
 
 
-def test_doctor_admin_is_section_gated_and_branchless_in_the_ui() -> None:
+def test_doctor_admin_is_section_gated_and_schedule_scoped_by_branch() -> None:
     route = (ROOT / "backend/app/api/routes/doctor_admin.py").read_text(encoding="utf-8")
     actions = (ROOT / "frontend/src/app/(dashboard)/doctors/actions.ts").read_text(encoding="utf-8")
     panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-management.tsx").read_text(encoding="utf-8")
@@ -51,8 +51,7 @@ def test_doctor_admin_is_section_gated_and_branchless_in_the_ui() -> None:
     assert 'require_section_access("clinic_operations")' in route
     assert '"/doctor-admin/{doctor_id}/working-hours"' in route
     assert "branch_id" not in DoctorAdminCreate.model_fields
-    # Doctor administration remains branchless, but laser-device eligibility is
-    # intentionally scoped by doctor, branch and weekday in the same actions file.
+    # Creation and profile remain branchless; schedule edits use the actual branch.
     def section(source: str, start: str, end: str) -> str:
         assert source.count(start) == 1, f"Expected exactly one section: {start}"
         remainder = source.split(start, 1)[1]
@@ -62,11 +61,14 @@ def test_doctor_admin_is_section_gated_and_branchless_in_the_ui() -> None:
     admin_actions = (
         section(actions, "export async function createDoctorAction(", "export async function updateDoctorAction("),
         section(actions, "export async function updateDoctorAction(", "export async function updateDoctorScheduleAction("),
-        section(actions, "export async function updateDoctorScheduleAction(", "export async function removeDoctorAction("),
     )
     for admin_action in admin_actions:
         assert "branch_id" not in admin_action
         assert "branchId" not in admin_action
+
+    schedule_action = section(actions, "export async function updateDoctorScheduleAction(", "export async function removeDoctorAction(")
+    assert 'branch_id: clean(formData.get("branch_id"))' in schedule_action
+    assert "laser_weekday_exclusions: parseLaserWeekdays(formData)" in schedule_action
 
     laser_action = actions.split("export async function saveDoctorLaserWeekday(", 1)
     assert len(laser_action) == 2
@@ -74,26 +76,21 @@ def test_doctor_admin_is_section_gated_and_branchless_in_the_ui() -> None:
     assert 'formData.get("weekday")' in laser_action[1]
     assert '/clinic/doctor-laser-weekdays/${doctorId}/${branchId}/${weekday}' in laser_action[1]
 
-    # Check only the branchless creation/profile/schedule controls. The laser
-    # editor is allowed (and required) to show the branch explicitly.
+    # The branch field is supplied by the selected schedule, not a new selector.
     admin_controls = (
         section(panel, "function ScheduleFields(", "const categoryOptions ="),
         section(panel, "function CreateDoctorForm(", "function DoctorProfileForm("),
         section(panel, "function DoctorProfileForm(", "function DoctorScheduleForm("),
-        section(panel, "function DoctorScheduleForm(", "function RemoveDoctorForm("),
     )
     for control in admin_controls:
         assert 'name="branch_id"' not in control
-        assert "الفرع" not in control
 
-    laser_editor = section(panel, "function DoctorEditorCard(", "export function DoctorManagementPanel(")
-    assert "أجهزة الليزر حسب يوم العمل والفرع" in laser_editor
-    assert "<DoctorLaserWeekdayPanel" in laser_editor
-    laser_panel = (ROOT / "frontend/src/app/(dashboard)/doctors/doctor-laser-weekdays.tsx").read_text(
-        encoding="utf-8"
-    )
-    assert 'name="branch_id"' in laser_panel
-    assert "{row.branch_name}" in laser_panel
+    schedule = section(panel, "function DoctorScheduleForm(", "function RemoveDoctorForm(")
+    assert 'name="branch_id" value={branch.branch_id}' in schedule
+    assert "branch?.branch_name" in schedule
+    assert "row.branch_id === branch?.branch_id" in schedule
+    assert "laser_weekday_exclusions_json" in panel
+    assert "<DoctorLaserWeekdayPanel" not in panel
     assert 'canAccessSection(ctx.workspace, "clinic_operations")' in page
     assert "DoctorManagementPanel" in page
     assert "doctor_admin_read_router" in router

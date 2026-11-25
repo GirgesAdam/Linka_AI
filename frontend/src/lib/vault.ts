@@ -25,6 +25,9 @@ export type MainTreasury = {
   activated: boolean;
   active_channels: string[];
   cash_minor: number;
+  bank_minor: number;
+  cash_activated: boolean;
+  bank_activated: boolean;
   visa_minor: number;
   instapay_minor: number;
   total_recorded_minor: number;

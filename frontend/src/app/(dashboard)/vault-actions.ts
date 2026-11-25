@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { actionFeedbackFailure, type ActionFeedbackState } from "@/lib/action-feedback";
 import { tiaRequest } from "@/lib/tia/api";
 
-const vaultKinds = new Set(["reception", "main_cash", "main_visa", "main_instapay"]);
+const vaultKinds = new Set(["main_cash", "main_bank"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function moneyMinor(value: FormDataEntryValue | null, allowZero = false): number {
@@ -92,6 +92,24 @@ export async function activateVaultAccount(
     return { notice: "تم تفعيل الحساب وتسجيل الرصيد الافتتاحي بنجاح.", error: null };
   } catch (error) {
     return actionFeedbackFailure(error, "تعذر تفعيل الحساب. لم يتم تغيير الرصيد.");
+  }
+}
+
+export async function recordMainBankDeposit(
+  _previous: ActionFeedbackState, formData: FormData,
+): Promise<ActionFeedbackState> {
+  try {
+    await tiaRequest("/vault/treasury/bank-deposits", {
+      method: "POST",
+      body: JSON.stringify({
+        amount_minor: moneyMinor(formData.get("amount")),
+        idempotency_key: idempotencyKey(formData),
+      }),
+    });
+    refreshFinanceAndReception();
+    return { notice: "تم توريد الكاش إلى البنك.", error: null };
+  } catch (error) {
+    return actionFeedbackFailure(error, "تعذر تأكيد التوريد إلى البنك. حدّث الرصيد قبل إعادة المحاولة.");
   }
 }
 
